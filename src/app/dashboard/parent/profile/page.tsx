@@ -1,0 +1,676 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import {
+    ChevronRight, Settings, Lock, X, CheckCircle,
+    AlertTriangle, User, Mail, Phone, MapPin,
+    Eye, EyeOff, Upload,
+} from "lucide-react";
+import Sidebar from "../components/Sidebar";
+
+// ─── Toggle ───────────────────────────────────────────────────────────────────
+function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+    return (
+        <button onClick={onChange}
+            className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0"
+            style={{ background: enabled ? "#2563eb" : "#cbd5e1" }}>
+            <span className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform"
+                style={{ transform: enabled ? "translateX(22px)" : "translateX(2px)" }} />
+        </button>
+    );
+}
+
+// ─── Password input ───────────────────────────────────────────────────────────
+function PwInput({ value, onChange, placeholder, error }: {
+    value: string; onChange: (v: string) => void;
+    placeholder: string; error?: string;
+}) {
+    const [show, setShow] = useState(false);
+    return (
+        <div>
+            <div className={`flex items-center border rounded-xl bg-white overflow-hidden transition-all
+                ${error ? "border-red-300" : "border-slate-200 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100"}`}>
+                <Lock className="w-3.5 h-3.5 text-slate-400 ml-3 mr-2 shrink-0" />
+                <input type={show ? "text" : "password"} value={value} onChange={e => onChange(e.target.value)}
+                    placeholder={placeholder}
+                    className="flex-1 py-2.5 text-sm text-slate-800 outline-none bg-transparent placeholder:text-slate-400" />
+                <button type="button" onClick={() => setShow(p => !p)} className="pr-3 text-slate-400 hover:text-slate-600">
+                    {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+            </div>
+            {error && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" />{error}</p>}
+        </div>
+    );
+}
+
+// ─── Read-only field on profile page ─────────────────────────────────────────
+function LockedField({ label, icon: Icon, value }: {
+    label: string; icon: React.ElementType; value: string;
+}) {
+    return (
+        <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1.5">{label}</label>
+            <div className="flex items-center border border-slate-100 rounded-xl bg-slate-50 overflow-hidden">
+                <div className="pl-3.5 pr-2 shrink-0"><Icon className="w-3.5 h-3.5 text-slate-400" /></div>
+                <span className="flex-1 py-2.5 pr-3 text-sm text-slate-500 select-none truncate">{value || "—"}</span>
+                <div className="pr-3 shrink-0"><Lock className="w-3 h-3 text-slate-300" /></div>
+            </div>
+        </div>
+    );
+}
+
+// ─── Editable field inside modal ──────────────────────────────────────────────
+function EditField({ label, icon: Icon, value, onChange, type = "text", error, hint, optional }: {
+    label: string; icon: React.ElementType; value: string;
+    onChange: (v: string) => void; type?: string; error?: string; hint?: string; optional?: boolean;
+}) {
+    return (
+        <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5">
+                {label}
+                {optional && (
+                    <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-full">Optional</span>
+                )}
+            </label>
+            <div className={`flex items-center border rounded-xl bg-white overflow-hidden transition-all
+                ${error ? "border-red-300" : "border-slate-200 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100"}`}>
+                <div className="pl-3.5 pr-2 shrink-0"><Icon className="w-3.5 h-3.5 text-slate-400" /></div>
+                <input type={type} value={value} onChange={e => onChange(e.target.value)}
+                    placeholder={optional ? `${label} (optional)` : label}
+                    className="flex-1 py-2.5 pr-3 text-sm text-slate-800 outline-none bg-transparent placeholder:text-slate-400" />
+            </div>
+            {error && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" />{error}</p>}
+            {hint && !error && <p className="mt-1 text-[11px] text-slate-400">{hint}</p>}
+        </div>
+    );
+}
+
+// ─── Custom Select (for Suffix) ───────────────────────────────────────────────
+function SuffixSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+    return (
+        <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5">
+                Suffix
+                <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-full">Optional</span>
+            </label>
+            <div className="flex items-center border border-slate-200 rounded-xl bg-white overflow-hidden focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+                <div className="pl-3.5 pr-2 shrink-0"><User className="w-3.5 h-3.5 text-slate-400" /></div>
+                <select value={value} onChange={e => onChange(e.target.value)}
+                    className="flex-1 py-2.5 pr-3 text-sm text-slate-800 outline-none bg-transparent">
+                    <option value="">None</option>
+                    <option value="Jr.">Jr.</option>
+                    <option value="Sr.">Sr.</option>
+                    <option value="II">II</option>
+                    <option value="III">III</option>
+                    <option value="IV">IV</option>
+                </select>
+            </div>
+        </div>
+    );
+}
+
+// ─── Profile data type ────────────────────────────────────────────────────────
+interface ProfileData {
+    firstName:  string;
+    middleName: string;
+    lastName:   string;
+    suffix:     string;
+    email:      string;
+    phone:      string;
+    address:    string;
+}
+
+function getFullName(p: ProfileData) {
+    return [p.firstName, p.middleName, p.lastName, p.suffix].filter(Boolean).join(" ");
+}
+
+// ─── Settings Modal ───────────────────────────────────────────────────────────
+type Tab  = "profile" | "password";
+type Step = "edit" | "review" | "success";
+
+function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
+    profile: ProfileData; onSave: (p: ProfileData) => void; onClose: () => void;
+    initialTab?: Tab;
+}) {
+    const [tab,  setTab]  = useState<Tab>(initialTab);
+    const [step, setStep] = useState<Step>("edit");
+
+    // Profile fields
+    const [pForm, setPForm] = useState<ProfileData>({ ...profile });
+    const [pErr,  setPErr]  = useState<Partial<Record<keyof ProfileData, string>>>({});
+    const setP = (k: keyof ProfileData) => (v: string) => setPForm(prev => ({ ...prev, [k]: v }));
+
+    // Authorization password for profile changes
+    const [authPw,  setAuthPw]  = useState("");
+    const [authErr, setAuthErr] = useState("");
+
+    // Password change fields
+    const [pw,    setPw]    = useState({ current: "", next: "", confirm: "" });
+    const [pwErr, setPwErr] = useState<Partial<typeof pw>>({});
+    const setPwF = (k: keyof typeof pw) => (v: string) => { setPw(p => ({ ...p, [k]: v })); setPwErr(p => ({ ...p, [k]: "" })); };
+
+    // Password strength
+    function pwStrength(p: string) {
+        const s = [p.length >= 8, /[A-Z]/.test(p), /[0-9]/.test(p), /[^A-Za-z0-9]/.test(p)].filter(Boolean).length;
+        return [
+            { label: "",        color: "" },
+            { label: "Weak",    color: "#ef4444" },
+            { label: "Fair",    color: "#f97316" },
+            { label: "Good",    color: "#eab308" },
+            { label: "Strong",  color: "#22c55e" },
+        ][Math.min(s, 4)];
+    }
+    const sw = pwStrength(pw.next);
+
+    // Detect changes
+    const changes: { field: string; from: string; to: string }[] = [];
+    if (pForm.firstName  !== profile.firstName)  changes.push({ field: "First Name",   from: profile.firstName,  to: pForm.firstName  });
+    if (pForm.middleName !== profile.middleName) changes.push({ field: "Middle Name",  from: profile.middleName, to: pForm.middleName });
+    if (pForm.lastName   !== profile.lastName)   changes.push({ field: "Last Name",    from: profile.lastName,   to: pForm.lastName   });
+    if (pForm.suffix     !== profile.suffix)     changes.push({ field: "Suffix",       from: profile.suffix,     to: pForm.suffix     });
+    if (pForm.email      !== profile.email)      changes.push({ field: "Email",        from: profile.email,      to: pForm.email      });
+    if (pForm.phone      !== profile.phone)      changes.push({ field: "Phone Number", from: profile.phone,      to: pForm.phone      });
+    if (pForm.address    !== profile.address)    changes.push({ field: "Address",      from: profile.address,    to: pForm.address    });
+
+    // Validate
+    function validateProfile() {
+        const e: typeof pErr = {};
+        if (!pForm.firstName.trim())            e.firstName = "First name is required";
+        if (!pForm.lastName.trim())             e.lastName  = "Last name is required";
+        if (!/\S+@\S+\.\S+/.test(pForm.email)) e.email     = "Enter a valid email address";
+        setPErr(e);
+        return Object.keys(e).length === 0;
+    }
+
+    function validatePassword() {
+        const e: typeof pwErr = {};
+        if (!pw.current.trim())          e.current = "Current password is required";
+        if (pw.next.length < 8)          e.next    = "At least 8 characters required";
+        else if (!/[A-Z]/.test(pw.next)) e.next    = "Include at least one uppercase letter";
+        else if (!/[0-9]/.test(pw.next)) e.next    = "Include at least one number";
+        if (pw.next !== pw.confirm)      e.confirm = "Passwords do not match";
+        setPwErr(e);
+        return Object.keys(e).length === 0;
+    }
+
+    // Step handlers
+    function handleReview() {
+        if (tab === "profile") {
+            if (!validateProfile()) return;
+            if (changes.length === 0) { setAuthErr("No changes were made."); return; }
+            if (!authPw.trim()) { setAuthErr("Please enter your current password to authorize this change."); return; }
+            setAuthErr("");
+        } else {
+            if (!validatePassword()) return;
+        }
+        setStep("review");
+    }
+
+    const [saving, setSaving] = useState(false);
+    function handleConfirm() {
+        setSaving(true);
+        setTimeout(() => {
+            if (tab === "profile") onSave(pForm);
+            setSaving(false);
+            setStep("success");
+        }, 900);
+    }
+
+    function handleClose() {
+        setStep("edit"); setAuthPw(""); setAuthErr("");
+        setPErr({}); setPwErr({});
+        onClose();
+    }
+
+    function switchTab(t: Tab) {
+        setTab(t); setStep("edit");
+        setPErr({}); setPwErr({});
+        setAuthPw(""); setAuthErr("");
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            onClick={handleClose}>
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+                style={{ maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
+
+                {/* Header */}
+                <div className="px-6 py-4 border-b border-slate-100 shrink-0 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+                            <Settings className="w-4 h-4 text-blue-600" />
+                        </div>
+                        <div>
+                            <h2 className="text-sm font-extrabold text-slate-900">
+                                {step === "edit"    && "Account Settings"}
+                                {step === "review"  && "Review Changes"}
+                                {step === "success" && "Changes Saved!"}
+                            </h2>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                                {step === "edit"    && (tab === "profile" ? "Edit your profile information" : "Update your password")}
+                                {step === "review"  && "Confirm before applying changes"}
+                                {step === "success" && "Your account has been updated"}
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={handleClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 transition">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                {/* Tab bar — only on edit step */}
+                {step === "edit" && (
+                    <div className="px-6 border-b border-slate-100 shrink-0 flex gap-1 bg-white">
+                        {([
+                            { key: "profile",  label: "Personal Info" },
+                            { key: "password", label: "Password"      },
+                        ] as { key: Tab; label: string }[]).map(({ key, label }) => (
+                            <button key={key} onClick={() => switchTab(key)}
+                                className={`px-4 py-3 text-sm font-bold border-b-2 transition -mb-px
+                                    ${tab === key ? "border-blue-500 text-blue-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}>
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {/* Body */}
+                <div className="overflow-y-auto flex-1 px-6 py-5">
+
+                    {/* EDIT: Personal Info */}
+                    {step === "edit" && tab === "profile" && (
+                        <div className="space-y-4">
+
+                            {/* First + Last name row */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <EditField label="First Name *" icon={User} value={pForm.firstName}
+                                    onChange={setP("firstName")} error={pErr.firstName} />
+                                <EditField label="Last Name *" icon={User} value={pForm.lastName}
+                                    onChange={setP("lastName")} error={pErr.lastName} />
+                            </div>
+
+                            {/* Middle name + Suffix row */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <EditField label="Middle Name" icon={User} value={pForm.middleName}
+                                    onChange={setP("middleName")} optional />
+                                <SuffixSelect value={pForm.suffix} onChange={setP("suffix")} />
+                            </div>
+
+                            <EditField label="Email Address *" icon={Mail}   value={pForm.email}   onChange={setP("email")}   type="email" error={pErr.email} />
+                            <EditField label="Phone Number"    icon={Phone}  value={pForm.phone}   onChange={setP("phone")}   hint="Format: +63 9XX XXX XXXX" />
+                            <EditField label="Address"         icon={MapPin} value={pForm.address} onChange={setP("address")} />
+
+                            {/* Authorization */}
+                            <div className="border-t border-slate-100 pt-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                    <p className="text-xs font-bold text-slate-600">Authorization Required</p>
+                                </div>
+                                <p className="text-[11px] text-slate-400 mb-2.5">
+                                    Enter your current password to save any profile changes.
+                                </p>
+                                <PwInput value={authPw}
+                                    onChange={v => { setAuthPw(v); setAuthErr(""); }}
+                                    placeholder="Enter current password to confirm"
+                                    error={authErr} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* EDIT: Password */}
+                    {step === "edit" && tab === "password" && (
+                        <div className="space-y-4">
+                            <PwInput value={pw.current} onChange={setPwF("current")}
+                                placeholder="Current password" error={pwErr.current} />
+                            <div className="border-t border-slate-100 pt-2" />
+                            <PwInput value={pw.next} onChange={setPwF("next")}
+                                placeholder="New password" error={pwErr.next} />
+
+                            {pw.next && (
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <span className="text-[10px] text-slate-400">Password strength</span>
+                                        <span className="text-[10px] font-bold" style={{ color: sw.color }}>{sw.label}</span>
+                                    </div>
+                                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                        <div className="h-full rounded-full transition-all"
+                                            style={{ background: sw.color, width: `${["","Weak","Fair","Good","Strong"].indexOf(sw.label) * 25}%` }} />
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                                        {[
+                                            { ok: pw.next.length >= 8,           label: "8+ characters"     },
+                                            { ok: /[A-Z]/.test(pw.next),         label: "Uppercase letter"  },
+                                            { ok: /[0-9]/.test(pw.next),         label: "Number"            },
+                                            { ok: /[^A-Za-z0-9]/.test(pw.next),  label: "Special character" },
+                                        ].map(({ ok, label }) => (
+                                            <div key={label} className={`flex items-center gap-1 text-[10px] font-semibold ${ok ? "text-emerald-600" : "text-slate-400"}`}>
+                                                {ok ? <CheckCircle className="w-3 h-3" /> : <X className="w-3 h-3" />} {label}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <PwInput value={pw.confirm} onChange={setPwF("confirm")}
+                                placeholder="Confirm new password" error={pwErr.confirm} />
+                        </div>
+                    )}
+
+                    {/* REVIEW */}
+                    {step === "review" && (
+                        <div className="space-y-4">
+                            <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                <p className="text-xs text-amber-700 leading-relaxed">
+                                    Please review your changes below. Once confirmed, your account will be updated immediately.
+                                </p>
+                            </div>
+
+                            {tab === "profile" && (
+                                <div className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3">
+                                        {changes.length} field{changes.length !== 1 ? "s" : ""} changed
+                                    </p>
+                                    <div className="space-y-3">
+                                        {changes.map(({ field, from, to }) => (
+                                            <div key={field}>
+                                                <p className="text-[10px] font-bold text-slate-400 mb-0.5">{field}</p>
+                                                <div className="flex items-center gap-2 text-xs">
+                                                    <span className="text-slate-400 line-through truncate max-w-[38%]">{from || "—"}</span>
+                                                    <span className="text-slate-300 shrink-0">→</span>
+                                                    <span className="font-bold text-blue-600 truncate">{to || "—"}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {tab === "password" && (
+                                <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex items-center gap-3">
+                                    <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                                    <p className="text-xs text-slate-600">
+                                        Your password will be updated. You may need to log in again on other devices.
+                                    </p>
+                                </div>
+                            )}
+
+                            <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex items-center gap-2">
+                                <Lock className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                                <p className="text-xs text-blue-700">Identity verified with your current password.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* SUCCESS */}
+                    {step === "success" && (
+                        <div className="text-center py-4 space-y-4">
+                            <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center mx-auto">
+                                <CheckCircle className="w-8 h-8 text-emerald-500" />
+                            </div>
+                            <div>
+                                <h3 className="text-base font-extrabold text-slate-800">
+                                    {tab === "profile" ? "Profile Updated!" : "Password Changed!"}
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    {tab === "profile"
+                                        ? "Your personal information has been saved successfully."
+                                        : "Your password has been updated. Use it the next time you log in."}
+                                </p>
+                            </div>
+
+                            {tab === "profile" && (
+                                <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-left space-y-2">
+                                    {([
+                                        ["First Name",  pForm.firstName],
+                                        ["Middle Name", pForm.middleName || "—"],
+                                        ["Last Name",   pForm.lastName],
+                                        ["Suffix",      pForm.suffix    || "—"],
+                                        ["Email",       pForm.email],
+                                        ["Phone",       pForm.phone     || "—"],
+                                        ["Address",     pForm.address   || "—"],
+                                    ] as [string, string][]).map(([l, v]) => (
+                                        <div key={l} className="flex justify-between text-xs">
+                                            <span className="text-slate-400 w-24 shrink-0">{l}</span>
+                                            <span className="font-semibold text-slate-800 text-right">{v}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {tab === "password" && (
+                                <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 flex items-center gap-2">
+                                    <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                                    <p className="text-xs font-semibold text-emerald-700">Password updated successfully.</p>
+                                </div>
+                            )}
+
+                            <button onClick={handleClose}
+                                className="w-full py-3 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition">
+                                Done
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer */}
+                {step !== "success" && (
+                    <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/60 flex gap-3 shrink-0">
+                        {step === "edit" && (
+                            <>
+                                <button onClick={handleClose}
+                                    className="px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
+                                    Cancel
+                                </button>
+                                <button onClick={handleReview}
+                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 transition">
+                                    <ChevronRight className="w-4 h-4" /> Review Changes
+                                </button>
+                            </>
+                        )}
+                        {step === "review" && (
+                            <>
+                                <button onClick={() => setStep("edit")}
+                                    className="flex-1 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
+                                    ← Go Back
+                                </button>
+                                <button onClick={handleConfirm} disabled={saving}
+                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition">
+                                    {saving
+                                        ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                                          </svg> Saving…</>
+                                        : <><CheckCircle className="w-4 h-4" /> Confirm & Save</>
+                                    }
+                                </button>
+                            </>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ─── Main Profile Page ────────────────────────────────────────────────────────
+export default function ProfilePage() {
+    const [profile, setProfile] = useState<ProfileData>({
+        firstName:  "John",
+        middleName: "",
+        lastName:   "Doe",
+        suffix:     "",
+        email:      "john.doe@email.com",
+        phone:      "+63 912 345 6789",
+        address:    "123 Main Street, Manila, Philippines",
+    });
+
+    const [emailNotif,   setEmailNotif]   = useState(true);
+    const [smsNotif,     setSmsNotif]     = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+    const [settingsTab,  setSettingsTab]  = useState<"profile" | "password">("profile");
+
+    function openSettings(tab: "profile" | "password" = "profile") {
+        setSettingsTab(tab);
+        setShowSettings(true);
+    }
+
+    const fullName = getFullName(profile);
+    const initials = [profile.firstName, profile.lastName].filter(Boolean).map(n => n[0].toUpperCase()).join("");
+
+    return (
+        <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
+            <Sidebar />
+
+            <main className="flex-1 overflow-y-auto p-8">
+
+                {/* Page header */}
+                <div className="flex items-start justify-between mb-6">
+                    <div>
+                        <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Profile Settings</h1>
+                        <p className="text-slate-500 text-sm mt-0.5">Manage your account information and preferences</p>
+                    </div>
+                    <button onClick={() => openSettings("profile")}
+                        className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 transition shadow-md shadow-blue-200">
+                        <Settings className="w-4 h-4" /> Settings
+                    </button>
+                </div>
+
+                <div className="flex gap-6 items-start">
+
+                    {/* Left column */}
+                    <div className="flex-1 flex flex-col gap-5 min-w-0">
+
+                        {/* Profile card */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+
+                            {/* Card header — no "Edit via Settings" button */}
+                            <div className="mb-5">
+                                <h2 className="text-base font-extrabold text-slate-800">Personal Information</h2>
+                            </div>
+
+                            {/* Avatar */}
+                            <div className="flex flex-col items-center mb-6 pb-6 border-b border-slate-100">
+                                <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center text-white font-extrabold text-2xl mb-3">
+                                    {initials}
+                                </div>
+                                <p className="text-base font-extrabold text-slate-800">{fullName}</p>
+                                <p className="text-xs text-slate-400 mt-0.5">Parent · Santiago Elementary School</p>
+                                <button onClick={() => openSettings("profile")}
+                                    className="mt-3 flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-500 hover:bg-slate-50 transition">
+                                    <Upload className="w-4 h-4" /> Change Photo via Settings
+                                </button>
+                            </div>
+
+                            {/* Lock notice */}
+                            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 mb-5">
+                                <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <p className="text-xs text-slate-500">
+                                    Fields are <strong>read-only</strong> here. Click{" "}
+                                    <button onClick={() => openSettings("profile")}
+                                        className="font-bold text-blue-600 underline hover:no-underline">Settings</button>{" "}
+                                    to edit your information.
+                                </p>
+                            </div>
+
+                            {/* Locked fields — split name */}
+                            <div className="flex flex-col gap-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <LockedField label="First Name"  icon={User} value={profile.firstName}  />
+                                    <LockedField label="Last Name"   icon={User} value={profile.lastName}   />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <LockedField label="Middle Name" icon={User} value={profile.middleName || "—"} />
+                                    <LockedField label="Suffix"      icon={User} value={profile.suffix     || "—"} />
+                                </div>
+                                <LockedField label="Email Address" icon={Mail}   value={profile.email}   />
+                                <LockedField label="Phone Number"  icon={Phone}  value={profile.phone}   />
+                                <LockedField label="Address"       icon={MapPin} value={profile.address}  />
+                            </div>
+                        </div>
+
+                        {/* Security card */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                            <div className="flex items-center justify-between mb-1">
+                                <h2 className="text-base font-extrabold text-slate-800">Security</h2>
+                                <button onClick={() => openSettings("password")}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition">
+                                    <Settings className="w-3 h-3" /> Change Password
+                                </button>
+                            </div>
+                            <p className="text-xs text-slate-400 mb-4">Update your password and security preferences</p>
+                            <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+                                <Lock className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                                <p className="text-xs text-blue-700 leading-relaxed">
+                                    For your security, password changes are only available through{" "}
+                                    <button onClick={() => openSettings("password")} className="font-bold underline hover:no-underline">Settings</button>{" "}
+                                    and require your current password for authorization.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right column */}
+                    <div className="w-60 flex flex-col gap-5 flex-shrink-0">
+
+                        {/* My Children/Ward */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                            <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">My Children / Ward</h2>
+                            <p className="text-xs text-slate-400 mb-4">Manage your children/Ward&apos;s profiles</p>
+                            {[
+                                { initials: "MD", name: "Maria Santos Doe",  grade: "Grade 3 - Mabuhay", bg: "#3b82f6", studentId: "2" },
+                                { initials: "CS", name: "Carlos Santos Doe", grade: "Grade 6 - Rizal",   bg: "#2563eb", studentId: "1" },
+                            ].map(child => (
+                                <Link key={child.name} href={`/dashboard/parent?student=${child.studentId}`}
+                                    className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-blue-50 hover:border-blue-200 transition-colors mb-2 last:mb-0">
+                                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0"
+                                        style={{ background: child.bg }}>
+                                        {child.initials}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-bold text-slate-800 leading-tight truncate">{child.name}</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">{child.grade}</p>
+                                    </div>
+                                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                                </Link>
+                            ))}
+                        </div>
+
+                        {/* Notifications */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                            <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">Notifications</h2>
+                            <p className="text-xs text-slate-400 mb-4">Choose what you want to be notified about</p>
+                            <div className="flex flex-col gap-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-semibold text-slate-700">Email Notifications</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">Get alerts via email</p>
+                                    </div>
+                                    <Toggle enabled={emailNotif} onChange={() => setEmailNotif(p => !p)} />
+                                </div>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-semibold text-slate-700">SMS Notifications</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">Get alerts via text message</p>
+                                    </div>
+                                    <Toggle enabled={smsNotif} onChange={() => setSmsNotif(p => !p)} />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            {/* Settings Modal */}
+            {showSettings && (
+                <SettingsModal
+                    profile={profile}
+                    initialTab={settingsTab}
+                    onSave={updated => setProfile(updated)}
+                    onClose={() => setShowSettings(false)}
+                />
+            )}
+        </div>
+    );
+}

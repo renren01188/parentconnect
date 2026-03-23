@@ -1,0 +1,639 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import {
+  ArrowLeft, CheckCircle, AlertCircle,
+  CreditCard, Phone, Mail, GraduationCap, Edit2,
+  Save, XCircle, ChevronDown, Plus, Users, MapPin,
+} from "lucide-react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+
+const inputBase = "w-full px-4 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400";
+const inputOk   = `${inputBase} border-slate-200 focus:ring-emerald-400`;
+const inputErr  = `${inputBase} border-red-400 bg-red-50 focus:ring-red-400`;
+const inputView = `${inputBase} border-slate-100 bg-slate-50 text-slate-600 cursor-default`;
+
+const isValidEmail   = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+const isValidContact = (v: string) => /^[0-9]{11}$/.test(v.replace(/\s/g, ""));
+const capitalize     = (v: string) => v.replace(/\b\w/g, c => c.toUpperCase());
+
+function Field({ label, required, error, children }: {
+  label: string; required?: boolean; error?: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-sm font-semibold text-slate-700 flex items-center gap-1">
+        {label}{required && <span className="text-red-500 text-xs">*</span>}
+      </label>
+      {children}
+      {error && (
+        <p className="flex items-center gap-1 text-xs text-red-500 font-medium">
+          <AlertCircle className="w-3 h-3 shrink-0" />{error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ReviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between py-2 border-b border-slate-100 last:border-0">
+      <span className="text-xs text-slate-400 font-medium">{label}</span>
+      <span className="text-xs font-bold text-slate-700 text-right max-w-[60%]">{value || "—"}</span>
+    </div>
+  );
+}
+
+interface StudentData {
+  id: number;
+  student_id: string;
+  first_name: string;
+  middle_name: string | null;
+  last_name: string;
+  suffix: string | null;
+  gender: string;
+  grade: string;
+  section: string;
+  rfid_card: string | null;
+  full_name: string;
+  parent_first_name: string;
+  parent_middle_name: string | null;
+  parent_last_name: string;
+  parent_suffix: string | null;
+  relationship: string;
+  contact_number: string;
+  parent_email: string;
+  parent_address: string;   // ← new
+  password_set: number;
+  parent_status: string;
+}
+
+function ConfirmModal({
+  student, form, originalGrade, originalSection, onConfirm, onCancel, saving,
+}: {
+  student: StudentData; form: any; originalGrade: string; originalSection: string;
+  onConfirm: () => void; onCancel: () => void; saving: boolean;
+}) {
+  const sectionChanged = form.grade !== originalGrade || form.section !== originalSection;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="bg-white rounded-2xl shadow-xl border border-slate-100 w-full max-w-md p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertCircle className="w-5 h-5 text-amber-500" />
+          </div>
+          <div>
+            <h3 className="font-extrabold text-slate-800 text-base">Confirm Changes</h3>
+            <p className="text-xs text-slate-400">Please review before saving</p>
+          </div>
+        </div>
+        <p className="text-sm text-slate-600 mb-4">
+          Are you sure you want to save the changes for{" "}
+          <span className="font-bold text-slate-800">{form.firstName} {form.lastName}</span>?
+        </p>
+        {sectionChanged && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
+            <p className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1.5">
+              <GraduationCap className="w-3.5 h-3.5" /> Section / Grade Change Detected
+            </p>
+            <div className="flex items-center gap-2 text-xs text-blue-600">
+              <span className="bg-blue-100 px-2 py-1 rounded-lg font-semibold">{originalGrade} · {originalSection}</span>
+              <span>→</span>
+              <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg font-semibold">{form.grade} · {form.section}</span>
+            </div>
+            <p className="text-[11px] text-blue-500 mt-2">
+              ⚠ This student will be moved to the adviser of <strong>{form.grade} · {form.section}</strong> and will no longer appear in your list.
+            </p>
+          </div>
+        )}
+        <div className="bg-slate-50 rounded-xl p-3 mb-5 text-xs text-slate-500 space-y-1">
+          {form.firstName   !== student.first_name     && <p>• First name: <span className="font-semibold text-slate-700">{form.firstName}</span></p>}
+          {form.lastName    !== student.last_name      && <p>• Last name: <span className="font-semibold text-slate-700">{form.lastName}</span></p>}
+          {form.gender      !== student.gender         && <p>• Gender: <span className="font-semibold text-slate-700">{form.gender}</span></p>}
+          {form.studentId   !== student.student_id     && <p>• Student ID: <span className="font-semibold text-slate-700">{form.studentId}</span></p>}
+          {form.contactNumber !== student.contact_number && <p>• Contact: <span className="font-semibold text-slate-700">{form.contactNumber}</span></p>}
+          {form.email       !== student.parent_email   && <p>• Email: <span className="font-semibold text-slate-700">{form.email}</span></p>}
+          {form.address     !== student.parent_address && <p>• Address: <span className="font-semibold text-slate-700">{form.address || "—"}</span></p>}
+          {(form.parentFirstName !== student.parent_first_name || form.parentLastName !== student.parent_last_name) && (
+            <p>• Parent name: <span className="font-semibold text-slate-700">{form.parentFirstName} {form.parentLastName}</span></p>
+          )}
+          {form.relationship !== student.relationship  && <p>• Relationship: <span className="font-semibold text-slate-700">{form.relationship}</span></p>}
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm rounded-xl transition-colors">
+            <XCircle className="w-4 h-4" /> Cancel
+          </button>
+          <button onClick={onConfirm} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white font-bold text-sm rounded-xl transition-colors">
+            {saving ? (
+              <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+              </svg> Saving…</>
+            ) : (
+              <><CheckCircle className="w-4 h-4" /> Confirm</>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function StudentViewPage() {
+  const params = useParams();
+  const id     = params?.id as string;
+
+  const [student,     setStudent]     = useState<StudentData | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [fetchError,  setFetchError]  = useState("");
+  const [editing,     setEditing]     = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const [saveError,   setSaveError]   = useState("");
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const [sections,        setSections]        = useState<string[]>([]);
+  const [loadingSections, setLoadingSections] = useState(false);
+  const [addingNew,       setAddingNew]       = useState(false);
+  const [newSectionInput, setNewSectionInput] = useState("");
+
+  const [form, setForm] = useState({
+    firstName: "", middleName: "", lastName: "", suffix: "", gender: "", studentId: "",
+    grade: "", section: "",
+    parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
+    relationship: "", contactNumber: "", email: "",
+    address: "",   // ← new
+  });
+  const [originalGrade,   setOriginalGrade]   = useState("");
+  const [originalSection, setOriginalSection] = useState("");
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!id) return;
+    async function load() {
+      setLoading(true); setFetchError("");
+      try {
+        const res  = await fetch(`/api/students/${id}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.message || "Failed to load student.");
+        const d = json.data;
+        setStudent(d);
+        const f = {
+          firstName:       d.first_name         || "",
+          middleName:      d.middle_name         || "",
+          lastName:        d.last_name           || "",
+          suffix:          d.suffix              || "",
+          gender:          d.gender              || "",
+          studentId:       d.student_id          || "",
+          grade:           d.grade               || "",
+          section:         d.section             || "",
+          parentFirstName: d.parent_first_name   || "",
+          parentMiddleName:d.parent_middle_name  || "",
+          parentLastName:  d.parent_last_name    || "",
+          parentSuffix:    d.parent_suffix       || "",
+          relationship:    d.relationship        || "",
+          contactNumber:   d.contact_number      || "",
+          email:           d.parent_email        || "",
+          address:         d.parent_address      || "",  // ← new
+        };
+        setForm(f);
+        setOriginalGrade(d.grade   || "");
+        setOriginalSection(d.section || "");
+      } catch (e: any) {
+        setFetchError(e.message);
+      } finally { setLoading(false); }
+    }
+    load();
+  }, [id]);
+
+  useEffect(() => {
+    if (!form.grade) { setSections([]); return; }
+    async function loadSections() {
+      setLoadingSections(true);
+      try {
+        const res  = await fetch(`/api/sections?grade=${encodeURIComponent(form.grade)}`);
+        const json = await res.json();
+        if (json.success) setSections(json.sections || []);
+      } catch { setSections([]); }
+      finally { setLoadingSections(false); }
+    }
+    loadSections();
+  }, [form.grade]);
+
+  const set = (field: string, raw: string) => {
+    const nameFields = ["firstName","middleName","lastName","parentFirstName","parentMiddleName","parentLastName"];
+    const value = nameFields.includes(field) ? capitalize(raw) : raw;
+    setForm(p => ({ ...p, [field]: value }));
+    setTouched(p => ({ ...p, [field]: true }));
+  };
+
+  const E: Record<string, string> = {};
+  if (touched.firstName       && !form.firstName.trim())       E.firstName       = "First name is required.";
+  if (touched.lastName        && !form.lastName.trim())        E.lastName        = "Last name is required.";
+  if (touched.gender          && !form.gender)                 E.gender          = "Gender is required.";
+  if (touched.studentId       && !form.studentId.trim())       E.studentId       = "Student ID is required.";
+  if (touched.grade           && !form.grade)                  E.grade           = "Grade is required.";
+  if (touched.section         && !form.section.trim())         E.section         = "Section is required.";
+  if (touched.parentFirstName && !form.parentFirstName.trim()) E.parentFirstName = "First name is required.";
+  if (touched.parentLastName  && !form.parentLastName.trim())  E.parentLastName  = "Last name is required.";
+  if (touched.relationship    && !form.relationship)           E.relationship    = "Relationship is required.";
+  if (touched.contactNumber) {
+    if (!form.contactNumber.trim())               E.contactNumber = "Contact number is required.";
+    else if (!isValidContact(form.contactNumber)) E.contactNumber = "Must be exactly 11 digits.";
+  }
+  if (touched.email) {
+    if (!form.email.trim())             E.email = "Email is required.";
+    else if (!isValidEmail(form.email)) E.email = "Enter a valid email address.";
+  }
+
+  const handleSaveClick = () => {
+    setTouched({
+      firstName: true, lastName: true, gender: true, studentId: true,
+      grade: true, section: true, parentFirstName: true, parentLastName: true,
+      relationship: true, contactNumber: true, email: true,
+    });
+    if (Object.keys(E).length > 0) return;
+    setShowConfirm(true);
+  };
+
+  const handleConfirmedSave = async () => {
+    setSaving(true); setSaveError("");
+    try {
+      const res  = await fetch(`/api/students/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || "Failed to save.");
+      setStudent(prev => prev ? {
+        ...prev,
+        first_name: form.firstName, middle_name: form.middleName,
+        last_name: form.lastName, suffix: form.suffix,
+        gender: form.gender, student_id: form.studentId,
+        grade: form.grade, section: form.section,
+        full_name: [form.firstName, form.middleName, form.lastName, form.suffix].filter(Boolean).join(" "),
+        parent_first_name: form.parentFirstName, parent_middle_name: form.parentMiddleName,
+        parent_last_name: form.parentLastName, parent_suffix: form.parentSuffix,
+        relationship: form.relationship, contact_number: form.contactNumber,
+        parent_email: form.email, parent_address: form.address,   // ← new
+      } : prev);
+      setOriginalGrade(form.grade);
+      setOriginalSection(form.section);
+      setSaveSuccess(true); setEditing(false); setTouched({}); setShowConfirm(false);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (e: any) {
+      setSaveError(e.message); setShowConfirm(false);
+    } finally { setSaving(false); }
+  };
+
+  const handleCancelEdit = () => {
+    if (!student) return;
+    setForm({
+      firstName:        student.first_name         || "",
+      middleName:       student.middle_name        || "",
+      lastName:         student.last_name          || "",
+      suffix:           student.suffix             || "",
+      gender:           student.gender             || "",
+      studentId:        student.student_id         || "",
+      grade:            student.grade              || "",
+      section:          student.section            || "",
+      parentFirstName:  student.parent_first_name  || "",
+      parentMiddleName: student.parent_middle_name || "",
+      parentLastName:   student.parent_last_name   || "",
+      parentSuffix:     student.parent_suffix      || "",
+      relationship:     student.relationship       || "",
+      contactNumber:    student.contact_number     || "",
+      email:            student.parent_email       || "",
+      address:          student.parent_address     || "",  // ← new
+    });
+    setTouched({}); setSaveError(""); setEditing(false); setAddingNew(false); setNewSectionInput("");
+  };
+
+  return (
+    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50 font-sans">
+
+      {showConfirm && student && (
+        <ConfirmModal
+          student={student} form={form}
+          originalGrade={originalGrade} originalSection={originalSection}
+          onConfirm={handleConfirmedSave} onCancel={() => setShowConfirm(false)} saving={saving}
+        />
+      )}
+
+      <Link href="/dashboard/adviser/students"
+        className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium transition-colors mb-6">
+        <ArrowLeft className="w-4 h-4" /> Back to Students
+      </Link>
+
+      {loading && (
+        <div className="flex items-center justify-center py-24 text-slate-400 text-sm gap-2">
+          <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+          Loading student…
+        </div>
+      )}
+
+      {!loading && fetchError && (
+        <div className="max-w-2xl mx-auto bg-red-50 border border-red-200 rounded-2xl p-6 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-red-700">Failed to load student</p>
+            <p className="text-xs text-red-500 mt-1">{fetchError}</p>
+          </div>
+        </div>
+      )}
+
+      {!loading && !fetchError && student && (
+        <div className="max-w-2xl mx-auto">
+
+          <div className="flex items-start justify-between mb-6">
+            <div>
+              <h1 className="text-2xl font-extrabold text-slate-800">{student.full_name}</h1>
+              <p className="text-slate-400 text-sm mt-1">
+                Student ID: <span className="font-semibold text-slate-600">{student.student_id}</span>
+                {" · "}{student.grade} · {student.section}
+              </p>
+            </div>
+            {!editing ? (
+              <button onClick={() => setEditing(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-emerald-200">
+                <Edit2 className="w-4 h-4" /> Edit
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={handleCancelEdit}
+                  className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm rounded-xl transition-colors">
+                  <XCircle className="w-4 h-4" /> Cancel
+                </button>
+                <button onClick={handleSaveClick}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-emerald-200">
+                  <Save className="w-4 h-4" /> Save Changes
+                </button>
+              </div>
+            )}
+          </div>
+
+          {saveSuccess && (
+            <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-4">
+              <CheckCircle className="w-4 h-4 text-emerald-500" />
+              <p className="text-sm font-semibold text-emerald-700">Changes saved successfully!</p>
+            </div>
+          )}
+          {saveError && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <p className="text-sm text-red-600">{saveError}</p>
+            </div>
+          )}
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex flex-col gap-6">
+
+            {/* ── Student Information ── */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
+                  <GraduationCap className="w-4 h-4 text-emerald-600" />
+                </div>
+                <h2 className="font-bold text-slate-800">Student Information</h2>
+                {editing && <span className="ml-auto text-[11px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-semibold">Editable</span>}
+              </div>
+
+              {editing ? (
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="First Name" required error={E.firstName}>
+                      <input className={E.firstName ? inputErr : inputOk} value={form.firstName}
+                        onChange={e => set("firstName", e.target.value)}
+                        onBlur={() => setTouched(p => ({ ...p, firstName: true }))} placeholder="e.g. Maria" />
+                    </Field>
+                    <Field label="Last Name" required error={E.lastName}>
+                      <input className={E.lastName ? inputErr : inputOk} value={form.lastName}
+                        onChange={e => set("lastName", e.target.value)}
+                        onBlur={() => setTouched(p => ({ ...p, lastName: true }))} placeholder="e.g. Santos" />
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Middle Name">
+                      <input className={inputOk} value={form.middleName}
+                        onChange={e => set("middleName", e.target.value)} placeholder="e.g. Reyes or N/A" />
+                    </Field>
+                    <Field label="Suffix">
+                      <select className={inputOk} value={form.suffix} onChange={e => set("suffix", e.target.value)}>
+                        <option value="">None</option>
+                        {["Jr.","Sr.","II","III","IV"].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Gender" required error={E.gender}>
+                      <select className={E.gender ? inputErr : inputOk} value={form.gender}
+                        onChange={e => set("gender", e.target.value)}
+                        onBlur={() => setTouched(p => ({ ...p, gender: true }))}>
+                        <option value="">Select gender</option>
+                        <option value="Male">👦 Male</option>
+                        <option value="Female">👧 Female</option>
+                      </select>
+                    </Field>
+                    <Field label="Student ID" required error={E.studentId}>
+                      <input className={E.studentId ? inputErr : inputOk} value={form.studentId}
+                        onChange={e => { const v = e.target.value.replace(/\D/g, ""); setForm(p => ({ ...p, studentId: v })); setTouched(p => ({ ...p, studentId: true })); }}
+                        onBlur={() => setTouched(p => ({ ...p, studentId: true }))} placeholder="e.g. 20261234" inputMode="numeric" />
+                    </Field>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <ReviewRow label="First Name"  value={student.first_name} />
+                    <ReviewRow label="Middle Name" value={student.middle_name || "—"} />
+                    <ReviewRow label="Last Name"   value={student.last_name} />
+                    <ReviewRow label="Suffix"      value={student.suffix || "None"} />
+                  </div>
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <ReviewRow label="Student ID" value={student.student_id} />
+                    <ReviewRow label="Gender"     value={student.gender} />
+                    <ReviewRow label="RFID Card"  value={student.rfid_card || "Not assigned"} />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100" />
+
+            {/* ── Class Section ── */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl bg-blue-100 flex items-center justify-center">
+                  <CreditCard className="w-4 h-4 text-blue-600" />
+                </div>
+                <h2 className="font-bold text-slate-800">Class Section</h2>
+                {editing && <span className="ml-auto text-[11px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-semibold">Editable</span>}
+              </div>
+
+              {editing ? (
+                <div className="flex flex-col gap-4">
+                  <Field label="Grade Level" required error={E.grade}>
+                    <div className="relative">
+                      <select className={`${E.grade ? inputErr : inputOk} appearance-none pr-10`} value={form.grade}
+                        onChange={e => { setForm(p => ({ ...p, grade: e.target.value, section: "" })); setTouched(p => ({ ...p, grade: true })); setAddingNew(false); setNewSectionInput(""); }}>
+                        <option value="">Select grade</option>
+                        {[1,2,3,4,5,6].map(g => <option key={g} value={`Grade ${g}`}>Grade {g}</option>)}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    </div>
+                  </Field>
+                  <Field label="Section" required error={E.section}>
+                    <>
+                      {!addingNew ? (
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <select className={`${E.section ? inputErr : inputOk} appearance-none pr-10`} value={form.section}
+                              onChange={e => { setForm(p => ({ ...p, section: e.target.value })); setTouched(p => ({ ...p, section: true })); }}
+                              disabled={!form.grade || loadingSections}>
+                              <option value="">{!form.grade ? "Select a grade first" : loadingSections ? "Loading sections…" : sections.length === 0 ? "No sections yet — add one" : "Select section"}</option>
+                              {sections.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          </div>
+                          {form.grade && (
+                            <button type="button" onClick={() => { setAddingNew(true); setNewSectionInput(""); }}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold transition-colors whitespace-nowrap">
+                              <Plus className="w-3.5 h-3.5" /> New Section
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex gap-2">
+                            <input autoFocus className={`${inputOk} flex-1`} placeholder="e.g. Masayahin"
+                              value={newSectionInput} onChange={e => setNewSectionInput(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") { e.preventDefault(); const t = newSectionInput.trim(); if (!t) return; setSections(prev => prev.includes(t) ? prev : [...prev, t].sort()); setForm(p => ({ ...p, section: t })); setTouched(p => ({ ...p, section: true })); setAddingNew(false); setNewSectionInput(""); }
+                                if (e.key === "Escape") { setAddingNew(false); setNewSectionInput(""); }
+                              }} />
+                            <button type="button" disabled={!newSectionInput.trim()}
+                              onClick={() => { const t = newSectionInput.trim(); if (!t) return; setSections(prev => prev.includes(t) ? prev : [...prev, t].sort()); setForm(p => ({ ...p, section: t })); setTouched(p => ({ ...p, section: true })); setAddingNew(false); setNewSectionInput(""); }}
+                              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition-colors disabled:opacity-40">Add</button>
+                            <button type="button" onClick={() => { setAddingNew(false); setNewSectionInput(""); }}
+                              className="px-3 py-2 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 text-xs font-semibold transition-colors">Cancel</button>
+                          </div>
+                          <p className="text-[11px] text-slate-400">Press Enter or click Add to confirm.</p>
+                        </div>
+                      )}
+                      {form.section && !addingNew && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-700 text-xs font-semibold px-3 py-1 rounded-full">
+                            <CheckCircle className="w-3 h-3" /> {form.section}
+                          </span>
+                          {(form.grade !== originalGrade || form.section !== originalSection) && (
+                            <span className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg font-semibold">⚠ Will transfer to new adviser</span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  </Field>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Grade Level"><input className={inputView} value={student.grade} readOnly /></Field>
+                  <Field label="Section"><input className={inputView} value={student.section} readOnly /></Field>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100" />
+
+            {/* ── Parent / Guardian ── */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
+                  <Users className="w-4 h-4 text-emerald-600" />
+                </div>
+                <h2 className="font-bold text-slate-800">Parent / Guardian</h2>
+                {editing && <span className="ml-auto text-[11px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-semibold">Editable</span>}
+              </div>
+
+              {editing ? (
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="First Name" required error={E.parentFirstName}>
+                      <input className={E.parentFirstName ? inputErr : inputOk} value={form.parentFirstName}
+                        onChange={e => set("parentFirstName", e.target.value)}
+                        onBlur={() => setTouched(p => ({ ...p, parentFirstName: true }))} placeholder="e.g. Juan" />
+                    </Field>
+                    <Field label="Last Name" required error={E.parentLastName}>
+                      <input className={E.parentLastName ? inputErr : inputOk} value={form.parentLastName}
+                        onChange={e => set("parentLastName", e.target.value)}
+                        onBlur={() => setTouched(p => ({ ...p, parentLastName: true }))} placeholder="e.g. Dela Cruz" />
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Middle Name">
+                      <input className={inputOk} value={form.parentMiddleName}
+                        onChange={e => set("parentMiddleName", e.target.value)} placeholder="e.g. Santos or N/A" />
+                    </Field>
+                    <Field label="Suffix">
+                      <select className={inputOk} value={form.parentSuffix} onChange={e => set("parentSuffix", e.target.value)}>
+                        <option value="">None</option>
+                        {["Jr.","Sr.","II","III","IV"].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <Field label="Relationship" required error={E.relationship}>
+                    <select className={E.relationship ? inputErr : inputOk} value={form.relationship}
+                      onChange={e => set("relationship", e.target.value)}
+                      onBlur={() => setTouched(p => ({ ...p, relationship: true }))}>
+                      <option value="">Select relationship</option>
+                      {["Father","Mother","Guardian","Grandparent","Sibling","Other"].map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Contact Number" required error={E.contactNumber}>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input className={`${E.contactNumber ? inputErr : inputOk} pl-9`} placeholder="09171234567" maxLength={11} value={form.contactNumber}
+                        onChange={e => { const v = e.target.value.replace(/\D/g, ""); setForm(p => ({ ...p, contactNumber: v })); setTouched(p => ({ ...p, contactNumber: true })); }}
+                        onBlur={() => setTouched(p => ({ ...p, contactNumber: true }))} />
+                    </div>
+                  </Field>
+                  <Field label="Email Address" required error={E.email}>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input type="email" className={`${E.email ? inputErr : inputOk} pl-9`} placeholder="parent@email.com" value={form.email}
+                        onChange={e => { setForm(p => ({ ...p, email: e.target.value })); setTouched(p => ({ ...p, email: true })); }}
+                        onBlur={() => setTouched(p => ({ ...p, email: true }))} />
+                    </div>
+                  </Field>
+                  {/* ── Address (new) ── */}
+                  <Field label="Home Address">
+                    <div className="relative">
+                      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input className={`${inputOk} pl-9`} placeholder="e.g. 123 Rizal St., Brgy. Poblacion, Manila" value={form.address}
+                        onChange={e => setForm(p => ({ ...p, address: e.target.value }))} />
+                    </div>
+                  </Field>
+                </div>
+              ) : (
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                  <ReviewRow label="First Name"   value={student.parent_first_name} />
+                  <ReviewRow label="Middle Name"  value={student.parent_middle_name || "—"} />
+                  <ReviewRow label="Last Name"    value={student.parent_last_name} />
+                  <ReviewRow label="Suffix"       value={student.parent_suffix || "None"} />
+                  <ReviewRow label="Relationship" value={student.relationship} />
+                  <ReviewRow label="Contact"      value={student.contact_number} />
+                  <ReviewRow label="Email"        value={student.parent_email} />
+                  <ReviewRow label="Address"      value={student.parent_address || "—"} />
+                  <ReviewRow label="Account"      value={student.password_set ? "Password set ✓" : "Using temp password"} />
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

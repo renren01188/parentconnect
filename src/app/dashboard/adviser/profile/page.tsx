@@ -1,0 +1,946 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import {
+    Eye, EyeOff, ShieldCheck,
+    School, Mail, Phone, Check, CircleAlert,
+    BookOpen, TrendingUp, ClipboardList, CalendarDays,
+    RefreshCw, Send, Users, FileText,
+    Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, Camera, ImagePlus, Trash2, ChevronDown,
+} from "lucide-react";
+
+function checkPassword(pw: string) {
+    return {
+        length:    pw.length >= 8,
+        uppercase: /[A-Z]/.test(pw),
+        numOrSym:  /[0-9!@#$%^&*]/.test(pw),
+    };
+}
+
+function getInitials(first: string, last: string) {
+    return `${first?.[0] ?? ""}${last?.[0] ?? ""}`.toUpperCase();
+}
+
+interface AdviserProfile {
+    id: number;
+    employee_id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string | null;
+    grade: string | null;
+    section: string | null;
+    status: string;
+    student_count: number;
+}
+
+// ─── Auth Gate ────────────────────────────────────────────────────────────────
+function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; onCancel: () => void }) {
+    const [pw, setPw] = useState("");
+    const [show, setShow] = useState(false);
+    const [err, setErr] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    async function handleSubmit() {
+        if (!pw.trim()) { setErr("Please enter your current password."); return; }
+        setLoading(true); setErr("");
+        try {
+            const res  = await fetch("/api/adviser/verify-password", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: pw }),
+            });
+            const json = await res.json();
+            if (!json.success) { setErr(json.message || "Incorrect password."); setLoading(false); return; }
+            onConfirm(pw);
+        } catch {
+            setErr("Failed to verify password. Please try again.");
+            setLoading(false);
+        }
+    }
+
+    return (
+        <div className="flex flex-col items-center px-8 py-10">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4">
+                <Lock className="w-7 h-7 text-emerald-600" />
+            </div>
+            <h3 className="text-lg font-extrabold text-slate-800 mb-1">Verify Your Identity</h3>
+            <p className="text-sm text-slate-400 text-center mb-6 max-w-xs">Enter your current password to access account settings</p>
+            <div className="w-full max-w-xs space-y-3">
+                <div className="relative">
+                    <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                        type={show ? "text" : "password"}
+                        value={pw}
+                        onChange={e => { setPw(e.target.value); setErr(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleSubmit()}
+                        placeholder="Current password"
+                        autoFocus
+                        className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-10 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white transition"
+                    />
+                    <button type="button" onClick={() => setShow(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                </div>
+                {err && (
+                    <div className="flex items-center gap-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-600">
+                        <CircleAlert className="h-3.5 w-3.5 shrink-0" />{err}
+                    </div>
+                )}
+                <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={loading}
+                    className="w-full h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-60 transition-colors"
+                >
+                    {loading ? <><RefreshCw className="h-4 w-4 animate-spin" /> Verifying…</> : "Continue →"}
+                </button>
+                <button type="button" onClick={onCancel} className="w-full text-sm text-slate-400 hover:text-slate-600 transition-colors py-1">Cancel</button>
+            </div>
+        </div>
+    );
+}
+
+// ─── Settings Modal ───────────────────────────────────────────────────────────
+type SettingsView = "menu" | "auth" | "personal-info" | "password" | "profile-picture";
+
+function SettingsModal({
+    profile,
+    onClose,
+    onProfileUpdated,
+}: {
+    profile: AdviserProfile;
+    onClose: () => void;
+    onProfileUpdated: () => void;
+}) {
+    const [view, setView] = useState<SettingsView>("menu");
+    const [verifiedPw, setVerifiedPw] = useState("");
+    const [pendingNav, setPendingNav] = useState<"personal-info" | "password" | "profile-picture" | null>(null);
+
+    // Personal info state
+    const [email,   setEmail]   = useState(profile.email);
+    const [phone,   setPhone]   = useState(profile.phone ?? "");
+    const [grade,   setGrade]   = useState(profile.grade ?? "");
+    const [section, setSection] = useState(profile.section ?? "");
+    const [note,    setNote]    = useState("");
+    const [isSending,   setIsSending]   = useState(false);
+    const [approvalMsg, setApprovalMsg] = useState("");
+    const [approvalErr, setApprovalErr] = useState(false);
+
+    // Grade / section dropdown data
+    const GRADE_LEVELS = ["Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6"];
+    const [sectionOptions, setSectionOptions] = useState<string[]>([]);
+    const [loadingSections, setLoadingSections] = useState(false);
+
+    // Fetch sections whenever grade changes
+    useEffect(() => {
+        if (!grade) { setSectionOptions([]); setSection(""); return; }
+        setLoadingSections(true);
+        setSection("");
+        fetch(`/api/sections?grade=${encodeURIComponent(grade)}`)
+            .then(r => r.json())
+            .then(json => {
+                if (json.success) setSectionOptions(json.sections ?? []);
+                else setSectionOptions([]);
+            })
+            .catch(() => setSectionOptions([]))
+            .finally(() => setLoadingSections(false));
+    }, [grade]);
+
+    // Password state
+    const [newPw,      setNewPw]      = useState("");
+    const [confirmPw,  setConfirmPw]  = useState("");
+    const [showNew,    setShowNew]    = useState(false);
+    const [showCon,    setShowCon]    = useState(false);
+    const [pwMsg,      setPwMsg]      = useState("");
+    const [pwError,    setPwError]    = useState(false);
+    const [isSavingPw, setIsSavingPw] = useState(false);
+
+    // Profile picture state
+    const [avatarPreview,   setAvatarPreview]   = useState<string | null>(null);
+    const [avatarFile,      setAvatarFile]      = useState<File | null>(null);
+    const [avatarMsg,       setAvatarMsg]       = useState("");
+    const [avatarErr,       setAvatarErr]       = useState(false);
+    const [isSavingAvatar,  setIsSavingAvatar]  = useState(false);
+
+    function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) { setAvatarErr(true); setAvatarMsg("Image must be under 5 MB."); return; }
+        if (!file.type.startsWith("image/")) { setAvatarErr(true); setAvatarMsg("Please select a valid image file."); return; }
+        setAvatarErr(false); setAvatarMsg("");
+        setAvatarFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => setAvatarPreview(ev.target?.result as string);
+        reader.readAsDataURL(file);
+    }
+
+    async function handleSaveAvatar() {
+        if (!avatarFile) return;
+        setIsSavingAvatar(true); setAvatarMsg(""); setAvatarErr(false);
+        try {
+            const formData = new FormData();
+            formData.append("avatar", avatarFile);
+            const res  = await fetch("/api/adviser/avatar", { method: "POST", body: formData });
+            const json = await res.json();
+            if (!json.success) throw new Error(json.message);
+            setAvatarMsg("Profile picture updated successfully!");
+            onProfileUpdated();
+            setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2500);
+        } catch (e: any) {
+            setAvatarErr(true); setAvatarMsg(e.message || "Failed to upload photo.");
+        } finally {
+            setIsSavingAvatar(false);
+        }
+    }
+
+    async function handleRemoveAvatar() {
+        setIsSavingAvatar(true); setAvatarMsg(""); setAvatarErr(false);
+        try {
+            const res  = await fetch("/api/adviser/avatar", { method: "DELETE" });
+            const json = await res.json();
+            if (!json.success) throw new Error(json.message);
+            setAvatarPreview(null); setAvatarFile(null);
+            setAvatarMsg("Profile picture removed.");
+            onProfileUpdated();
+            setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2000);
+        } catch (e: any) {
+            setAvatarErr(true); setAvatarMsg(e.message || "Failed to remove photo.");
+        } finally {
+            setIsSavingAvatar(false);
+        }
+    }
+
+    const pwChecks = checkPassword(newPw);
+    const pwValid  = pwChecks.length && pwChecks.uppercase && pwChecks.numOrSym;
+    const advisoryClass = profile.grade && profile.section
+        ? `Grade ${profile.grade} · ${profile.section}`
+        : "No section assigned";
+
+    // Close on Escape
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", handler);
+        return () => window.removeEventListener("keydown", handler);
+    }, [onClose]);
+
+    function navigate(dest: "personal-info" | "password" | "profile-picture") {
+        if (verifiedPw) { setView(dest); }
+        else { setPendingNav(dest); setView("auth"); }
+    }
+
+    function handleAuthConfirm(pw: string) {
+        setVerifiedPw(pw);
+        if (pendingNav) { setView(pendingNav); setPendingNav(null); }
+    }
+
+    async function handleSendApproval() {
+        setApprovalMsg(""); setApprovalErr(false);
+        if (!email.trim()) { setApprovalErr(true); setApprovalMsg("Email address is required."); return; }
+        setIsSending(true);
+        try {
+            const res  = await fetch("/api/adviser/me", {
+                method: "PATCH", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, phone, grade, section, note: note.trim() }),
+            });
+            const json = await res.json();
+            if (!json.success) throw new Error(json.message);
+            setApprovalMsg("Approval request sent! Your changes will be applied once the Principal approves.");
+            setNote("");
+            onProfileUpdated();
+            setTimeout(() => { setApprovalMsg(""); setView("menu"); }, 3500);
+        } catch (e: any) {
+            setApprovalErr(true);
+            setApprovalMsg(e.message || "Failed to send approval request.");
+        } finally {
+            setIsSending(false);
+        }
+    }
+
+    async function handleUpdatePassword() {
+        setPwMsg(""); setPwError(false);
+        if (!pwValid)            { setPwError(true); setPwMsg("New password doesn't meet requirements."); return; }
+        if (newPw !== confirmPw) { setPwError(true); setPwMsg("Passwords do not match."); return; }
+        setIsSavingPw(true);
+        try {
+            const res  = await fetch("/api/adviser/me", {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ current_password: verifiedPw, new_password: newPw }),
+            });
+            const json = await res.json();
+            if (!json.success) { setPwError(true); setPwMsg(json.message); return; }
+            setPwMsg("Password updated successfully!");
+            setNewPw(""); setConfirmPw(""); setVerifiedPw("");
+            setTimeout(() => { setPwMsg(""); setView("menu"); }, 2500);
+        } catch {
+            setPwError(true); setPwMsg("Failed to update password. Please try again.");
+        } finally {
+            setIsSavingPw(false);
+        }
+    }
+
+    const viewTitle: Record<SettingsView, string> = {
+        "menu":             "Account Settings",
+        "auth":             "Verify Identity",
+        "personal-info":    "Edit Personal Information",
+        "password":         "Change Password",
+        "profile-picture":  "Change Profile Picture",
+    };
+    const viewSubtitle: Record<SettingsView, string> = {
+        "menu":             "Manage your profile and security",
+        "auth":             "Confirm your identity to continue",
+        "personal-info":    "Changes require Principal approval",
+        "password":         "No approval needed for password changes",
+        "profile-picture":  "Upload a new photo — no approval needed",
+    };
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            onClick={onClose}
+        >
+            <div
+                className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+                style={{ maxHeight: "90vh" }}
+                onClick={e => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-100 shrink-0">
+                    {(view === "personal-info" || view === "password" || view === "auth" || view === "profile-picture") && (
+                        <button
+                            type="button"
+                            onClick={() => setView("menu")}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 transition shrink-0"
+                        >
+                            <ArrowLeft className="w-4 h-4" />
+                        </button>
+                    )}
+                    <div className="flex-1">
+                        <h2 className="text-base font-extrabold text-slate-800">{viewTitle[view]}</h2>
+                        <p className="text-xs text-slate-400 mt-0.5">{viewSubtitle[view]}</p>
+                    </div>
+                    <button type="button" onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 transition shrink-0">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                {/* Body */}
+                <div className="overflow-y-auto flex-1">
+
+                    {/* ── MENU ── */}
+                    {view === "menu" && (
+                        <div className="p-5 space-y-3">
+                            {/* Profile chip */}
+                            <div className="flex items-center gap-3 bg-slate-50 rounded-xl border border-slate-100 px-4 py-3 mb-2">
+                                <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white text-sm font-extrabold shrink-0 overflow-hidden">
+                                    {avatarPreview
+                                        ? <img src={avatarPreview} alt="avatar" className="w-full h-full object-cover" />
+                                        : getInitials(profile.first_name, profile.last_name)}
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="text-sm font-bold text-slate-800 truncate">{profile.first_name} {profile.last_name}</p>
+                                    <p className="text-xs text-slate-400 truncate">{profile.email}</p>
+                                </div>
+                                <span className="ml-auto flex items-center gap-1 text-[11px] font-semibold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full shrink-0">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Active
+                                </span>
+                            </div>
+
+                            {/* Menu items */}
+                            {[
+                                {
+                                    icon: Camera,
+                                    label: "Change Profile Picture",
+                                    description: "Upload a new profile photo",
+                                    badge: "No approval needed",
+                                    badgeColor: "bg-emerald-50 text-emerald-600 border-emerald-100",
+                                    dest: "profile-picture" as const,
+                                },
+                                {
+                                    icon: Pencil,
+                                    label: "Edit Personal Information",
+                                    description: "Update email, phone, and advisory class",
+                                    badge: "Requires Principal approval",
+                                    badgeColor: "bg-amber-50 text-amber-600 border-amber-100",
+                                    dest: "personal-info" as const,
+                                },
+                                {
+                                    icon: ShieldCheck,
+                                    label: "Change Password",
+                                    description: "Update your account password securely",
+                                    badge: "No approval needed",
+                                    badgeColor: "bg-emerald-50 text-emerald-600 border-emerald-100",
+                                    dest: "password" as const,
+                                },
+                            ].map(({ icon: Icon, label, description, badge, badgeColor, dest }) => (
+                                <button
+                                    key={dest}
+                                    type="button"
+                                    onClick={() => navigate(dest)}
+                                    className="w-full flex items-center gap-4 p-4 rounded-xl border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/40 transition-all group text-left"
+                                >
+                                    <div className="w-11 h-11 rounded-xl bg-slate-100 group-hover:bg-emerald-100 flex items-center justify-center shrink-0 transition-colors">
+                                        <Icon className="w-5 h-5 text-slate-500 group-hover:text-emerald-600 transition-colors" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-bold text-slate-700">{label}</p>
+                                        <p className="text-xs text-slate-400 mt-0.5">{description}</p>
+                                        <span className={`mt-1.5 inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badgeColor}`}>{badge}</span>
+                                    </div>
+                                    <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-emerald-400 shrink-0 transition-colors" />
+                                </button>
+                            ))}
+
+                            <p className="text-[11px] text-slate-400 text-center pt-2">
+                                You'll be asked to verify your password when accessing any setting.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* ── AUTH GATE ── */}
+                    {view === "auth" && (
+                        <AuthGate
+                            onConfirm={handleAuthConfirm}
+                            onCancel={() => setView("menu")}
+                        />
+                    )}
+
+                    {/* ── PERSONAL INFO ── */}
+                    {view === "personal-info" && (
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
+                                <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                                <p className="text-xs text-amber-700 leading-relaxed">
+                                    <strong>First name, last name, role,</strong> and <strong>employee ID</strong> can only be changed by the Principal.
+                                    Changes to email, phone, and advisory class will be sent for approval.
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                {/* Locked */}
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                                        First Name <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    </label>
+                                    <input value={profile.first_name} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 px-4 text-sm text-slate-400 cursor-default outline-none" />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                                        Last Name <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    </label>
+                                    <input value={profile.last_name} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 px-4 text-sm text-slate-400 cursor-default outline-none" />
+                                </div>
+
+                                {/* Email */}
+                                <div>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Email <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                    </label>
+                                    <div className="relative">
+                                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input value={email} onChange={e => setEmail(e.target.value)}
+                                            className="h-11 w-full rounded-xl border border-emerald-300 bg-white pl-9 pr-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
+                                    </div>
+                                </div>
+
+                                {/* Phone */}
+                                <div>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Phone <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                    </label>
+                                    <div className="relative">
+                                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input value={phone} onChange={e => setPhone(e.target.value)}
+                                            className="h-11 w-full rounded-xl border border-emerald-300 bg-white pl-9 pr-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
+                                    </div>
+                                </div>
+
+                                {/* Locked — Role */}
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                                        Role <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    </label>
+                                    <div className="relative">
+                                        <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input value="Class Adviser" disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 pl-9 pr-4 text-sm text-slate-400 cursor-default outline-none" />
+                                    </div>
+                                </div>
+
+                                {/* Locked — Employee ID */}
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                                        Employee ID <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    </label>
+                                    <div className="relative">
+                                        <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input value={profile.employee_id} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 pl-9 pr-4 text-sm text-slate-400 cursor-default outline-none" />
+                                    </div>
+                                </div>
+
+                                {/* Advisory Class */}
+                                <div className="col-span-2">
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Advisory Class <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {/* Grade dropdown */}
+                                        <div className="relative">
+                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
+                                            <select
+                                                value={grade}
+                                                onChange={e => setGrade(e.target.value)}
+                                                className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer"
+                                            >
+                                                <option value="">Select Grade</option>
+                                                {GRADE_LEVELS.map(g => (
+                                                    <option key={g} value={g}>{g}</option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                                        </div>
+
+                                        {/* Section dropdown — depends on grade */}
+                                        <div className="relative">
+                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
+                                            <select
+                                                value={section}
+                                                onChange={e => setSection(e.target.value)}
+                                                disabled={!grade || loadingSections}
+                                                className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                            >
+                                                <option value="">
+                                                    {!grade
+                                                        ? "Select grade first"
+                                                        : loadingSections
+                                                        ? "Loading…"
+                                                        : sectionOptions.length === 0
+                                                        ? "No sections found"
+                                                        : "Select Section"}
+                                                </option>
+                                                {sectionOptions.map(s => (
+                                                    <option key={s} value={s}>{s}</option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {approvalMsg && (
+                                <div className={`flex items-start gap-2 rounded-xl px-4 py-3 text-sm font-medium ${approvalErr ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                                    {approvalErr ? <CircleAlert className="h-4 w-4 shrink-0 mt-0.5" /> : <Check className="h-4 w-4 shrink-0 mt-0.5" />}
+                                    {approvalMsg}
+                                </div>
+                            )}
+
+                            {/* Note to principal */}
+                            <div>
+                                <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                    Note to Principal
+                                    <span className="normal-case font-normal text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">Optional</span>
+                                </label>
+                                <textarea
+                                    value={note}
+                                    onChange={e => setNote(e.target.value)}
+                                    placeholder="Briefly explain why you're requesting these changes (e.g. I changed my personal number)…"
+                                    rows={3}
+                                    maxLength={300}
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white transition resize-none placeholder:text-slate-400"
+                                />
+                                <p className="mt-1 text-right text-[11px] text-slate-400">{note.length}/300</p>
+                                <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                    <CircleAlert className="h-3 w-3 text-amber-400 shrink-0" />
+                                    This note will be visible to the Principal in the Approval Requests panel.
+                                </p>
+                            </div>
+
+                            <div className="flex gap-3 pt-1">
+                                <button type="button" onClick={() => setView("menu")}
+                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    Cancel
+                                </button>
+                                <button type="button" onClick={handleSendApproval} disabled={isSending}
+                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-60 transition-colors">
+                                    {isSending
+                                        ? <><RefreshCw className="h-4 w-4 animate-spin" /> Sending…</>
+                                        : <><Send className="h-4 w-4" /> Send for Approval</>}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── CHANGE PASSWORD ── */}
+                    {view === "password" && (
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
+                                <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+                                <p className="text-xs text-emerald-700">
+                                    Password changes take effect <strong>immediately</strong> — no Principal approval needed.
+                                </p>
+                            </div>
+
+                            {/* Verified password (visual indicator) */}
+                            <div>
+                                <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                    Current Password
+                                    <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Verified ✓</span>
+                                </label>
+                                <div className="relative">
+                                    <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-500" />
+                                    <input value="••••••••••" disabled
+                                        className="h-11 w-full rounded-xl border border-emerald-200 bg-emerald-50/50 pl-9 pr-4 text-sm text-emerald-700 cursor-default outline-none" />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">New Password</label>
+                                    <div className="relative">
+                                        <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input type={showNew ? "text" : "password"} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Enter new password"
+                                            className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-10 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white transition" />
+                                        <button type="button" onClick={() => setShowNew(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                            {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Confirm Password</label>
+                                    <div className="relative">
+                                        <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                        <input type={showCon ? "text" : "password"} value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Confirm new password"
+                                            className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-10 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white transition" />
+                                        <button type="button" onClick={() => setShowCon(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                            {showCon ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Requirements checklist */}
+                            <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+                                <p className="text-xs font-semibold text-slate-500 mb-2">Password Requirements</p>
+                                <div className="space-y-1.5">
+                                    {[
+                                        { label: "At least 8 characters",          met: pwChecks.length    },
+                                        { label: "One uppercase letter",            met: pwChecks.uppercase },
+                                        { label: "One number or special character", met: pwChecks.numOrSym  },
+                                    ].map(({ label, met }) => (
+                                        <div key={label} className="flex items-center gap-2">
+                                            <Check className={`h-3.5 w-3.5 ${met ? "text-emerald-500" : "text-slate-300"}`} />
+                                            <span className={`text-xs ${met ? "text-emerald-600" : "text-slate-400"}`}>{label}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Match indicator */}
+                            {confirmPw && (
+                                <div className={`flex items-center gap-2 text-xs font-medium ${newPw === confirmPw ? "text-emerald-600" : "text-red-500"}`}>
+                                    {newPw === confirmPw
+                                        ? <><Check className="h-3.5 w-3.5" /> Passwords match</>
+                                        : <><CircleAlert className="h-3.5 w-3.5" /> Passwords do not match</>}
+                                </div>
+                            )}
+
+                            {pwMsg && (
+                                <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium ${pwError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                                    {pwError ? <CircleAlert className="h-4 w-4 shrink-0" /> : <Check className="h-4 w-4 shrink-0" />}
+                                    {pwMsg}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 pt-1">
+                                <button type="button" onClick={() => setView("menu")}
+                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    Cancel
+                                </button>
+                                <button type="button" onClick={handleUpdatePassword}
+                                    disabled={isSavingPw || !pwValid || newPw !== confirmPw}
+                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-50 transition-colors">
+                                    {isSavingPw
+                                        ? <><RefreshCw className="h-4 w-4 animate-spin" /> Updating…</>
+                                        : <><ShieldCheck className="h-4 w-4" /> Update Password</>}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── PROFILE PICTURE ── */}
+                    {view === "profile-picture" && (
+                        <div className="p-6 space-y-5">
+                            <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
+                                <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+                                <p className="text-xs text-emerald-700">
+                                    Profile picture changes take effect <strong>immediately</strong> — no Principal approval needed.
+                                </p>
+                            </div>
+
+                            {/* Avatar preview */}
+                            <div className="flex flex-col items-center gap-4 py-2">
+                                <div className="relative">
+                                    <div className="w-28 h-28 rounded-full overflow-hidden ring-4 ring-slate-100 shadow-md bg-emerald-600 flex items-center justify-center text-white text-3xl font-extrabold">
+                                        {avatarPreview
+                                            ? <img src={avatarPreview} alt="Preview" className="w-full h-full object-cover" />
+                                            : getInitials(profile.first_name, profile.last_name)}
+                                    </div>
+                                    {/* Camera overlay button */}
+                                    <label
+                                        htmlFor="avatar-upload"
+                                        className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-emerald-500 hover:bg-emerald-600 border-2 border-white flex items-center justify-center cursor-pointer transition-colors shadow"
+                                        title="Upload photo"
+                                    >
+                                        <Camera className="w-4 h-4 text-white" />
+                                    </label>
+                                    <input
+                                        id="avatar-upload"
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={handleAvatarFileChange}
+                                    />
+                                </div>
+                                <div className="text-center">
+                                    <p className="text-sm font-bold text-slate-700">{profile.first_name} {profile.last_name}</p>
+                                    <p className="text-xs text-slate-400 mt-0.5">Class Adviser</p>
+                                </div>
+                            </div>
+
+                            {/* Upload area */}
+                            <label
+                                htmlFor="avatar-upload-drop"
+                                className="flex flex-col items-center justify-center gap-2 w-full rounded-xl border-2 border-dashed border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40 transition-all cursor-pointer py-6 px-4"
+                            >
+                                <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+                                    <ImagePlus className="w-5 h-5 text-slate-400" />
+                                </div>
+                                <p className="text-sm font-semibold text-slate-600">
+                                    {avatarFile ? avatarFile.name : "Click to select a photo"}
+                                </p>
+                                <p className="text-xs text-slate-400">PNG, JPG, GIF up to 5 MB</p>
+                                <input
+                                    id="avatar-upload-drop"
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={handleAvatarFileChange}
+                                />
+                            </label>
+
+                            {avatarMsg && (
+                                <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium ${avatarErr ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                                    {avatarErr ? <CircleAlert className="h-4 w-4 shrink-0" /> : <Check className="h-4 w-4 shrink-0" />}
+                                    {avatarMsg}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 pt-1">
+                                <button type="button" onClick={handleRemoveAvatar} disabled={isSavingAvatar}
+                                    className="flex items-center justify-center gap-2 px-4 h-11 rounded-xl border border-red-200 text-sm font-semibold text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors shrink-0">
+                                    <Trash2 className="h-4 w-4" /> Remove
+                                </button>
+                                <button type="button" onClick={() => setView("menu")}
+                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    Cancel
+                                </button>
+                                <button type="button" onClick={handleSaveAvatar}
+                                    disabled={!avatarFile || isSavingAvatar}
+                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-50 transition-colors">
+                                    {isSavingAvatar
+                                        ? <><RefreshCw className="h-4 w-4 animate-spin" /> Saving…</>
+                                        : <><Camera className="h-4 w-4" /> Save Photo</>}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+export default function AdviserProfilePage() {
+    const [profile,      setProfile]      = useState<AdviserProfile | null>(null);
+    const [loading,      setLoading]      = useState(true);
+    const [loadErr,      setLoadErr]      = useState("");
+    const [showSettings, setShowSettings] = useState(false);
+
+    async function loadProfile() {
+        setLoading(true); setLoadErr("");
+        try {
+            const res  = await fetch("/api/adviser/me");
+            const json = await res.json();
+            if (!json.success) throw new Error(json.message);
+            setProfile(json.adviser);
+        } catch (e: any) {
+            setLoadErr(e.message || "Failed to load profile.");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    useEffect(() => { loadProfile(); }, []);
+
+    const initials      = profile ? getInitials(profile.first_name, profile.last_name) : "??";
+    const advisoryClass = profile?.grade && profile?.section
+        ? `Grade ${profile.grade} · ${profile.section}`
+        : "No section assigned";
+
+    return (
+        <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 font-sans">
+
+            {/* Page header */}
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">My Profile</h1>
+                    <p className="text-slate-400 text-sm mt-0.5">View your account information</p>
+                </div>
+                {profile && (
+                    <button
+                        type="button"
+                        onClick={() => setShowSettings(true)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50 transition-all shadow-sm"
+                    >
+                        <Settings className="h-4 w-4" />
+                        Settings
+                    </button>
+                )}
+            </div>
+
+            {loading && (
+                <div className="flex items-center justify-center py-20 gap-2 text-slate-400">
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <span className="text-sm">Loading profile…</span>
+                </div>
+            )}
+
+            {!loading && loadErr && (
+                <div className="flex flex-col items-center justify-center py-20 gap-3">
+                    <p className="text-red-500 font-semibold">{loadErr}</p>
+                    <button onClick={loadProfile} className="px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600 transition-colors">Retry</button>
+                </div>
+            )}
+
+            {!loading && !loadErr && profile && (
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+
+                    {/* Left column */}
+                    <div className="xl:col-span-4 flex flex-col gap-5">
+                        {/* Avatar card */}
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                            <div className="h-20 bg-gradient-to-r from-emerald-600 to-emerald-500" />
+                            <div className="px-6 pb-6">
+                                <div className="-mt-10 mb-4 flex justify-center">
+                                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-600 text-white text-2xl font-extrabold ring-4 ring-white shadow-md">
+                                        {initials}
+                                    </div>
+                                </div>
+                                <div className="text-center">
+                                    <h3 className="text-xl font-extrabold text-slate-800">{profile.first_name} {profile.last_name}</h3>
+                                    <p className="text-sm text-slate-400 mt-0.5">Class Adviser</p>
+                                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                        {profile.status === "active" ? "Active" : "Inactive"}
+                                    </span>
+                                </div>
+                                <div className="mt-5 space-y-2.5">
+                                    {[
+                                        { icon: BookOpen, text: advisoryClass },
+                                        { icon: School,   text: "Santiago Elementary" },
+                                        { icon: Mail,     text: profile.email || "—" },
+                                        { icon: Phone,    text: profile.phone || "—" },
+                                    ].map(({ icon: Icon, text }) => (
+                                        <div key={text} className="flex items-center gap-2.5 text-sm text-slate-600">
+                                            <Icon className="h-4 w-4 text-slate-400 shrink-0" />
+                                            <span className="truncate">{text}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Class Overview */}
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                            <h4 className="text-sm font-bold text-slate-700 mb-4">My Class Overview</h4>
+                            <div className="space-y-3">
+                                {[
+                                    { icon: Users,         label: "Total Students", value: String(profile.student_count), color: "text-emerald-600" },
+                                    { icon: TrendingUp,    label: "Advisory Class", value: advisoryClass,                 color: "text-emerald-600" },
+                                    { icon: ClipboardList, label: "Employee ID",    value: profile.employee_id,           color: "text-amber-500"   },
+                                    { icon: CalendarDays,  label: "Account Status", value: profile.status,                color: "text-blue-500"    },
+                                ].map(({ icon: Icon, label, value, color }) => (
+                                    <div key={label} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                                        <div className="flex items-center gap-2.5 text-sm text-slate-600">
+                                            <Icon className="h-4 w-4 text-slate-400" />{label}
+                                        </div>
+                                        <span className={`text-sm font-bold ${color}`}>{value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right column — read-only */}
+                    <div className="xl:col-span-8 flex flex-col gap-5">
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                                <h3 className="text-base font-bold text-slate-800">Personal Information</h3>
+                            </div>
+                            <div className="p-6">
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    {[
+                                        { label: "First Name",    value: profile.first_name,   icon: null      },
+                                        { label: "Last Name",     value: profile.last_name,    icon: null      },
+                                        { label: "Email Address", value: profile.email,        icon: Mail      },
+                                        { label: "Phone Number",  value: profile.phone || "—", icon: Phone     },
+                                        { label: "Role",          value: "Class Adviser",      icon: Users     },
+                                        { label: "Employee ID",   value: profile.employee_id,  icon: FileText  },
+                                    ].map(({ label, value, icon: Icon }) => (
+                                        <div key={label}>
+                                            <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</label>
+                                            <div className="relative">
+                                                {Icon && <Icon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />}
+                                                <input value={value} disabled
+                                                    className={`h-11 w-full rounded-xl border border-slate-200 bg-slate-50 ${Icon ? "pl-9" : "px-4"} pr-4 text-sm text-slate-500 cursor-default outline-none`} />
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <div className="sm:col-span-2">
+                                        <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Advisory Class</label>
+                                        <div className="relative">
+                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                            <input
+                                                value={`${advisoryClass} · ${profile.student_count} Student${profile.student_count !== 1 ? "s" : ""}`}
+                                                disabled
+                                                className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Notice */}
+                                <div className="mt-4 flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
+                                    <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                                    <p className="text-xs text-amber-700">
+                                        To edit your profile or change your password, use the <strong>Settings</strong> button at the top right.
+                                        Profile changes require Principal approval; password and photo changes take effect immediately.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Settings Modal */}
+            {showSettings && profile && (
+                <SettingsModal
+                    profile={profile}
+                    onClose={() => setShowSettings(false)}
+                    onProfileUpdated={loadProfile}
+                />
+            )}
+        </main>
+    );
+}
