@@ -1,225 +1,324 @@
 "use client";
 
-// src/app/dashboard/parent/notifications/page.tsx
-
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertCircle, CalendarCheck, MessageSquare, Bell, CheckCheck,
+  AlertCircle,
+  Bell,
+  CalendarCheck,
+  CheckCheck,
+  MessageSquare,
 } from "lucide-react";
+
 import Sidebar from "../components/Sidebar";
 import { useNotifContext } from "../context/NotificationContext";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import {
+  type FilterTab,
+  type Notification,
+  type NotifType,
+} from "../data";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type NotifType = "alert" | "message" | "event";
-type FilterTab = "All" | "Unread" | "Principal" | "Teacher";
+type PageNotification = Notification & {
+  source?: "database" | "mock";
+  announcementId?: number;
+  createdAt?: string;
+};
 
-interface Notification {
-  id: number;
-  type: NotifType;
-  title: string;
-  msg: string;
-  time: string;
-  category: string;
-  unread: boolean;
-  tab: FilterTab[];
-  studentName?: string;
-  teacherName?: string;
-  eventId?: string;
-}
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
-const INITIAL_NOTIFICATIONS: Notification[] = [
+const TYPE_CONFIG: Record<
+  NotifType,
   {
-    id: 1, type: "alert",
-    title: "Absent Alert",
-    msg: "Maria was marked absent today",
-    time: "2 hours ago", category: "Attendance",
-    unread: true, tab: ["All", "Unread"],
-    studentName: "Maria",
-  },
-  {
-    id: 2, type: "message",
-    title: "New Message from Teacher",
-    msg: "Ms. Ana Cruz sent you a message about the upcoming exam",
-    time: "5 hours ago", category: "Teacher",
-    unread: true, tab: ["All", "Unread", "Teacher"],
-    teacherName: "Ms. Ana Cruz",
-  },
-  {
-    id: 3, type: "event",
-    title: "Upcoming Event Reminder",
-    msg: "Parent-Teacher Conference on November 25, 2026",
-    time: "2 days ago", category: "Event",
-    unread: false, tab: ["All"],
-    eventId: "ptc-nov-25",
-  },
-];
-
-// ─── Config ───────────────────────────────────────────────────────────────────
-const TYPE_CONFIG: Record<NotifType, {
-  Icon: React.ElementType;
-  iconBg: string;
-  iconColor: string;
-  borderColor: string;
-  CatIcon: React.ElementType;
-}> = {
+    Icon: React.ElementType;
+    iconBg: string;
+    iconColor: string;
+    borderColor: string;
+    categoryIcon: React.ElementType;
+  }
+> = {
   alert: {
-    Icon: AlertCircle, iconBg: "#fee2e2", iconColor: "#ef4444",
-    borderColor: "#ef4444", CatIcon: Bell,
+    Icon: AlertCircle,
+    iconBg: "#fee2e2",
+    iconColor: "#ef4444",
+    borderColor: "#ef4444",
+    categoryIcon: Bell,
   },
   message: {
-    Icon: MessageSquare, iconBg: "#dbeafe", iconColor: "#3b82f6",
-    borderColor: "#3b82f6", CatIcon: Bell,
+    Icon: MessageSquare,
+    iconBg: "#dbeafe",
+    iconColor: "#3b82f6",
+    borderColor: "#3b82f6",
+    categoryIcon: Bell,
   },
   event: {
-    Icon: CalendarCheck, iconBg: "#fef9c3", iconColor: "#f59e0b",
-    borderColor: "#f59e0b", CatIcon: CalendarCheck,
+    Icon: CalendarCheck,
+    iconBg: "#fef9c3",
+    iconColor: "#f59e0b",
+    borderColor: "#f59e0b",
+    categoryIcon: CalendarCheck,
   },
 };
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function NotificationsPage() {
-  const router       = useRouter();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { setUnreadCount } = useNotifContext();
 
-  const [notifs,      setNotifs]      = useState<Notification[]>(INITIAL_NOTIFICATIONS);
-  const [activeTab,   setActiveTab]   = useState<FilterTab>("All");
-  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const [notifications, setNotifications] = useState<PageNotification[]>([]);
+  const [activeTab, setActiveTab] = useState<FilterTab>("All");
+  const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
 
-  // Sync Notifications badge whenever read state changes (runs on mount too)
-  useEffect(() => {
-    setUnreadCount(notifs.filter((n: Notification) => n.unread).length);
-  }, [notifs, setUnreadCount]);
+  const loadNotifications = useCallback(async () => {
+    const res = await fetch("/api/parents/notifications", { cache: "no-store" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success || !Array.isArray(data.notifications)) return;
+
+    setNotifications(
+      data.notifications.map((notif: Notification) => ({
+        ...notif,
+        source: "database" as const,
+      }))
+    );
+  }, []);
 
   useEffect(() => {
-    const eventParam = searchParams.get("event");
-    if (eventParam) {
-      const match = INITIAL_NOTIFICATIONS.find((n: Notification) => n.eventId === eventParam);
-      if (match) setHighlightId(match.id);
+    const initialLoad = window.setTimeout(() => {
+      loadNotifications().catch(() => null);
+    }, 0);
+
+    const client = supabaseBrowser;
+    if (!client) {
+      return () => window.clearTimeout(initialLoad);
     }
-  }, [searchParams]);
 
-  const unreadCount = notifs.filter((n: Notification) => n.unread).length;
-  const markAllRead = () => setNotifs(prev => prev.map(n => ({ ...n, unread: false })));
+    const channel = client
+      .channel("parent-announcement-notifications")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "parent_announcement_notifications" },
+        () => {
+          loadNotifications().catch(() => null);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      window.clearTimeout(initialLoad);
+      client.removeChannel(channel);
+    };
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    setUnreadCount(notifications.filter((notif) => notif.unread).length);
+  }, [notifications, setUnreadCount]);
+
+  const linkedEventId = useMemo(() => {
+    const eventParam = searchParams.get("event");
+    if (!eventParam) return null;
+
+    return notifications.find((notif) => notif.eventId === eventParam)?.id ?? null;
+  }, [notifications, searchParams]);
+
+  const unreadCount = notifications.filter((notif) => notif.unread).length;
 
   const tabCounts: Record<FilterTab, number> = {
-    All:       notifs.length,
-    Unread:    notifs.filter((n: Notification) => n.unread).length,
-    Principal: notifs.filter((n: Notification) => n.tab.includes("Principal")).length,
-    Teacher:   notifs.filter((n: Notification) => n.tab.includes("Teacher")).length,
+    All: notifications.filter((notif) => notif.unread).length,
+    Unread: notifications.filter((notif) => notif.unread).length,
+    Principal: notifications.filter((notif) =>
+      notif.tab.includes("Principal") && notif.unread
+    ).length,
+    Teacher: notifications.filter((notif) =>
+      notif.tab.includes("Teacher") && notif.unread
+    ).length,
+    Guidance: notifications.filter((notif) =>
+      notif.tab.includes("Guidance") && notif.unread
+    ).length,
   };
 
-  const filtered = notifs.filter((n: Notification) =>
-    activeTab === "All" ? true : n.tab.includes(activeTab)
+  const filteredNotifications = notifications.filter((notif) =>
+    activeTab === "All" ? true : notif.tab.includes(activeTab)
   );
 
-  function handleClick(notif: Notification) {
-    setNotifs(prev => prev.map(n => n.id === notif.id ? { ...n, unread: false } : n));
+  async function markAllRead() {
+    setNotifications((prev) => prev.map((notif) => ({ ...notif, unread: false })));
+    await fetch("/api/parents/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => null);
+  }
+
+  function handleClick(notif: PageNotification) {
+    setNotifications((prev) =>
+      prev.map((item) =>
+        item.id === notif.id ? { ...item, unread: false } : item
+      )
+    );
+
+    if (notif.source === "database") {
+      fetch("/api/parents/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notificationId: notif.id }),
+      }).catch(() => null);
+    }
+
     if (notif.type === "alert" && notif.studentName) {
-      router.push(`/dashboard/parent/attendance?student=${encodeURIComponent(notif.studentName)}`);
-    } else if (notif.type === "message" && notif.teacherName) {
-      router.push(`/dashboard/parent/reports?teacher=${encodeURIComponent(notif.teacherName)}`);
-    } else if (notif.type === "event") {
-      setHighlightId(prev => prev === notif.id ? null : notif.id);
+      router.push(
+        `/dashboard/parent/attendance?student=${encodeURIComponent(
+          notif.studentName
+        )}`
+      );
+      return;
+    }
+
+    if (notif.announcementId) {
+      return;
+    }
+
+    if (notif.type === "message" && notif.teacherName) {
+      router.push(
+        `/dashboard/parent/reports?teacher=${encodeURIComponent(
+          notif.teacherName
+        )}`
+      );
+      return;
+    }
+
+    if (notif.type === "event") {
+      setExpandedEventId((prev) => (prev === notif.id ? null : notif.id));
     }
   }
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden", fontFamily: "sans-serif", background: "#eef2f7" }}>
+    <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
       <Sidebar />
 
-      <main style={{ flex: 1, overflowY: "auto", padding: 32 }}>
-
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
+      <main className="flex-1 overflow-y-auto px-6 py-6 md:px-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", margin: 0 }}>Notifications</h1>
-            <p style={{ fontSize: 14, color: "#64748b", margin: "4px 0 0" }}>Stay updated with your child&apos;s school activities</p>
+            <h1 className="text-2xl font-extrabold text-slate-900">
+              Notifications
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Stay updated with your child&apos;s school activities
+            </p>
           </div>
+
           {unreadCount > 0 && (
-            <button onClick={markAllRead} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
-              <CheckCheck style={{ width: 14, height: 14 }} /> Mark all as read
+            <button
+              type="button"
+              onClick={markAllRead}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Mark all as read
             </button>
           )}
         </div>
 
-        {/* Filter tabs */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-          {(["All", "Unread", "Principal", "Teacher"] as FilterTab[]).map(tab => {
-            const isActive = activeTab === tab;
-            const count    = tabCounts[tab];
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          {(["All", "Unread", "Principal", "Teacher", "Guidance"] as FilterTab[]).map(
+            (tab) => {
+              const isActive = activeTab === tab;
+              const count = tabCounts[tab];
+
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${isActive
+                      ? "border-blue-600 bg-blue-600 text-white"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                >
+                  {tab}
+                  {count > 0 && (
+                    <span
+                      className={`flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-bold ${isActive
+                          ? "bg-white/25 text-white"
+                          : "bg-red-500 text-white"
+                        }`}
+                    >
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            }
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {filteredNotifications.map((notif) => {
+            const {
+              Icon,
+              iconBg,
+              iconColor,
+              borderColor,
+              categoryIcon: CategoryIcon,
+            } = TYPE_CONFIG[notif.type];
+            const isHighlighted =
+              expandedEventId === notif.id || linkedEventId === notif.id;
+
             return (
-              <button key={tab} onClick={() => setActiveTab(tab)} style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "6px 16px", borderRadius: 999,
-                border: isActive ? "1px solid #2563eb" : "1px solid #e2e8f0",
-                background: isActive ? "#2563eb" : "#fff",
-                color: isActive ? "#fff" : "#475569",
-                fontSize: 14, fontWeight: 600, cursor: "pointer",
-              }}>
-                {tab}
-                {count > 0 && (
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, minWidth: 18, height: 18,
-                    padding: "0 4px", borderRadius: 999,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: isActive ? "rgba(255,255,255,0.3)" : "#ef4444",
-                    color: "#fff",
-                  }}>
-                    {count}
-                  </span>
+              <button
+                key={notif.id}
+                type="button"
+                onClick={() => handleClick(notif)}
+                className="relative flex w-full items-start gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition-shadow hover:shadow-md"
+                style={{
+                  borderLeft: `4px solid ${borderColor}`,
+                  boxShadow: isHighlighted
+                    ? `0 0 0 2px ${borderColor}40`
+                    : undefined,
+                }}
+              >
+                <div
+                  className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                  style={{ background: iconBg }}
+                >
+                  <Icon className="h-5 w-5" style={{ color: iconColor }} />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="mb-0.5 text-sm font-bold text-slate-900">
+                    {notif.title}
+                  </p>
+                  <p className="mb-2 text-sm text-slate-600">{notif.msg}</p>
+
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+                    <span className="inline-flex items-center gap-1">
+                      <Bell className="h-3 w-3" />
+                      {notif.time}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <CategoryIcon className="h-3 w-3" />
+                      {notif.category}
+                    </span>
+                  </div>
+
+                  {isHighlighted && notif.type === "event" && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+                      <span className="font-bold">Event Details:</span>{" "}
+                      {notif.msg}. Check with your class adviser for more
+                      information.
+                    </div>
+                  )}
+                </div>
+
+                {notif.unread && (
+                  <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500" />
                 )}
               </button>
             );
           })}
-        </div>
 
-        {/* Notification cards */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {filtered.map((notif: Notification) => {
-            const { Icon, iconBg, iconColor, borderColor, CatIcon } = TYPE_CONFIG[notif.type];
-            const isHighlighted = highlightId === notif.id;
-            return (
-              <div key={notif.id} onClick={() => handleClick(notif)} style={{
-                display: "flex", alignItems: "flex-start", gap: 16,
-                background: "#fff",
-                border: "1px solid #e2e8f0",
-                borderLeft: `4px solid ${borderColor}`,
-                borderRadius: 16,
-                padding: "16px 20px",
-                cursor: "pointer",
-                position: "relative",
-                boxShadow: isHighlighted ? `0 0 0 2px ${borderColor}40` : "0 1px 3px rgba(0,0,0,0.06)",
-                transition: "box-shadow 0.15s",
-              }}>
-                <div style={{ width: 40, height: 40, borderRadius: "50%", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-                  <Icon style={{ width: 20, height: 20, color: iconColor }} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: "0 0 2px" }}>{notif.title}</p>
-                  <p style={{ fontSize: 13, color: "#475569", margin: "0 0 8px" }}>{notif.msg}</p>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#94a3b8" }}>
-                      <Bell style={{ width: 11, height: 11 }} /> {notif.time}
-                    </span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#94a3b8" }}>
-                      <CatIcon style={{ width: 11, height: 11 }} /> {notif.category}
-                    </span>
-                  </div>
-                  {isHighlighted && notif.type === "event" && (
-                    <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, fontSize: 12, color: "#92400e", fontWeight: 500 }}>
-                      📅 <strong>Event Details:</strong> {notif.msg} — Check with your class adviser for more information.
-                    </div>
-                  )}
-                </div>
-                {notif.unread && (
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#3b82f6", flexShrink: 0, marginTop: 6 }} />
-                )}
-              </div>
-            );
-          })}
+          {filteredNotifications.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center text-sm text-slate-400">
+              No notifications found for this filter.
+            </div>
+          )}
         </div>
       </main>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { GraduationCap } from "lucide-react";
+import Link from "next/link";
 
 export default function HeroSection() {
   return (
@@ -26,18 +27,18 @@ export default function HeroSection() {
           </span>
         </div>
         <nav className="flex items-center gap-6">
-          <a
-            href="#contact"
+          <Link
+            href="/contact-us"
             className="text-white/80 hover:text-white text-sm font-medium transition-colors duration-200 tracking-wide"
           >
             Contact us
-          </a>
-          <a
-            href="#about"
+          </Link>
+          <Link
+            href="/about"
             className="text-white/80 hover:text-white text-sm font-medium transition-colors duration-200 tracking-wide"
           >
             About
-          </a>
+          </Link>
 
           {/* ── ICT Login link ── */}
           <a

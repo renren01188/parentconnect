@@ -41,14 +41,15 @@ interface DashboardStats {
 
 interface AdviserInfo {
   section: string | null;
+  sections: string[];
   grade: string | null;
   full_name: string;
 }
 
 const AVATAR_COLORS = [
-  "bg-emerald-500","bg-blue-500","bg-orange-500","bg-pink-500",
-  "bg-purple-500","bg-teal-500","bg-red-500","bg-indigo-500",
-  "bg-amber-500","bg-cyan-500",
+  "bg-emerald-500", "bg-blue-500", "bg-orange-500", "bg-pink-500",
+  "bg-purple-500", "bg-teal-500", "bg-red-500", "bg-indigo-500",
+  "bg-amber-500", "bg-cyan-500",
 ];
 
 function getInitial(name: string) {
@@ -70,14 +71,20 @@ function formatTime(value: string) {
   return `${hour.toString().padStart(2, "0")}:${minute} ${suffix}`;
 }
 
+function formatGradeLabel(grade: string | null) {
+  if (!grade) return "";
+  return grade.trim().replace(/^Grade\s+/i, "Grade ");
+}
+
 // ── Main Page — sidebar removed, layout.tsx handles it ────────────────────────
 export default function AdviserDashboardPage() {
-  const [adviser,        setAdviser]  = useState<AdviserInfo | null>(null);
-  const [stats,          setStats]    = useState<DashboardStats>({ total_students: 0, present: 0, absent: 0, late: 0, pending_reports: 0 });
-  const [logs,           setLogs]     = useState<RfidLog[]>([]);
-  const [reports,        setReports]  = useState<ParentReport[]>([]);
-  const [absentStudents, setAbsent]   = useState<AbsentStudent[]>([]);
-  const [loading,        setLoading]  = useState(true);
+  const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
+  const [stats, setStats] = useState<DashboardStats>({ total_students: 0, present: 0, absent: 0, late: 0, pending_reports: 0 });
+  const [logs, setLogs] = useState<RfidLog[]>([]);
+  const [reports, setReports] = useState<ParentReport[]>([]);
+  const [absentStudents, setAbsent] = useState<AbsentStudent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeSection, setActiveSection] = useState("");
 
   const todayLabel = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -86,9 +93,11 @@ export default function AdviserDashboardPage() {
   useEffect(() => {
     async function loadDashboard() {
       try {
-        const [logsRes, stuRes] = await Promise.all([
-          fetch("/api/attendance/today", { cache: "no-store" }),
-          fetch("/api/students?limit=200",  { cache: "no-store" }),
+        const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
+        const [logsRes, stuRes, reportsRes] = await Promise.all([
+          fetch(`/api/attendance/today${section ? `?section=${encodeURIComponent(section)}` : ""}`, { cache: "no-store" }),
+          fetch(`/api/students?limit=200${section ? `&section=${encodeURIComponent(section)}` : ""}`, { cache: "no-store" }),
+          fetch(`/api/reports/parent-adviser?role=adviser`, { cache: "no-store" }),
         ]);
 
         const logsData = await logsRes.json();
@@ -96,15 +105,31 @@ export default function AdviserDashboardPage() {
 
         const stuData = await stuRes.json();
         if (stuData.success) {
-          if (stuData.adviser) setAdviser(stuData.adviser);
-          const all     = stuData.data as any[];
-          const present = all.filter(s => s.today_status === "Present").length;
-          const late    = all.filter(s => s.today_status === "Late").length;
-          const absent  = all.filter(s => s.today_status === "Absent").length;
-          setStats({ total_students: stuData.pagination.total, present, late, absent, pending_reports: 0 });
+          if (stuData.adviser) {
+            setAdviser(stuData.adviser);
+            if (!activeSection && stuData.adviser.sections?.length) {
+              setActiveSection(stuData.adviser.sections[0]);
+            }
+          }
+          const all = stuData.data as any[];
+          const present = all.filter(s => s.today_status === "On Time").length;
+          const late = all.filter(s => s.today_status === "Late").length;
+          const absent = all.filter(s => s.today_status === "Absent").length;
+          setStats({ total_students: stuData.pagination.total, present, late, absent, pending_reports: stuData.pendingReports ?? 0 });
           setAbsent(
             all.filter(s => s.today_status === "Absent").slice(0, 5)
-               .map(s => ({ id: s.id, student_id: s.student_id, full_name: s.full_name }))
+              .map(s => ({ id: s.id, student_id: s.student_id, full_name: s.full_name }))
+          );
+        }
+        const reportsData = await reportsRes.json();
+        if (reportsData.success) {
+          setReports(
+            (reportsData.reports ?? []).slice(0, 4).map((r: any) => ({
+              id: r.id,
+              parent_name: r.parent_name,
+              subject: r.subject,
+              is_read: r.status !== "New",
+            }))
           );
         }
       } catch (e) {
@@ -114,18 +139,22 @@ export default function AdviserDashboardPage() {
       }
     }
     loadDashboard();
-  }, []);
+  }, [activeSection]);
 
   const sectionLabel = adviser?.grade && adviser?.section
-    ? `Grade ${adviser.grade} · ${adviser.section}`
+    ? `${formatGradeLabel(adviser.grade)} · ${adviser.section}`
+    : "Your Section";
+
+  const currentSectionLabel = adviser?.grade && (activeSection || adviser?.section)
+    ? `${formatGradeLabel(adviser.grade)} · ${activeSection || adviser?.section}`
     : "Your Section";
 
   const statCards = [
-    { label: "Students", value: stats.total_students, sub: "Enrolled in class", icon: Users,       color: "text-slate-700",   iconBg: "bg-slate-100"  },
-    { label: "Present",  value: stats.present,        sub: "Here today",        icon: CheckCircle, color: "text-emerald-600", iconBg: "bg-emerald-50" },
-    { label: "Absent",   value: stats.absent,         sub: "Not in today",      icon: XCircle,     color: "text-red-500",     iconBg: "bg-red-50"     },
-    { label: "Late",     value: stats.late,           sub: "Late arrivals",     icon: Clock,       color: "text-amber-500",   iconBg: "bg-amber-50"   },
-    { label: "Reports",  value: stats.pending_reports,sub: "Pending review",    icon: FileText,    color: "text-blue-500",    iconBg: "bg-blue-50"    },
+    { label: "Students", value: stats.total_students, sub: "Enrolled in class", icon: Users, color: "text-slate-700", iconBg: "bg-slate-100" },
+    { label: "Present", value: stats.present, sub: "Here today", icon: CheckCircle, color: "text-emerald-600", iconBg: "bg-emerald-50" },
+    { label: "Absent", value: stats.absent, sub: "Not in today", icon: XCircle, color: "text-red-500", iconBg: "bg-red-50" },
+    { label: "Late", value: stats.late, sub: "Late arrivals", icon: Clock, color: "text-amber-500", iconBg: "bg-amber-50" },
+    { label: "Reports", value: stats.pending_reports, sub: "Pending review", icon: FileText, color: "text-blue-500", iconBg: "bg-blue-50" },
   ];
 
   return (
@@ -136,12 +165,32 @@ export default function AdviserDashboardPage() {
         <div>
           <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Dashboard</h1>
           <p className="text-slate-400 text-sm mt-0.5">{todayLabel}</p>
+          <p className="text-slate-400 text-sm mt-1">{currentSectionLabel}</p>
         </div>
         <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 shadow-sm">
           <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="text-sm font-medium text-slate-600">Scanner Online</span>
         </div>
       </div>
+
+      {adviser && adviser.sections?.length > 1 && (
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          {adviser.sections.map(sec => (
+            <button
+              key={sec}
+              onClick={() => setActiveSection(sec)}
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
+                ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
+                : "border border-slate-200 bg-white text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
+                }`}
+            >
+              <span className={`h-2 w-2 rounded-full ${(activeSection || adviser.sections[0]) === sec ? "bg-white" : "bg-slate-300"
+                }`} />
+              {adviser.grade ? `${formatGradeLabel(adviser.grade)} · ${sec}` : sec}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
@@ -175,7 +224,7 @@ export default function AdviserDashboardPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-50 bg-slate-50/60">
-                  {["Time","Student","Status","Type"].map(h => (
+                  {["Time", "Student", "Status", "Type"].map(h => (
                     <th key={h} className="text-left text-xs font-semibold text-slate-400 px-5 py-3">{h}</th>
                   ))}
                 </tr>
@@ -198,11 +247,10 @@ export default function AdviserDashboardPage() {
                         </div>
                       </td>
                       <td className="px-5 py-3">
-                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                          log.status === "On Time" ? "bg-emerald-100 text-emerald-700" :
-                          log.status === "Late"    ? "bg-amber-100 text-amber-700" :
-                          "bg-red-100 text-red-600"
-                        }`}>{log.status}</span>
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${log.status === "On Time" ? "bg-emerald-100 text-emerald-700" :
+                          log.status === "Late" ? "bg-amber-100 text-amber-700" :
+                            "bg-red-100 text-red-600"
+                          }`}>{log.status}</span>
                       </td>
                       <td className="px-5 py-3">
                         <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">{log.type}</span>
@@ -228,24 +276,7 @@ export default function AdviserDashboardPage() {
             </div>
             <div className="divide-y divide-slate-50">
               {reports.length === 0 ? (
-                [
-                  { name: "Maria Santos Doe",     subject: "Concern about math performance", read: false },
-                  { name: "Juan dela Cruz Parent", subject: "Request for school records",    read: false },
-                  { name: "Pedro Reyes Parent",   subject: "Absence excuse letter",         read: true  },
-                ].map((r, i) => (
-                  <div key={i} className="flex items-center justify-between px-5 py-3.5 hover:bg-slate-50 transition-colors cursor-pointer">
-                    <div className="flex items-start gap-3 min-w-0">
-                      <span className={`mt-0.5 shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md ${r.read ? "bg-slate-100 text-slate-400" : "bg-emerald-500 text-white"}`}>
-                        {r.read ? "Read" : "New"}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-700 truncate">{r.name}</p>
-                        <p className="text-xs text-slate-400 truncate">{r.subject}</p>
-                      </div>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-slate-300 shrink-0 ml-2" />
-                  </div>
-                ))
+                <p className="px-5 py-6 text-center text-sm text-slate-400">No reports yet.</p>
               ) : (
                 reports.slice(0, 4).map(r => (
                   <div key={r.id} className="flex items-center justify-between px-5 py-3.5 hover:bg-slate-50 transition-colors cursor-pointer">

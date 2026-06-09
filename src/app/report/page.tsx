@@ -1,21 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
 import Link from "next/link";
 
 // ─── Grade / Section data ─────────────────────────────────────────────────────
-const GRADE_SECTIONS: Record<string, string[]> = {
-  "Grade 1": ["Sampaguita", "Rosal", "Camia", "Ilang-Ilang"],
-  "Grade 2": ["Narra", "Molave", "Acacia", "Mahogany"],
-  "Grade 3": ["Mabuhay", "Bayanihan", "Kalayaan", "Pagkakaisa"],
-  "Grade 4": ["Rizal", "Bonifacio", "Mabini", "Luna"],
-  "Grade 5": ["Aguinaldo", "Del Pilar", "Jacinto", "Burgos"],
-  "Grade 6": ["Lapu-Lapu", "Soliman", "Tupas", "Sikatuna"],
-};
-
-const GRADE_LEVELS = Object.keys(GRADE_SECTIONS);
-
 const SUFFIXES = ["", "Jr.", "Sr.", "II", "III", "IV"];
 
 // ─── Custom Select ────────────────────────────────────────────────────────────
@@ -98,6 +87,8 @@ const inputCls = "w-full px-4 py-3 rounded-xl border border-slate-200 text-slate
 export default function ReportPage() {
   const [loading,   setLoading]   = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error,     setError]     = useState("");
+  const [gradeSections, setGradeSections] = useState<Record<string, string[]>>({});
 
   const [form, setForm] = useState({
     firstName:  "",
@@ -121,13 +112,41 @@ export default function ReportPage() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     set(e.target.name, e.target.value);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    async function loadOptions() {
+      const res = await fetch("/api/student-reports/options", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.gradeSections) setGradeSections(data.gradeSections);
+    }
+
+    loadOptions();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     setLoading(true);
-    setTimeout(() => { setLoading(false); setSubmitted(true); }, 2000);
+    try {
+      const res = await fetch("/api/student-reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setError(data?.message || "Invalid, please input the correct details.");
+        return;
+      }
+
+      setSubmitted(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const sections = form.gradeLevel ? GRADE_SECTIONS[form.gradeLevel] : [];
+  const gradeLevels = Object.keys(gradeSections);
+  const sections = form.gradeLevel ? gradeSections[form.gradeLevel] ?? [] : [];
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
@@ -162,9 +181,9 @@ export default function ReportPage() {
             </div>
           </div>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</a>
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</a>
+        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
+          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
         </nav>
       </header>
 
@@ -265,7 +284,7 @@ export default function ReportPage() {
                   <CustomSelect
                     placeholder="Select grade level..."
                     value={form.gradeLevel}
-                    options={GRADE_LEVELS}
+                    options={gradeLevels}
                     onChange={v => set("gradeLevel", v)}
                   />
                 </div>
@@ -307,6 +326,12 @@ export default function ReportPage() {
                     className={`${inputCls} resize-none`}
                   />
                 </div>
+
+                {error && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm font-semibold text-red-600">
+                    {error}
+                  </div>
+                )}
 
                 {/* Privacy notice */}
                 <div className="bg-sky-50 border border-sky-200 rounded-xl p-4 flex gap-3">

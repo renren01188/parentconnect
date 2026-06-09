@@ -1,200 +1,147 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
-  ChevronRight, AlertTriangle, CheckCircle,
-  Clock, Search, X, Flag, User,
-  GraduationCap, BookOpen, Eye,
+  Search, ChevronDown, ChevronLeft, ChevronRight,
+  Activity, LogIn, Edit3, ShieldAlert, Eye,
+  Calendar, X, Clock, Monitor,
+  MessageSquare, UserX, Settings,
+  AlertTriangle, CheckCircle, FileText,
+  Shield, RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { useNotifContext } from "../context/NotificationContext";
 
-// ─── Constants ────────────────────────────────────────────────────
+// ─── Theme ───────────────────────────────────────────────────
 const PRIMARY = "#522081";
 
-// ─── Types ────────────────────────────────────────────────────────
-type ReportStatus   = "Pending" | "Reviewed" | "Resolved" | "Escalated";
-type ReporterType   = "Parent"  | "Student";
-type ReportCategory =
-  | "Bullying" | "Academic" | "Attendance"
-  | "Health"   | "Safety"   | "Misconduct" | "Other";
-
-interface Report {
+// ─── Types ───────────────────────────────────────────────────
+interface AuditEvent {
   id: string;
-  reporterType: ReporterType;
-  reporterName: string;
-  reporterRelation?: string;
-  studentName: string;
-  studentId: string;
-  grade: string;
-  section: string;
-  category: ReportCategory;
-  subject: string;
-  body: string;
-  status: ReportStatus;
-  submittedAt: string;
-  submittedMs: number;
+  timestamp: string;
+  timestampMs: number;
+  performedBy: string;
+  performedByRole: string;
+  targetUser: string;
+  targetRole: string;
+  targetEmail: string;
+  action: string;
+  description: string;
+  module: string;
+  ipAddress: string;
+  browser: string;
+  changes: unknown[];
 }
 
-// ─── Mock Reports ─────────────────────────────────────────────────
-const INITIAL_REPORTS: Report[] = [
-  // Grade 3 – St. Francis
-  {
-    id: "r1", reporterType: "Parent", reporterName: "Jose Santos Dela Cruz",
-    reporterRelation: "Father", studentName: "Mark Dela Cruz", studentId: "20260001",
-    grade: "Grade 3", section: "St. Francis", category: "Bullying",
-    subject: "Bullying incident during recess",
-    body: "My son was pushed by a classmate during recess on March 10. He is afraid to go back to school. Please investigate.",
-    status: "Pending", submittedAt: "Mar 10, 2025 · 9:12 AM", submittedMs: Date.now() - 9 * 86400000,
-  },
-  {
-    id: "r2", reporterType: "Student", reporterName: "Anna Dela Cruz",
-    studentName: "Anna Dela Cruz", studentId: "20260002",
-    grade: "Grade 3", section: "St. Francis", category: "Misconduct",
-    subject: "Classmate spreading rumors",
-    body: "A classmate has been spreading false rumors about me. It is affecting my focus and I don't feel comfortable anymore.",
-    status: "Reviewed", submittedAt: "Mar 12, 2025 · 10:30 AM", submittedMs: Date.now() - 7 * 86400000,
-  },
-  {
-    id: "r3", reporterType: "Parent", reporterName: "Maria Reyes",
-    reporterRelation: "Mother", studentName: "Carlo Reyes", studentId: "20260003",
-    grade: "Grade 3", section: "St. Francis", category: "Academic",
-    subject: "Lack of learning materials",
-    body: "Carlo has been unable to follow lessons because he doesn't have textbooks.",
-    status: "Resolved", submittedAt: "Mar 5, 2025 · 8:00 AM", submittedMs: Date.now() - 14 * 86400000,
-  },
-  // Grade 3 – Luna
-  {
-    id: "r4", reporterType: "Student", reporterName: "Sofia Luna",
-    studentName: "Sofia Luna", studentId: "20260004",
-    grade: "Grade 3", section: "Luna", category: "Safety",
-    subject: "Broken chair in classroom",
-    body: "There is a broken chair with sharp edges. A classmate already got a cut. Please fix this.",
-    status: "Escalated", submittedAt: "Mar 14, 2025 · 2:45 PM", submittedMs: Date.now() - 5 * 86400000,
-  },
-  {
-    id: "r5", reporterType: "Parent", reporterName: "Ben Torres",
-    reporterRelation: "Father", studentName: "Nina Torres", studentId: "20260005",
-    grade: "Grade 3", section: "Luna", category: "Attendance",
-    subject: "Teacher absent multiple times",
-    body: "The class adviser has been absent 4 times this month with no substitute assigned.",
-    status: "Pending", submittedAt: "Mar 15, 2025 · 7:55 AM", submittedMs: Date.now() - 4 * 86400000,
-  },
-  // Grade 4 – St. Michael
-  {
-    id: "r6", reporterType: "Parent", reporterName: "Karen Mendoza",
-    reporterRelation: "Mother", studentName: "Rico Mendoza", studentId: "20260006",
-    grade: "Grade 4", section: "St. Michael", category: "Health",
-    subject: "Canteen selling expired goods",
-    body: "Rico came home sick after eating from the school canteen. Please have it inspected.",
-    status: "Pending", submittedAt: "Mar 13, 2025 · 11:00 AM", submittedMs: Date.now() - 6 * 86400000,
-  },
-  {
-    id: "r7", reporterType: "Student", reporterName: "Leo Batungbakal",
-    studentName: "Leo Batungbakal", studentId: "20260007",
-    grade: "Grade 4", section: "St. Michael", category: "Bullying",
-    subject: "Senior students intimidating juniors",
-    body: "Some Grade 6 students have been bullying us during PE and taking our equipment.",
-    status: "Reviewed", submittedAt: "Mar 11, 2025 · 3:20 PM", submittedMs: Date.now() - 8 * 86400000,
-  },
-  {
-    id: "r8", reporterType: "Parent", reporterName: "Juan Dela Rosa",
-    reporterRelation: "Father", studentName: "Sofia Dela Rosa", studentId: "20260008",
-    grade: "Grade 4", section: "St. Michael", category: "Other",
-    subject: "Request for afternoon class schedule",
-    body: "We would like to request afternoon sessions due to morning transportation issues.",
-    status: "Resolved", submittedAt: "Feb 28, 2025 · 9:00 AM", submittedMs: Date.now() - 19 * 86400000,
-  },
-  // Grade 4 – Jacinto
-  {
-    id: "r9", reporterType: "Student", reporterName: "Renz Santos",
-    studentName: "Renz Santos", studentId: "20260009",
-    grade: "Grade 4", section: "Jacinto", category: "Academic",
-    subject: "Unfair grading by subject teacher",
-    body: "Our Math teacher gives higher grades to students who give gifts. Please check our test papers.",
-    status: "Escalated", submittedAt: "Mar 16, 2025 · 1:00 PM", submittedMs: Date.now() - 3 * 86400000,
-  },
-  // Grade 5 – St. Joseph
-  {
-    id: "r10", reporterType: "Parent", reporterName: "Ana Villanueva",
-    reporterRelation: "Mother", studentName: "Paulo Villanueva", studentId: "20260010",
-    grade: "Grade 5", section: "St. Joseph", category: "Misconduct",
-    subject: "Student using phone during class",
-    body: "A classmate is using their phone during class to bully others. The teacher has not addressed it.",
-    status: "Pending", submittedAt: "Mar 17, 2025 · 8:30 AM", submittedMs: Date.now() - 2 * 86400000,
-  },
-  {
-    id: "r11", reporterType: "Student", reporterName: "Clara Reyes",
-    studentName: "Clara Reyes", studentId: "20260011",
-    grade: "Grade 5", section: "St. Joseph", category: "Safety",
-    subject: "Slippery corridor after rain",
-    body: "The corridor outside our classroom becomes very slippery when it rains. Several students have slipped.",
-    status: "Reviewed", submittedAt: "Mar 9, 2025 · 12:00 PM", submittedMs: Date.now() - 10 * 86400000,
-  },
-  // Grade 5 – Burgos
-  {
-    id: "r12", reporterType: "Parent", reporterName: "Roberto Cruz",
-    reporterRelation: "Father", studentName: "Pia Cruz", studentId: "20260012",
-    grade: "Grade 5", section: "Burgos", category: "Bullying",
-    subject: "Verbal abuse from classmate",
-    body: "Pia has been called names by a classmate. She cries every day before school.",
-    status: "Escalated", submittedAt: "Mar 18, 2025 · 6:50 AM", submittedMs: Date.now() - 1 * 86400000,
-  },
-  // Grade 6 – St. Peter
-  {
-    id: "r13", reporterType: "Student", reporterName: "Mark Aquino",
-    studentName: "Mark Aquino", studentId: "20260013",
-    grade: "Grade 6", section: "St. Peter", category: "Academic",
-    subject: "No feedback on submitted projects",
-    body: "Our Science projects were submitted 3 weeks ago and we still haven't received any feedback.",
-    status: "Pending", submittedAt: "Mar 6, 2025 · 10:15 AM", submittedMs: Date.now() - 13 * 86400000,
-  },
-  {
-    id: "r14", reporterType: "Parent", reporterName: "Liza Gomez",
-    reporterRelation: "Mother", studentName: "Trisha Gomez", studentId: "20260014",
-    grade: "Grade 6", section: "St. Peter", category: "Health",
-    subject: "No school nurse on duty",
-    body: "Trisha had an asthma attack and nobody from the clinic was available. The nurse only comes twice a week.",
-    status: "Resolved", submittedAt: "Mar 1, 2025 · 2:00 PM", submittedMs: Date.now() - 18 * 86400000,
-  },
+// ─── Constants ────────────────────────────────────────────────
+const PER_PAGE_OPTIONS = [8, 15, 25, 50];
+
+const ACTION_META: Record<string, { label: string; bg: string; text: string; border: string; Icon: React.ElementType }> = {
+  Login:            { label: "Login",          bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", Icon: LogIn          },
+  Logout:           { label: "Logout",         bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: LogIn          },
+  Create:           { label: "Create",         bg: "#f0fdf4", text: "#059669", border: "#6ee7b7", Icon: Plus           },
+  Update:           { label: "Update",         bg: "#fefce8", text: "#ca8a04", border: "#fde68a", Icon: Edit3          },
+  Deactivate:       { label: "Deactivate",     bg: "#fff7ed", text: "#ea580c", border: "#fed7aa", Icon: UserX          },
+  Delete:           { label: "Delete",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2         },
+  Message:          { label: "Message",        bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare  },
+  System:           { label: "System",         bg: "#f0f9ff", text: "#0284c7", border: "#bae6fd", Icon: Settings       },
+  "Security Alert": { label: "Security Alert", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert    },
+  "Password Reset": { label: "Password Reset", bg: "#fdf4ff", text: "#7c3aed", border: "#ddd6fe", Icon: RefreshCw      },
+  Export:           { label: "Export",         bg: "#f0fdf4", text: "#0f766e", border: "#99f6e4", Icon: FileText       },
+  "Submit Report":  { label: "Submit Report",  bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText       },
+  Approve:          { label: "Approve",        bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", Icon: CheckCircle    },
+  Reject:           { label: "Reject",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: AlertTriangle  },
+};
+
+const ROLE_META: Record<string, { bg: string; text: string; border: string }> = {
+  "ICT Admin":  { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
+  "ICT":        { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
+  "Adviser":    { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
+  "Parent":     { bg: "#fdf4ff", text: "#7e22ce", border: "#e9d5ff" },
+  "Principal":  { bg: "#fefce8", text: "#92400e", border: "#fde68a" },
+  "Student":    { bg: "#fff7ed", text: "#c2410c", border: "#fed7aa" },
+};
+
+// ─── Helpers ─────────────────────────────────────────────────
+function getInitials(name: string): string {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "?";
+  return ((parts[0][0] ?? "") + (parts[parts.length - 1][0] ?? "")).toUpperCase();
+}
+
+const AVATAR_COLORS = [
+  "bg-teal-600", "bg-blue-600", "bg-green-700",
+  "bg-violet-600", "bg-amber-600", "bg-orange-500",
+  "bg-cyan-600", "bg-rose-600", "bg-indigo-600",
 ];
-
-// ─── Grade ordering ────────────────────────────────────────────────
-const GRADE_ORDER = ["Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6"];
-
-function buildStructure(reports: Report[]) {
-  const map: Record<string, Record<string, Report[]>> = {};
-  for (const r of reports) {
-    if (!map[r.grade]) map[r.grade] = {};
-    if (!map[r.grade][r.section]) map[r.grade][r.section] = [];
-    map[r.grade][r.section].push(r);
-  }
-  return map;
+function avatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-// ─── Styling ──────────────────────────────────────────────────────
-const STATUS_STYLE: Record<ReportStatus, { bg: string; text: string; border: string; dot: string }> = {
-  Pending:   { bg: "#fffbeb", text: "#d97706", border: "#fde68a", dot: "#f59e0b" },
-  Reviewed:  { bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", dot: "#3b82f6" },
-  Resolved:  { bg: "#f0fdf4", text: "#059669", border: "#bbf7d0", dot: "#10b981" },
-  Escalated: { bg: "#fef2f2", text: "#dc2626", border: "#fecaca", dot: "#ef4444" },
-};
+function resolveAction(raw: string): string {
+  if (!raw) return "System";
+  if (ACTION_META[raw]) return raw;
+  const lower = raw.toLowerCase();
+  for (const key of Object.keys(ACTION_META)) {
+    if (key.toLowerCase() === lower) return key;
+  }
+  const first = raw.split(/[_\s]/)[0];
+  const cap   = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  return ACTION_META[cap] ? cap : raw;
+}
 
-const CATEGORY_ICON: Record<ReportCategory, string> = {
-  Bullying: "🥊", Academic: "📚", Attendance: "📋",
-  Health: "🏥", Safety: "⚠️", Misconduct: "🚫", Other: "📝",
-};
+// ─── Action Badge ─────────────────────────────────────────────
+function ActionBadge({ type }: { type: string }) {
+  const resolved = resolveAction(type);
+  const m = ACTION_META[resolved] ?? {
+    label: resolved, bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: Activity,
+  };
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap"
+      style={{ background: m.bg, color: m.text, borderColor: m.border }}
+    >
+      <m.Icon className="w-3 h-3 shrink-0" />
+      {m.label}
+    </span>
+  );
+}
 
-// ─── Report Detail Modal ───────────────────────────────────────────
-function ReportDetailModal({
-  report, onClose, onStatusChange,
-}: {
-  report: Report;
-  onClose: () => void;
-  onStatusChange: (id: string, status: ReportStatus) => void;
-}) {
-  const sm = STATUS_STYLE[report.status];
-  const nextStatuses = (["Pending","Reviewed","Resolved","Escalated"] as ReportStatus[])
-    .filter((s) => s !== report.status);
+// ─── Role Badge ───────────────────────────────────────────────
+function RoleBadge({ role }: { role: string }) {
+  const m = ROLE_META[role] ?? { bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb" };
+  return (
+    <span
+      className="inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap"
+      style={{ background: m.bg, color: m.text, borderColor: m.border }}
+    >
+      {role || "Unknown"}
+    </span>
+  );
+}
+
+// ─── Skeleton Row ─────────────────────────────────────────────
+function SkeletonRow() {
+  return (
+    <tr className="border-b border-gray-50 animate-pulse">
+      {[10, 28, 32, 20, 24, 56, 8].map((w, i) => (
+        <td key={i} className="px-5 py-4">
+          <div className={`h-3 bg-gray-100 rounded-full w-${w}`} />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+// ─── Event Detail Modal ───────────────────────────────────────
+function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () => void }) {
+  const resolved = resolveAction(event.action);
+  const m = ACTION_META[resolved] ?? {
+    label: resolved, bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: Activity,
+  };
+  const initials = getInitials(event.performedBy);
+  const color    = avatarColor(event.performedBy);
 
   return (
     <div
@@ -202,103 +149,114 @@ function ReportDetailModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col"
-        style={{ maxHeight: "90vh" }}
+        className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Gradient header */}
+        {/* Header — purple gradient */}
         <div
           className="px-6 py-5 text-white"
           style={{ background: `linear-gradient(135deg, #3a1660 0%, ${PRIMARY} 60%, #6b2fa0 100%)` }}
         >
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">{CATEGORY_ICON[report.category]}</span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/20">
-                {report.category}
-              </span>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center"
+                style={{ background: "rgba(255,255,255,0.18)" }}
+              >
+                <m.Icon className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white">Event Details</h2>
+                <p className="text-xs text-white/60">#{event.id}</p>
+              </div>
             </div>
             <button
               onClick={onClose}
-              className="w-7 h-7 rounded-lg flex items-center justify-center bg-white/15 hover:bg-white/25 transition"
+              className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/15 hover:bg-white/25 transition"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4 text-white" />
             </button>
           </div>
-          <h2 className="text-base font-extrabold leading-snug">{report.subject}</h2>
-          <p className="text-xs text-white/70 mt-1">
-            {report.grade} · {report.section} · {report.submittedAt}
-          </p>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-6 space-y-4">
-          {/* Reporter */}
-          <div className="flex items-start gap-3 bg-gray-50 rounded-xl border border-gray-100 p-3">
-            <div
-              className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-extrabold shrink-0"
-              style={{ background: "#52208115", color: PRIMARY }}
-            >
-              {report.reporterType === "Student"
-                ? <GraduationCap className="w-4 h-4" />
-                : <User className="w-4 h-4" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-sm font-bold text-gray-800">{report.reporterName}</p>
-                <span
-                  className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-                  style={{
-                    background: report.reporterType === "Student" ? "#f0fdf4" : "#eff6ff",
-                    color:      report.reporterType === "Student" ? "#059669" : "#2563eb",
-                  }}
-                >
-                  {report.reporterType === "Student" ? "👨‍🎓 Student" : `👤 ${report.reporterRelation ?? "Parent"}`}
-                </span>
+        {/* Body */}
+        <div className="p-6 space-y-4">
+          {/* Action type */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Action Type</span>
+            <ActionBadge type={event.action} />
+          </div>
+
+          {/* Description */}
+          <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+              Description
+            </p>
+            <p className="text-sm font-semibold text-gray-800">
+              {event.description || event.action || "—"}
+            </p>
+          </div>
+
+          {/* Details grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "Timestamp",  value: event.timestamp,        icon: Clock    },
+              { label: "Module",     value: event.module  || "—",   icon: Monitor  },
+              { label: "IP Address", value: event.ipAddress|| "—",  icon: Shield   },
+              { label: "Browser",    value: event.browser  || "—",  icon: Activity },
+            ].map(({ label, value, icon: Icon }) => (
+              <div key={label} className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Icon className="w-3 h-3 text-gray-400" />
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+                </div>
+                <p className="text-xs font-semibold text-gray-700">{value}</p>
               </div>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Reporting for: <strong>{report.studentName}</strong> (ID: {report.studentId})
+            ))}
+          </div>
+
+          {/* Target info (if present) */}
+          {event.targetUser && (
+            <div className="bg-purple-50 rounded-xl p-3.5 border border-purple-100">
+              <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1">
+                Target User
               </p>
+              <p className="text-sm font-semibold text-purple-900">{event.targetUser}</p>
+              {event.targetEmail && (
+                <p className="text-xs text-purple-500 mt-0.5">{event.targetEmail}</p>
+              )}
+              {event.targetRole && (
+                <div className="mt-1.5">
+                  <RoleBadge role={event.targetRole} />
+                </div>
+              )}
             </div>
-            <span
-              className="text-[11px] font-bold px-2.5 py-1 rounded-full border shrink-0"
-              style={{ color: sm.text, background: sm.bg, borderColor: sm.border }}
+          )}
+
+          {/* Performed by */}
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-gray-100 bg-gray-50">
+            <div
+              className={`w-10 h-10 rounded-full ${color} flex items-center justify-center text-white text-xs font-bold shrink-0`}
             >
-              {report.status}
-            </span>
-          </div>
-
-          {/* Body */}
-          <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Report Details</p>
-            <p className="text-sm text-gray-700 leading-relaxed">{report.body}</p>
-          </div>
-
-          {/* Status update */}
-          <div>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Update Status</p>
-            <div className="flex flex-wrap gap-2">
-              {nextStatuses.map((s) => {
-                const st = STATUS_STYLE[s];
-                return (
-                  <button
-                    key={s}
-                    onClick={() => { onStatusChange(report.id, s); onClose(); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition hover:opacity-80"
-                    style={{ color: st.text, background: st.bg, borderColor: st.border }}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.dot }} />
-                    Mark as {s}
-                  </button>
-                );
-              })}
+              {initials}
+            </div>
+            <div>
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">
+                Performed By
+              </p>
+              <p className="text-sm font-semibold text-gray-800 mb-1">
+                {event.performedBy || "—"}
+              </p>
+              <RoleBadge role={event.performedByRole || "Unknown"} />
             </div>
           </div>
         </div>
 
-        <div className="px-6 pb-5">
+        <div className="px-6 pb-6">
           <button
             onClick={onClose}
-            className="w-full py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+            className="w-full py-2.5 text-sm font-bold text-white rounded-xl transition"
+            style={{ background: `linear-gradient(135deg, #3a1660 0%, ${PRIMARY} 60%, #6b2fa0 100%)` }}
           >
             Close
           </button>
@@ -308,442 +266,496 @@ function ReportDetailModal({
   );
 }
 
-// ─── Report Card ───────────────────────────────────────────────────
-function ReportCard({ report, onView }: { report: Report; onView: (r: Report) => void }) {
-  const sm = STATUS_STYLE[report.status];
-  return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 hover:shadow-md transition group">
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-base shrink-0">{CATEGORY_ICON[report.category]}</span>
-          <p className="text-sm font-bold text-gray-800 truncate">{report.subject}</p>
-        </div>
-        <span
-          className="text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 flex items-center gap-1"
-          style={{ color: sm.text, background: sm.bg, borderColor: sm.border }}
-        >
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: sm.dot }} />
-          {report.status}
-        </span>
-      </div>
+// ─── Main Page ────────────────────────────────────────────────
+export default function AuditTrailPage() {
+  // ── Filter & pagination state ──
+  const [query,        setQuery]       = useState("");
+  const [actionFilter, setActionFilter]= useState("");
+  const [roleFilter,   setRoleFilter]  = useState("");
+  const [dateFilter,   setDateFilter]  = useState("");
+  const [page,         setPage]        = useState(1);
+  const [perPage,      setPerPage]     = useState(8);
 
-      <p className="text-xs text-gray-500 line-clamp-2 mb-3">{report.body}</p>
+  // ── UI state ──
+  const [viewEvent,  setViewEvent]  = useState<AuditEvent | null>(null);
+  const [actionOpen, setActionOpen] = useState(false);
+  const [roleOpen,   setRoleOpen]   = useState(false);
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div
-            className="flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full"
-            style={{
-              background: report.reporterType === "Student" ? "#f0fdf4" : "#eff6ff",
-              color:      report.reporterType === "Student" ? "#059669" : "#2563eb",
-            }}
-          >
-            {report.reporterType === "Student"
-              ? <GraduationCap className="w-3 h-3" />
-              : <User className="w-3 h-3" />}
-            {report.reporterType === "Student" ? "Student" : (report.reporterRelation ?? "Parent")}
-          </div>
-          <span className="text-[10px] text-gray-400">·</span>
-          <span className="text-[11px] text-gray-500 truncate">{report.reporterName}</span>
-        </div>
-        <button
-          onClick={() => onView(report)}
-          className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-lg transition opacity-0 group-hover:opacity-100"
-          style={{ background: "#52208115", color: PRIMARY }}
-        >
-          <Eye className="w-3 h-3" /> View
-        </button>
-      </div>
+  // ── Data state ──
+  const [events,     setEvents]     = useState<AuditEvent[]>([]);
+  const [total,      setTotal]      = useState(0);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-      <div className="flex items-center gap-1 mt-2">
-        <Clock className="w-3 h-3 text-gray-300 shrink-0" />
-        <span className="text-[10px] text-gray-400">{report.submittedAt}</span>
-      </div>
-    </div>
-  );
-}
+  // ── Debounce ──
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-// ─── Main Page ─────────────────────────────────────────────────────
-export default function ReportsPage() {
-  const { setUnreadCount } = useNotifContext();
+  // ── Fetch ──
+  const fetchEvents = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        page:    String(page),
+        perPage: String(perPage),
+      });
+      if (query)        params.set("search", query);
+      if (actionFilter) params.set("action", actionFilter);
+      if (roleFilter)   params.set("role",   roleFilter);
+      if (dateFilter)   params.set("date",   dateFilter);
 
-  const [reports,          setReports]          = useState<Report[]>(INITIAL_REPORTS);
-  const [selectedGrade,    setSelectedGrade]    = useState<string | null>(null);
-  const [selectedSection,  setSelectedSection]  = useState<string | null>(null);
-  const [statusFilter,     setStatusFilter]     = useState<"All" | ReportStatus>("All");
-  const [typeFilter,       setTypeFilter]       = useState<"All" | ReporterType>("All");
-  const [searchQ,          setSearchQ]          = useState("");
-  const [viewReport,       setViewReport]       = useState<Report | null>(null);
+      const res  = await fetch(`/api/principal/audit-log?${params.toString()}`);
+      const json = await res.json();
 
-  // ── Push pending count into context so Sidebar can show the badge ──
-  const pendingCount = useMemo(
-    () => reports.filter((r) => r.status === "Pending").length,
-    [reports],
-  );
-  useEffect(() => {
-    setUnreadCount(pendingCount);
-  }, [pendingCount, setUnreadCount]);
+      if (!res.ok || !json.success) {
+        throw new Error(json.message ?? "Failed to load audit log.");
+      }
 
-  const structure  = useMemo(() => buildStructure(reports), [reports]);
-  const gradeList  = useMemo(
-    () => GRADE_ORDER.filter((g) => structure[g]),
-    [structure],
-  );
-
-  // Count per grade for sidebar badges
-  const gradeStats = useMemo(
-    () =>
-      Object.fromEntries(
-        gradeList.map((g) => {
-          const allInGrade = Object.values(structure[g] ?? {}).flat();
-          return [
-            g,
-            {
-              total:    allInGrade.length,
-              pending:  allInGrade.filter((r) => r.status === "Pending").length,
-              escalated:allInGrade.filter((r) => r.status === "Escalated").length,
-            },
-          ];
-        }),
-      ),
-    [gradeList, structure],
-  );
-
-  const sectionList = useMemo(
-    () => (selectedGrade ? Object.keys(structure[selectedGrade] ?? {}).sort() : []),
-    [selectedGrade, structure],
-  );
-
-  const visibleReports = useMemo(() => {
-    if (!selectedGrade || !selectedSection) return [];
-    let list = [...(structure[selectedGrade]?.[selectedSection] ?? [])];
-    if (statusFilter !== "All") list = list.filter((r) => r.status === statusFilter);
-    if (typeFilter   !== "All") list = list.filter((r) => r.reporterType === typeFilter);
-    if (searchQ.trim()) {
-      const q = searchQ.toLowerCase();
-      list = list.filter(
-        (r) =>
-          r.subject.toLowerCase().includes(q) ||
-          r.reporterName.toLowerCase().includes(q) ||
-          r.studentName.toLowerCase().includes(q),
-      );
+      setEvents(json.auditLog ?? []);
+      setTotal(json.total     ?? 0);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setLoading(false);
     }
-    return list.sort((a, b) => b.submittedMs - a.submittedMs);
-  }, [selectedGrade, selectedSection, structure, statusFilter, typeFilter, searchQ]);
+  }, [page, perPage, query, actionFilter, roleFilter, dateFilter, refreshKey]); // eslint-disable-line
 
-  const sectionStats = useMemo(() => {
-    if (!selectedGrade || !selectedSection) return null;
-    const list = structure[selectedGrade]?.[selectedSection] ?? [];
-    return {
-      total:    list.length,
-      pending:  list.filter((r) => r.status === "Pending").length,
-      escalated:list.filter((r) => r.status === "Escalated").length,
-      resolved: list.filter((r) => r.status === "Resolved").length,
-      students: list.filter((r) => r.reporterType === "Student").length,
-      parents:  list.filter((r) => r.reporterType === "Parent").length,
-    };
-  }, [selectedGrade, selectedSection, structure]);
+  useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
-  const handleStatusChange = (id: string, status: ReportStatus) => {
-    setReports((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
-  };
+  function handleSearch(val: string) {
+    setQuery(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setPage(1), 300);
+  }
+
+  // ── Derived ──
+  const totalPages  = Math.max(1, Math.ceil(total / perPage));
+  const hasFilters  = !!(query || actionFilter || roleFilter || dateFilter);
+
+  const stats = useMemo(() => ({
+    total,
+    logins:   events.filter(e => resolveAction(e.action) === "Login").length,
+    edits:    events.filter(e => ["Submit Report","Message","Escalate","Resolve"].includes(resolveAction(e.action))).length,
+    security: events.filter(e => resolveAction(e.action) === "Security Alert").length,
+  }), [events, total]);
+
+  function resetFilters() {
+    setQuery(""); setActionFilter("");
+    setRoleFilter(""); setDateFilter(""); setPage(1);
+  }
+
+  const ACTION_TYPES = ["Login", "Logout", "Submit Report", "Message", "Escalate", "Resolve"];
+  const ROLE_OPTIONS = ["Principal", "ICT Admin", "Adviser", "Parent"];
+
+  const statCards = [
+    { label: "Total Events",    value: stats.total,    Icon: Activity,    color: PRIMARY,   bg: `${PRIMARY}18`  },
+    { label: "Login Events",    value: stats.logins,   Icon: LogIn,       color: "#2563eb", bg: "#eff6ff"       },
+    { label: "Edit Actions",    value: stats.edits,    Icon: Edit3,       color: "#d97706", bg: "#fffbeb"       },
+    { label: "Security Alerts", value: stats.security, Icon: ShieldAlert, color: "#dc2626", bg: "#fef2f2"       },
+  ];
 
   return (
     <div
-      className="min-h-screen bg-[#f5f3ff] p-6"
-      style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}
+      className="principal-audit-page p-4 sm:p-6 min-h-screen bg-[#f5f3ff]"
+      onClick={() => { setActionOpen(false); setRoleOpen(false); }}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      {/* ── Header ── */}
+      <div className="principal-audit-header mb-5 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-extrabold text-gray-900">Reports</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Browse by grade level and section — includes parent and student reports.
+          <h1 className="text-2xl font-bold text-gray-900">Audit Trail</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Complete log of all system actions performed by Parents, Advisers, ICT Admins, and the Principal.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {pendingCount > 0 && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-bold text-amber-700">{pendingCount} pending</span>
-            </div>
-          )}
-          <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-500">
-            {reports.length} total reports
-          </div>
-        </div>
+
+        {/* Refresh */}
+        <button
+          onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold border rounded-xl hover:opacity-80 disabled:opacity-50 transition"
+          style={{ color: PRIMARY, borderColor: `${PRIMARY}40`, background: `${PRIMARY}08` }}
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
       </div>
 
-      <div className="flex gap-5 items-start">
-
-        {/* ── Grade Sidebar ── */}
-        <div className="w-56 shrink-0 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <p className="text-xs font-extrabold text-gray-700">Grade Levels</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Select to browse sections</p>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {gradeList.map((grade) => {
-              const gs     = gradeStats[grade];
-              const active = selectedGrade === grade;
-              return (
-                <button
-                  key={grade}
-                  onClick={() => {
-                    setSelectedGrade(grade);
-                    setSelectedSection(null);
-                    setSearchQ("");
-                    setStatusFilter("All");
-                    setTypeFilter("All");
-                  }}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left transition"
-                  style={{ background: active ? "#52208110" : "white" }}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div
-                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                      style={{
-                        background: active ? PRIMARY : "#f3f4f6",
-                        color:      active ? "white"  : "#6b7280",
-                      }}
-                    >
-                      <BookOpen className="w-3.5 h-3.5" />
-                    </div>
-                    <span
-                      className="text-xs font-bold truncate"
-                      style={{ color: active ? PRIMARY : "#374151" }}
-                    >
-                      {grade}
-                    </span>
-                  </div>
-                  {/* Badge cluster */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    {gs.escalated > 0 && (
-                      <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">
-                        {gs.escalated}🔴
-                      </span>
-                    )}
-                    {gs.pending > 0 && (
-                      <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                        {gs.pending}
-                      </span>
-                    )}
-                    <span
-                      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{
-                        background: active ? PRIMARY : "#f3f4f6",
-                        color:      active ? "white"  : "#6b7280",
-                      }}
-                    >
-                      {gs.total}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ── Main Panel ── */}
-        <div className="flex-1 min-w-0">
-
-          {/* No grade selected */}
-          {!selectedGrade && (
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col items-center justify-center py-20">
-              <BookOpen className="w-10 h-10 text-gray-200 mb-3" />
-              <p className="text-sm text-gray-400">Select a grade level to view reports.</p>
+      {/* ── Stats ── */}
+      <div className="principal-audit-stats grid grid-cols-4 gap-4 mb-5">
+        {statCards.map(({ label, value, Icon, color, bg }) => (
+          <div key={label} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: bg }}>
+              <Icon className="w-5 h-5" style={{ color }} />
             </div>
-          )}
-
-          {/* Grade selected — show sections */}
-          {selectedGrade && !selectedSection && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
-                <span className="font-bold" style={{ color: PRIMARY }}>{selectedGrade}</span>
-                <ChevronRight className="w-3 h-3" />
-                <span>Select a section</span>
-              </div>
-
-              {sectionList.map((section) => {
-                const list      = structure[selectedGrade]?.[section] ?? [];
-                const pending   = list.filter((r) => r.status === "Pending").length;
-                const escalated = list.filter((r) => r.status === "Escalated").length;
-                const resolved  = list.filter((r) => r.status === "Resolved").length;
-                const students  = list.filter((r) => r.reporterType === "Student").length;
-                const parents   = list.filter((r) => r.reporterType === "Parent").length;
-
-                return (
-                  <button
-                    key={section}
-                    onClick={() => setSelectedSection(section)}
-                    className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm p-5 text-left hover:border-[#522081]/30 hover:bg-purple-50/20 transition group"
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-extrabold"
-                          style={{ background: "#52208115", color: PRIMARY }}
-                        >
-                          {section.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="text-sm font-extrabold text-gray-800">{section}</p>
-                          <p className="text-xs text-gray-400">{list.length} total reports</p>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-purple-400 group-hover:translate-x-0.5 transition-all" />
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {pending > 0 && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-                          {pending} Pending
-                        </span>
-                      )}
-                      {escalated > 0 && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
-                          {escalated} Escalated
-                        </span>
-                      )}
-                      {resolved > 0 && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          {resolved} Resolved
-                        </span>
-                      )}
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
-                        👤 {parents} Parent{parents !== 1 ? "s" : ""}
-                      </span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-                        👨‍🎓 {students} Student{students !== 1 ? "s" : ""}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
+            <div>
+              <p className="text-2xl font-black text-gray-800">
+                {loading
+                  ? <span className="inline-block w-10 h-5 bg-gray-100 rounded animate-pulse" />
+                  : value.toLocaleString()
+                }
+              </p>
+              <p className="text-xs font-semibold text-gray-400 mt-0.5">{label}</p>
             </div>
-          )}
+          </div>
+        ))}
+      </div>
 
-          {/* Grade + Section — show report list */}
-          {selectedGrade && selectedSection && (
-            <div className="space-y-4">
-              {/* Breadcrumb */}
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+      {/* ── Table card ── */}
+      <div className="principal-audit-card bg-white rounded-2xl border border-gray-200 shadow-sm">
+
+        {/* Filters bar */}
+        <div
+          className="principal-audit-filters relative px-5 py-4 border-b border-gray-100 flex items-center gap-3 flex-wrap rounded-t-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Search */}
+          <div className="relative flex-1 min-w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+            <input
+              value={query}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Search by user, description, action…"
+              className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-gray-50 transition text-gray-900"
+              onFocus={(e) => (e.target.style.borderColor = PRIMARY)}
+              onBlur={(e)  => (e.target.style.borderColor = "#e5e7eb")}
+            />
+          </div>
+
+          {/* Date filter */}
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            <input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => { setDateFilter(e.target.value); setPage(1); }}
+              className="pl-9 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-white text-gray-700 w-44"
+              onFocus={(e) => (e.target.style.borderColor = PRIMARY)}
+              onBlur={(e)  => (e.target.style.borderColor = "#e5e7eb")}
+            />
+          </div>
+
+          {/* Action filter */}
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setActionOpen(p => !p); setRoleOpen(false); }}
+              className="flex items-center gap-2 pl-3.5 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-white hover:border-gray-300 transition min-w-36 justify-between"
+              style={actionFilter ? { borderColor: PRIMARY, color: PRIMARY } : { color: "#6b7280" }}
+            >
+              <span className="truncate">{actionFilter || "All Actions"}</span>
+              <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform ${actionOpen ? "rotate-180" : ""}`} />
+            </button>
+            {actionOpen && (
+              <div className="absolute top-full mt-1.5 left-0 bg-white border border-gray-200 rounded-xl shadow-2xl z-[9999] py-1 min-w-48 max-h-72 overflow-y-auto">
                 <button
-                  onClick={() => setSelectedSection(null)}
-                  className="font-bold hover:underline"
-                  style={{ color: PRIMARY }}
+                  onClick={() => { setActionFilter(""); setActionOpen(false); setPage(1); }}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-purple-50 transition font-bold"
+                  style={{ color: !actionFilter ? PRIMARY : "#374151" }}
                 >
-                  {selectedGrade}
+                  All Actions
                 </button>
-                <ChevronRight className="w-3 h-3" />
-                <span className="font-bold text-gray-700">{selectedSection}</span>
-              </div>
-
-              {/* Section stat cards */}
-              {sectionStats && (
-                <>
-                  <div className="grid grid-cols-4 gap-3">
-                    {([
-                      { label: "Total",     value: sectionStats.total,     color: PRIMARY,   bg: "#52208115" },
-                      { label: "Pending",   value: sectionStats.pending,   color: "#d97706", bg: "#fffbeb"   },
-                      { label: "Escalated", value: sectionStats.escalated, color: "#dc2626", bg: "#fef2f2"   },
-                      { label: "Resolved",  value: sectionStats.resolved,  color: "#059669", bg: "#f0fdf4"   },
-                    ] as const).map(({ label, value, color, bg }) => (
-                      <div key={label} className="bg-white rounded-xl border border-gray-100 p-3 text-center shadow-sm">
-                        <p className="text-2xl font-black" style={{ color }}>{value}</p>
-                        <p className="text-[10px] font-bold text-gray-400 mt-0.5">{label}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Reporter type split */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5">
-                      <User className="w-3 h-3 text-blue-500" />
-                      <span className="text-xs font-bold text-blue-700">
-                        {sectionStats.parents} from Parents
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-1.5">
-                      <GraduationCap className="w-3 h-3 text-emerald-500" />
-                      <span className="text-xs font-bold text-emerald-700">
-                        {sectionStats.students} from Students
-                      </span>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Filters */}
-              <div className="flex items-center gap-3">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input
-                    value={searchQ}
-                    onChange={(e) => setSearchQ(e.target.value)}
-                    placeholder="Search reports…"
-                    className="w-full pl-9 pr-9 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 bg-white"
-                    style={{ color: "#111827" }}
-                  />
-                  {searchQ && (
+                {ACTION_TYPES.map((a) => {
+                  const m = ACTION_META[a];
+                  return (
                     <button
-                      onClick={() => setSearchQ("")}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      key={a}
+                      onClick={() => { setActionFilter(a); setActionOpen(false); setPage(1); }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-purple-50 transition flex items-center gap-2"
+                      style={{
+                        color:      actionFilter === a ? PRIMARY   : "#374151",
+                        background: actionFilter === a ? "#f5f3ff" : "",
+                      }}
                     >
-                      <X className="w-3.5 h-3.5" />
+                      {m && <m.Icon className="w-3.5 h-3.5 shrink-0" style={{ color: m.text }} />}
+                      {a}
                     </button>
-                  )}
-                </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-                  className="px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-white appearance-none"
-                  style={{ color: "#111827" }}
-                >
-                  <option value="All">All Status</option>
-                  <option>Pending</option>
-                  <option>Reviewed</option>
-                  <option>Resolved</option>
-                  <option>Escalated</option>
-                </select>
-                <select
-                  value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value as typeof typeFilter)}
-                  className="px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-white appearance-none"
-                  style={{ color: "#111827" }}
-                >
-                  <option value="All">All Reporters</option>
-                  <option value="Parent">Parents</option>
-                  <option value="Student">Students</option>
-                </select>
+                  );
+                })}
               </div>
+            )}
+          </div>
 
-              {/* Report cards */}
-              {visibleReports.length === 0 ? (
-                <div className="bg-white rounded-2xl border border-gray-200 flex flex-col items-center justify-center py-16">
-                  <Flag className="w-8 h-8 text-gray-200 mb-3" />
-                  <p className="text-sm text-gray-400">No reports match your filters.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {visibleReports.map((r) => (
-                    <ReportCard key={r.id} report={r} onView={setViewReport} />
-                  ))}
-                </div>
-              )}
-            </div>
+
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setRoleOpen(p => !p); setActionOpen(false); }}
+              className="flex items-center gap-2 pl-3.5 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-white hover:border-gray-300 transition min-w-32 justify-between"
+              style={roleFilter ? { borderColor: PRIMARY, color: PRIMARY } : { color: "#6b7280" }}
+            >
+              <span className="truncate">{roleFilter || "All Roles"}</span>
+              <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform ${roleOpen ? "rotate-180" : ""}`} />
+            </button>
+            {roleOpen && (
+              <div className="absolute top-full mt-1.5 left-0 bg-white border border-gray-200 rounded-xl shadow-2xl z-[9999] py-1 min-w-40">
+                <button
+                  onClick={() => { setRoleFilter(""); setRoleOpen(false); setPage(1); }}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-purple-50 transition font-bold"
+                  style={{ color: !roleFilter ? PRIMARY : "#374151" }}
+                >
+                  All Roles
+                </button>
+                {ROLE_OPTIONS.map((r) => {
+                  const m = ROLE_META[r] ?? { text: "#6b7280" };
+                  return (
+                    <button
+                      key={r}
+                      onClick={() => { setRoleFilter(r); setRoleOpen(false); setPage(1); }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-purple-50 transition flex items-center gap-2"
+                      style={{
+                        color:      roleFilter === r ? PRIMARY   : "#374151",
+                        background: roleFilter === r ? "#f5f3ff" : "",
+                      }}
+                    >
+                      <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: m.text }} />
+                      {r}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Clear */}
+          {hasFilters && (
+            <button
+              onClick={resetFilters}
+              className="flex items-center gap-1.5 text-xs font-bold text-red-500 hover:text-red-700 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition"
+            >
+              <X className="w-3.5 h-3.5" />Clear
+            </button>
           )}
+        </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="mx-5 mt-4 flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
+            <span>{error}</span>
+            <button
+              onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
+              className="ml-auto text-xs font-bold text-red-600 hover:underline"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-gray-50/80 border-b border-gray-100">
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3 w-12">#</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3 w-40">Timestamp</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3 w-40">Performed By</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3 w-28">Role</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3 w-36">Action</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3">Description</th>
+                <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-4 py-3 w-20">Details</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                Array.from({ length: perPage > 8 ? 8 : perPage }).map((_, i) => (
+                  <SkeletonRow key={i} />
+                ))
+              ) : events.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-16 text-center">
+                    <Activity className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+                    <p className="text-sm font-semibold text-gray-400">
+                      {hasFilters ? "No events match your filters." : "No audit log entries yet."}
+                    </p>
+                    {hasFilters && (
+                      <button
+                        onClick={resetFilters}
+                        className="mt-2 text-xs font-medium hover:underline"
+                        style={{ color: PRIMARY }}
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ) : (
+                events.map((event, idx) => {
+                  const initials = getInitials(event.performedBy);
+                  const color    = avatarColor(event.performedBy);
+                  const isAlert  = resolveAction(event.action) === "Security Alert";
+                  const rowNum   = (page - 1) * perPage + idx + 1;
+
+                  return (
+                    <tr
+                      key={event.id}
+                      className={`hover:bg-purple-50/30 transition group ${isAlert ? "bg-red-50/20" : ""}`}
+                    >
+                      {/* # */}
+                      <td className="px-5 py-3.5">
+                        <span className="text-xs font-mono font-semibold text-gray-400">{rowNum}</span>
+                      </td>
+
+                      {/* Timestamp */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                          <Clock className="w-3 h-3 text-gray-300 shrink-0" />
+                          <span className="whitespace-nowrap">{event.timestamp}</span>
+                        </div>
+                      </td>
+
+                      {/* Performed By */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-7 h-7 rounded-full ${color} flex items-center justify-center text-white text-[10px] font-bold shrink-0`}
+                          >
+                            {initials}
+                          </div>
+                          <p className="text-sm font-semibold text-gray-700 truncate max-w-32">
+                            {event.performedBy || "Unknown"}
+                          </p>
+                        </div>
+                      </td>
+
+                      {/* Role */}
+                      <td className="px-4 py-3.5">
+                        <RoleBadge role={event.performedByRole || "Unknown"} />
+                      </td>
+
+                      {/* Action */}
+                      <td className="px-4 py-3.5">
+                        <ActionBadge type={event.action} />
+                      </td>
+
+                      {/* Description */}
+                      <td className="px-4 py-3.5">
+                        <p className="text-sm text-gray-600 truncate max-w-xs">
+                          {event.description || event.action || "—"}
+                        </p>
+                      </td>
+
+                      {/* View details */}
+                      <td className="px-4 py-3.5">
+                        <button
+                          onClick={() => setViewEvent(event)}
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center transition ${
+                            isAlert ? "text-red-400 hover:text-red-600 hover:bg-red-100" : "text-gray-400 hover:bg-purple-100"
+                          }`}
+                          onMouseEnter={(e) => { if (!isAlert) (e.currentTarget as HTMLButtonElement).style.color = PRIMARY; }}
+                          onMouseLeave={(e) => { if (!isAlert) (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af"; }}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        <div
+          className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-xs text-gray-400">
+            {loading
+              ? "Loading…"
+              : total === 0
+              ? "No results"
+              : `Showing ${(page - 1) * perPage + 1}–${Math.min(page * perPage, total)} of ${total.toLocaleString()} events`
+            }
+          </p>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(p => Math.max(p - 1, 1))}
+              disabled={page === 1 || loading}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            {(() => {
+              const pages: (number | "...")[] = [];
+              if (totalPages <= 5) {
+                for (let i = 1; i <= totalPages; i++) pages.push(i);
+              } else {
+                pages.push(1);
+                if (page > 3) pages.push("...");
+                for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
+                if (page < totalPages - 2) pages.push("...");
+                pages.push(totalPages);
+              }
+              return pages.map((p, i) =>
+                p === "..." ? (
+                  <span key={`dot-${i}`} className="w-8 text-center text-gray-300 text-xs">...</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p as number)}
+                    disabled={loading}
+                    className="w-8 h-8 rounded-lg text-xs font-bold transition border disabled:opacity-50"
+                    style={{
+                      background:  page === p ? PRIMARY  : "white",
+                      color:       page === p ? "white"  : "#6b7280",
+                      borderColor: page === p ? PRIMARY  : "#e5e7eb",
+                    }}
+                  >
+                    {p}
+                  </button>
+                )
+              );
+            })()}
+
+            <button
+              onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+              disabled={page === totalPages || loading}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Rows per page:</span>
+            <div className="relative">
+              <select
+                value={perPage}
+                onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}
+                className="appearance-none pl-3 pr-7 py-1.5 text-xs border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none"
+              >
+                {PER_PAGE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Detail modal */}
-      {viewReport !== null && (
-        <ReportDetailModal
-          report={viewReport}
-          onClose={() => setViewReport(null)}
-          onStatusChange={handleStatusChange}
-        />
-      )}
+      {/* Event detail modal */}
+      {viewEvent && <EventDetailModal event={viewEvent} onClose={() => setViewEvent(null)} />}
+
+      <style jsx global>{`
+        @media (max-width: 1024px) {
+          .principal-audit-stats { grid-template-columns: repeat(2, 1fr); }
+          .principal-audit-filters { flex-wrap: wrap; }
+          .principal-audit-filters > * { flex: 1 1 calc(50% - 0.5rem); }
+        }
+        @media (max-width: 640px) {
+          .principal-audit-stats { grid-template-columns: repeat(2, 1fr); }
+          .principal-audit-filters > * { width: 100%; flex: 1 1 100%; }
+          .principal-audit-card > div:last-child {
+            gap: 0.75rem; align-items: flex-start; flex-direction: column;
+          }
+          .principal-audit-card > div:last-child > div { width: 100%; justify-content: space-between; }
+          .principal-audit-page table { min-width: 700px; }
+        }
+        @media (max-width: 400px) {
+          .principal-audit-stats { grid-template-columns: 1fr; }
+        }
+      `}</style>
     </div>
   );
 }

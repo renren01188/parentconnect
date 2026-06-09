@@ -1,37 +1,153 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Camera, Save, X, Pencil } from "lucide-react";
 
+type IctProfileForm = {
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  suffix: string;
+  email: string;
+  phone: string;
+  employeeId: string;
+  status: string;
+};
+
 const fields = [
-  { label: "First Name",    key: "firstName",  type: "text",  col: 1 },
-  { label: "Last Name",     key: "lastName",   type: "text",  col: 2 },
-  { label: "Email Address", key: "email",      type: "email", col: 1 },
-  { label: "Phone Number",  key: "phone",      type: "tel",   col: 2 },
-  { label: "Department",    key: "department", type: "text",  col: 1 },
-  { label: "Employee ID",   key: "employeeId", type: "text",  col: 2 },
+  { label: "First Name",    key: "firstName",  type: "text" },
+  { label: "Last Name",     key: "lastName",   type: "text" },
+  { label: "Middle Name",   key: "middleName", type: "text" },
+  { label: "Suffix",        key: "suffix",     type: "text" },
+  { label: "Email Address", key: "email",      type: "email" },
+  { label: "Phone Number",  key: "phone",      type: "tel" },
+  { label: "Employee ID",   key: "employeeId", type: "text" },
 ];
 
-const defaultForm = {
-  firstName:  "Juan",
-  lastName:   "Dela Cruz",
-  email:      "j.delacruz@school.edu.ph",
-  phone:      "+63 912 345 6789",
-  department: "ICT Department",
-  employeeId: "EMP-2024-001",
+const defaultForm: IctProfileForm = {
+  firstName: "",
+  middleName: "",
+  lastName: "",
+  suffix: "",
+  email: "",
+  phone: "",
+  employeeId: "",
+  status: "active",
 };
 
 export default function ICTProfilePage() {
+  const router = useRouter();
   const [isEditing,    setIsEditing]    = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [form,         setForm]         = useState(defaultForm);
   const [draft,        setDraft]        = useState(defaultForm);
+  const [loading,      setLoading]      = useState(true);
+  const [saving,       setSaving]       = useState(false);
+  const [error,        setError]        = useState("");
+  const [success,      setSuccess]      = useState("");
 
-  const initials = `${form.firstName[0]}${form.lastName[0]}`;
+  const initials = [form.firstName, form.lastName]
+    .filter(Boolean)
+    .map((name) => name[0]?.toUpperCase())
+    .join("") || "IA";
 
   const handleEdit   = () => { setDraft({ ...form }); setIsEditing(true);  };
   const handleCancel = () => { setDraft({ ...form }); setIsEditing(false); };
-  const handleSave   = () => { setForm({ ...draft }); setIsEditing(false); };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProfile() {
+      try {
+        setLoading(true);
+        const res = await fetch("/api/ict/me", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+
+        if (!isMounted) return;
+
+        if (res.status === 401) {
+          router.push("/login/ict");
+          return;
+        }
+
+        if (!res.ok || !data?.ict) {
+          setError(data?.message || "Unable to load your profile.");
+          return;
+        }
+
+        const nextForm: IctProfileForm = {
+          firstName: data.ict.firstName || "",
+          middleName: data.ict.middleName || "",
+          lastName: data.ict.lastName || "",
+          suffix: data.ict.suffix || "",
+          email: data.ict.email || "",
+          phone: data.ict.phone || "",
+          employeeId: data.ict.employeeId || "",
+          status: data.ict.status || "active",
+        };
+
+        setForm(nextForm);
+        setDraft(nextForm);
+      } catch {
+        if (isMounted) setError("Unable to load your profile.");
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    loadProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+
+      const res = await fetch("/api/ict/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (res.status === 401) {
+        router.push("/login/ict");
+        return;
+      }
+
+      if (!res.ok || !data?.ict) {
+        setError(data?.message || "Unable to save your profile.");
+        return;
+      }
+
+      const nextForm: IctProfileForm = {
+        firstName: data.ict.firstName || "",
+        middleName: data.ict.middleName || "",
+        lastName: data.ict.lastName || "",
+        suffix: data.ict.suffix || "",
+        email: data.ict.email || "",
+        phone: data.ict.phone || "",
+        employeeId: data.ict.employeeId || "",
+        status: data.ict.status || "active",
+      };
+
+      setForm(nextForm);
+      setDraft(nextForm);
+      setIsEditing(false);
+      setSuccess(data.message || "Profile updated successfully.");
+    } catch {
+      setError("Unable to save your profile.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -40,6 +156,16 @@ export default function ICTProfilePage() {
     reader.onload = () => setProfileImage(reader.result as string);
     reader.readAsDataURL(file);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-8">
+        <div className="max-w-3xl mx-auto bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-sm text-gray-500">
+          Loading your profile...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -73,14 +199,27 @@ export default function ICTProfilePage() {
             </button>
             <button
               onClick={handleSave}
+              disabled={saving}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1a3a0a] text-white text-sm font-semibold hover:bg-[#274e13] shadow-sm transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
-              Save Changes
+              {saving ? "Saving..." : "Save Changes"}
             </button>
           </div>
         )}
       </div>
+
+      {(error || success) && (
+        <div className="max-w-3xl mx-auto mb-4">
+          <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${
+            error
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-green-200 bg-green-50 text-green-700"
+          }`}>
+            {error || success}
+          </div>
+        </div>
+      )}
 
       {/* ── Main card ── */}
       <div className="max-w-3xl mx-auto bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -96,7 +235,7 @@ export default function ICTProfilePage() {
               {/* Avatar */}
               <div className="w-28 h-28 rounded-2xl bg-[#1a3a0a] flex items-center justify-center text-white text-3xl font-bold overflow-hidden shadow-md">
                 {profileImage
-                  ? <img src={profileImage} alt="avatar" className="w-full h-full object-cover" />
+                  ? <Image src={profileImage} alt="avatar" width={112} height={112} unoptimized className="w-full h-full object-cover" />
                   : initials
                 }
               </div>
@@ -116,7 +255,7 @@ export default function ICTProfilePage() {
             {/* Name & role under avatar */}
             <div className="text-center">
               <p className="text-sm font-semibold text-gray-800 leading-tight">
-                {form.firstName} {form.lastName}
+                {[form.firstName, form.middleName, form.lastName, form.suffix].filter(Boolean).join(" ")}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">ICT Personnel</p>
             </div>
@@ -124,7 +263,7 @@ export default function ICTProfilePage() {
             {/* Status pill */}
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-50 border border-green-200 text-[11px] font-semibold text-green-700">
               <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              Active
+              {form.status || "Active"}
             </span>
           </div>
 
@@ -146,7 +285,7 @@ export default function ICTProfilePage() {
                   {isEditing ? (
                     <input
                       type={type}
-                      value={draft[key as keyof typeof draft]}
+                      value={draft[key as keyof IctProfileForm]}
                       onChange={(e) =>
                         setDraft((prev) => ({ ...prev, [key]: e.target.value }))
                       }
@@ -154,7 +293,7 @@ export default function ICTProfilePage() {
                     />
                   ) : (
                     <p className="px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-100 text-sm text-gray-700">
-                      {form[key as keyof typeof form]}
+                      {form[key as keyof IctProfileForm] || "-"}
                     </p>
                   )}
                 </div>

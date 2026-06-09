@@ -13,6 +13,7 @@ export interface AdviserPayload {
   email: string;
   grade: string | null;
   section: string | null;
+  sections: string[];          // all sections this adviser handles
   role: string;
 }
 

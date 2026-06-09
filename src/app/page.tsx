@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, ShieldCheck, BookOpen, FileText } from "lucide-react";
+import { Users, ShieldCheck, BookOpen, FileText, HeartHandshake } from "lucide-react";
 import HeroSection from "@/components/HeroSection";
 import LoginCard from "@/components/LoginCard";
 
@@ -11,8 +11,10 @@ const roles = [
     description:
       "Monitor student attendance with RFID logs, manage parent reports, and track class activities.",
     buttonLabel: "Login as Guardian / Parent",
-    buttonColor: "bg-sky-500 hover:bg-sky-600 shadow-sky-200 shadow-md",
-    iconBg: "bg-sky-500",
+    buttonColor: "shadow-md",
+    buttonStyle: { background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" },
+    iconBg: "",
+    iconStyle: { background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" },
     href: "/login/guardian",
   },
   {
@@ -35,6 +37,16 @@ const roles = [
     iconBg: "bg-emerald-600",
     href: "/login/adviser",
   },
+  {
+    icon: HeartHandshake,
+    title: "Guidance Counselor",
+    description:
+      "Review escalated student concerns, coordinate interventions, and monitor guidance reports.",
+    buttonLabel: "Log in as Guidance Counselor",
+    buttonColor: "bg-sky-600 hover:bg-sky-700 shadow-sky-200 shadow-md",
+    iconBg: "bg-sky-600",
+    href: "/login/guidance",
+  },
 ];
 
 export default function LandingPage() {
@@ -50,7 +62,7 @@ export default function LandingPage() {
           <p className="text-slate-500 text-base">Select a type of user.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 w-full max-w-6xl">
           {roles.map((role) => (
             <LoginCard key={role.title} {...role} />
           ))}

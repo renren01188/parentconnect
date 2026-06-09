@@ -6,8 +6,10 @@ import {
   UserPlus, CreditCard as RfidIcon, RefreshCw, Trash2,
   AlertTriangle, X, Eye, EyeOff, GraduationCap,
   User, Mail, ShieldAlert, XCircle, MapPin,
+  ChevronDown, CheckCircle2, ArrowDownCircle,
 } from "lucide-react";
 import Link from "next/link";
+import { TransferFromStandbyModal } from "./TransferFromStandbyModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,14 +23,14 @@ interface Student {
   grade: string;
   section: string;
   rfid_card: string | null;
-  today_status: "Present" | "Absent" | "Late";
+  today_status: "Present" | "Absent" | "Late" | "Excused";
   attendance_rate: number;
   parent_first_name?: string;
   parent_last_name?: string;
   relationship?: string;
   contact_number?: string;
   parent_email?: string;
-  parent_address?: string;   // ← new
+  parent_address?: string;
 }
 
 interface Pagination {
@@ -38,8 +40,14 @@ interface Pagination {
   totalPages: number;
 }
 
+function formatGradeLabel(grade?: string | null) {
+  if (!grade) return "";
+  return grade.trim().replace(/^Grade\s+/i, "Grade ");
+}
+
 interface AdviserInfo {
   section: string | null;
+  sections: string[];
   grade: string | null;
   full_name: string;
 }
@@ -67,8 +75,9 @@ function avatarColor(name: string) {
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     Present: "bg-emerald-100 text-emerald-700",
-    Late:    "bg-amber-100 text-amber-700",
-    Absent:  "bg-red-100 text-red-600",
+    Late: "bg-amber-100 text-amber-700",
+    Absent: "bg-red-100 text-red-600",
+    Excused: "bg-sky-100 text-sky-700",
   };
   return (
     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${map[status] ?? "bg-slate-100 text-slate-500"}`}>
@@ -96,8 +105,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── DeleteStudentModal ───────────────────────────────────────────────────────
-
+// --- DeleteStudentModal -
 function DeleteStudentModal({
   student,
   onClose,
@@ -107,15 +115,15 @@ function DeleteStudentModal({
   onClose: () => void;
   onDeleted: (id: number) => void;
 }) {
-  const [password,     setPassword]     = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [reason,       setReason]       = useState("");
-  const [touched,      setTouched]      = useState({ password: false, reason: false });
-  const [deleting,     setDeleting]     = useState(false);
-  const [apiError,     setApiError]     = useState("");
+  const [reason, setReason] = useState("");
+  const [touched, setTouched] = useState({ password: false, reason: false });
+  const [deleting, setDeleting] = useState(false);
+  const [apiError, setApiError] = useState("");
 
   const passwordError = touched.password && !password.trim() ? "Password is required." : "";
-  const reasonError   = touched.reason && reason.trim().length < 10
+  const reasonError = touched.reason && reason.trim().length < 10
     ? reason.trim().length === 0 ? "Reason is required." : "Minimum 10 characters required."
     : "";
   const canSubmit = password.trim().length > 0 && reason.trim().length >= 10;
@@ -126,8 +134,8 @@ function DeleteStudentModal({
     setDeleting(true);
     setApiError("");
     try {
-      const res  = await fetch(`/api/students?id=${student.id}`, {
-        method:  "DELETE",
+      const res = await fetch(`/api/students?id=${student.id}`, {
+        method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           password,
@@ -162,7 +170,6 @@ function DeleteStudentModal({
           }
         `}</style>
 
-        {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
@@ -173,30 +180,20 @@ function DeleteStudentModal({
               <p className="text-xs text-slate-400 mt-0.5">This action is permanent and cannot be undone.</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            disabled={deleting}
-            className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
-          >
+          <button onClick={onClose} disabled={deleting} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Scrollable body */}
         <div className="overflow-y-auto flex-1 px-6 py-5 flex flex-col gap-5">
-
-          {/* Warning banner */}
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
             <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
             <p className="text-xs text-red-600 font-medium leading-relaxed">
-              You are about to permanently delete this student's record. The parent will be notified
-              via email. Please review the details below before proceeding.
+              You are about to permanently delete this student's record. The parent will be notified via email. Please review the details below before proceeding.
             </p>
           </div>
 
-          {/* Student info card */}
           <div className="rounded-xl border border-slate-200 overflow-hidden">
-            {/* Student header row */}
             <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-slate-100">
               <div className={`w-10 h-10 rounded-full ${avatarColor(student.full_name)} flex items-center justify-center text-white text-sm font-bold shrink-0`}>
                 {getInitials(student.full_name)}
@@ -208,23 +205,18 @@ function DeleteStudentModal({
               <StatusBadge status={student.today_status} />
             </div>
 
-            {/* Student + Parent info grid */}
             <div className="grid grid-cols-2 divide-x divide-slate-100 bg-slate-50">
-
-              {/* Student column */}
               <div className="px-4 py-3">
                 <div className="flex items-center gap-1.5 mb-2">
                   <GraduationCap className="w-3.5 h-3.5 text-slate-400" />
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Student</span>
                 </div>
-                <InfoRow label="ID"         value={student.student_id} />
-                <InfoRow label="Grade"      value={student.grade} />
-                <InfoRow label="Section"    value={student.section} />
-                <InfoRow label="RFID"       value={student.rfid_card || "Not assigned"} />
+                <InfoRow label="ID" value={student.student_id} />
+                <InfoRow label="Grade" value={student.grade} />
+                <InfoRow label="Section" value={student.section} />
+                <InfoRow label="RFID" value={student.rfid_card || "Not assigned"} />
                 <InfoRow label="Attendance" value={student.attendance_rate ? `${student.attendance_rate}%` : "—"} />
               </div>
-
-              {/* Parent column */}
               <div className="px-4 py-3">
                 <div className="flex items-center gap-1.5 mb-2">
                   <User className="w-3.5 h-3.5 text-slate-400" />
@@ -232,11 +224,11 @@ function DeleteStudentModal({
                 </div>
                 {student.parent_first_name ? (
                   <>
-                    <InfoRow label="Name"         value={`${student.parent_first_name} ${student.parent_last_name ?? ""}`.trim()} />
-                    <InfoRow label="Relationship" value={student.relationship   || "—"} />
-                    <InfoRow label="Contact"      value={student.contact_number || "—"} />
-                    <InfoRow label="Email"        value={student.parent_email   || "—"} />
-                    <InfoRow label="Address"      value={student.parent_address || "—"} />
+                    <InfoRow label="Name" value={`${student.parent_first_name} ${student.parent_last_name ?? ""}`.trim()} />
+                    <InfoRow label="Relationship" value={student.relationship || "—"} />
+                    <InfoRow label="Contact" value={student.contact_number || "—"} />
+                    <InfoRow label="Email" value={student.parent_email || "—"} />
+                    <InfoRow label="Address" value={student.parent_address || "—"} />
                   </>
                 ) : (
                   <p className="text-[11px] text-slate-400 mt-1">Parent info not available.</p>
@@ -245,18 +237,14 @@ function DeleteStudentModal({
             </div>
           </div>
 
-          {/* Reason textarea */}
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
               <Mail className="w-3.5 h-3.5 text-slate-400" />
-              Reason for Deletion
-              <span className="text-red-500 text-xs">*</span>
+              Reason for Deletion <span className="text-red-500 text-xs">*</span>
             </label>
             <p className="text-[11px] text-slate-400">
               This message will be emailed to{" "}
-              <span className="font-semibold text-slate-600">
-                {student.parent_email || "the parent's registered email"}
-              </span>.
+              <span className="font-semibold text-slate-600">{student.parent_email || "the parent's registered email"}</span>.
             </p>
             <textarea
               rows={4}
@@ -264,9 +252,8 @@ function DeleteStudentModal({
               value={reason}
               onChange={e => { setReason(e.target.value); setTouched(p => ({ ...p, reason: true })); }}
               onBlur={() => setTouched(p => ({ ...p, reason: true }))}
-              className={`w-full px-4 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400 resize-none leading-relaxed ${
-                reasonError ? "border-red-400 bg-red-50 focus:ring-red-400" : "border-slate-200 focus:ring-emerald-400"
-              }`}
+              className={`w-full px-4 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400 resize-none leading-relaxed ${reasonError ? "border-red-400 bg-red-50 focus:ring-red-400" : "border-slate-200 focus:ring-emerald-400"
+                }`}
             />
             <div className="flex items-center justify-between">
               {reasonError
@@ -278,12 +265,10 @@ function DeleteStudentModal({
             </div>
           </div>
 
-          {/* Password */}
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
               <ShieldAlert className="w-3.5 h-3.5 text-slate-400" />
-              Adviser Password Authorization
-              <span className="text-red-500 text-xs">*</span>
+              Adviser Password Authorization <span className="text-red-500 text-xs">*</span>
             </label>
             <p className="text-[11px] text-slate-400">Enter your current password to authorize this deletion.</p>
             <div className="relative">
@@ -293,15 +278,10 @@ function DeleteStudentModal({
                 value={password}
                 onChange={e => { setPassword(e.target.value); setTouched(p => ({ ...p, password: true })); }}
                 onBlur={() => setTouched(p => ({ ...p, password: true }))}
-                className={`w-full px-4 py-3 pr-11 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400 ${
-                  passwordError ? "border-red-400 bg-red-50 focus:ring-red-400" : "border-slate-200 focus:ring-emerald-400"
-                }`}
+                className={`w-full px-4 py-3 pr-11 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400 ${passwordError ? "border-red-400 bg-red-50 focus:ring-red-400" : "border-slate-200 focus:ring-emerald-400"
+                  }`}
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(v => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-              >
+              <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
@@ -312,7 +292,6 @@ function DeleteStudentModal({
             )}
           </div>
 
-          {/* API error */}
           {apiError && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
@@ -321,28 +300,13 @@ function DeleteStudentModal({
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50 rounded-b-2xl">
-          <button
-            onClick={onClose}
-            disabled={deleting}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 font-bold text-sm rounded-xl transition-colors disabled:opacity-50"
-          >
+          <button onClick={onClose} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 font-bold text-sm rounded-xl transition-colors disabled:opacity-50">
             <XCircle className="w-4 h-4" /> Cancel
           </button>
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-red-200"
-          >
+          <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-red-200">
             {deleting ? (
-              <>
-                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                </svg>
-                Deleting…
-              </>
+              <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Deleting…</>
             ) : (
               <><Trash2 className="w-4 h-4" /> Confirm Delete</>
             )}
@@ -356,62 +320,74 @@ function DeleteStudentModal({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdviserStudentsPage() {
-  const [students,      setStudents]      = useState<Student[]>([]);
-  const [pagination,    setPagination]    = useState<Pagination>({ total: 0, page: 1, limit: 5, totalPages: 1 });
-  const [adviser,       setAdviser]       = useState<AdviserInfo | null>(null);
-  const [loading,       setLoading]       = useState(true);
-  const [error,         setError]         = useState<string | null>(null);
-  const [search,        setSearch]        = useState("");
-  const [debSearch,     setDebSearch]     = useState("");
-  const [filter,        setFilter]        = useState("All");
-  const [page,          setPage]          = useState(1);
-  const [deleteTarget,  setDeleteTarget]  = useState<Student | null>(null);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [pagination, setPagination] = useState<Pagination>({ total: 0, page: 1, limit: 5, totalPages: 1 });
+  const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [debSearch, setDebSearch] = useState("");
+  const [filter, setFilter] = useState("All");
+  const [page, setPage] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<Student | null>(null);
   const [loadingDelete, setLoadingDelete] = useState<number | null>(null);
+  const [activeSection, setActiveSection] = useState<string>("");
+
+  // ── Receive Transfer modal (incoming) ──
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebSearch(search), 350);
     return () => clearTimeout(t);
   }, [search]);
 
-  useEffect(() => { setPage(1); }, [debSearch, filter]);
+  useEffect(() => { setPage(1); }, [debSearch, filter, activeSection]);
 
   const fetchStudents = useCallback(async (p: number) => {
     setLoading(true);
     setError(null);
     try {
-      const qs   = new URLSearchParams({ page: String(p), limit: "5", filter, ...(debSearch ? { search: debSearch } : {}) });
-      const res  = await fetch(`/api/students?${qs}`);
+      const qs = new URLSearchParams({
+        page: String(p), limit: "5", filter,
+        ...(debSearch ? { search: debSearch } : {}),
+        ...(activeSection ? { section: activeSection } : {}),
+      });
+      const res = await fetch(`/api/students?${qs}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || json.message || "Unknown error");
       setStudents(json.data);
       setPagination(json.pagination);
-      if (json.adviser) setAdviser(json.adviser);
+      if (json.adviser) {
+        setAdviser(json.adviser);
+        if (!activeSection && json.adviser.sections?.length) {
+          setActiveSection(json.adviser.sections[0]);
+        }
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [debSearch, filter]);
+  }, [debSearch, filter, activeSection]);
 
   useEffect(() => { fetchStudents(page); }, [fetchStudents, page]);
 
-  // Fetch full student detail (including address) then open modal
   const handleOpenDelete = async (s: Student) => {
     if (s.parent_email !== undefined) { setDeleteTarget(s); return; }
     setLoadingDelete(s.id);
     try {
-      const res  = await fetch(`/api/students/${s.id}`);
+      const res = await fetch(`/api/students/${s.id}`);
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
         setDeleteTarget({
           ...s,
           parent_first_name: d.parent_first_name,
-          parent_last_name:  d.parent_last_name,
-          relationship:      d.relationship,
-          contact_number:    d.contact_number,
-          parent_email:      d.parent_email,
-          parent_address:    d.parent_address,   // ← new
+          parent_last_name: d.parent_last_name,
+          relationship: d.relationship,
+          contact_number: d.contact_number,
+          parent_email: d.parent_email,
+          parent_address: d.parent_address,
         });
       } else {
         setDeleteTarget(s);
@@ -429,9 +405,14 @@ export default function AdviserStudentsPage() {
     setDeleteTarget(null);
   };
 
+  const handleReceived = () => {
+    setShowReceiveModal(false);
+    fetchStudents(page);
+  };
+
   const sectionLabel =
-    adviser?.grade && adviser?.section
-      ? `Grade ${adviser.grade} · ${adviser.section}`
+    adviser?.grade && activeSection
+      ? `${formatGradeLabel(adviser.grade)} · ${activeSection}`
       : "Your Section";
 
   return (
@@ -445,6 +426,13 @@ export default function AdviserStudentsPage() {
         />
       )}
 
+      {showReceiveModal && (
+        <TransferFromStandbyModal
+          onClose={() => setShowReceiveModal(false)}
+          onTransferred={handleReceived}
+        />
+      )}
+
       {/* Page header */}
       <div className="flex items-start justify-between mb-6">
         <div>
@@ -453,23 +441,57 @@ export default function AdviserStudentsPage() {
             {loading ? "Loading…" : `${pagination.total} student${pagination.total !== 1 ? "s" : ""} · ${sectionLabel}`}
           </p>
         </div>
-        <Link
-          href="/dashboard/adviser/students/add"
-          className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-emerald-200"
-        >
-          <UserPlus className="w-4 h-4" /> Add Student
-        </Link>
+
+        {/* ── Action buttons ── */}
+        <div className="flex items-center gap-2">
+          {/* Receive Transfer button */}
+          <button
+            onClick={() => setShowReceiveModal(true)}
+            className="flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl transition-all bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-400"
+          >
+            <ArrowDownCircle className="w-4 h-4" />
+            Receive Transfer
+          </button>
+
+          <Link
+            href="/dashboard/adviser/students/add"
+            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-emerald-200"
+          >
+            <UserPlus className="w-4 h-4" /> Add Student
+          </Link>
+        </div>
       </div>
 
-      {/* Section badge */}
-      {adviser?.section && (
-        <div className="mb-4 inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          <span className="text-sm font-semibold text-emerald-700">{sectionLabel}</span>
+      {/* Section switcher */}
+      {adviser && (adviser.sections?.length > 0 || adviser.section) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {adviser.sections?.length > 1 ? (
+            <>
+              <span className="text-xs font-semibold text-slate-400 mr-1">Section:</span>
+              {adviser.sections.map(sec => (
+                <button
+                  key={sec}
+                  onClick={() => { setActiveSection(sec); setPage(1); }}
+                  className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
+                      ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
+                      : "bg-slate-100 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200"
+                    }`}
+                >
+                  <span className={`h-2 w-2 rounded-full ${(activeSection || adviser.sections[0]) === sec ? "bg-white" : "bg-slate-300"}`} />
+                  {adviser.grade ? `${formatGradeLabel(adviser.grade)} – ${sec}` : sec}
+                </button>
+              ))}
+            </>
+          ) : (
+            <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="text-sm font-semibold text-emerald-700">{sectionLabel}</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Table card */}
+
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
 
         {/* Search + filter */}
@@ -485,13 +507,12 @@ export default function AdviserStudentsPage() {
             />
           </div>
           <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
-            {["All", "Present", "Absent", "Late"].map(f => (
+            {["All", "Present", "Absent", "Late", "Excused"].map(f => (
               <button
                 key={f}
                 onClick={() => { setFilter(f); setPage(1); }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  filter === f ? "bg-emerald-500 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filter === f ? "bg-emerald-500 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
               >
                 {f}
               </button>
@@ -524,12 +545,7 @@ export default function AdviserStudentsPage() {
                   <td colSpan={6} className="py-12 text-center">
                     <p className="text-red-500 font-semibold text-sm mb-1">Failed to load students</p>
                     <p className="text-slate-400 text-xs mb-3">{error}</p>
-                    <button
-                      onClick={() => fetchStudents(page)}
-                      className="px-4 py-1.5 bg-emerald-500 text-white text-xs font-bold rounded-lg hover:bg-emerald-600 transition-colors"
-                    >
-                      Retry
-                    </button>
+                    <button onClick={() => fetchStudents(page)} className="px-4 py-1.5 bg-emerald-500 text-white text-xs font-bold rounded-lg hover:bg-emerald-600 transition-colors">Retry</button>
                   </td>
                 </tr>
               )}
@@ -542,70 +558,75 @@ export default function AdviserStudentsPage() {
                 </tr>
               )}
 
-              {!loading && !error && students.map(s => (
-                <tr key={s.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 transition-colors">
+              {!loading && !error && students.map(s => {
+                return (
+                  <tr
+                    key={s.id}
+                    className="border-b border-slate-50 last:border-0 transition-colors hover:bg-slate-50/60"
+                  >
 
-                  <td className="py-3 pr-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-full ${avatarColor(s.full_name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>
-                        {getInitials(s.full_name)}
+                    <td className="py-3 pr-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-full ${avatarColor(s.full_name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>
+                          {getInitials(s.full_name)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-800">{s.full_name}</p>
+                          <p className="text-[11px] text-slate-400">{s.gender}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-sm font-bold text-slate-800">{s.full_name}</p>
-                        <p className="text-[11px] text-slate-400">{s.gender}</p>
-                      </div>
-                    </div>
-                  </td>
+                    </td>
 
-                  <td className="py-3 pr-4 text-xs text-slate-500 font-medium">{s.student_id}</td>
+                    <td className="py-3 pr-4 text-xs text-slate-500 font-medium">{s.student_id}</td>
 
-                  <td className="py-3 pr-4">
-                    {s.rfid_card ? (
-                      <div className="flex items-center gap-1.5 text-xs text-slate-600">
-                        <CreditCard className="w-3.5 h-3.5 text-emerald-500" />{s.rfid_card}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <CreditCard className="w-3.5 h-3.5 text-slate-300" />No Card
-                      </div>
-                    )}
-                  </td>
-
-                  <td className="py-3 pr-4"><AttendanceRate rate={s.attendance_rate} /></td>
-
-                  <td className="py-3 pr-4"><StatusBadge status={s.today_status} /></td>
-
-                  <td className="py-3">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Link
-                        href={`/dashboard/adviser/students/${s.id}`}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
-                      >
-                        View
-                      </Link>
-
-                      {!s.rfid_card && (
-                        <Link
-                          href={`/dashboard/adviser/students/${s.id}/assign-rfid`}
-                          className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
-                        >
-                          <RfidIcon className="w-3 h-3" /> Assign RFID
-                        </Link>
+                    <td className="py-3 pr-4">
+                      {s.rfid_card ? (
+                        <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                          <CreditCard className="w-3.5 h-3.5 text-emerald-500" />{s.rfid_card}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                          <CreditCard className="w-3.5 h-3.5 text-slate-300" />No Card
+                        </div>
                       )}
+                    </td>
 
-                      <button
-                        onClick={() => handleOpenDelete(s)}
-                        disabled={loadingDelete === s.id}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
-                      >
-                        {loadingDelete === s.id
-                          ? <><RefreshCw className="w-3 h-3 animate-spin" /> Loading…</>
-                          : <><Trash2 className="w-3 h-3" /> Delete</>}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    <td className="py-3 pr-4"><AttendanceRate rate={s.attendance_rate} /></td>
+
+                    <td className="py-3 pr-4"><StatusBadge status={s.today_status} /></td>
+
+                    <td className="py-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Link
+                          href={`/dashboard/adviser/students/${s.id}`}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          View
+                        </Link>
+
+                        {!s.rfid_card && (
+                          <Link
+                            href="/dashboard/adviser/attendance"
+                            className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
+                          >
+                            <RfidIcon className="w-3 h-3" /> Assign RFID
+                          </Link>
+                        )}
+
+                        <button
+                          onClick={() => handleOpenDelete(s)}
+                          disabled={loadingDelete === s.id}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                        >
+                          {loadingDelete === s.id
+                            ? <><RefreshCw className="w-3 h-3 animate-spin" /> Loading…</>
+                            : <><Trash2 className="w-3 h-3" /> Delete</>}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -628,9 +649,8 @@ export default function AdviserStudentsPage() {
                 <button
                   key={p}
                   onClick={() => setPage(p)}
-                  className={`w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${
-                    page === p ? "bg-emerald-500 text-white" : "border border-slate-200 text-slate-500 hover:bg-slate-50"
-                  }`}
+                  className={`w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${page === p ? "bg-emerald-500 text-white" : "border border-slate-200 text-slate-500 hover:bg-slate-50"
+                    }`}
                 >
                   {p}
                 </button>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
     ChevronRight, Settings, Lock, X, CheckCircle,
     AlertTriangle, User, Mail, Phone, MapPin,
@@ -121,6 +122,14 @@ interface ProfileData {
     address:    string;
 }
 
+type LinkedStudent = {
+    id: number;
+    lrn: string;
+    name: string;
+    grade: string;
+    section: string;
+};
+
 function getFullName(p: ProfileData) {
     return [p.firstName, p.middleName, p.lastName, p.suffix].filter(Boolean).join(" ");
 }
@@ -130,7 +139,7 @@ type Tab  = "profile" | "password";
 type Step = "edit" | "review" | "success";
 
 function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
-    profile: ProfileData; onSave: (p: ProfileData) => void; onClose: () => void;
+    profile: ProfileData; onSave: (p: ProfileData, currentPassword: string) => Promise<void>; onClose: () => void;
     initialTab?: Tab;
 }) {
     const [tab,  setTab]  = useState<Tab>(initialTab);
@@ -208,13 +217,32 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
     }
 
     const [saving, setSaving] = useState(false);
-    function handleConfirm() {
+    async function handleConfirm() {
         setSaving(true);
-        setTimeout(() => {
-            if (tab === "profile") onSave(pForm);
+        try {
+            if (tab === "profile") {
+                await onSave(pForm, authPw);
+            } else {
+                const res = await fetch("/api/parents/me", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ currentPassword: pw.current, newPassword: pw.next }),
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    setStep("edit");
+                    setPwErr({ current: data.message || "Unable to update password." });
+                    return;
+                }
+            }
             setSaving(false);
             setStep("success");
-        }, 900);
+        } catch {
+            if (tab === "profile") setAuthErr("Unable to save profile. Please try again.");
+            else setPwErr({ current: "Unable to update password. Please try again." });
+        } finally {
+            setSaving(false);
+        }
     }
 
     function handleClose() {
@@ -496,15 +524,19 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
 
 // ─── Main Profile Page ────────────────────────────────────────────────────────
 export default function ProfilePage() {
+    const router = useRouter();
     const [profile, setProfile] = useState<ProfileData>({
-        firstName:  "John",
+        firstName:  "",
         middleName: "",
-        lastName:   "Doe",
+        lastName:   "",
         suffix:     "",
-        email:      "john.doe@email.com",
-        phone:      "+63 912 345 6789",
-        address:    "123 Main Street, Manila, Philippines",
+        email:      "",
+        phone:      "",
+        address:    "",
     });
+    const [students, setStudents] = useState<LinkedStudent[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState("");
 
     const [emailNotif,   setEmailNotif]   = useState(true);
     const [smsNotif,     setSmsNotif]     = useState(false);
@@ -516,8 +548,77 @@ export default function ProfilePage() {
         setShowSettings(true);
     }
 
+    useEffect(() => {
+        async function loadProfile() {
+            try {
+                const res = await fetch("/api/parents/me");
+                const data = await res.json();
+
+                if (!data.success) {
+                    router.push("/login/guardian");
+                    return;
+                }
+
+                setProfile({
+                    firstName: data.parent.firstName || "",
+                    middleName: data.parent.middleName || "",
+                    lastName: data.parent.lastName || "",
+                    suffix: data.parent.suffix || "",
+                    email: data.parent.email || "",
+                    phone: data.parent.phone || "",
+                    address: data.parent.address || "",
+                });
+                setStudents(data.students ?? []);
+            } catch {
+                setLoadError("Unable to load your profile. Please try again.");
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        loadProfile();
+    }, [router]);
+
+    async function saveProfile(updated: ProfileData, currentPassword: string) {
+        const res = await fetch("/api/parents/me", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...updated, currentPassword }),
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+            throw new Error(data.message || "Unable to save profile.");
+        }
+
+        setProfile(data.parent ?? updated);
+    }
+
     const fullName = getFullName(profile);
     const initials = [profile.firstName, profile.lastName].filter(Boolean).map(n => n[0].toUpperCase()).join("");
+    const studentColors = ["#3b82f6", "#2563eb", "#0ea5e9", "#6366f1"];
+
+    function studentInitials(name: string) {
+        return name
+            .split(" ")
+            .filter(Boolean)
+            .slice(0, 2)
+            .map(part => part[0]?.toUpperCase())
+            .join("") || "ST";
+    }
+
+    if (loading) {
+        return (
+            <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
+                <Sidebar />
+                <main className="flex-1 grid place-items-center p-8">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-sm font-semibold text-slate-500 shadow-sm">
+                        Loading your profile...
+                    </div>
+                </main>
+            </div>
+        );
+    }
 
     return (
         <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
@@ -530,6 +631,7 @@ export default function ProfilePage() {
                     <div>
                         <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Profile Settings</h1>
                         <p className="text-slate-500 text-sm mt-0.5">Manage your account information and preferences</p>
+                        {loadError && <p className="text-red-500 text-xs mt-1">{loadError}</p>}
                     </div>
                     <button onClick={() => openSettings("profile")}
                         className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 transition shadow-md shadow-blue-200">
@@ -618,19 +720,21 @@ export default function ProfilePage() {
                         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">My Children / Ward</h2>
                             <p className="text-xs text-slate-400 mb-4">Manage your children/Ward&apos;s profiles</p>
-                            {[
-                                { initials: "MD", name: "Maria Santos Doe",  grade: "Grade 3 - Mabuhay", bg: "#3b82f6", studentId: "2" },
-                                { initials: "CS", name: "Carlos Santos Doe", grade: "Grade 6 - Rizal",   bg: "#2563eb", studentId: "1" },
-                            ].map(child => (
-                                <Link key={child.name} href={`/dashboard/parent?student=${child.studentId}`}
+                            {students.length === 0 && (
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs text-slate-500">
+                                    No linked students found.
+                                </div>
+                            )}
+                            {students.map((child, index) => (
+                                <Link key={`${child.id}-${child.lrn}`} href={`/dashboard/parent?student=${child.id}`}
                                     className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-blue-50 hover:border-blue-200 transition-colors mb-2 last:mb-0">
                                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0"
-                                        style={{ background: child.bg }}>
-                                        {child.initials}
+                                        style={{ background: studentColors[index % studentColors.length] }}>
+                                        {studentInitials(child.name)}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <p className="text-xs font-bold text-slate-800 leading-tight truncate">{child.name}</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">{child.grade}</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">{child.grade} - {child.section}</p>
                                     </div>
                                     <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
                                 </Link>
@@ -667,7 +771,7 @@ export default function ProfilePage() {
                 <SettingsModal
                     profile={profile}
                     initialTab={settingsTab}
-                    onSave={updated => setProfile(updated)}
+                    onSave={saveProfile}
                     onClose={() => setShowSettings(false)}
                 />
             )}

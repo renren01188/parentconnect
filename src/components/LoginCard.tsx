@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { ArrowRight, LucideIcon } from "lucide-react";
 
 interface LoginCardProps {
@@ -8,7 +9,9 @@ interface LoginCardProps {
   description: string;
   buttonLabel: string;
   buttonColor: string;
+  buttonStyle?: React.CSSProperties;
   iconBg: string;
+  iconStyle?: React.CSSProperties;
   href?: string;
   onClick?: () => void;
 }
@@ -19,7 +22,9 @@ export default function LoginCard({
   description,
   buttonLabel,
   buttonColor,
+  buttonStyle,
   iconBg,
+  iconStyle,
   href = "#",
   onClick,
 }: LoginCardProps) {
@@ -28,6 +33,7 @@ export default function LoginCard({
       {/* Icon */}
       <div
         className={`w-14 h-14 rounded-2xl ${iconBg} flex items-center justify-center mb-5 transition-transform duration-300 group-hover:scale-110`}
+        style={iconStyle}
       >
         <Icon className="w-7 h-7 text-white" />
       </div>
@@ -49,6 +55,7 @@ export default function LoginCard({
           font-semibold text-sm text-white transition-all duration-200
           hover:gap-3 active:scale-95 ${buttonColor}
         `}
+        style={buttonStyle}
       >
         {buttonLabel}
         <ArrowRight className="w-4 h-4" />

@@ -78,7 +78,7 @@ function ResetPasswordForm() {
   return (
     <>
       <div className="flex flex-col items-center mb-7">
-        <div className="w-16 h-16 rounded-2xl bg-sky-500 flex items-center justify-center mb-4 shadow-lg shadow-sky-200">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 8px 24px rgba(26,32,53,0.25)" }}>
           <KeyRound className="w-8 h-8 text-white" />
         </div>
         <h2 className="text-2xl font-extrabold text-slate-800">Reset Password</h2>
@@ -101,7 +101,7 @@ function ResetPasswordForm() {
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input type={showNew ? "text" : "password"} placeholder="Create a strong password" required
               value={newPassword} onChange={e => setNewPassword(e.target.value)}
-              className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent transition placeholder-slate-400"
+              className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition placeholder-slate-400"
             />
             <button type="button" onClick={() => setShowNew(!showNew)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
@@ -129,7 +129,7 @@ function ResetPasswordForm() {
               className={`w-full pl-10 pr-11 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400
                 ${confirmPassword && confirmPassword !== newPassword
                   ? "border-red-400 bg-red-50 focus:ring-red-400"
-                  : "border-slate-200 focus:ring-sky-400"}`}
+                  : "border-slate-200 focus:ring-indigo-400"}`}
             />
             <button type="button" onClick={() => setShowConfirm(!showConfirm)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
@@ -145,7 +145,8 @@ function ResetPasswordForm() {
         </div>
 
         <button type="submit" disabled={loading || !token}
-          className="flex items-center justify-center gap-2 w-full bg-sky-500 hover:bg-sky-600 disabled:bg-sky-300 text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md shadow-sky-200 text-sm">
+          className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md text-sm disabled:opacity-60"
+          style={{ background: loading ? "#3a4a6b" : "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
           {loading ? (
             <span className="flex items-center gap-2">
               <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
@@ -169,15 +170,15 @@ export default function ResetPasswordPage() {
       <header className="relative w-full h-48 overflow-hidden">
         <div className="absolute inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')` }} />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0d1526]/90 via-[#1a2035]/80 to-[#0d1526]/70" />
         <div className="relative z-10 flex items-center h-full px-8">
           <h1 className="text-white font-bold text-xl md:text-2xl">
-            ParentConnect: <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
+            ParentConnect: <span className="text-indigo-300">Parent Communication and RFID Monitoring</span>
           </h1>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium">Contact us</a>
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium">About</a>
+        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium">Contact us</Link>
+          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium">About</Link>
         </nav>
       </header>
 

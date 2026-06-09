@@ -1,22 +1,47 @@
 "use client";
 
 import { useState } from "react";
-import { ShieldCheck, ArrowLeft, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { ShieldCheck, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function PrincipalLoginPage() {
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const router = useRouter();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg("");
     setLoading(true);
-    setTimeout(() => {
+
+    try {
+      const res = await fetch("/api/auth/principal/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier, password }),
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        setErrorMsg(data.message || "Login failed. Please try again.");
+        return;
+      }
+
+      if (!data.passwordSet) {
+        router.push("/set-password/principal");
+      } else {
+        router.push("/dashboard/principal");
+      }
+      router.refresh();
+    } catch {
+      setErrorMsg("Could not connect to server. Please try again.");
+    } finally {
       setLoading(false);
-      router.push("/dashboard/principal");
-    }, 2000);
+    }
   };
 
   return (
@@ -52,9 +77,9 @@ export default function PrincipalLoginPage() {
             </div>
           </div>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</a>
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</a>
+        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
+          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
         </nav>
       </header>
 
@@ -76,12 +101,21 @@ export default function PrincipalLoginPage() {
             </p>
           </div>
 
+          {errorMsg && (
+            <div className="flex items-center gap-2.5 bg-red-50 border border-red-100 text-red-600 text-sm font-medium px-4 py-3 rounded-xl mb-4">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">Username or Email</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email or Employee ID</label>
               <input
                 type="text"
-                placeholder="Enter your username"
+                value={identifier}
+                onChange={e => { setIdentifier(e.target.value); setErrorMsg(""); }}
+                placeholder="principal@school.edu or EMP-2025-002"
                 required
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition placeholder-slate-400"
               />
@@ -92,6 +126,8 @@ export default function PrincipalLoginPage() {
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={e => { setPassword(e.target.value); setErrorMsg(""); }}
                   placeholder="Enter your password"
                   required
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition placeholder-slate-400 pr-11"

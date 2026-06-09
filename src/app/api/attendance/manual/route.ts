@@ -1,3 +1,13 @@
+// app/api/attendance/manual/route.ts
+//
+// CHANGE vs original:
+//   The student lookup was filtering with .eq("section", adviser.section),
+//   which only matched the primary section. An adviser with sections ["A","B"]
+//   could not manually record attendance for a student in section B.
+//
+//   Fix: build a section OR filter across all adviser.sections, same
+//   pattern used in the DELETE handler above.
+
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
@@ -9,15 +19,43 @@ type ManualBody = {
   remark?: string;
 };
 
+type StudentNameFields = {
+  first_name?: string | null;
+  middle_name?: string | null;
+  last_name?: string | null;
+  suffix?: string | null;
+};
+
 function getToday() {
-  return new Date().toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return `${year}-${month}-${day}`;
 }
 
 function getNowTime() {
-  return new Date().toTimeString().slice(0, 8);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const hour = parts.find((p) => p.type === "hour")?.value ?? "00";
+  const minute = parts.find((p) => p.type === "minute")?.value ?? "00";
+  const second = parts.find((p) => p.type === "second")?.value ?? "00";
+  return `${hour}:${minute}:${second}`;
 }
 
-function buildFullName(student: any) {
+function buildFullName(student: StudentNameFields) {
   return [student.first_name, student.middle_name, student.last_name, student.suffix]
     .filter(Boolean)
     .join(" ");
@@ -35,13 +73,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── CHANGE: resolve full sections array ────────────────────────────
+    const adviserSections: string[] =
+      adviser?.sections?.length
+        ? adviser.sections
+        : adviser?.section
+        ? [adviser.section]
+        : [];
+
+    // Base query
     let query = supabase
       .from("students")
-      .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section")
+      .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section, class_session")
       .eq("student_id", body.student_id);
 
-    if (adviser?.section) query = query.eq("section", adviser.section);
-    if (adviser?.grade)   query = query.eq("grade", adviser.grade);
+    // ── CHANGE: OR filter across all sections instead of single .eq() ──
+    if (adviserSections.length > 0) {
+      const orFilter = adviserSections.map((s) => `section.eq.${s}`).join(",");
+      query = query.or(orFilter);
+    }
+    if (adviser?.grade) {
+      query = query.eq("grade", adviser.grade);
+    }
 
     const { data: students, error } = await query.limit(1);
     if (error) throw error;
@@ -56,27 +109,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          message: anyStudent && anyStudent.length > 0
-            ? "This student does not belong to your section."
-            : "Student not found.",
+          message:
+            anyStudent && anyStudent.length > 0
+              ? "This student does not belong to your section."
+              : "Student not found.",
         },
         { status: 404 }
       );
     }
 
-    const student = students[0];
+    const student        = students[0];
     const attendanceDate = getToday();
     const timeLogged     = getNowTime();
+    const sessionType    = (student.class_session || "Morning") as "Morning" | "Afternoon";
 
     const { data: existing } = await supabase
       .from("attendance_logs")
-      .select("id")
+      .select("id, type, status")
       .eq("student_db_id", student.id)
       .eq("attendance_date", attendanceDate)
-      .eq("type", body.type)
-      .limit(1);
+      .eq("session_type", sessionType);
 
-    if (existing && existing.length > 0) {
+    const hasExcusedLog = (existing ?? []).some((log) => log.status === "Excused");
+    if (hasExcusedLog) {
+      return NextResponse.json(
+        { success: false, message: `${buildFullName(student)} is excused today. Manual attendance is not needed.` },
+        { status: 409 }
+      );
+    }
+
+    if ((existing ?? []).some((log) => log.type === body.type)) {
       return NextResponse.json(
         { success: false, message: `${body.type} already recorded today` },
         { status: 409 }
@@ -91,6 +153,7 @@ export async function POST(req: NextRequest) {
         attendance_date: attendanceDate,
         time_logged:     timeLogged,
         type:            body.type,
+        session_type:    sessionType,
         status:          body.status,
         via:             "Manual",
         remark:          body.remark || null,
@@ -112,11 +175,11 @@ export async function POST(req: NextRequest) {
         attendance_date: attendanceDate,
         time_logged:     timeLogged,
         type:            body.type,
+        session_type:    sessionType,
         status:          body.status,
         via:             "Manual",
       },
     });
-
   } catch (error) {
     console.error("Manual attendance error:", error);
     return NextResponse.json(

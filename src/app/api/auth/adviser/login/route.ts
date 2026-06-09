@@ -1,8 +1,10 @@
+// app/api/auth/adviser/login/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
+import { logAudit } from "@/lib/audit";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -21,7 +23,9 @@ export async function POST(req: NextRequest) {
 
     const { data: advisers, error } = await supabase
       .from("advisers")
-      .select("id, employee_id, first_name, last_name, email, password_hash, grade, section, phone, status")
+      .select(
+        "id, employee_id, first_name, last_name, email, password_hash, grade, section, sections, phone, status, password_set"
+      )
       .or(`email.eq.${identifier.trim()},employee_id.eq.${identifier.trim()}`)
       .limit(1);
 
@@ -51,6 +55,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const sectionsArray: string[] =
+      Array.isArray(adviser.sections) && adviser.sections.length > 0
+        ? adviser.sections
+        : adviser.section
+        ? [adviser.section]
+        : [];
+
+    const fullName = `${adviser.first_name} ${adviser.last_name}`;
+
     const payload = {
       id:          adviser.id,
       employee_id: adviser.employee_id,
@@ -59,7 +72,9 @@ export async function POST(req: NextRequest) {
       email:       adviser.email,
       grade:       adviser.grade,
       section:     adviser.section,
+      sections:    sectionsArray,
       role:        "adviser",
+      passwordSet: adviser.password_set == null ? true : (adviser.password_set === true || adviser.password_set === 1),
     };
 
     const token = await new SignJWT(payload)
@@ -76,12 +91,24 @@ export async function POST(req: NextRequest) {
       path:     "/",
     });
 
-    return NextResponse.json({ success: true, message: "Login successful." });
+    // ── Audit log ──
+    await logAudit({
+      action:          "Login",
+      performedBy:     fullName,
+      performedByRole: "Adviser",
+      details:         `Adviser "${fullName}" logged in.`,
+      module:          "Auth",
+    });
 
-  } catch (error: any) {
+    return NextResponse.json({
+      success:     true,
+      passwordSet: adviser.password_set === true || adviser.password_set === 1,
+      message:     "Login successful.",
+    });
+  } catch (error: unknown) {
     console.error("POST /api/auth/adviser/login error:", error);
     return NextResponse.json(
-      { success: false, message: error.message || "Server error." },
+      { success: false, message: error instanceof Error ? error.message : "Server error." },
       { status: 500 }
     );
   }

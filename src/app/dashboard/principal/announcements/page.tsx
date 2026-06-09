@@ -1,1332 +1,565 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
-import {
-  Send, Save, X, CheckCircle, Eye,
-  Search, Trash2, MoreHorizontal, RefreshCw,
-  CheckCheck, Megaphone, Calendar, Clock, Bell, Pencil,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, Users } from "lucide-react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useNotifContext } from "../context/NotificationContext";
 
-// ─── Constants ────────────────────────────────────────────────────
-const PRIMARY = "#522081";
+type Tab = "all-staffs" | "mine";
+type AnnouncementStatus = "Published" | "Scheduled" | "Draft" | "Resolved";
 
-// ─── Types ────────────────────────────────────────────────────────
-type Priority  = "Normal" | "Urgent";
-type Audience  = "Everyone" | "Advisers" | "Parents";
-type AnnStatus = "Sent" | "Draft" | "Resolved" | "Scheduled";
-
-interface Announcement {
+type Announcement = {
   id: string;
-  initials: string;
   title: string;
-  senderName: string;
-  senderLabel: string;
-  date: string;
-  dateMs: number;
-  priority: Priority;
-  audience: Audience;
-  body: string;
-  status: AnnStatus;
-  readCount: number;
-  totalRecipients: number;
-  scheduledDate?: string;      // ISO date string "YYYY-MM-DD"
-  scheduledDateMs?: number;    // for countdown / auto-send
-}
-
-// ─── Mock Data ────────────────────────────────────────────────────
-const MOCK: Announcement[] = [
-  {
-    id: "a1", initials: "ST",
-    title: "Monthly Attendance Report Reminder",
-    senderName: "Sofia Torres", senderLabel: "Class Adviser: Ana Cruz",
-    date: "March 10, 2024", dateMs: Date.now() - 9 * 86400000,
-    priority: "Urgent", audience: "Everyone",
-    body: "Reminder: Monthly attendance reports due by March 20. Please ensure all class attendance records are finalized and submitted before the deadline.",
-    status: "Sent", readCount: 18, totalRecipients: 20,
-  },
-  {
-    id: "a2", initials: "RM",
-    title: "RFID Scanner Maintenance Notice",
-    senderName: "Rico Mendoza", senderLabel: "Class Adviser: Ana Cruz",
-    date: "March 8, 2024", dateMs: Date.now() - 11 * 86400000,
-    priority: "Normal", audience: "Advisers",
-    body: "RFID scanner maintenance scheduled for March 16. Scanner units will be offline from 6:00 AM to 7:00 AM. Please use manual attendance entry during this window.",
-    status: "Sent", readCount: 8, totalRecipients: 9,
-  },
-  {
-    id: "a3", initials: "PC",
-    title: "School Foundation Day — No Classes",
-    senderName: "Parent Community", senderLabel: "Principal's Office",
-    date: "March 10, 2024", dateMs: Date.now() - 9 * 86400000,
-    priority: "Normal", audience: "Parents",
-    body: "School Foundation Day — No Classes on March 22. In celebration of Santiago Elementary's founding anniversary, there will be no regular classes on Friday, March 22.",
-    status: "Sent", readCount: 42, totalRecipients: 50,
-  },
-  {
-    id: "a4", initials: "RP",
-    title: "Parent-Teacher Conference Schedule",
-    senderName: "Reinalyn A. Muralla", senderLabel: "Principal's Office",
-    date: "March 5, 2024", dateMs: Date.now() - 14 * 86400000,
-    priority: "Urgent", audience: "Everyone",
-    body: "The Parent-Teacher Conference is scheduled on March 25–26. All parents are required to attend. Advisers must coordinate with parents for their respective time slots.",
-    status: "Sent", readCount: 55, totalRecipients: 59,
-  },
-  {
-    id: "a5", initials: "RP",
-    title: "Q3 Grading Submission Deadline",
-    senderName: "Reinalyn A. Muralla", senderLabel: "Principal's Office",
-    date: "March 1, 2024", dateMs: Date.now() - 18 * 86400000,
-    priority: "Normal", audience: "Advisers",
-    body: "All advisers must submit Q3 grades no later than March 15. Late submissions will be subject to administrative review.",
-    status: "Resolved", readCount: 9, totalRecipients: 9,
-  },
-  {
-    id: "a6", initials: "RP",
-    title: "Grade Promotion Requirements",
-    senderName: "Reinalyn A. Muralla", senderLabel: "Principal's Office",
-    date: "March 13, 2024", dateMs: Date.now() - 6 * 86400000,
-    priority: "Normal", audience: "Everyone",
-    body: "Please review the updated grade promotion requirements for the upcoming school year. All advisers must inform their students and parents accordingly.",
-    status: "Draft", readCount: 0, totalRecipients: 59,
-  },
-  {
-    id: "a7", initials: "RP",
-    title: "End of Quarter Reminders",
-    senderName: "Reinalyn A. Muralla", senderLabel: "Principal's Office",
-    date: "March 11, 2024", dateMs: Date.now() - 8 * 86400000,
-    priority: "Normal", audience: "Parents",
-    body: "End of quarter reminders for parents regarding report card distribution and clearance requirements.",
-    status: "Draft", readCount: 0, totalRecipients: 50,
-  },
-  {
-    id: "a8", initials: "RP",
-    title: "General Assembly",
-    senderName: "Reinalyn A. Muralla", senderLabel: "Principal's Office",
-    date: "Scheduled for March 20, 2026", dateMs: Date.now() + 2 * 86400000,
-    priority: "Urgent", audience: "Everyone",
-    body: "All students, parents, and faculty are required to attend the General Assembly on March 20, 2026 at 8:00 AM in the school gymnasium. Please be on time.",
-    status: "Scheduled", readCount: 0, totalRecipients: 59,
-    scheduledDate: "2026-03-20",
-    scheduledDateMs: new Date("2026-03-20").getTime(),
-  },
-];
-
-let counter = 100;
-
-// ─── Helpers ──────────────────────────────────────────────────────
-function nowLabel(): string {
-  return new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-}
-
-function formatScheduledDate(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-}
-
-function daysUntil(ms: number): number {
-  return Math.ceil((ms - Date.now()) / 86400000);
-}
-
-// ─── Style Maps ───────────────────────────────────────────────────
-const PRIORITY_STYLE: Record<Priority, string> = {
-  Urgent: "bg-red-100 text-red-600 border border-red-200",
-  Normal: "bg-teal-50 text-teal-700 border border-teal-200",
-};
-const AUDIENCE_STYLE: Record<Audience, string> = {
-  Everyone: "bg-amber-50 text-amber-700 border border-amber-200",
-  Advisers: "bg-violet-100 text-violet-700 border border-violet-200",
-  Parents:  "bg-sky-100 text-sky-700 border border-sky-200",
-};
-const STATUS_META: Record<AnnStatus, { bg: string; text: string; border: string; label: string }> = {
-  Sent:      { bg: "#f0fdf4", text: "#059669", border: "#bbf7d0", label: "Sent"      },
-  Draft:     { bg: "#fffbeb", text: "#d97706", border: "#fde68a", label: "Draft"     },
-  Resolved:  { bg: "#f5f3ff", text: PRIMARY,   border: "#ddd6fe", label: "Resolved"  },
-  Scheduled: { bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", label: "Scheduled" },
+  message: string;
+  body?: string;
+  created_at?: string;
+  scheduled_at?: string;
+  audience: string;
+  status?: AnnouncementStatus;
+  priority?: string;
+  senderName?: string;
+  date?: string;
+  source?: "principal" | "guidance";
 };
 
-// ─── Shared Badge ─────────────────────────────────────────────────
-function Badge({ children, cls }: { children: React.ReactNode; cls: string }) {
-  return (
-    <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full ${cls}`}>
-      {children}
-    </span>
-  );
+type StaffAnnouncement = {
+  id: string;
+  title: string;
+  message: string;
+  created_at?: string;
+  sender_name?: string;
+  senderName?: string;
+  audience: string;
+  source?: "guidance" | "adviser" | "ict";
+};
+
+const emptyForm = { title: "", body: "", audience: "Everyone", scheduleDate: "" };
+
+function formatDisplay(value?: string) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric",
+  });
 }
 
-// ─── Resolve Modal ────────────────────────────────────────────────
-function ResolveModal({
-  ann, onConfirm, onClose,
-}: {
-  ann: Announcement;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4" style={{ background: "#f0fdf4" }}>
-          <CheckCheck className="w-6 h-6 text-emerald-500" />
-        </div>
-        <h3 className="text-base font-extrabold text-gray-900 mb-1">Resolve Announcement?</h3>
-        <p className="text-sm text-gray-500 mb-5">
-          Mark <strong>"{ann.title}"</strong> as resolved? It will be archived.
-        </p>
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition" style={{ background: "#059669" }}>
-            Yes, Resolve
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+function toDateInputValue(isoString?: string) {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
 }
 
-// ─── Review Modal ─────────────────────────────────────────────────
-function ReviewModal({
-  ann, onClose, onResolve,
-}: {
-  ann: Announcement;
-  onClose: () => void;
-  onResolve: () => void;
-}) {
-  const sm  = STATUS_META[ann.status];
-  const pct = ann.totalRecipients ? Math.round((ann.readCount / ann.totalRecipients) * 100) : 0;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="px-6 py-5 border-b border-gray-100 flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-extrabold shrink-0"
-              style={{ background: "#52208115", color: PRIMARY }}>{ann.initials}</div>
-            <div>
-              <h2 className="text-base font-extrabold text-gray-900 leading-tight">{ann.title}</h2>
-              <p className="text-xs text-gray-400 mt-0.5">{ann.senderName} · {ann.date}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="p-6 space-y-5">
-          <div className="flex gap-2 flex-wrap">
-            <Badge cls={PRIORITY_STYLE[ann.priority]}>{ann.priority === "Urgent" ? "🔴" : "🟢"} {ann.priority}</Badge>
-            <Badge cls={AUDIENCE_STYLE[ann.audience]}>👥 {ann.audience}</Badge>
-            <span className="inline-flex items-center text-[11px] font-bold px-2.5 py-0.5 rounded-full border"
-              style={{ color: sm.text, background: sm.bg, borderColor: sm.border }}>{sm.label}</span>
-            {ann.status === "Scheduled" && ann.scheduledDate && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
-                <Calendar className="w-3 h-3" /> {formatScheduledDate(ann.scheduledDate)}
-              </span>
-            )}
-          </div>
-          <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-            <p className="text-sm text-gray-700 leading-relaxed">{ann.body}</p>
-          </div>
-          {ann.status === "Scheduled" && ann.scheduledDateMs && (
-            <div className="bg-blue-50 rounded-xl p-4 border border-blue-100 flex items-center gap-3">
-              <Clock className="w-5 h-5 text-blue-500 shrink-0" />
-              <div>
-                <p className="text-xs font-bold text-blue-700">Auto-sends on {formatScheduledDate(ann.scheduledDate!)}</p>
-                <p className="text-xs text-blue-500 mt-0.5">
-                  {daysUntil(ann.scheduledDateMs) > 0
-                    ? `${daysUntil(ann.scheduledDateMs)} day${daysUntil(ann.scheduledDateMs) !== 1 ? "s" : ""} remaining`
-                    : "Sending today"}
-                </p>
-              </div>
-            </div>
-          )}
-          {ann.status !== "Scheduled" && (
-            <div className="bg-purple-50/40 rounded-xl p-4 border border-purple-100">
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-3">Read Receipt</p>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500">{ann.readCount} of {ann.totalRecipients} recipients read</span>
-                <span className="text-sm font-extrabold" style={{ color: PRIMARY }}>{pct}%</span>
-              </div>
-              <div className="h-2 bg-white rounded-full overflow-hidden border border-purple-100">
-                <div className="h-full rounded-full" style={{ width: `${pct}%`, background: PRIMARY }} />
-              </div>
-            </div>
-          )}
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <span>📍 {ann.senderLabel}</span>
-            <span>🕐 {ann.date}</span>
-          </div>
-        </div>
-        <div className="px-6 pb-6 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Close</button>
-          {ann.status === "Sent" && (
-            <button onClick={() => { onResolve(); onClose(); }}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition"
-              style={{ background: PRIMARY }}>
-              <CheckCheck className="w-4 h-4" /> Mark Resolved
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+export default function PrincipalAnnouncementsPage() {
+  const [activeTab, setActiveTab] = useState<Tab>("all-staffs");
+  const { refreshCounts } = useNotifContext();
+  const [showCompose, setShowCompose] = useState(false);
+  const searchParams = useSearchParams();
 
-// ─── Delete Modal ─────────────────────────────────────────────────
-function DeleteModal({
-  ann, onConfirm, onClose,
-}: {
-  ann: Announcement;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 bg-red-50">
-          <Trash2 className="w-6 h-6 text-red-500" />
-        </div>
-        <h3 className="text-base font-extrabold text-gray-900 mb-1">Delete Announcement?</h3>
-        <p className="text-sm text-gray-500 mb-5">
-          Are you sure you want to delete <strong>"{ann.title}"</strong>? This cannot be undone.
-        </p>
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl bg-red-500 hover:bg-red-600 transition">Delete</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Edit Modal ───────────────────────────────────────────────────
-function EditModal({
-  ann,
-  onSave,
-  onClose,
-}: {
-  ann: Announcement;
-  onSave: (updated: Announcement) => void;
-  onClose: () => void;
-}) {
-  const [title,        setTitle]        = useState<string>(ann.title);
-  const [body,         setBody]         = useState<string>(ann.body);
-  const [audience,     setAudience]     = useState<Audience>(ann.audience);
-  const [priority,     setPriority]     = useState<Priority>(ann.priority);
-  const [useSchedule,  setUseSchedule]  = useState<boolean>(!!ann.scheduledDate);
-  const [scheduleDate, setScheduleDate] = useState<string>(ann.scheduledDate ?? "");
-  const [saving,       setSaving]       = useState<boolean>(false);
-
-  const todayIso = new Date().toISOString().split("T")[0];
-
-  const handleSave = (sendNow: boolean) => {
-    if (!title.trim() || !body.trim()) { alert("Title and message are required."); return; }
-    if (useSchedule && !scheduleDate)  { alert("Please pick a schedule date.");    return; }
-
-    setSaving(true);
-    setTimeout(() => {
-      const totalR = audience === "Everyone" ? 59 : audience === "Advisers" ? 9 : 50;
-
-      let newStatus: AnnStatus = ann.status;
-      let newDate   = ann.date;
-      let newDateMs = ann.dateMs;
-      let newSchedDate: string | undefined  = undefined;
-      let newSchedMs:   number | undefined  = undefined;
-
-      if (sendNow) {
-        newStatus   = "Sent";
-        newDate     = nowLabel();
-        newDateMs   = Date.now();
-      } else if (useSchedule && scheduleDate) {
-        const schedMs = new Date(scheduleDate + "T00:00:00").getTime();
-        const today   = new Date(); today.setHours(0, 0, 0, 0);
-        const isToday = schedMs <= today.getTime();
-        newStatus      = isToday ? "Sent" : "Scheduled";
-        newDate        = isToday ? nowLabel() : `Scheduled for ${formatScheduledDate(scheduleDate)}`;
-        newDateMs      = isToday ? Date.now() : schedMs;
-        newSchedDate   = scheduleDate;
-        newSchedMs     = schedMs;
-      }
-
-      onSave({
-        ...ann,
-        title,
-        body,
-        audience,
-        priority,
-        totalRecipients: totalR,
-        status:          newStatus,
-        date:            newDate,
-        dateMs:          newDateMs,
-        scheduledDate:   newSchedDate,
-        scheduledDateMs: newSchedMs,
-      });
-      setSaving(false);
-      onClose();
-    }, 800);
-  };
-
-  const inputCls = "w-full px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 focus:border-[#522081]/40 transition";
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
-
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "#52208115" }}>
-              <Pencil className="w-4 h-4" style={{ color: PRIMARY }} />
-            </div>
-            <div>
-              <h2 className="text-base font-extrabold text-gray-900">Edit Announcement</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Make changes before sending</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="overflow-y-auto flex-1 p-6 space-y-4">
-
-          {/* Send To */}
-          <div>
-            <label className="block text-xs font-bold text-gray-500 mb-1.5">Send To</label>
-            <div className="flex gap-2">
-              {(["Everyone","Advisers","Parents"] as Audience[]).map((a) => (
-                <button key={a} type="button" onClick={() => setAudience(a)}
-                  className="flex-1 py-2 rounded-xl border text-xs font-bold transition"
-                  style={{
-                    background:  audience === a ? PRIMARY : "white",
-                    color:       audience === a ? "white"  : "#6b7280",
-                    borderColor: audience === a ? PRIMARY  : "#e5e7eb",
-                  }}>
-                  {a}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Subject */}
-          <div>
-            <label className="block text-xs font-bold text-gray-500 mb-1.5">Subject <span className="text-red-500">*</span></label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Announcement subject…"
-              className={inputCls}
-              style={{ color: "#111827" }}
-            />
-          </div>
-
-          {/* Priority */}
-          <div>
-            <label className="block text-xs font-bold text-gray-500 mb-1.5">Priority Level</label>
-            <div className="flex gap-2">
-              {(["Normal","Urgent"] as Priority[]).map((p) => (
-                <button key={p} type="button" onClick={() => setPriority(p)}
-                  className="flex-1 py-2.5 rounded-xl border text-xs font-bold transition"
-                  style={{
-                    background:  priority === p ? (p === "Urgent" ? "#fef2f2" : "#f0fdf4") : "white",
-                    color:       priority === p ? (p === "Urgent" ? "#dc2626" : "#059669") : "#6b7280",
-                    borderColor: priority === p ? (p === "Urgent" ? "#fecaca" : "#bbf7d0") : "#e5e7eb",
-                  }}>
-                  {p === "Urgent" ? "🔴" : "🟢"} {p}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Message */}
-          <div>
-            <label className="block text-xs font-bold text-gray-500 mb-1.5">Message <span className="text-red-500">*</span></label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Write your announcement here…"
-              rows={5}
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 focus:border-[#522081]/40 transition resize-none"
-              style={{ color: "#111827" }}
-            />
-            <p className="text-[10px] text-gray-400 mt-0.5 text-right">{body.length} characters</p>
-          </div>
-
-          {/* Schedule Toggle */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setUseSchedule((p) => !p)}
-              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition"
-              style={{
-                borderColor: useSchedule ? "#2563eb" : "#e5e7eb",
-                background:  useSchedule ? "#eff6ff"  : "#f9fafb",
-                color:       useSchedule ? "#2563eb"  : "#6b7280",
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4" />
-                <span className="text-xs font-bold">
-                  {useSchedule ? "Scheduled Announcement" : "Schedule for Later"}
-                </span>
-              </div>
-              <div className={`w-9 h-5 rounded-full transition-colors flex items-center px-0.5 ${useSchedule ? "bg-blue-500" : "bg-gray-300"}`}>
-                <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${useSchedule ? "translate-x-4" : "translate-x-0"}`} />
-              </div>
-            </button>
-
-            {useSchedule && (
-              <div className="mt-2 space-y-1.5">
-                <input
-                  type="date"
-                  value={scheduleDate}
-                  min={todayIso}
-                  onChange={(e) => setScheduleDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-sm bg-white border border-blue-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 transition"
-                  style={{ color: "#111827" }}
-                />
-                {scheduleDate && (
-                  <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                    <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                    <p className="text-xs text-blue-700 font-semibold">
-                      Will auto-send on <strong>{formatScheduledDate(scheduleDate)}</strong>
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/60 flex gap-2 shrink-0">
-          <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
-            Cancel
-          </button>
-          <button
-            onClick={() => handleSave(false)}
-            disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold border rounded-xl transition disabled:opacity-60 hover:bg-gray-50"
-            style={{ borderColor: PRIMARY, color: PRIMARY }}
-          >
-            {saving
-              ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Saving…</>
-              : <><Save className="w-4 h-4" /> Save Changes</>}
-          </button>
-          <button
-            onClick={() => handleSave(true)}
-            disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-60 hover:opacity-90"
-            style={{ background: useSchedule ? "#2563eb" : PRIMARY }}
-          >
-            {saving
-              ? <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-              : useSchedule
-                ? <><Calendar className="w-4 h-4" /> Save & Schedule</>
-                : <><Send className="w-4 h-4" /> Save & Send</>}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-function Toast({ message, onClose }: { message: string; onClose: () => void }) {
-  return (
-    <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-gray-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl">
-      <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
-      <span className="text-sm font-semibold">{message}</span>
-      <button onClick={onClose} className="ml-2 text-white/60 hover:text-white transition"><X className="w-4 h-4" /></button>
-    </div>
-  );
-}
-
-// ─── Scheduled Countdown Badge ────────────────────────────────────
-function CountdownBadge({ scheduledDateMs }: { scheduledDateMs: number }) {
-  const days = daysUntil(scheduledDateMs);
-  if (days <= 0) return <span className="text-[10px] font-bold text-blue-600">Sending today</span>;
-  return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
-      <Clock className="w-2.5 h-2.5" /> {days}d away
-    </span>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────
-export default function AnnouncementsPage() {
-  const [announcements, setAnnouncements] = useState<Announcement[]>(MOCK);
-
-  type TabType = "All" | "Pending" | "Normal" | "Urgent" | "Resolved" | "Draft" | "Scheduled";
-  const [tab,      setTab]      = useState<TabType>("All");
-  const [searchQ,  setSearchQ]  = useState<string>("");
-
-  // ── Form state ────────────────────────────────────────────────
-  const [sendTo,       setSendTo]       = useState<Audience>("Everyone");
-  const [subject,      setSubject]      = useState<string>("");
-  const [priority,     setPriority]     = useState<Priority>("Normal");
-  const [message,      setMessage]      = useState<string>("");
-  const [useSchedule,  setUseSchedule]  = useState<boolean>(false);
-  const [scheduleDate, setScheduleDate] = useState<string>("");
-  const [sending,      setSending]      = useState<boolean>(false);
-  const [savingDraft,  setSavingDraft]  = useState<boolean>(false);
-
-  // ── Modals ────────────────────────────────────────────────────
-  const [resolveTarget, setResolveTarget] = useState<Announcement | null>(null);
-  const [reviewTarget,  setReviewTarget]  = useState<Announcement | null>(null);
-  const [deleteTarget,  setDeleteTarget]  = useState<Announcement | null>(null);
-  const [editTarget,    setEditTarget]    = useState<Announcement | null>(null);
-  const [toast,         setToast]         = useState<string | null>(null);
-  const [actionMenuId,  setActionMenuId]  = useState<string | null>(null);
-
-  // ── Auto-send scheduled announcements ────────────────────────
   useEffect(() => {
-    const interval = setInterval(() => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      setAnnouncements((prev) =>
-        prev.map((a) => {
-          if (a.status !== "Scheduled" || !a.scheduledDateMs) return a;
-          const schedDay = new Date(a.scheduledDateMs);
-          schedDay.setHours(0, 0, 0, 0);
-          if (schedDay <= today) {
-            return { ...a, status: "Sent" as AnnStatus, date: nowLabel() };
-          }
-          return a;
-        })
-      );
-    }, 60_000); // check every minute
-    return () => clearInterval(interval);
+    if (searchParams.get("compose") === "true") {
+      setActiveTab("mine");
+      setShowCompose(true);
+    }
+  }, [searchParams]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
+  const [viewAnn, setViewAnn] = useState<StaffAnnouncement | null>(null);
+  const [myAnnouncements, setMyAnnouncements] = useState<Announcement[]>([]);
+  const [staffAnnouncements, setStaffAnnouncements] = useState<StaffAnnouncement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [readKeys, setReadKeys] = useState<Set<string>>(new Set());
+
+  const isFormReady = form.title.trim() && form.body.trim();
+
+  const activeAnnouncements = useMemo(
+    () => (activeTab === "all-staffs" ? staffAnnouncements : myAnnouncements),
+    [activeTab, myAnnouncements, staffAnnouncements],
+  );
+
+  // ── Fetch my (principal) announcements + realtime ─────────────────────────
+  useEffect(() => {
+    const loadAnnouncements = async () => {
+      try {
+        const [annRes, notifRes] = await Promise.all([
+          fetch("/api/principal/announcements"),
+          fetch("/api/principal/notifications"),
+        ]);
+        const [data, notifData] = await Promise.all([
+          annRes.json(),
+          notifRes.json(),
+        ]);
+
+        if (notifData?.success) {
+          const alreadyRead = new Set<string>(
+            (notifData.notifications ?? []).filter((n: any) => n.read).map((n: any) => n.id)
+          );
+          setReadKeys(alreadyRead);
+        }
+
+        if (data.success) {
+          const normalized: Announcement[] = (data.announcements ?? []).map((a: any) => ({
+            ...a,
+            message: a.message ?? a.body ?? "",
+            status: a.status,
+          }));
+          setMyAnnouncements(normalized.filter((a) => a.source === "principal"));
+          setStaffAnnouncements(
+            normalized
+              .filter((a) => a.source === "guidance" || (a as any).source === "ict" || (a as any).source === "adviser")
+              .map((a) => ({
+                id: a.id,
+                title: a.title,
+                message: a.message ?? "",
+                created_at: (a as any).created_at ?? (a as any).date,
+                sender_name: (a as any).senderName,
+                audience: a.audience,
+                source: (a as any).source as "guidance" | "adviser" | "ict",
+              }))
+          );
+          console.log("readKeys:", [...readKeys]);
+          console.log("staff ids:", normalized.filter((a: any) => a.source === "guidance").map((a: any) => `guidance-announcement-${a.id}`));
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadAnnouncements();
+
+    const client = supabaseBrowser;
+    if (!client) return;
+
+    const channel = client
+      .channel("principal-staff-announcements")
+      .on("postgres_changes",
+        { event: "INSERT", schema: "public", table: "adviser_announcements" },
+        () => { loadAnnouncements(); }
+      )
+      .on("postgres_changes",
+        { event: "INSERT", schema: "public", table: "guidance_announcements" },
+        () => { loadAnnouncements(); }
+      )
+      .subscribe();
+
+    return () => { client.removeChannel(channel); };
   }, []);
 
-  // ── Derived Stats ─────────────────────────────────────────────
-  const sent      = announcements.filter((a) => a.status === "Sent");
-  const drafts    = announcements.filter((a) => a.status === "Draft");
-  const scheduled = announcements.filter((a) => a.status === "Scheduled");
-  const resolved  = announcements.filter((a) => a.status === "Resolved");
 
-  const totalReadRate = sent.length
-    ? Math.round(sent.reduce((acc, a) => acc + a.readCount / a.totalRecipients, 0) / sent.length * 100)
-    : 0;
-  const totalUnread = sent.reduce((acc, a) => acc + (a.totalRecipients - a.readCount), 0);
 
-  // ── Filtered List ─────────────────────────────────────────────
-  const filtered = useMemo<Announcement[]>(() => {
-    let list: Announcement[] = [...announcements];
-    if      (tab === "Pending")   list = list.filter((a) => a.status === "Sent" && a.readCount < a.totalRecipients);
-    else if (tab === "Normal")    list = list.filter((a) => a.priority === "Normal" && a.status === "Sent");
-    else if (tab === "Urgent")    list = list.filter((a) => a.priority === "Urgent" && a.status === "Sent");
-    else if (tab === "Resolved")  list = list.filter((a) => a.status === "Resolved");
-    else if (tab === "Draft")     list = list.filter((a) => a.status === "Draft");
-    else if (tab === "Scheduled") list = list.filter((a) => a.status === "Scheduled");
-    else list = list.filter((a) => a.status !== "Resolved");
 
-    if (searchQ.trim()) {
-      const q = searchQ.toLowerCase();
-      list = list.filter((a) =>
-        a.title.toLowerCase().includes(q) ||
-        a.body.toLowerCase().includes(q) ||
-        a.senderName.toLowerCase().includes(q)
-      );
+
+  const openNewAnnouncement = () => {
+    setEditingAnnouncement(null);
+    setForm(emptyForm);
+    setShowCompose(true);
+  };
+
+  const openEditAnnouncement = (ann: Announcement) => {
+    setEditingAnnouncement(ann);
+    setForm({
+      title: ann.title,
+      body: ann.message ?? "",
+      audience: ann.audience,
+      scheduleDate: ann.status === "Scheduled" ? toDateInputValue(ann.scheduled_at) : "",
+    });
+    setShowCompose(true);
+  };
+
+  const closeCompose = () => {
+    setShowCompose(false);
+    setEditingAnnouncement(null);
+    setForm(emptyForm);
+  };
+
+  const handleSaveAnnouncement = async () => {
+    if (!isFormReady || saving) return;
+    setSaving(true);
+
+    const payload = {
+      title: form.title.trim(),
+      message: form.body.trim(),
+      audience: form.audience,
+      scheduled_at: form.scheduleDate ? `${form.scheduleDate}T00:00:00` : null,
+    };
+
+    const url = editingAnnouncement
+      ? `/api/principal/announcements/${editingAnnouncement.id}`
+      : "/api/principal/announcements";
+    const method = editingAnnouncement ? "PATCH" : "POST";
+
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!data.success) {
+      console.error("Failed to save principal announcement:", data.message ?? data);
+      return;
     }
-    return list.sort((a, b) => b.dateMs - a.dateMs);
-  }, [announcements, tab, searchQ]);
 
-  // ── Handlers ──────────────────────────────────────────────────
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3500);
+    const normalized: Announcement = {
+      ...data.announcement,
+      message: data.announcement.message ?? data.announcement.body ?? "",
+      status: data.announcement.status,
+    };
+
+    if (editingAnnouncement) {
+      setMyAnnouncements(prev =>
+        prev.map(a => a.id === editingAnnouncement.id ? normalized : a)
+      );
+    } else {
+      setMyAnnouncements(prev => [normalized, ...prev]);
+    }
+
+    setActiveTab("mine");
+    closeCompose();
   };
 
-  const resetForm = () => {
-    setSubject("");
-    setMessage("");
-    setSendTo("Everyone");
-    setPriority("Normal");
-    setUseSchedule(false);
-    setScheduleDate("");
+  const handleDelete = async (id: string) => {
+    const res = await fetch(`/api/principal/announcements/${id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (data.success) {
+      setMyAnnouncements(prev => prev.filter(a => a.id !== id));
+    }
   };
 
-  const totalR = (a: Audience) => a === "Everyone" ? 59 : a === "Advisers" ? 9 : 50;
-
-  const handleSend = () => {
-    if (!subject.trim() || !message.trim()) { alert("Subject and message are required."); return; }
-    if (useSchedule && !scheduleDate)       { alert("Please pick a date to schedule."); return; }
-
-    setSending(true);
-    setTimeout(() => {
-      if (useSchedule && scheduleDate) {
-        // Schedule path
-        const schedMs = new Date(scheduleDate + "T00:00:00").getTime();
-        const today   = new Date(); today.setHours(0, 0, 0, 0);
-        const isToday = schedMs <= today.getTime();
-
-        const newAnn: Announcement = {
-          id: `a${++counter}`,
-          initials: "RP",
-          title: subject,
-          senderName: "Reinalyn A. Muralla",
-          senderLabel: "Principal's Office",
-          date: isToday ? nowLabel() : `Scheduled for ${formatScheduledDate(scheduleDate)}`,
-          dateMs: isToday ? Date.now() : schedMs,
-          priority,
-          audience: sendTo,
-          body: message,
-          status: isToday ? "Sent" : "Scheduled",
-          readCount: 0,
-          totalRecipients: totalR(sendTo),
-          scheduledDate: scheduleDate,
-          scheduledDateMs: schedMs,
-        };
-        setAnnouncements((prev) => [newAnn, ...prev]);
-        showToast(isToday ? "Announcement sent (scheduled for today)!" : `Scheduled for ${formatScheduledDate(scheduleDate)}!`);
-      } else {
-        // Send immediately
-        const newAnn: Announcement = {
-          id: `a${++counter}`,
-          initials: "RP",
-          title: subject,
-          senderName: "Reinalyn A. Muralla",
-          senderLabel: "Principal's Office",
-          date: nowLabel(),
-          dateMs: Date.now(),
-          priority,
-          audience: sendTo,
-          body: message,
-          status: "Sent",
-          readCount: 0,
-          totalRecipients: totalR(sendTo),
-        };
-        setAnnouncements((prev) => [newAnn, ...prev]);
-        showToast("Announcement sent successfully!");
-      }
-      setSending(false);
-      resetForm();
-    }, 1200);
+  const handleViewStaffAnnouncement = (ann: StaffAnnouncement) => {
+    setViewAnn(ann);
+    const rawId = ann.id.replace(/^(adviser|guidance|ict)-/, "");
+    const key = ann.source === "ict"
+      ? `ict-announcement-${rawId}`
+      : ann.source === "guidance"
+        ? `guidance-${rawId}`
+        : `adviser-${rawId}`;
+    if (!readKeys.has(key)) {
+      setReadKeys(prev => new Set(prev).add(key));
+      fetch("/api/principal/notifications/read", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notif_key: key }),
+      }).then(async (res) => {
+        const data = await res.json();
+        if (data.success) {
+          await new Promise(resolve => setTimeout(resolve, 600)); // give DB time to commit
+          await refreshCounts();
+        }
+      });
+    }
   };
-
-  const handleSaveDraft = () => {
-    if (!subject.trim()) { alert("Subject is required to save a draft."); return; }
-    setSavingDraft(true);
-    setTimeout(() => {
-      const newDraft: Announcement = {
-        id: `a${++counter}`,
-        initials: "RP",
-        title: subject,
-        senderName: "Reinalyn A. Muralla",
-        senderLabel: "Principal's Office",
-        date: nowLabel(),
-        dateMs: Date.now(),
-        priority,
-        audience: sendTo,
-        body: message,
-        status: "Draft",
-        readCount: 0,
-        totalRecipients: totalR(sendTo),
-      };
-      setAnnouncements((prev) => [newDraft, ...prev]);
-      setSavingDraft(false);
-      resetForm();
-      showToast("Draft saved!");
-    }, 800);
-  };
-
-  const handleResolve = (id: string) => {
-    setAnnouncements((prev) => prev.map((a) => a.id === id ? { ...a, status: "Resolved" as AnnStatus } : a));
-    showToast("Announcement resolved.");
-  };
-
-  const handleDelete = (id: string) => {
-    setAnnouncements((prev) => prev.filter((a) => a.id !== id));
-    showToast("Announcement deleted.");
-  };
-
-  const handleSendDraft = (id: string) => {
-    setAnnouncements((prev) => prev.map((a) =>
-      a.id === id ? { ...a, status: "Sent" as AnnStatus, date: nowLabel(), dateMs: Date.now() } : a
-    ));
-    showToast("Sent successfully!");
-  };
-
-  const handleEditSave = (updated: Announcement) => {
-    setAnnouncements((prev) => prev.map((a) => a.id === updated.id ? updated : a));
-    const wasScheduled = updated.status === "Scheduled";
-    showToast(wasScheduled
-      ? `Scheduled for ${updated.scheduledDate ? formatScheduledDate(updated.scheduledDate) : "later"}!`
-      : updated.status === "Sent"
-        ? "Announcement updated & sent!"
-        : "Changes saved!"
-    );
-  };
-
-  const tabCounts: Record<string, number> = {
-    All:       announcements.filter((a) => a.status !== "Resolved").length,
-    Pending:   sent.filter((a) => a.readCount < a.totalRecipients).length,
-    Normal:    announcements.filter((a) => a.priority === "Normal" && a.status === "Sent").length,
-    Urgent:    announcements.filter((a) => a.priority === "Urgent" && a.status === "Sent").length,
-    Resolved:  resolved.length,
-    Draft:     drafts.length,
-    Scheduled: scheduled.length,
-  };
-
-  const inputCls = "w-full px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 focus:border-[#522081]/40 transition placeholder-gray-300";
-
-  // Min date for the date picker = today
-  const todayIso = new Date().toISOString().split("T")[0];
 
   return (
-    <div
-      className="flex flex-col min-h-screen p-6 overflow-auto"
-      style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "#f5f3ff" }}
-      onClick={() => setActionMenuId(null)}
-    >
+    <div className="p-6 min-h-screen" style={{ maxWidth: 1040, margin: "0 auto" }}>
+
       {/* ── Header ── */}
-      <div className="flex items-start justify-between mb-5">
+      <div className="mb-5 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-extrabold text-gray-900">Announcements</h1>
-          <p className="text-sm mt-0.5" style={{ color: PRIMARY }}>Broadcast messages to advisers, parents, or all users</p>
+          <h1 className="text-2xl font-bold text-gray-900">Announcements</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Create announcements for staff and view messages from all staff members.
+          </p>
         </div>
-
+        <button
+          onClick={openNewAnnouncement}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white rounded-xl shadow-sm transition hover:opacity-90"
+          style={{ background: "#522081" }}
+        >
+          <Plus size={15} />
+          New Announcement
+        </button>
       </div>
 
-      {/* ── Stat Cards ── */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
-        <div className="rounded-xl p-5 text-white" style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
-          <p className="text-xs font-semibold text-white/70 mb-1">Total Sent</p>
-          <p className="text-4xl font-black">{sent.length}</p>
-        </div>
-        {[
-          { label: "Unread",        value: String(totalUnread),    sub: "recipients haven't read" },
-          { label: "Drafts",        value: String(drafts.length),  sub: "pending send"            },
-          { label: "Avg Read Rate", value: `${totalReadRate}%`,    sub: "across all sent"         },
-        ].map((c) => (
-          <div key={c.label} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
-            <p className="text-xs font-semibold text-gray-400 mb-1">{c.label}</p>
-            <p className="text-4xl font-black text-gray-800">{c.value}</p>
-            <p className="text-[10px] text-gray-400 mt-1">{c.sub}</p>
-          </div>
-        ))}
+      {/* ── Tabs ── */}
+      <div
+        className="inline-flex overflow-hidden bg-white border border-gray-200 rounded-xl shadow-sm mb-5"
+        role="tablist"
+        aria-label="Announcement source"
+      >
+        <button
+          className={`px-5 py-2.5 text-sm font-semibold transition ${
+            activeTab === "all-staffs" ? "text-white" : "text-gray-500 hover:text-gray-700"
+          }`}
+          style={activeTab === "all-staffs" ? { background: "#522081" } : {}}
+          onClick={() => setActiveTab("all-staffs")}
+          role="tab"
+          aria-selected={activeTab === "all-staffs"}
+        >
+          From All Staffs
+        </button>
+        <button
+          className={`px-5 py-2.5 text-sm font-semibold transition ${
+            activeTab === "mine" ? "text-white" : "text-gray-500 hover:text-gray-700"
+          }`}
+          style={activeTab === "mine" ? { background: "#522081" } : {}}
+          onClick={() => setActiveTab("mine")}
+          role="tab"
+          aria-selected={activeTab === "mine"}
+        >
+          My Announcements
+        </button>
       </div>
 
-      {/* ── Scheduled Banner (if any) ── */}
-      {scheduled.length > 0 && (
-        <div className="mb-4 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-2xl px-5 py-3.5">
-          <Bell className="w-5 h-5 text-blue-500 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-blue-700">
-              {scheduled.length} scheduled announcement{scheduled.length !== 1 ? "s" : ""} pending
-            </p>
-            <p className="text-xs text-blue-500 mt-0.5 truncate">
-              {scheduled.map((a) => `${a.title} (${a.scheduledDate ? formatScheduledDate(a.scheduledDate) : ""})`).join(" · ")}
+      {/* ── Announcement list ── */}
+      <div className="flex flex-col gap-3">
+        {loading && activeTab === "mine" ? (
+          <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6 text-sm text-gray-400">
+            Loading…
+          </div>
+        ) : activeAnnouncements.length === 0 ? (
+          <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-10 flex flex-col items-center gap-2">
+            <p className="text-sm font-semibold text-gray-700">No announcements yet</p>
+            <p className="text-xs text-gray-400">
+              {activeTab === "all-staffs"
+                ? "Announcements from guidance and other staff will appear here."
+                : "Your published and scheduled announcements will appear here."}
             </p>
           </div>
-          <button onClick={() => setTab("Scheduled")}
-            className="shrink-0 text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition">
-            View All
-          </button>
-        </div>
-      )}
-
-      {/* ── Body ── */}
-      <div className="flex gap-4 items-start">
-
-        {/* ── List Panel ── */}
-        <div className="flex-1 min-w-0 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden">
-
-          {/* Search + Tabs */}
-          <div className="border-b border-gray-100 px-4 pt-4 pb-3">
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-              <input
-                value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)}
-                placeholder="Search announcements…"
-                className="w-full pl-9 pr-9 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 bg-gray-50"
-                style={{ color: "#111827" }}
-              />
-              {searchQ && (
-                <button onClick={() => setSearchQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {(["All","Pending","Normal","Urgent","Scheduled","Resolved","Draft"] as const).map((t) => (
-                <button key={t} onClick={() => setTab(t)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition"
-                  style={{
-                    background:  tab === t ? (t === "Scheduled" ? "#2563eb" : PRIMARY) : "white",
-                    color:       tab === t ? "white" : "#6b7280",
-                    borderColor: tab === t ? (t === "Scheduled" ? "#2563eb" : PRIMARY) : "#e5e7eb",
-                  }}>
-                  {t}
-                  <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full"
-                    style={{
-                      background: tab === t ? "rgba(255,255,255,0.25)" : "#f3f4f6",
-                      color: tab === t ? "white" : "#6b7280",
-                    }}>
-                    {tabCounts[t]}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Announcement List */}
-          <div className="overflow-y-auto divide-y divide-gray-50 flex-1" style={{ maxHeight: "calc(100vh - 400px)" }}>
-            {filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16">
-                <Megaphone className="w-10 h-10 text-gray-200 mb-3" />
-                <p className="text-sm text-gray-400">No announcements match your filters.</p>
-              </div>
-            ) : (
-              filtered.map((ann) => {
-                const sm  = STATUS_META[ann.status];
-                const pct = ann.totalRecipients ? Math.round((ann.readCount / ann.totalRecipients) * 100) : 0;
-                const isScheduled = ann.status === "Scheduled";
-
-                return (
-                  <div key={ann.id}
-                    className={`px-5 py-4 hover:bg-purple-50/30 transition-colors group relative ${isScheduled ? "bg-blue-50/20" : ""}`}>
-                    {/* Top row */}
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-extrabold shrink-0 mt-0.5"
-                          style={{ background: isScheduled ? "#dbeafe" : "#52208115", color: isScheduled ? "#2563eb" : PRIMARY }}>
-                          {ann.initials}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="text-sm font-bold text-gray-800 truncate">{ann.title}</p>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0"
-                              style={{ color: sm.text, background: sm.bg, borderColor: sm.border }}>
-                              {sm.label}
-                            </span>
-                            {isScheduled && ann.scheduledDateMs && (
-                              <CountdownBadge scheduledDateMs={ann.scheduledDateMs} />
-                            )}
-                          </div>
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {ann.senderName} · {ann.date}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge cls={PRIORITY_STYLE[ann.priority]}>{ann.priority}</Badge>
-                        <Badge cls={AUDIENCE_STYLE[ann.audience]}>{ann.audience}</Badge>
-                        {/* Action menu */}
-                        <div className="relative" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => setActionMenuId(actionMenuId === ann.id ? null : ann.id)}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition opacity-0 group-hover:opacity-100">
-                            <MoreHorizontal className="w-4 h-4" />
-                          </button>
-                          {actionMenuId === ann.id && (
-                            <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl z-30 w-44 py-1 overflow-hidden">
-                              <button onClick={() => { setReviewTarget(ann); setActionMenuId(null); }}
-                                className="w-full text-left px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-purple-50 flex items-center gap-2">
-                                <Eye className="w-3.5 h-3.5" /> View Details
-                              </button>
-                              <button onClick={() => { setEditTarget(ann); setActionMenuId(null); }}
-                                className="w-full text-left px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-purple-50 flex items-center gap-2">
-                                <Pencil className="w-3.5 h-3.5" /> Edit
-                              </button>
-                              {(ann.status === "Draft" || ann.status === "Scheduled") && (
-                                <button onClick={() => { handleSendDraft(ann.id); setActionMenuId(null); }}
-                                  className="w-full text-left px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-purple-50 flex items-center gap-2">
-                                  <Send className="w-3.5 h-3.5" /> Send Now
-                                </button>
-                              )}
-                              {ann.status === "Sent" && (
-                                <button onClick={() => { setResolveTarget(ann); setActionMenuId(null); }}
-                                  className="w-full text-left px-4 py-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 flex items-center gap-2">
-                                  <CheckCheck className="w-3.5 h-3.5" /> Resolve
-                                </button>
-                              )}
-                              <button onClick={() => { setDeleteTarget(ann); setActionMenuId(null); }}
-                                className="w-full text-left px-4 py-2 text-xs font-semibold text-red-500 hover:bg-red-50 flex items-center gap-2">
-                                <Trash2 className="w-3.5 h-3.5" /> Delete
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Body */}
-                    <p className="text-xs text-gray-600 leading-relaxed line-clamp-2 ml-12 mb-3">{ann.body}</p>
-
-                    {/* Scheduled info bar */}
-                    {isScheduled && ann.scheduledDate && (
-                      <div className="ml-12 mb-2 flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                        <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                        <span className="text-xs font-semibold text-blue-700">
-                          Auto-sends on {formatScheduledDate(ann.scheduledDate)}
-                        </span>
-                        <span className="text-xs text-blue-400 ml-auto">
-                          {daysUntil(ann.scheduledDateMs!) > 0
-                            ? `in ${daysUntil(ann.scheduledDateMs!)} day${daysUntil(ann.scheduledDateMs!) !== 1 ? "s" : ""}`
-                            : "today"}
-                        </span>
-                      </div>
+        ) : (
+          activeAnnouncements.map((ann) => (
+            <article key={ann.id} className="bg-white border border-gray-100 rounded-xl shadow-sm p-5 flex flex-col gap-3">
+              {/* top row */}
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                {activeTab === "all-staffs" ? (
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color: "#7c3aed" }}>
+                      <Users size={13} />
+                      {(ann as StaffAnnouncement).sender_name ?? (ann as StaffAnnouncement).senderName ?? "Staff"}
+                    </span>
+                    {(() => {
+                      const rawId = ann.id.replace(/^(adviser|guidance|ict)-/, "");
+                      const key = (ann as StaffAnnouncement).source === "ict"
+                        ? `ict-announcement-${rawId}`
+                        : (ann as StaffAnnouncement).source === "guidance"
+                          ? `guidance-${rawId}`
+                          : `adviser-${rawId}`;
+                      return !readKeys.has(key);
+                    })() && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                        New
+                      </span>
                     )}
-
-                    {/* Bottom row */}
-                    <div className="flex items-center justify-between ml-12">
-                      <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                        <span>👤</span>
-                        <span>{ann.senderLabel}</span>
-                      </div>
-                      {ann.status === "Sent" && (
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-1.5">
-                            <Eye className="w-3 h-3 text-gray-300" />
-                            <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: PRIMARY }} />
-                            </div>
-                            <span className="text-[10px] text-gray-400 font-semibold">{pct}%</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button onClick={() => setEditTarget(ann)}
-                              className="px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50 transition"
-                              style={{ borderColor: PRIMARY, color: PRIMARY }}>
-                              <Pencil className="w-3 h-3 inline mr-1" />Edit
-                            </button>
-                            <button onClick={() => setResolveTarget(ann)}
-                              className="px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50 transition"
-                              style={{ borderColor: "#e5e7eb", color: "#6b7280" }}>
-                              Resolve
-                            </button>
-                            <button onClick={() => setReviewTarget(ann)}
-                              className="px-3 py-1.5 text-xs font-bold text-white rounded-lg hover:opacity-90 transition"
-                              style={{ background: PRIMARY }}>
-                              Review
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      {(ann.status === "Draft" || ann.status === "Scheduled") && (
-                        <div className="flex items-center gap-1.5">
-                          <button onClick={() => setEditTarget(ann)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50 transition"
-                            style={{ borderColor: PRIMARY, color: PRIMARY }}>
-                            <Pencil className="w-3 h-3" /> Edit
-                          </button>
-                          <button onClick={() => handleSendDraft(ann.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white rounded-lg hover:opacity-90 transition"
-                            style={{ background: isScheduled ? "#2563eb" : PRIMARY }}>
-                            <Send className="w-3 h-3" /> Send Now
-                          </button>
-                          <button onClick={() => setDeleteTarget(ann)}
-                            className="px-3 py-1.5 text-xs font-bold text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition">
-                            Delete
-                          </button>
-                        </div>
-                      )}
-                      {ann.status === "Resolved" && (
-                        <span className="text-xs text-gray-400 italic flex items-center gap-1">
-                          <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> Resolved
-                        </span>
-                      )}
-                    </div>
                   </div>
-                );
-              })
-            )}
-          </div>
+                ) : (
+                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${
+                    (ann as Announcement).status === "Scheduled"
+                      ? "bg-amber-50 text-amber-700 border border-amber-200"
+                      : "bg-purple-50 border border-purple-200"
+                  }`}
+                  style={(ann as Announcement).status !== "Scheduled" ? { color: "#522081" } : {}}
+                  >
+                    {(ann as Announcement).status === "Scheduled" && <Clock size={11} />}
+                    {(ann as Announcement).status}
+                  </span>
+                )}
 
-          {/* Footer */}
-          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between shrink-0">
-            <p className="text-xs text-gray-400">Showing {filtered.length} of {announcements.length} announcements</p>
-            <div className="flex items-center gap-1.5 text-xs text-gray-400">
-              <RefreshCw className="w-3 h-3" />
-              <span>Live updates every minute</span>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Right Panel ── */}
-        <div className="w-72 shrink-0 space-y-4">
-
-          {/* New Announcement Form */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2.5 mb-4">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "#52208115" }}>
-                <Megaphone className="w-4 h-4" style={{ color: PRIMARY }} />
-              </div>
-              <h3 className="text-sm font-extrabold text-gray-900">New Announcement</h3>
-            </div>
-
-            {/* Send To */}
-            <div className="mb-3">
-              <label className="block text-xs font-bold text-gray-500 mb-1.5">Send To</label>
-              <div className="flex gap-1.5">
-                {(["Everyone","Advisers","Parents"] as Audience[]).map((a) => (
-                  <button key={a} onClick={() => setSendTo(a)}
-                    className="flex-1 py-1.5 rounded-lg text-xs font-bold border transition"
-                    style={{
-                      background:  sendTo === a ? PRIMARY : "white",
-                      color:       sendTo === a ? "white"  : "#6b7280",
-                      borderColor: sendTo === a ? PRIMARY  : "#e5e7eb",
-                    }}>
-                    {a}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Subject */}
-            <div className="mb-3">
-              <label className="block text-xs font-bold text-gray-500 mb-1.5">Subject</label>
-              <input
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Enter announcement subject…"
-                className={inputCls}
-                style={{ color: "#111827" }}
-              />
-            </div>
-
-            {/* Priority */}
-            <div className="mb-3">
-              <label className="block text-xs font-bold text-gray-500 mb-1.5">Priority Level</label>
-              <div className="flex gap-2">
-                {(["Normal","Urgent"] as Priority[]).map((p) => (
-                  <button key={p} onClick={() => setPriority(p)}
-                    className="flex-1 py-2 rounded-xl border text-xs font-bold transition"
-                    style={{
-                      background:  priority === p ? (p === "Urgent" ? "#fef2f2" : "#f0fdf4") : "white",
-                      color:       priority === p ? (p === "Urgent" ? "#dc2626" : "#059669") : "#6b7280",
-                      borderColor: priority === p ? (p === "Urgent" ? "#fecaca" : "#bbf7d0") : "#e5e7eb",
-                    }}>
-                    {p === "Urgent" ? "🔴" : "🟢"} {p}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Message */}
-            <div className="mb-3">
-              <label className="block text-xs font-bold text-gray-500 mb-1.5">Message</label>
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Write your announcement here…"
-                rows={3}
-                className="w-full px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-100 focus:border-[#522081]/40 transition resize-none placeholder-gray-300"
-                style={{ color: "#111827" }}
-              />
-              <p className="text-[10px] text-gray-400 mt-0.5 text-right">{message.length} characters</p>
-            </div>
-
-            {/* ── Schedule Toggle ── */}
-            <div className="mb-4">
-              <button
-                type="button"
-                onClick={() => setUseSchedule((p) => !p)}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition"
-                style={{
-                  borderColor: useSchedule ? "#2563eb" : "#e5e7eb",
-                  background:  useSchedule ? "#eff6ff"  : "#f9fafb",
-                  color:       useSchedule ? "#2563eb"  : "#6b7280",
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4" />
-                  <span className="text-xs font-bold">
-                    {useSchedule ? "Scheduled Announcement" : "Schedule for Later"}
+                <div className="flex items-center gap-2 flex-wrap justify-end ml-auto">
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                    {ann.audience}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-xs text-gray-400 font-medium">
+                    <Calendar size={12} />
+                    {activeTab === "mine" && (ann as Announcement).status === "Scheduled"
+                      ? `Scheduled: ${formatDisplay((ann as Announcement).scheduled_at)}`
+                      : formatDisplay(ann.created_at ?? (ann as any).date)}
                   </span>
                 </div>
-                <div className={`w-9 h-5 rounded-full transition-colors flex items-center px-0.5 ${useSchedule ? "bg-blue-500" : "bg-gray-300"}`}>
-                  <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${useSchedule ? "translate-x-4" : "translate-x-0"}`} />
-                </div>
-              </button>
+              </div>
 
-              {useSchedule && (
-                <div className="mt-2 space-y-1.5">
-                  <label className="block text-xs font-bold text-gray-500">Send Date</label>
+              {/* title */}
+              <p className="text-sm font-bold text-gray-800 leading-snug">{ann.title}</p>
+
+              {/* body */}
+              <p className="text-sm text-gray-500 leading-relaxed">{ann.message}</p>
+
+              {/* actions */}
+              {activeTab === "all-staffs" ? (
+                <button
+                  className="self-start flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition hover:opacity-80"
+                  style={{ color: "#522081", borderColor: "rgba(82,32,129,0.3)" }}
+                  onClick={() => handleViewStaffAnnouncement(ann as StaffAnnouncement)}
+                >
+                  <Eye size={13} />
+                  View Full Announcement
+                </button>
+              ) : (
+                <div className="flex gap-2 self-end">
+                  <button
+                    title="Edit"
+                    onClick={() => openEditAnnouncement(ann as Announcement)}
+                    className="w-8 h-8 rounded-lg border border-gray-200 bg-white flex items-center justify-center text-gray-400 transition hover:text-white hover:border-transparent"
+                    style={{} as React.CSSProperties}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#522081"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#522081"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "white"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#e5e7eb"; }}
+                  >
+                    <Edit2 size={13} />
+                  </button>
+                  <button
+                    title="Delete"
+                    onClick={() => handleDelete(ann.id)}
+                    className="w-8 h-8 rounded-lg border border-gray-200 bg-white flex items-center justify-center text-gray-400 hover:text-red-600 hover:border-red-300 hover:bg-red-50 transition"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              )}
+            </article>
+          ))
+        )}
+      </div>
+
+      {/* ── Compose / Edit Modal ── */}
+      {showCompose && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          onClick={closeCompose}
+        >
+          <div
+            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="text-sm font-bold text-gray-900">
+                {editingAnnouncement ? "Edit Announcement" : "New Announcement"}
+              </h2>
+              <button
+                onClick={closeCompose}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* body */}
+            <div className="p-6 flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Title</label>
+                <input
+                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 outline-none transition"
+                  style={{ ["--tw-ring-color" as string]: "#522081" } as React.CSSProperties}
+                  placeholder="Announcement title..."
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  onFocus={(e) => { e.target.style.borderColor = "#522081"; e.target.style.boxShadow = "0 0 0 3px rgba(82,32,129,0.08)"; }}
+                  onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; e.target.style.boxShadow = "none"; }}
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Message</label>
+                <textarea
+                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-800 outline-none transition resize-vertical"
+                  placeholder="Write your announcement here..."
+                  rows={5}
+                  value={form.body}
+                  onChange={(e) => setForm({ ...form, body: e.target.value })}
+                  onFocus={(e) => { e.target.style.borderColor = "#522081"; e.target.style.boxShadow = "0 0 0 3px rgba(82,32,129,0.08)"; }}
+                  onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; e.target.style.boxShadow = "none"; }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Audience</label>
+                  <select
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-700 outline-none transition"
+                    value={form.audience}
+                    onChange={(e) => setForm({ ...form, audience: e.target.value })}
+                    onFocus={(e) => { e.target.style.borderColor = "#522081"; }}
+                    onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; }}
+                  >
+                    <option value="Everyone">Everyone</option>
+                    <option value="Advisers">School Staffs Only</option>
+                    <option value="Parents">Parents Only</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Schedule Date</label>
                   <input
                     type="date"
-                    value={scheduleDate}
-                    min={todayIso}
-                    onChange={(e) => setScheduleDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-sm bg-white border border-blue-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 transition"
-                    style={{ color: "#111827" }}
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-700 outline-none transition"
+                    value={form.scheduleDate}
+                    onChange={(e) => setForm({ ...form, scheduleDate: e.target.value })}
+                    onFocus={(e) => { e.target.style.borderColor = "#522081"; }}
+                    onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; }}
                   />
-                  {scheduleDate && (
-                    <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                      <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                      <p className="text-xs text-blue-700 font-semibold">
-                        Will auto-send on <strong>{formatScheduledDate(scheduleDate)}</strong>
-                      </p>
-                    </div>
-                  )}
                 </div>
-              )}
+              </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex gap-2">
+            {/* footer */}
+            <div className="flex gap-2 justify-end px-6 py-4 border-t border-gray-100">
               <button
-                onClick={handleSaveDraft}
-                disabled={savingDraft}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold border rounded-xl transition disabled:opacity-60 hover:bg-gray-50"
-                style={{ borderColor: "#e5e7eb", color: "#6b7280" }}
+                onClick={closeCompose}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
               >
-                {savingDraft
-                  ? <><svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Saving…</>
-                  : <><Save className="w-3.5 h-3.5" /> Save Draft</>}
+                Cancel
               </button>
               <button
-                onClick={handleSend}
-                disabled={sending}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold text-white rounded-xl transition disabled:opacity-60 hover:opacity-90"
-                style={{ background: useSchedule ? "#2563eb" : PRIMARY }}
+                onClick={handleSaveAnnouncement}
+                disabled={!isFormReady || saving}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white rounded-xl shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition hover:opacity-90"
+                style={{ background: "#522081" }}
               >
-                {sending
-                  ? <><svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> {useSchedule ? "Scheduling…" : "Sending…"}</>
-                  : useSchedule
-                    ? <><Calendar className="w-3.5 h-3.5" /> Schedule</>
-                    : <><Send className="w-3.5 h-3.5" /> Send Now</>}
+                {form.scheduleDate ? <Clock size={13} /> : <Plus size={13} />}
+                {saving ? "Saving..." : editingAnnouncement ? "Save Changes" : form.scheduleDate ? "Schedule" : "Publish Now"}
               </button>
-            </div>
-          </div>
-
-          {/* Saved Drafts */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-extrabold text-gray-900">Saved Drafts</h3>
-              <span className="text-xs font-extrabold px-2 py-0.5 rounded-full text-white" style={{ background: PRIMARY }}>
-                {drafts.length}
-              </span>
-            </div>
-            {drafts.length === 0 ? (
-              <p className="text-xs text-gray-400 italic text-center py-3">No drafts saved.</p>
-            ) : (
-              <div className="space-y-2.5">
-                {drafts.map((d) => (
-                  <div key={d.id} className="flex items-start justify-between gap-2 group">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-semibold text-gray-800 truncate">{d.title}</p>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border shrink-0"
-                          style={{ color: STATUS_META.Draft.text, background: STATUS_META.Draft.bg, borderColor: STATUS_META.Draft.border }}>
-                          Draft
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-gray-400 mt-0.5">{d.date} · {d.audience}</p>
-                    </div>
-                    <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
-                      <button onClick={() => handleSendDraft(d.id)}
-                        className="w-6 h-6 rounded-lg flex items-center justify-center text-white hover:opacity-80 transition"
-                        style={{ background: PRIMARY }}>
-                        <Send className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => setDeleteTarget(d)}
-                        className="w-6 h-6 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 transition border border-red-200">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Scheduled Queue */}
-          {scheduled.length > 0 && (
-            <div className="bg-white rounded-2xl border border-blue-100 shadow-sm p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-extrabold text-gray-900">Scheduled Queue</h3>
-                <span className="text-xs font-extrabold px-2 py-0.5 rounded-full text-white bg-blue-500">
-                  {scheduled.length}
-                </span>
-              </div>
-              <div className="space-y-2.5">
-                {scheduled.map((s) => (
-                  <div key={s.id} className="flex items-start gap-2.5 group">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-blue-50 border border-blue-100">
-                      <Calendar className="w-4 h-4 text-blue-500" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-gray-800 truncate">{s.title}</p>
-                      <p className="text-[10px] text-blue-600 font-bold mt-0.5">
-                        {s.scheduledDate ? formatScheduledDate(s.scheduledDate) : ""}
-                        {s.scheduledDateMs && daysUntil(s.scheduledDateMs) > 0
-                          ? ` · ${daysUntil(s.scheduledDateMs)}d away`
-                          : " · today"}
-                      </p>
-                      <p className="text-[10px] text-gray-400">{s.audience}</p>
-                    </div>
-                    <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
-                      <button onClick={() => handleSendDraft(s.id)}
-                        className="w-6 h-6 rounded-lg flex items-center justify-center text-white bg-blue-500 hover:bg-blue-600 transition">
-                        <Send className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => setDeleteTarget(s)}
-                        className="w-6 h-6 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 transition border border-red-200">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Audience Breakdown */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-            <h3 className="text-sm font-extrabold text-gray-900 mb-3">Audience Breakdown</h3>
-            <div className="space-y-2.5">
-              {([
-                { label: "Everyone", count: announcements.filter((a) => a.audience === "Everyone" && a.status === "Sent").length, color: "#d97706" },
-                { label: "Advisers", count: announcements.filter((a) => a.audience === "Advisers" && a.status === "Sent").length, color: PRIMARY   },
-                { label: "Parents",  count: announcements.filter((a) => a.audience === "Parents"  && a.status === "Sent").length, color: "#0284c7" },
-              ]).map(({ label, count, color }) => (
-                <div key={label}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-gray-600">{label}</span>
-                    <span className="text-xs font-bold" style={{ color }}>{count}</span>
-                  </div>
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${(count / Math.max(sent.length, 1)) * 100}%`, background: color, opacity: 0.75 }} />
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         </div>
-      </div>
-
-      {/* ── Modals ── */}
-      {editTarget !== null && (
-        <EditModal
-          ann={editTarget}
-          onSave={(updated) => { handleEditSave(updated); setEditTarget(null); }}
-          onClose={() => setEditTarget(null)}
-        />
-      )}
-      {resolveTarget !== null && (
-        <ResolveModal
-          ann={resolveTarget}
-          onConfirm={() => { handleResolve(resolveTarget.id); setResolveTarget(null); }}
-          onClose={() => setResolveTarget(null)}
-        />
-      )}
-      {reviewTarget !== null && (
-        <ReviewModal
-          ann={reviewTarget}
-          onClose={() => setReviewTarget(null)}
-          onResolve={() => { handleResolve(reviewTarget.id); setReviewTarget(null); }}
-        />
-      )}
-      {deleteTarget !== null && (
-        <DeleteModal
-          ann={deleteTarget}
-          onConfirm={() => { handleDelete(deleteTarget.id); setDeleteTarget(null); }}
-          onClose={() => setDeleteTarget(null)}
-        />
       )}
 
-      {/* ── Toast ── */}
-      {toast !== null && <Toast message={toast} onClose={() => setToast(null)} />}
+      {/* ── View Staff Announcement Modal ── */}
+      {viewAnn && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          onClick={() => setViewAnn(null)}
+        >
+          <div
+            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* header */}
+            <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-sm font-bold text-gray-900">{viewAnn.title}</h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {viewAnn.sender_name ?? viewAnn.senderName ?? "Staff"} — {formatDisplay(viewAnn.created_at)}
+                </p>
+              </div>
+              <button
+                onClick={() => setViewAnn(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* body */}
+            <div className="p-6 flex flex-col gap-4">
+              <p className="text-sm text-gray-700 leading-relaxed">{viewAnn.message}</p>
+              <span className="self-start text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                {viewAnn.audience}
+              </span>
+            </div>
+
+            {/* footer */}
+            <div className="flex justify-end px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setViewAnn(null)}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

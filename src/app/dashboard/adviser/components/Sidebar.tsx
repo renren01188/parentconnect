@@ -5,17 +5,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Users, ScanLine, FileText, Bell, LogOut,
+  LayoutDashboard, Users, ScanLine, FileText, Bell, LogOut, Monitor,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS = [
-  { label: "Dashboard",       icon: LayoutDashboard, href: "/dashboard/adviser"              },
-  { label: "Students",        icon: Users,           href: "/dashboard/adviser/students"     },
-  { label: "RFID Attendance", icon: ScanLine,        href: "/dashboard/adviser/attendance"   },
-  { label: "Reports",         icon: FileText,        href: "/dashboard/adviser/reports"      },
-  { label: "Notifications",   icon: Bell,            href: "/dashboard/adviser/notifications" },
+  { label: "Dashboard",       icon: LayoutDashboard, href: "/dashboard/adviser"                  },
+  { label: "Students",        icon: Users,           href: "/dashboard/adviser/students"         },
+  { label: "RFID Attendance", icon: ScanLine,        href: "/dashboard/adviser/attendance"       },
+  { label: "Reports",         icon: FileText,        href: "/dashboard/adviser/reports"          },
+  { label: "Contact ICT",     icon: Monitor,         href: "/dashboard/adviser/contact-ict"      },
+  { label: "Notifications",   icon: Bell,            href: "/dashboard/adviser/notifications"    },
 ];
 
 interface AdviserInfo {
@@ -38,7 +40,7 @@ function Badge({ count }: { count: number }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { unreadCount, notifUnreadCount } = useNotifContext();
+  const { unreadCount, notifUnreadCount, ictUnreadCount } = useNotifContext();
 
   const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
 
@@ -51,6 +53,8 @@ export default function Sidebar() {
 
   const adviserInitials = adviser ? getAdviserInitials(adviser.first_name, adviser.last_name) : "RT";
   const adviserName     = adviser ? `${adviser.first_name} ${adviser.last_name}` : "Ren Taf";
+
+  const isTransferActive = pathname.startsWith("/dashboard/adviser/transfer-level");
 
   return (
     <aside className="w-48 flex-shrink-0 flex flex-col h-screen bg-gradient-to-b from-emerald-600 to-emerald-700">
@@ -67,10 +71,10 @@ export default function Sidebar() {
             ? pathname === href
             : pathname.startsWith(href);
 
-          // Each nav item gets its own accurate badge
           const badgeCount =
             label === "Reports"       ? unreadCount      :
-            label === "Notifications" ? notifUnreadCount : 0;
+            label === "Notifications" ? notifUnreadCount :
+            label === "Contact ICT"   ? ictUnreadCount   : 0;
 
           return (
             <Link
@@ -88,6 +92,22 @@ export default function Sidebar() {
             </Link>
           );
         })}
+
+        {/* Divider */}
+        <div className="my-2 border-t border-emerald-500/30" />
+
+        {/* Transfer New Level button */}
+        <Link
+          href="/dashboard/adviser/transfer-level"
+          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all
+            ${isTransferActive
+              ? "bg-amber-400 text-amber-900 shadow-sm"
+              : "text-amber-200 hover:bg-amber-500/20 hover:text-amber-100 border border-amber-400/30"
+            }`}
+        >
+          <ArrowUpCircle className="w-4 h-4 shrink-0" />
+          <span className="flex-1 leading-tight">Transfer New Level</span>
+        </Link>
       </nav>
 
       {/* Profile + Logout */}

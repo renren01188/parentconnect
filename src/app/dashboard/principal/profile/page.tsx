@@ -1,29 +1,21 @@
-"use client";
+﻿"use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 import {
   User, Mail, Phone, CreditCard, Lock, Eye, EyeOff,
   Camera, Building2, Calendar,
-  CheckCircle, AlertTriangle, Shield, Copy, Check,
-  X, Repeat2, ChevronRight, Settings,
+  CheckCircle, AlertTriangle, Shield, Check,
+  X, ChevronRight, Settings,
 } from "lucide-react";
 
-// ─── Constants ────────────────────────────────────────────────────
+// Constants
 const PRIMARY = "#522081";
 
-// ─── Types ────────────────────────────────────────────────────────
-type TransferStep = "form" | "preview" | "success";
+// Types
 
-interface TransferForm {
-  fullName: string; employeeId: string; contactNumber: string;
-  email: string; effectiveDate: string; reason: string; currentPassword: string;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────
-function genTempPwd(): string {
-  const c = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
-  return Array.from({ length: 12 }, () => c[Math.floor(Math.random() * c.length)]).join("");
-}
+// Helpers
 
 function pwdStrength(p: string) {
   let s = 0;
@@ -43,7 +35,7 @@ function pwdStrength(p: string) {
   return { score: s, ...lvl[Math.min(s, 5)] };
 }
 
-// ─── Sub-components ───────────────────────────────────────────────
+// Sub-components
 function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button onClick={onToggle}
@@ -76,7 +68,7 @@ function PwdField({ label, value, onChange, placeholder, error }: {
   );
 }
 
-// ─── Read-only display field (used on the profile page) ──────────
+// Read-only display field
 function ReadOnlyField({ label, icon: Icon, value }: {
   label: string; icon: React.ElementType; value: string;
 }) {
@@ -85,38 +77,14 @@ function ReadOnlyField({ label, icon: Icon, value }: {
       <label className="block text-xs font-semibold text-gray-500 mb-1.5">{label}</label>
       <div className="flex items-center border border-gray-100 rounded-xl bg-gray-50 overflow-hidden">
         <div className="pl-3.5 pr-2 shrink-0"><Icon className="w-3.5 h-3.5 text-gray-400" /></div>
-        <span className="flex-1 py-2.5 pr-3 text-sm text-gray-500 select-none truncate">{value || "—"}</span>
+        <span className="flex-1 py-2.5 pr-3 text-sm text-gray-500 select-none truncate">{value || "-"}</span>
         <div className="pr-3 shrink-0"><Lock className="w-3 h-3 text-gray-300" /></div>
       </div>
     </div>
   );
 }
 
-// ─── Editable input (used only inside modals) ─────────────────────
-function InputField({ label, icon: Icon, value, onChange, placeholder, readOnly, error, type = "text", helper }: {
-  label: string; icon: React.ElementType; value: string;
-  onChange?: (v: string) => void; placeholder?: string;
-  readOnly?: boolean; error?: string; type?: string; helper?: string;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1.5">{label}</label>
-      <div className={`flex items-center border rounded-xl overflow-hidden transition
-        ${readOnly ? "border-gray-100 bg-gray-50" : error ? "border-red-300 bg-white" : "border-gray-200 bg-white focus-within:ring-2 focus-within:ring-purple-100 focus-within:border-[#522081]/40"}`}>
-        <div className="pl-3.5 pr-2 shrink-0"><Icon className="w-3.5 h-3.5 text-gray-400" /></div>
-        <input type={type} value={value} onChange={onChange ? e => onChange(e.target.value) : undefined}
-          placeholder={placeholder} readOnly={readOnly}
-          className="flex-1 py-2.5 pr-3 text-sm outline-none bg-transparent"
-          style={{ color: readOnly ? "#6b7280" : "#111827" }} />
-        {readOnly && <div className="pr-3"><Lock className="w-3 h-3 text-gray-300" /></div>}
-      </div>
-      {error  && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{error}</p>}
-      {helper && !error && <p className="mt-1 text-[11px] text-gray-400">{helper}</p>}
-    </div>
-  );
-}
-
-// ─── Toast ────────────────────────────────────────────────────────
+// Toast
 function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
   return (
     <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-gray-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl">
@@ -127,22 +95,34 @@ function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
   );
 }
 
-// ─── Settings Modal ───────────────────────────────────────────────
+// Settings modal
 type SettingsTab  = "profile" | "password" | "photo";
 type SettingsStep = "edit" | "confirm" | "success";
 
 interface ProfileEdit {
-  firstName: string; lastName: string; email: string; phone: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  suffix: string;
+  email: string;
+  phone: string;
+  employeeId: string;
 }
 interface PasswordEdit {
   currentPassword: string; newPassword: string; confirmPassword: string;
 }
 
+interface PrincipalProfile extends ProfileEdit {
+  status: string;
+  effectiveDate: string;
+}
+
 function SettingsModal({
-  profile, onSave, onClose,
+  profile, onSave, onPasswordSave, onClose,
 }: {
-  profile: { firstName: string; lastName: string; email: string; phone: string };
-  onSave: (updated: ProfileEdit) => void;
+  profile: ProfileEdit;
+  onSave: (updated: ProfileEdit, currentPassword: string) => Promise<void>;
+  onPasswordSave: (updated: PasswordEdit) => Promise<void>;
   onClose: () => void;
 }) {
   const [tab,  setTab]  = useState<SettingsTab>("profile");
@@ -168,16 +148,21 @@ function SettingsModal({
 
   const profileChanges: { field: string; from: string; to: string }[] = [];
   if (pForm.firstName !== profile.firstName) profileChanges.push({ field: "First Name",    from: profile.firstName, to: pForm.firstName });
+  if (pForm.middleName !== profile.middleName) profileChanges.push({ field: "Middle Name", from: profile.middleName, to: pForm.middleName });
   if (pForm.lastName  !== profile.lastName)  profileChanges.push({ field: "Last Name",     from: profile.lastName,  to: pForm.lastName  });
+  if (pForm.suffix !== profile.suffix) profileChanges.push({ field: "Suffix", from: profile.suffix, to: pForm.suffix });
   if (pForm.email     !== profile.email)     profileChanges.push({ field: "Email Address", from: profile.email,     to: pForm.email     });
   if (pForm.phone     !== profile.phone)     profileChanges.push({ field: "Phone Number",  from: profile.phone,     to: pForm.phone     });
+  if (pForm.employeeId !== profile.employeeId) profileChanges.push({ field: "Employee ID", from: profile.employeeId, to: pForm.employeeId });
 
   const validateProfile = (): boolean => {
     const e: Partial<ProfileEdit> = {};
     if (!pForm.firstName.trim()) e.firstName = "Required";
     if (!pForm.lastName.trim())  e.lastName  = "Required";
+    if (!pForm.employeeId.trim()) e.employeeId = "Required";
     if (!/\S+@\S+\.\S+/.test(pForm.email)) e.email = "Enter a valid email";
-    if (pForm.phone && pForm.phone.replace(/\D/g, "").length < 10) e.phone = "Enter a valid phone number";
+    if (!pForm.phone.trim()) e.phone = "Required";
+    else if (pForm.phone.replace(/\D/g, "").length < 10) e.phone = "Enter a valid phone number";
     setPErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -206,13 +191,23 @@ function SettingsModal({
     setStep("confirm");
   };
 
-  const handleConfirm = () => {
-    setSaving(true);
-    setTimeout(() => {
-      if (tab === "profile") onSave(pForm);
-      setSaving(false);
+  const handleConfirm = async () => {
+    try {
+      setSaving(true);
+      if (tab === "profile") {
+        await onSave(pForm, pAuthPwd);
+      } else if (tab === "password") {
+        await onPasswordSave(pwForm);
+      }
       setStep("success");
-    }, 1000);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unable to save changes.";
+      if (tab === "profile") setPAuthErr(message);
+      if (tab === "password") setPwErrors((prev) => ({ ...prev, currentPassword: message }));
+      setStep("edit");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleClose = () => {
@@ -272,7 +267,7 @@ function SettingsModal({
 
         <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4">
 
-          {/* ── EDIT: Personal Info ── */}
+          {/* Edit: Personal Info */}
           {step === "edit" && tab === "profile" && (
             <>
               <div className="grid grid-cols-2 gap-4">
@@ -294,6 +289,22 @@ function SettingsModal({
                   </div>
                   {pErrors.lastName && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{pErrors.lastName}</p>}
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1.5">Middle Name</label>
+                  <div className={inputCls(pErrors.middleName)}>
+                    <div className="pl-3 pr-2"><User className="w-3.5 h-3.5 text-gray-400" /></div>
+                    <input value={pForm.middleName} onChange={e => setP("middleName")(e.target.value)} placeholder="Middle name"
+                      className="flex-1 py-2.5 pr-3 text-sm outline-none bg-transparent" style={{ color: "#111827" }} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1.5">Suffix</label>
+                  <div className={inputCls(pErrors.suffix)}>
+                    <div className="pl-3 pr-2"><User className="w-3.5 h-3.5 text-gray-400" /></div>
+                    <input value={pForm.suffix} onChange={e => setP("suffix")(e.target.value)} placeholder="Jr., III"
+                      className="flex-1 py-2.5 pr-3 text-sm outline-none bg-transparent" style={{ color: "#111827" }} />
+                  </div>
+                </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-gray-500 mb-1.5">Email Address <span className="text-red-500">*</span></label>
                   <div className={inputCls(pErrors.email)}>
@@ -312,6 +323,15 @@ function SettingsModal({
                   </div>
                   {pErrors.phone && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{pErrors.phone}</p>}
                 </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1.5">Employee ID <span className="text-red-500">*</span></label>
+                  <div className={inputCls(pErrors.employeeId)}>
+                    <div className="pl-3 pr-2"><CreditCard className="w-3.5 h-3.5 text-gray-400" /></div>
+                    <input value={pForm.employeeId} onChange={e => setP("employeeId")(e.target.value)} placeholder="Employee ID"
+                      className="flex-1 py-2.5 pr-3 text-sm outline-none bg-transparent" style={{ color: "#111827" }} />
+                  </div>
+                  {pErrors.employeeId && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{pErrors.employeeId}</p>}
+                </div>
               </div>
 
               <div className="border-t border-gray-100 pt-4">
@@ -325,7 +345,7 @@ function SettingsModal({
             </>
           )}
 
-          {/* ── EDIT: Password ── */}
+          {/* Edit: Password */}
           {step === "edit" && tab === "password" && (
             <>
               <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
@@ -365,7 +385,7 @@ function SettingsModal({
             </>
           )}
 
-          {/* ── EDIT: Profile Photo ── */}
+          {/* Edit: Profile Photo */}
           {step === "edit" && tab === "photo" && (
             <div className="space-y-4">
               <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
@@ -377,7 +397,7 @@ function SettingsModal({
               <div className="flex flex-col items-center gap-4 py-4">
                 <div className="relative">
                   {photoPreview ? (
-                    <img src={photoPreview} alt="Preview" className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg" />
+                    <Image src={photoPreview} alt="Preview" width={96} height={96} unoptimized className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg" />
                   ) : (
                     <div className="w-24 h-24 rounded-full flex items-center justify-center text-3xl font-extrabold text-white border-4 border-white shadow-lg"
                       style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
@@ -391,7 +411,7 @@ function SettingsModal({
                     </button>
                   )}
                 </div>
-                <p className="text-xs text-gray-400">{photoPreview ? "Preview — click Save to apply" : "Current profile photo"}</p>
+                <p className="text-xs text-gray-400">{photoPreview ? "Preview - click Save to apply" : "Current profile photo"}</p>
               </div>
 
               {/* Upload area */}
@@ -432,7 +452,7 @@ function SettingsModal({
             </div>
           )}
 
-          {/* ── CONFIRM ── */}
+          {/* Confirm */}
           {step === "confirm" && (
             <>
               <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
@@ -452,7 +472,7 @@ function SettingsModal({
                         <p className="text-[10px] font-bold text-gray-400 mb-1">{field}</p>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-400 line-through truncate">{from}</span>
-                          <span className="text-gray-300 shrink-0">→</span>
+                          <span className="text-gray-300 shrink-0">-&gt;</span>
                           <span className="text-xs font-bold truncate" style={{ color: PRIMARY }}>{to}</span>
                         </div>
                       </div>
@@ -478,7 +498,7 @@ function SettingsModal({
             </>
           )}
 
-          {/* ── SUCCESS ── */}
+          {/* Success */}
           {step === "success" && (
             <div className="text-center space-y-4 py-4">
               <div className="w-16 h-16 rounded-full mx-auto flex items-center justify-center bg-emerald-50">
@@ -541,13 +561,13 @@ function SettingsModal({
               <>
                 <button onClick={() => setStep("edit")}
                   className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
-                  ← Go Back
+                  Go Back
                 </button>
                 <button onClick={handleConfirm} disabled={saving}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 disabled:opacity-60 transition"
                   style={{ background: PRIMARY }}>
                   {saving
-                    ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Saving…</>
+                    ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Saving...</>
                     : <><CheckCircle className="w-4 h-4" /> Confirm & Save</>}
                 </button>
               </>
@@ -559,284 +579,166 @@ function SettingsModal({
   );
 }
 
-// ─── Transfer Modal ───────────────────────────────────────────────
-function TransferModal({ onClose }: { onClose: () => void }) {
-  const [step,    setStep]    = useState<TransferStep>("form");
-  const [loading, setLoading] = useState(false);
-  const [tempPwd, setTempPwd] = useState("");
-  const [copied,  setCopied]  = useState(false);
-  const [showTmp, setShowTmp] = useState(false);
-
-  const BLANK: TransferForm = {
-    fullName: "", employeeId: "", contactNumber: "",
-    email: "", effectiveDate: "", reason: "", currentPassword: "",
-  };
-  const [form,   setForm]   = useState<TransferForm>(BLANK);
-  const [errors, setErrors] = useState<Partial<Record<keyof TransferForm, string>>>({});
-
-  const set = (k: keyof TransferForm) => (v: string) => setForm(p => ({ ...p, [k]: v }));
-  const todayIso = new Date().toISOString().split("T")[0];
-
-  const validateForm = (): boolean => {
-    const e: Partial<Record<keyof TransferForm, string>> = {};
-    if (!form.fullName.trim())   e.fullName = "Required";
-    if (!form.employeeId.trim()) e.employeeId = "Required";
-    if (!/^[0-9]{10,11}$/.test(form.contactNumber.replace(/\D/g, "")))
-      e.contactNumber = "Enter 10–11 digit number";
-    if (!/\S+@\S+\.\S+/.test(form.email)) e.email = "Enter a valid email";
-    if (!form.effectiveDate)     e.effectiveDate = "Required";
-    if (!form.reason)            e.reason = "Required";
-    if (!form.currentPassword.trim()) e.currentPassword = "Required";
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handlePreview  = () => { if (validateForm()) setStep("preview"); };
-  const handleConfirm  = () => {
-    setLoading(true);
-    setTimeout(() => { setTempPwd(genTempPwd()); setLoading(false); setStep("success"); }, 1500);
-  };
-  const copyTmp = () => {
-    navigator.clipboard.writeText(tempPwd).catch(() => {});
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
-  };
-
-  const STEP_LABELS = ["Fill Form", "Preview", "Transfer Done"];
-  const STEP_IDX: Record<TransferStep, number> = { form: 0, preview: 1, success: 2 };
-  const cur = STEP_IDX[step];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-      onClick={step === "success" ? undefined : onClose}>
-      <div className="w-full max-w-xl bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
-
-        <div className="px-6 py-4 border-b border-gray-100 shrink-0 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "#52208115" }}>
-              <Repeat2 className="w-4 h-4" style={{ color: PRIMARY }} />
-            </div>
-            <div>
-              <h2 className="text-sm font-extrabold text-gray-900">Transfer Position to New Principal</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Assign the incoming principal as the new Super Admin</p>
-            </div>
-          </div>
-          {step !== "success" && (
-            <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition">
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-
-        <div className="px-6 pt-4 pb-2 shrink-0">
-          <div className="flex items-center gap-1">
-            {STEP_LABELS.map((label, i) => {
-              const done = cur > i; const active = cur === i;
-              return (
-                <div key={i} className="flex items-center flex-1 last:flex-none">
-                  <div className="flex flex-col items-center gap-1 shrink-0">
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                      style={{ background: done ? "#059669" : active ? PRIMARY : "#e5e7eb", color: done || active ? "white" : "#9ca3af" }}>
-                      {done ? <Check className="w-3.5 h-3.5" /> : i + 1}
-                    </div>
-                    <span className="text-[10px] font-semibold whitespace-nowrap"
-                      style={{ color: active ? PRIMARY : done ? "#059669" : "#9ca3af" }}>
-                      {label}
-                    </span>
-                  </div>
-                  {i < STEP_LABELS.length - 1 && (
-                    <div className="flex-1 h-0.5 mx-2 mb-4" style={{ background: cur > i ? "#059669" : "#e5e7eb" }} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="overflow-y-auto flex-1 px-6 pb-6 pt-2 space-y-4">
-          {step === "form" && (
-            <>
-              <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-700">These actions are <strong>irreversible</strong> and will be permanently logged.</p>
-              </div>
-              <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4 space-y-3">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
-                  <User className="w-3.5 h-3.5" style={{ color: PRIMARY }} />
-                  <p className="text-xs font-extrabold text-gray-700">Incoming Principal's Information</p>
-                </div>
-                <InputField label="Full Name *" icon={User} value={form.fullName} onChange={set("fullName")} placeholder="e.g. Maria Santos" error={errors.fullName} />
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField label="Employee ID *" icon={CreditCard} value={form.employeeId} onChange={set("employeeId")} placeholder="e.g. EMP-2025-002" error={errors.employeeId} />
-                  <InputField label="Contact Number *" icon={Phone} value={form.contactNumber} onChange={v => set("contactNumber")(v.replace(/\D/g, "").slice(0, 11))} placeholder="09171234567" error={errors.contactNumber} helper={`${form.contactNumber.replace(/\D/g, "").length}/11 digits`} />
-                </div>
-                <InputField label="Email Address *" icon={Mail} value={form.email} onChange={set("email")} placeholder="newprincipal@school.edu" error={errors.email} />
-                <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
-                  <Mail className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
-                  <p className="text-xs text-blue-700">A <strong>temporary password</strong> will be auto-generated and sent to this email after transfer is confirmed.</p>
-                </div>
-              </div>
-              <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4 space-y-3">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
-                  <Repeat2 className="w-3.5 h-3.5" style={{ color: PRIMARY }} />
-                  <p className="text-xs font-extrabold text-gray-700">Transfer Details</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Effective Date *</label>
-                    <input type="date" value={form.effectiveDate} min={todayIso} onChange={e => set("effectiveDate")(e.target.value)}
-                      className={`w-full px-3 py-2.5 text-sm border rounded-xl outline-none focus:ring-2 focus:ring-purple-100 bg-white ${errors.effectiveDate ? "border-red-300" : "border-gray-200"}`}
-                      style={{ color: "#111827" }} />
-                    {errors.effectiveDate && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{errors.effectiveDate}</p>}
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Reason for Transfer *</label>
-                    <select value={form.reason} onChange={e => set("reason")(e.target.value)}
-                      className={`w-full px-3 py-2.5 text-sm border rounded-xl outline-none focus:ring-2 focus:ring-purple-100 bg-white appearance-none ${errors.reason ? "border-red-300" : "border-gray-200"}`}
-                      style={{ color: form.reason ? "#111827" : "#9ca3af" }}>
-                      <option value="">Select reason…</option>
-                      {["Retirement", "Reassignment", "Promotion", "Resignation", "End of Term", "Other"].map(r => <option key={r}>{r}</option>)}
-                    </select>
-                    {errors.reason && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{errors.reason}</p>}
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4 space-y-3">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
-                  <Lock className="w-3.5 h-3.5 text-red-400" />
-                  <p className="text-xs font-extrabold text-gray-700">Authorization Required</p>
-                </div>
-                <PwdField label="Your Current Password *" value={form.currentPassword} onChange={set("currentPassword")} placeholder="Enter your current password" error={errors.currentPassword} />
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-                <button onClick={handlePreview} className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition" style={{ background: PRIMARY }}>
-                  <ChevronRight className="w-4 h-4" /> Preview Transfer
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === "preview" && (
-            <>
-              <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-700">Please review carefully. Once confirmed, <strong>this action cannot be undone.</strong></p>
-              </div>
-              <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Incoming Principal Details</p>
-                {[["Full Name", form.fullName], ["Employee ID", form.employeeId], ["Contact Number", form.contactNumber], ["Email Address", form.email],
-                  ["Effective Date", form.effectiveDate ? new Date(form.effectiveDate + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : ""],
-                  ["Reason", form.reason]].map(([l, v]) => (
-                  <div key={l} className="flex justify-between py-2 border-b border-gray-100 last:border-0">
-                    <span className="text-xs text-gray-400 w-32 shrink-0">{l}</span>
-                    <span className="text-xs font-semibold text-gray-800 text-right">{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-xs font-bold text-red-700 mb-2">⚠️ Consequences of Transfer</p>
-                <ul className="space-y-1 text-xs text-red-600">
-                  <li>• Your Super Admin access will be permanently revoked</li>
-                  <li>• New principal takes over all admin controls immediately</li>
-                  <li>• A temporary password will be emailed to <strong>{form.email}</strong></li>
-                  <li>• This transfer will be permanently logged in the audit trail</li>
-                  <li>• You will be logged out after transfer completes</li>
-                </ul>
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => setStep("form")} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">← Edit Details</button>
-                <button onClick={handleConfirm} disabled={loading}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 disabled:opacity-60 transition"
-                  style={{ background: "#dc2626" }}>
-                  {loading
-                    ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Processing…</>
-                    : <><Repeat2 className="w-4 h-4" /> Confirm & Initiate Transfer</>}
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === "success" && (
-            <div className="space-y-4 text-center">
-              <div className="w-16 h-16 rounded-full mx-auto flex items-center justify-center" style={{ background: "#f0fdf4" }}>
-                <CheckCircle className="w-8 h-8 text-emerald-500" />
-              </div>
-              <div>
-                <h3 className="text-lg font-extrabold text-gray-900">Transfer Complete!</h3>
-                <p className="text-sm text-gray-500 mt-1.5">The account for <strong>{form.fullName}</strong> has been created successfully.</p>
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-left">
-                <p className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-2"><Mail className="w-3.5 h-3.5" /> Temporary Password Sent</p>
-                <div className="flex items-center justify-between gap-3 bg-white border border-amber-200 rounded-lg px-3 py-2.5 mb-2">
-                  <code className="font-mono font-extrabold text-amber-900 flex-1 text-sm tracking-wider">
-                    {showTmp ? tempPwd : "•".repeat(tempPwd.length)}
-                  </code>
-                  <div className="flex gap-2 shrink-0">
-                    <button onClick={() => setShowTmp(p => !p)} className="text-amber-500 hover:text-amber-700 transition">
-                      {showTmp ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                    <button onClick={copyTmp} className="flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg text-white transition"
-                      style={{ background: copied ? "#10b981" : PRIMARY }}>
-                      {copied ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-amber-600">📧 Simulated email sent to <strong>{form.email}</strong>.</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 text-left">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">What Happens Next</p>
-                <div className="space-y-2.5">
-                  {[
-                    `${form.fullName} receives the temporary password via email`,
-                    "New principal logs in using the temporary password",
-                    "System prompts new principal to create a permanent password",
-                    "New principal gains full access to the principal dashboard",
-                    "Your account is now deactivated",
-                  ].map((text, i) => (
-                    <div key={i} className="flex items-start gap-2.5">
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 text-white mt-0.5" style={{ background: PRIMARY }}>{i + 1}</div>
-                      <p className="text-xs text-gray-600">{text}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <button onClick={onClose} className="w-full py-3 text-sm font-bold text-white rounded-xl hover:opacity-90 transition" style={{ background: PRIMARY }}>Done</button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Main Account & Profile Page ─────────────────────────────────
 export default function AccountProfilePage() {
-  const [firstName, setFirstName] = useState("Roberto");
-  const [lastName,  setLastName]  = useState("Pascual");
-  const [email,     setEmail]     = useState("r.pascual@santiago.edu.ph");
-  const [phone,     setPhone]     = useState("+63 917 123 4567");
+  const router = useRouter();
+  const [profile, setProfile] = useState<PrincipalProfile>({
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    suffix: "",
+    email: "",
+    phone: "",
+    employeeId: "",
+    status: "active",
+    effectiveDate: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [notifs, setNotifs] = useState({
     escalatedReports: true,
     announcementRead: true,
     dailyAttendance:  true,
   });
+  type NotificationKey = keyof typeof notifs;
+  const notificationItems: { key: NotificationKey; label: string; sub: string }[] = [
+    { key: "escalatedReports", label: "Escalated Report Alerts", sub: "Get notified when a new report is escalated" },
+    { key: "announcementRead", label: "Announcement Read Receipts", sub: "Notify when broadcast reaches 100% read rate" },
+    { key: "dailyAttendance", label: "Daily Attendance Summary", sub: "Receive end-of-day attendance digest" },
+  ];
 
-  const [showTransferModal, setShowTransferModal] = useState(false);
+
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProfile() {
+      try {
+        setLoading(true);
+        setLoadError("");
+        const res = await fetch("/api/principal/me", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+
+        if (!isMounted) return;
+
+        if (res.status === 401) {
+          router.push("/login/principal");
+          return;
+        }
+
+        if (!res.ok || !data?.principal) {
+          setLoadError(data?.message || "Unable to load your profile.");
+          return;
+        }
+
+        setProfile({
+          firstName: data.principal.firstName || "",
+          middleName: data.principal.middleName || "",
+          lastName: data.principal.lastName || "",
+          suffix: data.principal.suffix || "",
+          email: data.principal.email || "",
+          phone: data.principal.phone || "",
+          employeeId: data.principal.employeeId || "",
+          status: data.principal.status || "active",
+          effectiveDate: data.principal.effectiveDate || "",
+        });
+      } catch {
+        if (isMounted) setLoadError("Unable to load your profile.");
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    loadProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
+
+  const fullName = [profile.firstName, profile.middleName, profile.lastName, profile.suffix]
+    .filter(Boolean)
+    .join(" ");
+  const initials = [profile.firstName, profile.lastName]
+    .filter(Boolean)
+    .map((name) => name[0]?.toUpperCase())
+    .join("") || "P";
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3500);
   };
 
+  async function saveProfile(updated: ProfileEdit, currentPassword: string) {
+    const res = await fetch("/api/principal/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...updated, currentPassword }),
+    });
+    const data = await res.json().catch(() => null);
+
+    if (res.status === 401) {
+      router.push("/login/principal");
+      throw new Error("Session expired. Please log in again.");
+    }
+
+    if (!res.ok || !data?.principal) {
+      throw new Error(data?.message || "Unable to save profile.");
+    }
+
+    setProfile((prev) => ({
+      ...prev,
+      firstName: data.principal.firstName || "",
+      middleName: data.principal.middleName || "",
+      lastName: data.principal.lastName || "",
+      suffix: data.principal.suffix || "",
+      email: data.principal.email || "",
+      phone: data.principal.phone || "",
+      employeeId: data.principal.employeeId || "",
+      status: data.principal.status || prev.status,
+    }));
+    showToast(data.message || "Profile updated successfully!");
+  }
+
+  async function savePassword(updated: PasswordEdit) {
+    const res = await fetch("/api/principal/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    });
+    const data = await res.json().catch(() => null);
+
+    if (res.status === 401) {
+      router.push("/login/principal");
+      throw new Error("Session expired. Please log in again.");
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.message || "Unable to update password.");
+    }
+
+    showToast(data?.message || "Password updated successfully!");
+  }
+
+  if (loading) {
+    return (
+      <div className="principal-profile-page p-4 sm:p-6 bg-[#f5f3ff] min-h-screen" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 text-sm text-gray-500">
+          Loading your profile...
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="p-6 bg-[#f5f3ff] min-h-screen" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+    <div className="principal-profile-page p-4 sm:p-6 bg-[#f5f3ff] min-h-screen" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
 
       {/* Page Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="principal-profile-header flex items-start justify-between mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900">Account &amp; Profile</h1>
           <p className="text-sm text-gray-500 mt-0.5">Manage your personal information, security, and preferences</p>
@@ -849,7 +751,13 @@ export default function AccountProfilePage() {
         </button>
       </div>
 
-      <div className="flex gap-5 items-start">
+      {loadError && (
+        <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+          {loadError}
+        </div>
+      )}
+
+      <div className="principal-profile-body flex gap-5 items-start">
         <div className="flex-1 min-w-0 space-y-5">
 
           {/* Personal Information */}
@@ -865,11 +773,11 @@ export default function AccountProfilePage() {
               <div className="shrink-0">
                 <div className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-extrabold text-white"
                   style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
-                  {firstName[0]}{lastName[0]}
+                  {initials}
                 </div>
               </div>
               <div className="min-w-0">
-                <h3 className="text-base font-extrabold text-gray-900">{firstName} {lastName}</h3>
+                <h3 className="text-base font-extrabold text-gray-900">{fullName || "Principal"}</h3>
                 <div className="flex items-center gap-1.5 mt-1">
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-white" style={{ background: PRIMARY }}>
                     School Principal
@@ -877,7 +785,7 @@ export default function AccountProfilePage() {
                 </div>
                 <div className="flex flex-col gap-0.5 mt-2">
                   <p className="text-xs text-gray-400 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Santiago Elementary School</p>
-                  <p className="text-xs text-gray-400 flex items-center gap-1.5"><Calendar className="w-3 h-3" /> Member since January 2020</p>
+                  <p className="text-xs text-gray-400 flex items-center gap-1.5"><Calendar className="w-3 h-3" /> {profile.effectiveDate ? `Effective since ${profile.effectiveDate}` : "Active principal account"}</p>
                 </div>
               </div>
             </div>
@@ -894,13 +802,15 @@ export default function AccountProfilePage() {
             </div>
 
             {/* All fields are now read-only display */}
-            <div className="grid grid-cols-2 gap-4">
-              <ReadOnlyField label="First Name"     icon={User}       value={firstName} />
-              <ReadOnlyField label="Last Name"      icon={User}       value={lastName}  />
-              <ReadOnlyField label="Email Address"  icon={Mail}       value={email}     />
-              <ReadOnlyField label="Phone Number"   icon={Phone}      value={phone}     />
+            <div className="principal-profile-fields grid grid-cols-2 gap-4">
+              <ReadOnlyField label="First Name"     icon={User}       value={profile.firstName} />
+              <ReadOnlyField label="Last Name"      icon={User}       value={profile.lastName}  />
+              <ReadOnlyField label="Middle Name"    icon={User}       value={profile.middleName} />
+              <ReadOnlyField label="Suffix"         icon={User}       value={profile.suffix} />
+              <ReadOnlyField label="Email Address"  icon={Mail}       value={profile.email}     />
+              <ReadOnlyField label="Phone Number"   icon={Phone}      value={profile.phone}     />
               <ReadOnlyField label="Role"           icon={Shield}     value="School Principal" />
-              <ReadOnlyField label="Employee ID"    icon={CreditCard} value="EMP-2020-001"     />
+              <ReadOnlyField label="Employee ID"    icon={CreditCard} value={profile.employeeId}     />
             </div>
           </div>
 
@@ -908,83 +818,63 @@ export default function AccountProfilePage() {
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
             <h2 className="text-sm font-extrabold text-gray-800 mb-4">Notification Preferences</h2>
             <div className="space-y-4">
-              {[
-                { key: "escalatedReports", label: "Escalated Report Alerts",   sub: "Get notified when a new report is escalated"  },
-                { key: "announcementRead", label: "Announcement Read Receipts", sub: "Notify when broadcast reaches 100% read rate" },
-                { key: "dailyAttendance",  label: "Daily Attendance Summary",   sub: "Receive end-of-day attendance digest"         },
-              ].map(({ key, label, sub }) => (
+              {notificationItems.map(({ key, label, sub }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-semibold text-gray-800">{label}</p>
                     <p className="text-xs text-gray-400 mt-0.5">{sub}</p>
                   </div>
-                  <Toggle on={(notifs as any)[key]} onToggle={() => setNotifs(p => ({ ...p, [key]: !(p as any)[key] }))} />
+                  <Toggle on={notifs[key]} onToggle={() => setNotifs((prev) => ({ ...prev, [key]: !prev[key] }))} />
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Principal Succession */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-            <div className="mb-4">
-              <h2 className="text-sm font-extrabold text-gray-800">Principal Succession &amp; Account Control</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Alternatively transfer super admin rights upon end of tenure.</p>
-            </div>
-            <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5">
-              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-700">
-                These actions are irreversible and will be permanently logged. Proceed only during official transition.
-                All changes require your current password for confirmation.
-              </p>
-            </div>
-            <div className="border border-gray-100 rounded-xl p-4 flex items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "#52208115" }}>
-                  <Repeat2 className="w-5 h-5" style={{ color: PRIMARY }} />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-gray-800">Transfer Position to New Principal</p>
-                  <p className="text-xs text-gray-400 mt-0.5">Assign the incoming principal as the new Super Admin.</p>
-                  <div className="mt-2 space-y-1">
-                    {[
-                      "New principal receives temporary password via email",
-                      "All existing monitoring data and records are preserved",
-                      "Your account will be deactivated after transfer",
-                    ].map(t => (
-                      <p key={t} className="text-[11px] text-gray-500 flex items-center gap-1.5">
-                        <span className="w-1 h-1 rounded-full bg-gray-400 shrink-0" />{t}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowTransferModal(true)}
-                className="shrink-0 flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition shadow-md"
-                style={{ background: PRIMARY }}>
-                <Repeat2 className="w-4 h-4" /> Initiate Transfer
-              </button>
-            </div>
-          </div>
+
         </div>
       </div>
 
       {showSettingsModal && (
         <SettingsModal
-          profile={{ firstName, lastName, email, phone }}
-          onSave={(updated) => {
-            setFirstName(updated.firstName);
-            setLastName(updated.lastName);
-            setEmail(updated.email);
-            setPhone(updated.phone);
-            showToast("Profile updated successfully!");
-          }}
+          profile={profile}
+          onSave={saveProfile}
+          onPasswordSave={savePassword}
           onClose={() => setShowSettingsModal(false)}
         />
       )}
 
-      {showTransferModal && <TransferModal onClose={() => setShowTransferModal(false)} />}
+
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      <style jsx global>{`
+        @media (max-width: 1024px) {
+          .principal-profile-body {
+            flex-direction: column;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .principal-profile-header {
+            flex-direction: column;
+          }
+
+          .principal-profile-header > button {
+            width: 100%;
+            justify-content: center;
+          }
+
+          .principal-profile-fields {
+            grid-template-columns: 1fr;
+          }
+
+          .principal-profile-page .grid.grid-cols-2 {
+            grid-template-columns: 1fr !important;
+          }
+
+          .principal-profile-page .mt-2.grid.grid-cols-2 {
+            grid-template-columns: repeat(2, 1fr) !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
