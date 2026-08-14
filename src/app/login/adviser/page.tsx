@@ -33,7 +33,12 @@ export default function AdviserLoginPage() {
         return;
       }
 
-      router.push("/dashboard/adviser");
+      // First-time login: adviser must set a permanent password before access
+      if (!data.passwordSet) {
+        router.push("/set-password/adviser");
+      } else {
+        router.push("/dashboard/adviser");
+      }
       router.refresh();
 
     } catch {
@@ -76,9 +81,9 @@ export default function AdviserLoginPage() {
             </div>
           </div>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</a>
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</a>
+        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
+          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
         </nav>
       </header>
 

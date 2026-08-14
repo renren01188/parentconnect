@@ -1,39 +1,51 @@
 "use client";
 
-import { Users, ShieldCheck, BookOpen, FileText } from "lucide-react";
+import { Users, ShieldCheck, BookOpen, FileText, HeartHandshake } from "lucide-react";
 import HeroSection from "@/components/HeroSection";
 import LoginCard from "@/components/LoginCard";
 
 const roles = [
   {
     icon: Users,
-    title: "Guardian / Parent",
+    title: "Parent/Guardian",
     description:
-      "Monitor student attendance with RFID logs, manage parent reports, and track class activities.",
-    buttonLabel: "Login as Guardian / Parent",
-    buttonColor: "bg-sky-500 hover:bg-sky-600 shadow-sky-200 shadow-md",
-    iconBg: "bg-sky-500",
+      "Monitors the student's RFID attendance records and submits reports or concerns.",
+    buttonLabel: "Login as Parent/Guardian",
+    buttonColor: "shadow-md",
+    buttonStyle: { background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" },
+    iconBg: "",
+    iconStyle: { background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" },
     href: "/login/guardian",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Principal",
-    description:
-      "Access school-wide analytics, manage escalated reports, and oversee user management.",
-    buttonLabel: "Login as Principal",
-    buttonColor: "bg-violet-600 hover:bg-violet-700 shadow-violet-200 shadow-md",
-    iconBg: "bg-violet-600",
-    href: "/login/principal",
   },
   {
     icon: BookOpen,
     title: "Class Adviser",
     description:
-      "View student information, attendance records, submit reports, and track notifications.",
+      "Records and manages student attendance, receives concerns, and generates reports.",
     buttonLabel: "Login as Class Adviser",
     buttonColor: "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200 shadow-md",
     iconBg: "bg-emerald-600",
     href: "/login/adviser",
+  },
+  {
+    icon: HeartHandshake,
+    title: "Guidance Counselor",
+    description:
+      "Reviews and manages concerns escalated by the Class Adviser.",
+    buttonLabel: "Log in as Guidance Counselor",
+    buttonColor: "bg-sky-600 hover:bg-sky-700 shadow-sky-200 shadow-md",
+    iconBg: "bg-sky-600",
+    href: "/login/guidance",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Principal",
+    description:
+      "Monitors school-wide attendance reports and resolves escalated concerns.",
+    buttonLabel: "Login as Principal",
+    buttonColor: "bg-violet-600 hover:bg-violet-700 shadow-violet-200 shadow-md",
+    iconBg: "bg-violet-600",
+    href: "/login/principal",
   },
 ];
 
@@ -50,7 +62,7 @@ export default function LandingPage() {
           <p className="text-slate-500 text-base">Select a type of user.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 w-full max-w-6xl">
           {roles.map((role) => (
             <LoginCard key={role.title} {...role} />
           ))}
@@ -72,7 +84,7 @@ export default function LandingPage() {
                 Student Report or Concern
               </h3>
               <p className="text-slate-500 text-sm mt-1">
-                Submit a report anonymously without needing to log in.
+                The student&apos;s name is required. Students can submit reports or concerns without needing to log in.
               </p>
             </div>
           </div>

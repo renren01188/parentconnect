@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import crypto from "crypto";
-import nodemailer from "nodemailer";
+import { sendWithSmtp } from "@/lib/mailer";
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,18 +44,7 @@ export async function POST(req: NextRequest) {
 
     const resetUrl = `${process.env.NEXTAUTH_URL}/login/guardian/reset-password?token=${token}`;
 
-    const transporter = nodemailer.createTransport({
-      host:   process.env.SMTP_HOST,
-      port:   Number(process.env.SMTP_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
-
-    await transporter.sendMail({
-      from:    process.env.SMTP_FROM,
+    await sendWithSmtp({
       to:      email,
       subject: "ParentConnect — Password Reset Request",
       html: `
@@ -78,10 +67,10 @@ export async function POST(req: NextRequest) {
       message: "If an account exists with this email, a reset link has been sent.",
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("POST /api/auth/forgot-password error:", error);
     return NextResponse.json(
-      { success: false, message: error.message || "Server error." },
+      { success: false, message: error instanceof Error ? error.message : "Server error." },
       { status: 500 }
     );
   }

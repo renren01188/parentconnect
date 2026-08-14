@@ -3,20 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "next dev -p 3001 --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.577.0",
     "mysql2": "^3.19.1",
     "next": "16.1.6",
     "nodemailer": "^8.0.2",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

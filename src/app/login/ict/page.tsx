@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Monitor, ArrowLeft, ArrowRight } from "lucide-react";
+import Link from "next/link";
 
 export default function ICTLoginPage() {
   const router = useRouter();
@@ -32,9 +33,15 @@ export default function ICTLoginPage() {
         return;
       }
 
-      router.push("/ict/dashboard");
+      if (!data.passwordSet) {
+        router.push("/set-password/ict");
+      } else {
+        router.push("/dashboard/ict");
+      }
+      router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
+    } finally {
       setLoading(false);
     }
   }
@@ -44,13 +51,13 @@ export default function ICTLoginPage() {
       <div className="bg-white rounded-2xl shadow-md w-full max-w-sm px-8 py-8">
 
         {/* Back link */}
-        <a
+        <Link
           href="/"
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors mb-6"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to user selection
-        </a>
+        </Link>
 
         {/* Icon */}
         <div className="flex justify-center mb-4">

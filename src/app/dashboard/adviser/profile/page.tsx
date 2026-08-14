@@ -8,12 +8,13 @@ import {
     RefreshCw, Send, Users, FileText,
     Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, Camera, ImagePlus, Trash2, ChevronDown,
 } from "lucide-react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 function checkPassword(pw: string) {
     return {
-        length:    pw.length >= 8,
+        length: pw.length >= 8,
         uppercase: /[A-Z]/.test(pw),
-        numOrSym:  /[0-9!@#$%^&*]/.test(pw),
+        numOrSym: /[0-9!@#$%^&*]/.test(pw),
     };
 }
 
@@ -21,19 +22,35 @@ function getInitials(first: string, last: string) {
     return `${first?.[0] ?? ""}${last?.[0] ?? ""}`.toUpperCase();
 }
 
+function formatGradeLabel(grade: string | null) {
+    if (!grade) return "";
+    return grade.trim().replace(/^Grade\s+/i, "Grade ");
+}
+
 interface AdviserProfile {
     id: number;
     employee_id: string;
     first_name: string;
+    middle_name: string | null;
     last_name: string;
+    suffix: string | null;
     email: string;
     phone: string | null;
+    profile_picture?: string | null;
     grade: string | null;
     section: string | null;
+    sections: string[];
     status: string;
     student_count: number;
+    latest_change_request: {
+        id: number;
+        status: "Pending" | "Approved" | "Rejected";
+        created_at: string;
+        reviewed_at: string | null;
+        review_note: string | null;
+        changes: { field: string; from: string; to: string }[];
+    } | null;
 }
-
 // ─── Auth Gate ────────────────────────────────────────────────────────────────
 function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; onCancel: () => void }) {
     const [pw, setPw] = useState("");
@@ -45,7 +62,7 @@ function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; on
         if (!pw.trim()) { setErr("Please enter your current password."); return; }
         setLoading(true); setErr("");
         try {
-            const res  = await fetch("/api/adviser/verify-password", {
+            const res = await fetch("/api/adviser/verify-password", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ password: pw }),
             });
@@ -117,29 +134,37 @@ function SettingsModal({
     const [pendingNav, setPendingNav] = useState<"personal-info" | "password" | "profile-picture" | null>(null);
 
     // Personal info state
-    const [email,   setEmail]   = useState(profile.email);
-    const [phone,   setPhone]   = useState(profile.phone ?? "");
-    const [grade,   setGrade]   = useState(profile.grade ?? "");
-    const [section, setSection] = useState(profile.section ?? "");
-    const [note,    setNote]    = useState("");
-    const [isSending,   setIsSending]   = useState(false);
+    // Personal info state
+    const [firstName, setFirstName] = useState(profile.first_name);
+    const [middleName, setMiddleName] = useState(profile.middle_name ?? "");
+    const [lastName, setLastName] = useState(profile.last_name);
+    const [suffix, setSuffix] = useState(profile.suffix ?? "");
+    const [email, setEmail] = useState(profile.email);
+    const [phone, setPhone] = useState(profile.phone ?? "");
+    const [grade, setGrade] = useState(profile.grade ?? "");
+    const [selectedSections, setSelectedSections] = useState<string[]>(
+        profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []
+    );
+    const [note, setNote] = useState("");
+    const [isSending, setIsSending] = useState(false);
     const [approvalMsg, setApprovalMsg] = useState("");
     const [approvalErr, setApprovalErr] = useState(false);
+    const [approvalSent, setApprovalSent] = useState(false);
 
     // Grade / section dropdown data
-    const GRADE_LEVELS = ["Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6"];
-    const [sectionOptions, setSectionOptions] = useState<string[]>([]);
+    const GRADE_LEVELS = ["Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6"];
+    interface SectionOption { name: string; class_session: string | null; }
+    const [sectionOptions, setSectionOptions] = useState<SectionOption[]>([]);
     const [loadingSections, setLoadingSections] = useState(false);
 
     // Fetch sections whenever grade changes
     useEffect(() => {
-        if (!grade) { setSectionOptions([]); setSection(""); return; }
+        if (!grade) { setSectionOptions([]); setSelectedSections([]); return; }
         setLoadingSections(true);
-        setSection("");
         fetch(`/api/sections?grade=${encodeURIComponent(grade)}`)
             .then(r => r.json())
             .then(json => {
-                if (json.success) setSectionOptions(json.sections ?? []);
+                if (json.success) setSectionOptions(json.sectionsWithCount ?? []);
                 else setSectionOptions([]);
             })
             .catch(() => setSectionOptions([]))
@@ -147,25 +172,25 @@ function SettingsModal({
     }, [grade]);
 
     // Password state
-    const [newPw,      setNewPw]      = useState("");
-    const [confirmPw,  setConfirmPw]  = useState("");
-    const [showNew,    setShowNew]    = useState(false);
-    const [showCon,    setShowCon]    = useState(false);
-    const [pwMsg,      setPwMsg]      = useState("");
-    const [pwError,    setPwError]    = useState(false);
+    const [newPw, setNewPw] = useState("");
+    const [confirmPw, setConfirmPw] = useState("");
+    const [showNew, setShowNew] = useState(false);
+    const [showCon, setShowCon] = useState(false);
+    const [pwMsg, setPwMsg] = useState("");
+    const [pwError, setPwError] = useState(false);
     const [isSavingPw, setIsSavingPw] = useState(false);
 
     // Profile picture state
-    const [avatarPreview,   setAvatarPreview]   = useState<string | null>(null);
-    const [avatarFile,      setAvatarFile]      = useState<File | null>(null);
-    const [avatarMsg,       setAvatarMsg]       = useState("");
-    const [avatarErr,       setAvatarErr]       = useState(false);
-    const [isSavingAvatar,  setIsSavingAvatar]  = useState(false);
+    const [avatarPreview, setAvatarPreview] = useState<string | null>(profile.profile_picture ?? null);
+    const [avatarFile, setAvatarFile] = useState<File | null>(null);
+    const [avatarMsg, setAvatarMsg] = useState("");
+    const [avatarErr, setAvatarErr] = useState(false);
+    const [isSavingAvatar, setIsSavingAvatar] = useState(false);
 
     function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
         if (!file) return;
-        if (file.size > 5 * 1024 * 1024) { setAvatarErr(true); setAvatarMsg("Image must be under 5 MB."); return; }
+        if (file.size > 10 * 1024 * 1024) { setAvatarErr(true); setAvatarMsg("Image must be 10 MB or smaller."); return; }
         if (!file.type.startsWith("image/")) { setAvatarErr(true); setAvatarMsg("Please select a valid image file."); return; }
         setAvatarErr(false); setAvatarMsg("");
         setAvatarFile(file);
@@ -180,11 +205,12 @@ function SettingsModal({
         try {
             const formData = new FormData();
             formData.append("avatar", avatarFile);
-            const res  = await fetch("/api/adviser/avatar", { method: "POST", body: formData });
+            const res = await fetch("/api/adviser/avatar", { method: "POST", body: formData });
             const json = await res.json();
             if (!json.success) throw new Error(json.message);
             setAvatarMsg("Profile picture updated successfully!");
             onProfileUpdated();
+            window.dispatchEvent(new Event("adviser-profile-updated"));
             setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2500);
         } catch (e: any) {
             setAvatarErr(true); setAvatarMsg(e.message || "Failed to upload photo.");
@@ -196,12 +222,13 @@ function SettingsModal({
     async function handleRemoveAvatar() {
         setIsSavingAvatar(true); setAvatarMsg(""); setAvatarErr(false);
         try {
-            const res  = await fetch("/api/adviser/avatar", { method: "DELETE" });
+            const res = await fetch("/api/adviser/avatar", { method: "DELETE" });
             const json = await res.json();
             if (!json.success) throw new Error(json.message);
             setAvatarPreview(null); setAvatarFile(null);
             setAvatarMsg("Profile picture removed.");
             onProfileUpdated();
+            window.dispatchEvent(new Event("adviser-profile-updated"));
             setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2000);
         } catch (e: any) {
             setAvatarErr(true); setAvatarMsg(e.message || "Failed to remove photo.");
@@ -211,9 +238,10 @@ function SettingsModal({
     }
 
     const pwChecks = checkPassword(newPw);
-    const pwValid  = pwChecks.length && pwChecks.uppercase && pwChecks.numOrSym;
-    const advisoryClass = profile.grade && profile.section
-        ? `Grade ${profile.grade} · ${profile.section}`
+    const pwValid = pwChecks.length && pwChecks.uppercase && pwChecks.numOrSym;
+    const allSections = (profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []);
+    const advisoryClass = profile.grade && allSections.length
+        ? `${formatGradeLabel(profile.grade)} · ${allSections.join(" & ")}`
         : "No section assigned";
 
     // Close on Escape
@@ -238,13 +266,29 @@ function SettingsModal({
         if (!email.trim()) { setApprovalErr(true); setApprovalMsg("Email address is required."); return; }
         setIsSending(true);
         try {
-            const res  = await fetch("/api/adviser/me", {
-                method: "PATCH", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, phone, grade, section, note: note.trim() }),
+            const res = await fetch("/api/adviser/me", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    firstName,
+                    middleName,
+                    lastName,
+                    suffix,
+                    email,
+                    phone,
+                    grade,
+                    sections: selectedSections,
+                    note: note.trim(),
+                    currentPassword: verifiedPw,
+                }),
             });
             const json = await res.json();
-            if (!json.success) throw new Error(json.message);
-            setApprovalMsg("Approval request sent! Your changes will be applied once the Principal approves.");
+            if (!json.success) {
+                if (res.status === 409) setApprovalSent(true);
+                throw new Error(json.message);
+            }
+            setApprovalSent(true);
+            setApprovalMsg("Approval request sent! Your changes will be applied once ICT approves.");
             setNote("");
             onProfileUpdated();
             setTimeout(() => { setApprovalMsg(""); setView("menu"); }, 3500);
@@ -258,11 +302,11 @@ function SettingsModal({
 
     async function handleUpdatePassword() {
         setPwMsg(""); setPwError(false);
-        if (!pwValid)            { setPwError(true); setPwMsg("New password doesn't meet requirements."); return; }
+        if (!pwValid) { setPwError(true); setPwMsg("New password doesn't meet requirements."); return; }
         if (newPw !== confirmPw) { setPwError(true); setPwMsg("Passwords do not match."); return; }
         setIsSavingPw(true);
         try {
-            const res  = await fetch("/api/adviser/me", {
+            const res = await fetch("/api/adviser/me", {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ current_password: verifiedPw, new_password: newPw }),
             });
@@ -279,18 +323,18 @@ function SettingsModal({
     }
 
     const viewTitle: Record<SettingsView, string> = {
-        "menu":             "Account Settings",
-        "auth":             "Verify Identity",
-        "personal-info":    "Edit Personal Information",
-        "password":         "Change Password",
-        "profile-picture":  "Change Profile Picture",
+        "menu": "Account Settings",
+        "auth": "Verify Identity",
+        "personal-info": "Edit Personal Information",
+        "password": "Change Password",
+        "profile-picture": "Change Profile Picture",
     };
     const viewSubtitle: Record<SettingsView, string> = {
-        "menu":             "Manage your profile and security",
-        "auth":             "Confirm your identity to continue",
-        "personal-info":    "Changes require Principal approval",
-        "password":         "No approval needed for password changes",
-        "profile-picture":  "Upload a new photo — no approval needed",
+        "menu": "Manage your profile and security",
+        "auth": "Confirm your identity to continue",
+        "personal-info": "Changes require ICT approval",
+        "password": "No approval needed for password changes",
+        "profile-picture": "Upload a new photo — no approval needed",
     };
 
     return (
@@ -357,9 +401,9 @@ function SettingsModal({
                                 },
                                 {
                                     icon: Pencil,
-                                    label: "Edit Personal Information",
-                                    description: "Update email, phone, and advisory class",
-                                    badge: "Requires Principal approval",
+                                    label: "Request Grade Level & Section Change",
+                                    description: "Request a class assignment or contact-information change",
+                                    badge: "Requires ICT approval",
                                     badgeColor: "bg-amber-50 text-amber-600 border-amber-100",
                                     dest: "personal-info" as const,
                                 },
@@ -410,24 +454,71 @@ function SettingsModal({
                             <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
                                 <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                                 <p className="text-xs text-amber-700 leading-relaxed">
-                                    <strong>First name, last name, role,</strong> and <strong>employee ID</strong> can only be changed by the Principal.
-                                    Changes to email, phone, and advisory class will be sent for approval.
+                                    All changes below require <strong>ICT approval</strong> before they take effect.
+                                    <strong> Role</strong> and <strong>Employee ID</strong> can only be changed by the ICT.
                                 </p>
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
-                                {/* Locked */}
+
+                                {/* First Name — editable */}
                                 <div>
-                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
-                                        First Name <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        First Name
+                                        <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
                                     </label>
-                                    <input value={profile.first_name} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 px-4 text-sm text-slate-400 cursor-default outline-none" />
+                                    <input
+                                        value={firstName}
+                                        onChange={e => setFirstName(e.target.value)}
+                                        className="h-11 w-full rounded-xl border border-emerald-300 bg-white px-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition"
+                                    />
                                 </div>
+
+                                {/* Last Name — editable */}
                                 <div>
-                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
-                                        Last Name <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Last Name
+                                        <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
                                     </label>
-                                    <input value={profile.last_name} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 px-4 text-sm text-slate-400 cursor-default outline-none" />
+                                    <input
+                                        value={lastName}
+                                        onChange={e => setLastName(e.target.value)}
+                                        className="h-11 w-full rounded-xl border border-emerald-300 bg-white px-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition"
+                                    />
+                                </div>
+
+                                {/* Middle Name — new */}
+                                <div>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Middle Name
+                                        <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                    </label>
+                                    <input
+                                        value={middleName}
+                                        onChange={e => setMiddleName(e.target.value)}
+                                        placeholder="N/A if none"
+                                        className="h-11 w-full rounded-xl border border-emerald-300 bg-white px-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition"
+                                    />
+                                </div>
+
+                                {/* Suffix — new */}
+                                <div>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Suffix
+                                        <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                    </label>
+                                    <div className="relative">
+                                        <select
+                                            value={suffix}
+                                            onChange={e => setSuffix(e.target.value)}
+                                            className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white px-4 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer"
+                                        >
+                                            {["", "Jr.", "Sr.", "II", "III", "IV"].map(s => (
+                                                <option key={s} value={s}>{s || "None"}</option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                                    </div>
                                 </div>
 
                                 {/* Email */}
@@ -449,12 +540,19 @@ function SettingsModal({
                                     </label>
                                     <div className="relative">
                                         <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                                        <input value={phone} onChange={e => setPhone(e.target.value)}
-                                            className="h-11 w-full rounded-xl border border-emerald-300 bg-white pl-9 pr-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
+                                        <input
+                                            value={phone}
+                                            type="tel"
+                                            inputMode="numeric"
+                                            maxLength={11}
+                                            onChange={e => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                                            placeholder="09XXXXXXXXX"
+                                            className="h-11 w-full rounded-xl border border-emerald-300 bg-white pl-9 pr-4 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition"
+                                        />
                                     </div>
                                 </div>
 
-                                {/* Locked — Role */}
+                                {/* Role — locked */}
                                 <div>
                                     <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
                                         Role <span className="normal-case font-normal text-slate-300">(locked)</span>
@@ -465,7 +563,7 @@ function SettingsModal({
                                     </div>
                                 </div>
 
-                                {/* Locked — Employee ID */}
+                                {/* Employee ID — locked */}
                                 <div>
                                     <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
                                         Employee ID <span className="normal-case font-normal text-slate-300">(locked)</span>
@@ -476,54 +574,112 @@ function SettingsModal({
                                     </div>
                                 </div>
 
-                                {/* Advisory Class */}
+                                {/* Advisory Class — multi-section picker */}
                                 <div className="col-span-2">
                                     <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                                        Advisory Class <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
+                                        Advisory Class{" "}
+                                        <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">
+                                            Editable
+                                        </span>
                                     </label>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {/* Grade dropdown */}
-                                        <div className="relative">
-                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                                            <select
-                                                value={grade}
-                                                onChange={e => setGrade(e.target.value)}
-                                                className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer"
-                                            >
-                                                <option value="">Select Grade</option>
-                                                {GRADE_LEVELS.map(g => (
-                                                    <option key={g} value={g}>{g}</option>
-                                                ))}
-                                            </select>
-                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                                        </div>
 
-                                        {/* Section dropdown — depends on grade */}
-                                        <div className="relative">
-                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
-                                            <select
-                                                value={section}
-                                                onChange={e => setSection(e.target.value)}
-                                                disabled={!grade || loadingSections}
-                                                className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                                            >
-                                                <option value="">
-                                                    {!grade
-                                                        ? "Select grade first"
-                                                        : loadingSections
-                                                        ? "Loading…"
-                                                        : sectionOptions.length === 0
-                                                        ? "No sections found"
-                                                        : "Select Section"}
-                                                </option>
-                                                {sectionOptions.map(s => (
-                                                    <option key={s} value={s}>{s}</option>
-                                                ))}
-                                            </select>
-                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                                        </div>
+                                    {/* Grade dropdown */}
+                                    <div className="relative mb-2">
+                                        <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
+                                        <select
+                                            value={grade}
+                                            onChange={e => { setGrade(e.target.value); setSelectedSections([]); }}
+                                            className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer"
+                                        >
+                                            <option value="">Select Grade</option>
+                                            {GRADE_LEVELS.map(g => <option key={g} value={g}>{g}</option>)}
+                                        </select>
+                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                                     </div>
+
+                                    {/* Section multi-select — up to 2 */}
+                                    {grade && (
+                                        <div className="rounded-xl border border-emerald-200 overflow-hidden">
+                                            <div className="px-3 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
+                                                <p className="text-[11px] font-semibold text-emerald-700">Select up to 2 sections</p>
+                                                <span className="text-[10px] text-emerald-600 font-bold">{selectedSections.length}/2 selected</span>
+                                            </div>
+                                            {loadingSections ? (
+                                                <div className="flex items-center justify-center py-4 gap-2 text-slate-400 text-xs">
+                                                    <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Loading sections…
+                                                </div>
+                                            ) : sectionOptions.length === 0 ? (
+                                                <p className="text-xs text-slate-400 px-3 py-3 italic">No sections found for {grade}.</p>
+                                            ) : (
+                                                <div className="divide-y divide-slate-50">
+                                                    {sectionOptions.map(opt => {
+                                                        const isSelected = selectedSections.includes(opt.name);
+                                                        const isDisabled = !isSelected && selectedSections.length >= 2;
+                                                        return (
+                                                            <button
+                                                                key={opt.name}
+                                                                type="button"
+                                                                disabled={isDisabled}
+                                                                onClick={() => {
+                                                                    setSelectedSections(prev =>
+                                                                        isSelected
+                                                                            ? prev.filter(s => s !== opt.name)
+                                                                            : [...prev, opt.name].slice(0, 2)
+                                                                    );
+                                                                }}
+                                                                className="w-full flex items-center justify-between px-3 py-2.5 text-left transition disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                style={{ background: isSelected ? "rgba(16,185,129,0.06)" : "white" }}
+                                                            >
+                                                                <div className="flex items-center gap-2.5">
+                                                                    <div
+                                                                        className="w-4 h-4 rounded border-2 flex items-center justify-center transition shrink-0"
+                                                                        style={{
+                                                                            borderColor: isSelected ? "#10b981" : "#cbd5e1",
+                                                                            background: isSelected ? "#10b981" : "white",
+                                                                        }}
+                                                                    >
+                                                                        {isSelected && <Check className="h-2.5 w-2.5 text-white" />}
+                                                                    </div>
+                                                                    <span className={`text-sm font-semibold ${isSelected ? "text-emerald-800" : "text-slate-700"}`}>
+                                                                        {opt.name}
+                                                                    </span>
+                                                                </div>
+                                                                {opt.class_session && (
+                                                                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${opt.class_session.toLowerCase().includes("morning")
+                                                                        ? "bg-amber-50 text-amber-600 border-amber-100"
+                                                                        : "bg-sky-50 text-sky-600 border-sky-100"
+                                                                        }`}>
+                                                                        {opt.class_session}
+                                                                    </span>
+                                                                )}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                            {selectedSections.length > 0 && (
+                                                <div className="px-3 py-2 bg-emerald-50 border-t border-emerald-100 flex flex-wrap gap-1.5">
+                                                    {selectedSections.map(s => (
+                                                        <span key={s} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                                                            {s}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedSections(prev => prev.filter(x => x !== s))}
+                                                                className="ml-0.5 hover:text-emerald-900"
+                                                            >
+                                                                <X className="h-2.5 w-2.5" />
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    {!grade && (
+                                        <p className="text-[11px] text-slate-400 mt-1">Select a grade level to see available sections.</p>
+                                    )}
                                 </div>
+
                             </div>
 
                             {approvalMsg && (
@@ -533,10 +689,10 @@ function SettingsModal({
                                 </div>
                             )}
 
-                            {/* Note to principal */}
+                            {/* Note to ICT */}
                             <div>
                                 <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                                    Note to Principal
+                                    Note to ICT Personnel
                                     <span className="normal-case font-normal text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">Optional</span>
                                 </label>
                                 <textarea
@@ -550,7 +706,7 @@ function SettingsModal({
                                 <p className="mt-1 text-right text-[11px] text-slate-400">{note.length}/300</p>
                                 <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
                                     <CircleAlert className="h-3 w-3 text-amber-400 shrink-0" />
-                                    This note will be visible to the Principal in the Approval Requests panel.
+                                    This note will be visible to ICT in the Approval Requests panel.
                                 </p>
                             </div>
 
@@ -559,11 +715,13 @@ function SettingsModal({
                                     className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
                                     Cancel
                                 </button>
-                                <button type="button" onClick={handleSendApproval} disabled={isSending}
+                                <button type="button" onClick={handleSendApproval} disabled={isSending || approvalSent}
                                     className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-60 transition-colors">
                                     {isSending
                                         ? <><RefreshCw className="h-4 w-4 animate-spin" /> Sending…</>
-                                        : <><Send className="h-4 w-4" /> Send for Approval</>}
+                                        : approvalSent
+                                            ? <><Check className="h-4 w-4" /> Request Sent</>
+                                            : <><Send className="h-4 w-4" /> Send for Approval</>}
                                 </button>
                             </div>
                         </div>
@@ -622,9 +780,9 @@ function SettingsModal({
                                 <p className="text-xs font-semibold text-slate-500 mb-2">Password Requirements</p>
                                 <div className="space-y-1.5">
                                     {[
-                                        { label: "At least 8 characters",          met: pwChecks.length    },
-                                        { label: "One uppercase letter",            met: pwChecks.uppercase },
-                                        { label: "One number or special character", met: pwChecks.numOrSym  },
+                                        { label: "At least 8 characters", met: pwChecks.length },
+                                        { label: "One uppercase letter", met: pwChecks.uppercase },
+                                        { label: "One number or special character", met: pwChecks.numOrSym },
                                     ].map(({ label, met }) => (
                                         <div key={label} className="flex items-center gap-2">
                                             <Check className={`h-3.5 w-3.5 ${met ? "text-emerald-500" : "text-slate-300"}`} />
@@ -761,15 +919,15 @@ function SettingsModal({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function AdviserProfilePage() {
-    const [profile,      setProfile]      = useState<AdviserProfile | null>(null);
-    const [loading,      setLoading]      = useState(true);
-    const [loadErr,      setLoadErr]      = useState("");
+    const [profile, setProfile] = useState<AdviserProfile | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState("");
     const [showSettings, setShowSettings] = useState(false);
 
     async function loadProfile() {
         setLoading(true); setLoadErr("");
         try {
-            const res  = await fetch("/api/adviser/me");
+            const res = await fetch("/api/adviser/me");
             const json = await res.json();
             if (!json.success) throw new Error(json.message);
             setProfile(json.adviser);
@@ -782,10 +940,31 @@ export default function AdviserProfilePage() {
 
     useEffect(() => { loadProfile(); }, []);
 
-    const initials      = profile ? getInitials(profile.first_name, profile.last_name) : "??";
-    const advisoryClass = profile?.grade && profile?.section
-        ? `Grade ${profile.grade} · ${profile.section}`
+    // Keep the open profile page in sync when ICT reviews a request. The next
+    // server request also resolves the current assignment, so navigation to any
+    // adviser page immediately uses the approved class.
+    useEffect(() => {
+        const client = supabaseBrowser;
+        if (!profile?.id || !client) return;
+        const channel = client
+            .channel(`adviser-assignment-${profile.id}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "advisers", filter: `id=eq.${profile.id}` }, loadProfile)
+            .on("postgres_changes", { event: "*", schema: "public", table: "adviser_change_requests", filter: `adviser_id=eq.${profile.id}` }, loadProfile)
+            .subscribe();
+        return () => { client.removeChannel(channel); };
+    }, [profile?.id]);
+
+    const initials = profile ? getInitials(profile.first_name, profile.last_name) : "??";
+    const allSections = profile ? (profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []) : [];
+    const advisoryClass = profile?.grade && allSections.length
+        ? `${formatGradeLabel(profile.grade)} · ${allSections.join(" & ")}`
         : "No section assigned";
+    const request = profile?.latest_change_request;
+    const requestStyle = request?.status === "Approved"
+        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+        : request?.status === "Rejected"
+            ? "bg-red-50 border-red-200 text-red-800"
+            : "bg-amber-50 border-amber-200 text-amber-800";
 
     return (
         <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 font-sans">
@@ -832,8 +1011,8 @@ export default function AdviserProfilePage() {
                             <div className="h-20 bg-gradient-to-r from-emerald-600 to-emerald-500" />
                             <div className="px-6 pb-6">
                                 <div className="-mt-10 mb-4 flex justify-center">
-                                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-600 text-white text-2xl font-extrabold ring-4 ring-white shadow-md">
-                                        {initials}
+                                    <div className="flex h-20 w-20 overflow-hidden items-center justify-center rounded-full bg-emerald-600 text-white text-2xl font-extrabold ring-4 ring-white shadow-md">
+                                        {profile.profile_picture ? <img src={profile.profile_picture} alt="Profile" className="h-full w-full object-cover" /> : initials}
                                     </div>
                                 </div>
                                 <div className="text-center">
@@ -847,9 +1026,9 @@ export default function AdviserProfilePage() {
                                 <div className="mt-5 space-y-2.5">
                                     {[
                                         { icon: BookOpen, text: advisoryClass },
-                                        { icon: School,   text: "Santiago Elementary" },
-                                        { icon: Mail,     text: profile.email || "—" },
-                                        { icon: Phone,    text: profile.phone || "—" },
+                                        { icon: School, text: "Santiago Elementary" },
+                                        { icon: Mail, text: profile.email || "—" },
+                                        { icon: Phone, text: profile.phone || "—" },
                                     ].map(({ icon: Icon, text }) => (
                                         <div key={text} className="flex items-center gap-2.5 text-sm text-slate-600">
                                             <Icon className="h-4 w-4 text-slate-400 shrink-0" />
@@ -865,10 +1044,10 @@ export default function AdviserProfilePage() {
                             <h4 className="text-sm font-bold text-slate-700 mb-4">My Class Overview</h4>
                             <div className="space-y-3">
                                 {[
-                                    { icon: Users,         label: "Total Students", value: String(profile.student_count), color: "text-emerald-600" },
-                                    { icon: TrendingUp,    label: "Advisory Class", value: advisoryClass,                 color: "text-emerald-600" },
-                                    { icon: ClipboardList, label: "Employee ID",    value: profile.employee_id,           color: "text-amber-500"   },
-                                    { icon: CalendarDays,  label: "Account Status", value: profile.status,                color: "text-blue-500"    },
+                                    { icon: Users, label: "Total Students", value: String(profile.student_count), color: "text-emerald-600" },
+                                    { icon: TrendingUp, label: "Advisory Class", value: advisoryClass, color: "text-emerald-600" },
+                                    { icon: ClipboardList, label: "Employee ID", value: profile.employee_id, color: "text-amber-500" },
+                                    { icon: CalendarDays, label: "Account Status", value: profile.status, color: "text-blue-500" },
                                 ].map(({ icon: Icon, label, value, color }) => (
                                     <div key={label} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
                                         <div className="flex items-center gap-2.5 text-sm text-slate-600">
@@ -883,6 +1062,21 @@ export default function AdviserProfilePage() {
 
                     {/* Right column — read-only */}
                     <div className="xl:col-span-8 flex flex-col gap-5">
+                        {request && (
+                            <div className={`rounded-2xl border px-5 py-4 ${requestStyle}`}>
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-sm font-extrabold">Assignment change request: {request.status}</h3>
+                                        <p className="mt-1 text-xs opacity-80">
+                                            Submitted {new Date(request.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}.
+                                            {request.status === "Pending" ? " Your current class remains in effect until ICT approves it." : ""}
+                                        </p>
+                                        {request.review_note && <p className="mt-2 text-xs font-medium">ICT note: {request.review_note}</p>}
+                                    </div>
+                                    <span className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{request.status}</span>
+                                </div>
+                            </div>
+                        )}
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
                                 <h3 className="text-base font-bold text-slate-800">Personal Information</h3>
@@ -890,12 +1084,14 @@ export default function AdviserProfilePage() {
                             <div className="p-6">
                                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                     {[
-                                        { label: "First Name",    value: profile.first_name,   icon: null      },
-                                        { label: "Last Name",     value: profile.last_name,    icon: null      },
-                                        { label: "Email Address", value: profile.email,        icon: Mail      },
-                                        { label: "Phone Number",  value: profile.phone || "—", icon: Phone     },
-                                        { label: "Role",          value: "Class Adviser",      icon: Users     },
-                                        { label: "Employee ID",   value: profile.employee_id,  icon: FileText  },
+                                        { label: "First Name", value: profile.first_name, icon: null },
+                                        { label: "Last Name", value: profile.last_name, icon: null },
+                                        { label: "Middle Name", value: profile.middle_name || "—", icon: null },
+                                        { label: "Suffix", value: profile.suffix || "—", icon: null },
+                                        { label: "Email Address", value: profile.email, icon: Mail },
+                                        { label: "Phone Number", value: profile.phone || "—", icon: Phone },
+                                        { label: "Role", value: "Class Adviser", icon: Users },
+                                        { label: "Employee ID", value: profile.employee_id, icon: FileText },
                                     ].map(({ label, value, icon: Icon }) => (
                                         <div key={label}>
                                             <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</label>
@@ -908,13 +1104,22 @@ export default function AdviserProfilePage() {
                                     ))}
                                     <div className="sm:col-span-2">
                                         <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Advisory Class</label>
-                                        <div className="relative">
-                                            <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                                            <input
-                                                value={`${advisoryClass} · ${profile.student_count} Student${profile.student_count !== 1 ? "s" : ""}`}
-                                                disabled
-                                                className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none"
-                                            />
+                                        <div className="flex flex-wrap gap-2">
+                                            {allSections.length > 0 ? allSections.map(sec => (
+                                                <div key={sec} className="relative flex-1 min-w-[180px]">
+                                                    <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                                    <input
+                                                        value={`${formatGradeLabel(profile.grade ?? "")} · ${sec} · ${profile.student_count} Student${profile.student_count !== 1 ? "s" : ""}`}
+                                                        disabled
+                                                        className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none"
+                                                    />
+                                                </div>
+                                            )) : (
+                                                <div className="relative flex-1">
+                                                    <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                                    <input value="No section assigned" disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none" />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -924,7 +1129,7 @@ export default function AdviserProfilePage() {
                                     <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                                     <p className="text-xs text-amber-700">
                                         To edit your profile or change your password, use the <strong>Settings</strong> button at the top right.
-                                        Profile changes require Principal approval; password and photo changes take effect immediately.
+                                        Profile changes require <strong>ICT approval</strong>; password and photo changes take effect immediately.
                                     </p>
                                 </div>
                             </div>

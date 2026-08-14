@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const rfid = searchParams.get("rfid")?.trim();
+    const rfid = searchParams.get("rfid")?.trim().toUpperCase();
 
     if (!rfid) {
       return NextResponse.json(
@@ -13,10 +13,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Use ilike for case-insensitive match so "a1b2" and "A1B2" are treated as the same card.
+    // This ensures the check works across ALL advisers, grade levels, and sections.
     const { data: found, error } = await supabase
       .from("students")
       .select("student_id, first_name, last_name, grade, section")
-      .eq("rfid_card", rfid)
+      .ilike("rfid_card", rfid)
       .limit(1);
 
     if (error) throw error;

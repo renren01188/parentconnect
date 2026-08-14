@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { getStudentAge } from "@/lib/studentAge";
 
 const inputBase = "w-full px-4 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400";
 const inputOk   = `${inputBase} border-slate-200 focus:ring-emerald-400`;
@@ -67,7 +68,28 @@ interface StudentData {
   parent_address: string;   // ← new
   password_set: number;
   parent_status: string;
+  birth_date?: string | null;
+  mother_tongue?: string | null;
+  ip_ethnic_group?: string | null;
+  religion?: string | null;
+  house_street_sitio_purok?: string | null;
+  barangay?: string | null;
+  municipality_city?: string | null;
+  province?: string | null;
+  learning_modality?: string | null;
+  family_members?: { role: string; first_name: string | null; middle_name: string | null; last_name: string | null; relationship: string | null; contact_number: string | null }[];
 }
+
+type FamilyMemberForm = { role: "Father" | "Mother" | "Guardian"; firstName: string; middleName: string; lastName: string; suffix: string; relationship: string };
+const blankFamilyMembers = (): FamilyMemberForm[] => [
+  { role: "Father", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Father" },
+  { role: "Mother", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Mother" },
+  { role: "Guardian", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Guardian" },
+];
+const familyFormFrom = (members: StudentData["family_members"]): FamilyMemberForm[] => blankFamilyMembers().map(item => {
+  const found = members?.find(member => member.role === item.role);
+  return found ? { ...item, firstName: found.first_name || "", middleName: found.middle_name || "", lastName: found.last_name || "", relationship: found.relationship || item.relationship } : item;
+});
 
 function ConfirmModal({
   student, form, originalGrade, originalSection, onConfirm, onCancel, saving,
@@ -166,6 +188,7 @@ export default function StudentViewPage() {
     parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
     relationship: "", contactNumber: "", email: "",
     address: "",   // ← new
+    familyMembers: blankFamilyMembers(),
   });
   const [originalGrade,   setOriginalGrade]   = useState("");
   const [originalSection, setOriginalSection] = useState("");
@@ -199,7 +222,7 @@ export default function StudentViewPage() {
           email:           d.parent_email        || "",
           address:         d.parent_address      || "",  // ← new
         };
-        setForm(f);
+        setForm({ ...f, familyMembers: familyFormFrom(d.family_members) });
         setOriginalGrade(d.grade   || "");
         setOriginalSection(d.section || "");
       } catch (e: any) {
@@ -228,6 +251,9 @@ export default function StudentViewPage() {
     const value = nameFields.includes(field) ? capitalize(raw) : raw;
     setForm(p => ({ ...p, [field]: value }));
     setTouched(p => ({ ...p, [field]: true }));
+  };
+  const setFamilyMember = (role: FamilyMemberForm["role"], field: keyof Omit<FamilyMemberForm, "role">, value: string) => {
+    setForm(previous => ({ ...previous, familyMembers: previous.familyMembers.map(member => member.role === role ? { ...member, [field]: value } : member) }));
   };
 
   const E: Record<string, string> = {};
@@ -278,6 +304,7 @@ export default function StudentViewPage() {
         parent_last_name: form.parentLastName, parent_suffix: form.parentSuffix,
         relationship: form.relationship, contact_number: form.contactNumber,
         parent_email: form.email, parent_address: form.address,   // ← new
+        family_members: form.familyMembers.map(member => ({ role: member.role, first_name: member.firstName || null, middle_name: member.middleName || null, last_name: member.lastName || null, relationship: member.relationship || member.role, contact_number: form.contactNumber || null })),
       } : prev);
       setOriginalGrade(form.grade);
       setOriginalSection(form.section);
@@ -307,6 +334,7 @@ export default function StudentViewPage() {
       contactNumber:    student.contact_number     || "",
       email:            student.parent_email       || "",
       address:          student.parent_address     || "",  // ← new
+      familyMembers: familyFormFrom(student.family_members),
     });
     setTouched({}); setSaveError(""); setEditing(false); setAddingNew(false); setNewSectionInput("");
   };
@@ -457,6 +485,14 @@ export default function StudentViewPage() {
                     <ReviewRow label="Student ID" value={student.student_id} />
                     <ReviewRow label="Gender"     value={student.gender} />
                     <ReviewRow label="RFID Card"  value={student.rfid_card || "Not assigned"} />
+                    <ReviewRow label="Birth Date" value={student.birth_date || "â€”"} />
+                    <ReviewRow label="Age" value={getStudentAge(student.birth_date)} />
+                    <ReviewRow label="Mother Tongue" value={student.mother_tongue || "â€”"} />
+                    <ReviewRow label="IP / Ethnic Group" value={student.ip_ethnic_group || "—"} />
+                    <ReviewRow label="Religion" value={student.religion || "â€”"} />
+                    <ReviewRow label="Learning Modality" value={student.learning_modality || "â€”"} />
+                    <ReviewRow label="Address" value={[student.house_street_sitio_purok, student.barangay, student.municipality_city, student.province].filter(Boolean).join(", ") || "â€”"} />
+                    <ReviewRow label="Father / Mother / Guardian" value={(student.family_members ?? []).map(member => `${member.role}: ${[member.last_name, member.first_name, member.middle_name].filter(Boolean).join(", ")}${member.relationship ? ` (${member.relationship})` : ""}${member.contact_number ? ` · ${member.contact_number}` : ""}`).join(" | ") || "â€”"} />
                   </div>
                 </div>
               )}
@@ -615,6 +651,21 @@ export default function StudentViewPage() {
                         onChange={e => setForm(p => ({ ...p, address: e.target.value }))} />
                     </div>
                   </Field>
+                  <div className="border-t border-slate-100 pt-4">
+                    <p className="mb-1 text-sm font-bold text-slate-800">Registration verification records</p>
+                    <p className="mb-3 text-xs text-slate-500">These names must match the information used by a Father, Mother, or Guardian when creating a Parent account.</p>
+                    <div className="space-y-4">
+                      {form.familyMembers.map(member => <div key={member.role} className="rounded-xl border border-slate-200 p-3">
+                        <p className="mb-2 text-xs font-bold text-slate-700">{member.role}</p>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          <input className={inputOk} placeholder="First name" value={member.firstName} onChange={e => setFamilyMember(member.role, "firstName", e.target.value)} />
+                          <input className={inputOk} placeholder="Middle name" value={member.middleName} onChange={e => setFamilyMember(member.role, "middleName", e.target.value)} />
+                          <input className={inputOk} placeholder="Last name" value={member.lastName} onChange={e => setFamilyMember(member.role, "lastName", e.target.value)} />
+                        </div>
+                        {member.role === "Guardian" && <input className={`${inputOk} mt-3`} placeholder="Guardian relationship" value={member.relationship} onChange={e => setFamilyMember(member.role, "relationship", e.target.value)} />}
+                      </div>)}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
@@ -626,7 +677,7 @@ export default function StudentViewPage() {
                   <ReviewRow label="Contact"      value={student.contact_number} />
                   <ReviewRow label="Email"        value={student.parent_email} />
                   <ReviewRow label="Address"      value={student.parent_address || "—"} />
-                  <ReviewRow label="Account"      value={student.password_set ? "Password set ✓" : "Using temp password"} />
+                  <ReviewRow label="Account"      value={student.password_set ? "Password created ✓" : "Password setup pending"} />
                 </div>
               )}
             </div>

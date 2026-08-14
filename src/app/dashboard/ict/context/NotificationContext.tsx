@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useContext, useState, ReactNode } from "react";
-import { INITIAL_INBOX_UNREAD } from "@/app/dashboard/ict/inbox/data";
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 export type NotificationType = "info" | "warning" | "alert" | "success";
 
@@ -20,11 +20,12 @@ interface NotificationContextValue {
   markAllRead: () => void;
   markRead: (id: string) => void;
   addNotification: (n: Omit<Notification, "id" | "read">) => void;
-  // ── Inbox unread badge ──
   inboxUnreadCount: number;
   setInboxUnreadCount: (n: number) => void;
+  annUnreadCount: number;
+  refreshCounts: () => Promise<void>;
+  setAnnUnreadCount: (n: number) => void;
 }
-
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -55,9 +56,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     },
   ]);
 
-  // Seeded from MOCK_MESSAGES so the badge shows on every page,
-  // even before the Inbox page is ever visited.
-  const [inboxUnreadCount, setInboxUnreadCount] = useState(INITIAL_INBOX_UNREAD);
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
+  const [annUnreadCount, setAnnUnreadCount] = useState(0);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -78,6 +78,42 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ]);
   }
 
+  const refreshCounts = useCallback(async () => {
+    try {
+      const [msgRes, annRes] = await Promise.all([
+        fetch("/api/reports/staff-messages?role=ict", { cache: "no-store" }),
+        fetch("/api/ict/notifications", { cache: "no-store" }),
+      ]);
+      const msgData = await msgRes.json().catch(() => null);
+      const annData = await annRes.json().catch(() => null);
+      const messages = Array.isArray(msgData?.messages) ? msgData.messages : [];
+      setInboxUnreadCount(msgRes.ok ? messages.filter((m: { status?: string }) => m.status === "New").length : 0);
+      setAnnUnreadCount(annRes.ok ? Number(annData?.unreadCount ?? 0) : 0);
+    } catch {
+      setInboxUnreadCount(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshCounts();
+
+    const client = supabaseBrowser;
+    if (!client) return;
+
+    const channel = client
+      .channel("ict-sidebar-inbox-count")
+      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
+        refreshCounts();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "ict_notification_reads" }, () => {
+        refreshCounts();
+      })
+      .subscribe();
+
+
+    return () => { client.removeChannel(channel); };
+  }, [refreshCounts]);
+
   return (
     <NotificationContext.Provider
       value={{
@@ -88,8 +124,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         addNotification,
         inboxUnreadCount,
         setInboxUnreadCount,
+        annUnreadCount,
+        refreshCounts,
+        setAnnUnreadCount,
       }}
     >
+
       {children}
     </NotificationContext.Provider>
   );

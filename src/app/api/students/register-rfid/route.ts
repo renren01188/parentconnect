@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 
 type Body = {
   student_id: string;
@@ -8,6 +9,10 @@ type Body = {
 
 export async function POST(req: NextRequest) {
   try {
+    const adviser = await getAdviserFromToken();
+    if (!adviser?.grade) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const body = (await req.json()) as Body;
 
     if (!body.student_id || !body.rfid_card) {
@@ -17,11 +22,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Normalize RFID to uppercase for consistent storage and comparison
+    const normalizedRfid = body.rfid_card.trim().toUpperCase();
+
     // 1. Make sure the target student exists
     const { data: students, error: studentError } = await supabase
       .from("students")
       .select("id, student_id, first_name, last_name, rfid_card")
       .eq("student_id", body.student_id)
+      .eq("grade", adviser.grade)
+      .in("section", adviser.sections)
       .limit(1);
 
     if (studentError) throw studentError;
@@ -35,11 +45,11 @@ export async function POST(req: NextRequest) {
 
     const targetStudent = students[0];
 
-    // 2. Check if RFID is already assigned to anyone
+    // 2. Check if RFID is already assigned to anyone (case-insensitive, global across all advisers)
     const { data: rfidOwners, error: rfidError } = await supabase
       .from("students")
       .select("id, student_id, first_name, last_name, grade, section")
-      .eq("rfid_card", body.rfid_card)
+      .ilike("rfid_card", normalizedRfid)
       .limit(1);
 
     if (rfidError) throw rfidError;
@@ -69,10 +79,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Assign the RFID
+    // 3. Assign the RFID (store normalized uppercase value)
     const { error: updateError } = await supabase
       .from("students")
-      .update({ rfid_card: body.rfid_card })
+      .update({ rfid_card: normalizedRfid })
       .eq("student_id", body.student_id);
 
     if (updateError) throw updateError;

@@ -2,14 +2,12 @@
 
 // src/app/dashboard/parent/context/NotificationContext.tsx
 
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
-// Inline the initial counts here to avoid any import path issues.
-// These must match INITIAL_REPORTS and INITIAL_NOTIFICATIONS in parent/data.ts.
-// Reports unread: reports 1 and 5 have unread: true → 2
-// Notifications unread: notifications 1 and 2 have unread: true → 2
-const INITIAL_UNREAD_REPORTS       = 2;
-const INITIAL_UNREAD_NOTIFICATIONS = 2;
+// Reports and notifications are loaded from Supabase-backed API routes.
+const INITIAL_UNREAD_REPORTS       = 0;
+const INITIAL_UNREAD_NOTIFICATIONS = 0;
 
 interface NotifContextType {
   // Notifications bell badge
@@ -31,6 +29,56 @@ const NotifContext = createContext<NotifContextType>({
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [unreadCount,        setUnreadCount]        = useState(INITIAL_UNREAD_NOTIFICATIONS);
   const [unreadReportsCount, setUnreadReportsCount] = useState(INITIAL_UNREAD_REPORTS);
+
+  const refreshUnreadNotificationsCount = useCallback(async () => {
+    const res = await fetch("/api/parents/notifications", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (typeof data?.unreadCount === "number") {
+      setUnreadCount(data.unreadCount);
+    }
+  }, []);
+
+  const refreshUnreadReportsCount = useCallback(async () => {
+    const res = await fetch("/api/reports/parent-adviser", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    const reports = Array.isArray(data?.reports) ? data.reports : [];
+    setUnreadReportsCount(reports.filter((report: { unread?: boolean }) => Boolean(report.unread)).length);
+  }, []);
+
+  useEffect(() => {
+    const initialRefresh = window.setTimeout(() => {
+      refreshUnreadReportsCount().catch(() => null);
+      refreshUnreadNotificationsCount().catch(() => null);
+    }, 0);
+
+    const client = supabaseBrowser;
+    if (!client) {
+      return () => window.clearTimeout(initialRefresh);
+    }
+
+    const channel = client
+      .channel("parent-report-sidebar-count")
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
+        refreshUnreadReportsCount().catch(() => null);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
+        refreshUnreadReportsCount().catch(() => null);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_announcement_notifications" }, () => {
+        refreshUnreadNotificationsCount().catch(() => null);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_logs" }, () => {
+        refreshUnreadNotificationsCount().catch(() => null);
+      })
+      .subscribe();
+
+    return () => {
+      window.clearTimeout(initialRefresh);
+      client.removeChannel(channel);
+    };
+  }, [refreshUnreadReportsCount, refreshUnreadNotificationsCount]);
 
   return (
     <NotifContext.Provider value={{

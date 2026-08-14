@@ -1,12 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
-    LayoutDashboard, CalendarDays, FileText, Bell,
-    LogOut, TrendingUp, TrendingDown, ExternalLink,
-    AlertCircle, CalendarCheck, MessageSquare, CheckCheck,
-    ChevronDown,
+    AlertCircle, MessageSquare, CheckCheck,
+    Clock, Ban, Calendar, Users,
 } from "lucide-react";
 import Link from "next/link";
 import Sidebar from "./components/Sidebar";
@@ -18,6 +16,7 @@ interface StudentInfo {
     grade: string;
     adviser: string;
     initials: string;
+    avatarColor: string;
     stats: {
         totalPresent: string; presentDelta: string; presentUp: boolean;
         absentDays: string; absentDelta: string; absentUp: boolean;
@@ -28,17 +27,22 @@ interface StudentInfo {
         date: string; day: string; status: string;
         timeIn: string; timeOut: string; rfid: string;
     }[];
+    checkInTime: string;
+    checkInDay: string;
+    isAtSchool: boolean;
 }
 
-const STUDENTS: StudentInfo[] = [
+const FALLBACK_STUDENTS: StudentInfo[] = [
     {
         id: "1", name: "Carlos Santos Doe", studentId: "SES-2026-0891",
         grade: "Grade 6 - Rizal", adviser: "Mr. Jose Reyes", initials: "CS",
+        avatarColor: "#2563eb",
+        checkInTime: "07:30 AM", checkInDay: "Monday, November 22, 2026", isAtSchool: true,
         stats: {
-            totalPresent: "148", presentDelta: "+3 from last month", presentUp: true,
-            absentDays: "2", absentDelta: "-1 from last month", absentUp: false,
-            lateDays: "3", lateDelta: "+1 from last month", lateUp: true,
-            attendanceRate: "96.1%", rateLabel: "Excellent standing",
+            totalPresent: "148", presentDelta: "+3 this month", presentUp: true,
+            absentDays: "2", absentDelta: "-1 vs last mo.", absentUp: false,
+            lateDays: "3", lateDelta: "+1 this month", lateUp: true,
+            attendanceRate: "96.1%", rateLabel: "Excellent",
         },
         attendance: [
             { date: "Nov 22, 2026", day: "Monday", status: "Present", timeIn: "07:30 AM", timeOut: "04:00 PM", rfid: "Verified" },
@@ -51,11 +55,13 @@ const STUDENTS: StudentInfo[] = [
     {
         id: "2", name: "Maria Santos Doe", studentId: "SES-2026-1234",
         grade: "Grade 1 - Mabuhay", adviser: "Ms. Ana Cruz", initials: "MS",
+        avatarColor: "#3b82f6",
+        checkInTime: "07:45 AM", checkInDay: "Monday, November 22, 2026", isAtSchool: true,
         stats: {
-            totalPresent: "142", presentDelta: "+5 from last month", presentUp: true,
-            absentDays: "3", absentDelta: "-2 from last month", absentUp: false,
-            lateDays: "5", lateDelta: "+2 from last month", lateUp: true,
-            attendanceRate: "94.7%", rateLabel: "Excellent standing",
+            totalPresent: "142", presentDelta: "+5 this month", presentUp: true,
+            absentDays: "3", absentDelta: "-2 vs last mo.", absentUp: false,
+            lateDays: "5", lateDelta: "+2 this month", lateUp: true,
+            attendanceRate: "94.7%", rateLabel: "Excellent",
         },
         attendance: [
             { date: "Nov 22, 2026", day: "Monday", status: "Present", timeIn: "07:45 AM", timeOut: "03:30 PM", rfid: "Verified" },
@@ -67,240 +73,488 @@ const STUDENTS: StudentInfo[] = [
     },
 ];
 
-const INITIAL_NOTIFICATIONS = [
-    {
-        id: 1, type: "alert" as const, icon: AlertCircle,
-        title: "Absence Alert", time: "2 hours ago",
-        msg: "Carlos was marked absent on Nov 18. Please contact the school office if this is an error.",
-        unread: true, color: "bg-red-50 border-red-200", iconColor: "bg-red-500",
-        studentName: "Carlos", teacherName: undefined, eventId: undefined,
-    },
-    {
-        id: 2, type: "event" as const, icon: CalendarCheck,
-        title: "Upcoming Event", time: "5 hours ago",
-        msg: "Parent-Teacher Conference scheduled for Nov 28, 2026 at 2:00 PM.",
-        unread: true, color: "bg-amber-50 border-amber-200", iconColor: "bg-amber-500",
-        studentName: undefined, teacherName: undefined, eventId: "ptc-nov-28",
-    },
-    {
-        id: 3, type: "message" as const, icon: MessageSquare,
-        title: "Message from Teacher", time: "2 days ago",
-        msg: "Ms. Ana Cruz sent you a message regarding Maria's recent project submission.",
-        unread: false, color: "bg-slate-50 border-slate-200", iconColor: "bg-slate-500",
-        studentName: undefined, teacherName: "Ms. Ana Cruz", eventId: undefined,
-    },
+type ParentNotificationPreview = {
+    id: number;
+    type: "message";
+    icon: typeof MessageSquare;
+    title: string;
+    time: string;
+    msg: string;
+    unread: boolean;
+    color: string;
+    iconColor: string;
+    announcementId?: number;
+};
+
+/*
+const REMOVED_REPORT_SAMPLE = [
+    { title: "Q2 Progress Report", meta: "New · Nov 15, 2026", isNew: true },
+    { title: "Q1 Progress Report", meta: "Viewed · Aug 20, 2026", isNew: false },
+    { title: "Conduct & Behavior", meta: "Viewed · Oct 1, 2026", isNew: false },
 ];
 
-function StatusBadge({ status }: { status: string }) {
-    const map: Record<string, string> = {
-        Present: "bg-green-500 text-white",
-        Late: "bg-yellow-400 text-white",
-        Absent: "bg-red-500 text-white",
-    };
-    return (
-        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${map[status] ?? "bg-slate-200 text-slate-600"}`}>
-            {status}
-        </span>
-    );
-}
+const REMOVED_MESSAGE_SAMPLE = [
+    { initials: "AC", name: "Ms. Ana Cruz", preview: "Maria's project ...", color: "#6366f1" },
+    { initials: "SO", name: "School Office", preview: "PTC forms due ...", color: "#64748b" },
+    { initials: "PR", name: "Mr. Reyes", preview: "School perfor...", color: "#0ea5e9" },
+];
 
-function RfidBadge({ value }: { value: string }) {
-    const ok = value === "Verified";
+// Attendance week dots (Mon–Fri)
+*/
+
+const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+
+function WeekDots({ attendance }: { attendance: StudentInfo["attendance"] }) {
+    // Map last 5 records to M-F
+    const statusMap: Record<string, string> = {};
+    [...attendance].reverse().slice(0, 5).forEach((a) => {
+        statusMap[a.day.slice(0, 3)] = a.status;
+    });
     return (
-        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${ok ? "bg-sky-500 text-white" : "bg-slate-200 text-slate-500"}`}>
-            {value}
-        </span>
+        <div className="flex gap-2 mt-3">
+            {WEEK_DAYS.map((d) => {
+                const s = statusMap[d];
+                let bg = "bg-slate-200"; let icon = "–";
+                if (s === "Present") { bg = "bg-teal-400"; icon = "✓"; }
+                else if (s === "Late") { bg = "bg-yellow-400"; icon = "–"; }
+                else if (s === "Absent") { bg = "bg-red-400"; icon = "–"; }
+                return (
+                    <div key={d} className="flex flex-col items-center gap-1">
+                        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${bg}`}>{icon}</span>
+                        <span className="text-[10px] text-slate-400">{d}</span>
+                    </div>
+                );
+            })}
+        </div>
     );
 }
 
 export default function ParentDashboard() {
     const router = useRouter();
-    const [notifs, setNotifs] = useState(INITIAL_NOTIFICATIONS);
-    const [selectedId, setSelectedId] = useState(STUDENTS[0].id);
-    const [dropdownOpen, setDropdownOpen] = useState(false);
-    const dropdownRef = useRef<HTMLDivElement>(null);
+    const [notifs, setNotifs] = useState<ParentNotificationPreview[]>([]);
+    const [students, setStudents] = useState<StudentInfo[]>([]);
+    const [selectedId, setSelectedId] = useState("");
+    const [parentName, setParentName] = useState("Parent");
+    const [profileLoading, setProfileLoading] = useState(true);
+    const [reportsData, setReportsData] = useState<{ title: string; meta: string; isNew: boolean }[]>([]);
+    const [messagesData, setMessagesData] = useState<{ initials: string; name: string; preview: string; color: string }[]>([]);
 
     useEffect(() => {
-        function handleOutside(e: MouseEvent) {
-            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node))
-                setDropdownOpen(false);
+        async function loadParentStudent() {
+            try {
+                const res = await fetch("/api/parents/me");
+                const data = await res.json();
+
+                if (!data.success) {
+                    router.push("/login/guardian");
+                    return;
+                }
+
+                const linkedStudents: StudentInfo[] = (data.students ?? [data.student]).map((studentRow: {
+                    id: number;
+                    name: string;
+                    lrn: string;
+                    grade: string;
+                    section: string;
+                }, index: number) => {
+                    const template = FALLBACK_STUDENTS[index % FALLBACK_STUDENTS.length];
+                    const name = studentRow.name || "Student";
+                    const initials = name
+                        .split(" ")
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((part: string) => part[0]?.toUpperCase())
+                        .join("");
+
+                    return {
+                        ...template,
+                        id: String(studentRow.id),
+                        name,
+                        studentId: studentRow.lrn,
+                        grade: `${studentRow.grade} - ${studentRow.section}`,
+                        adviser: "Class Adviser",
+                        initials: initials || "ST",
+                    };
+                });
+
+                const firstStudent = linkedStudents[0];
+                setParentName(data.parent.name || "Parent");
+                setStudents(linkedStudents);
+                setSelectedId(firstStudent.id);
+
+                const attendanceResults = await Promise.all(
+                    linkedStudents.map(s =>
+                        fetch(`/api/attendance/parent-history?student_id=${s.studentId}`, { cache: "no-store" })
+                            .then(r => r.json())
+                            .catch(() => null)
+                    )
+                );
+
+                linkedStudents.forEach((s, i) => {
+                    const data = attendanceResults[i];
+                    if (!data?.success) return;
+                    const total = data.stats.present + data.stats.late + data.stats.absent + data.stats.excused;
+                    const rate = total > 0 ? ((data.stats.present + data.stats.late) / total * 100).toFixed(1) : "0.0";
+                    s.stats = {
+                        totalPresent: String(data.stats.present),
+                        presentDelta: "",
+                        presentUp: true,
+                        absentDays: String(data.stats.absent),
+                        absentDelta: "",
+                        absentUp: false,
+                        lateDays: String(data.stats.late),
+                        lateDelta: "",
+                        lateUp: false,
+                        attendanceRate: `${rate}%`,
+                        rateLabel: Number(rate) >= 95 ? "Excellent" : Number(rate) >= 85 ? "Good" : "Needs Attention",
+                    };
+                    // Build attendance records for "this week" dots
+                    s.attendance = data.records.slice(0, 5).map((r: any) => {
+                        const dateObj = new Date(r.attendance_date + "T00:00:00");
+                        return {
+                            date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+                            day: dateObj.toLocaleDateString("en-US", { weekday: "long" }),
+                            status: r.status === "On Time" ? "Present" : r.status,
+                            timeIn: r.time_in ?? "—",
+                            timeOut: r.time_out ?? "—",
+                            rfid: r.time_in ? "Verified" : "No Scan",
+                        };
+                    });
+                    // Check-in info from today's record
+                    const todayIso = new Date().toISOString().slice(0, 10);
+                    const todayRecord = data.records.find((r: any) => r.attendance_date === todayIso);
+                    s.isAtSchool = !!todayRecord?.time_in;
+                    s.checkInTime = todayRecord?.time_in
+                        ? (() => {
+                            const [h, m] = todayRecord.time_in.split(":");
+                            const hour = Number(h);
+                            const suffix = hour >= 12 ? "PM" : "AM";
+                            return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${suffix}`;
+                        })()
+                        : "Not yet in";
+                    s.checkInDay = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+                });
+
+                const notifRes = await fetch("/api/parents/notifications", { cache: "no-store" });
+                const notifData = await notifRes.json().catch(() => null);
+                const realNotifications = Array.isArray(notifData?.notifications) ? notifData.notifications : [];
+                setNotifs(realNotifications.slice(0, 3).map((notif: {
+                    id: number;
+                    title: string;
+                    msg: string;
+                    time: string;
+                    unread: boolean;
+                    announcementId?: number;
+                }) => ({
+                    id: notif.id,
+                    type: "message",
+                    icon: MessageSquare,
+                    title: notif.title,
+                    time: notif.time,
+                    msg: notif.msg,
+                    unread: notif.unread,
+                    color: notif.unread ? "bg-blue-50 border-blue-200" : "bg-slate-50 border-slate-200",
+                    iconColor: "bg-blue-500",
+                    announcementId: notif.announcementId,
+                })));
+                const reportsRes = await fetch("/api/reports/parent-adviser?role=parent", { cache: "no-store" });
+                const reportsJson = await reportsRes.json().catch(() => null);
+                if (reportsJson?.success) {
+                    const reports = (reportsJson.reports ?? []).slice(0, 3);
+                    setReportsData(reports.map((r: any) => ({
+                        title: r.subject,
+                        meta: `${r.status === "New" ? "New" : "Viewed"} · ${new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
+                        isNew: r.status === "New",
+                    })));
+                    setMessagesData(reports.slice(0, 3).map((r: any) => ({
+                        initials: r.adviser_name?.split(" ").map((p: string) => p[0]).join("").slice(0, 2).toUpperCase() ?? "AD",
+                        name: r.adviser_name ?? "Class Adviser",
+                        preview: (r.subject ?? "").slice(0, 18) + "...",
+                        color: "#6366f1",
+                    })));
+                }
+            } catch {
+                router.push("/login/guardian");
+            } finally {
+                setProfileLoading(false);
+            }
         }
-        document.addEventListener("mousedown", handleOutside);
-        return () => document.removeEventListener("mousedown", handleOutside);
-    }, []);
 
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const studentParam = params.get("student");
-        if (!studentParam) return;
-        const match = STUDENTS.find(s => s.id === studentParam);
-        if (match) setSelectedId(match.id);
-    }, []);
+        loadParentStudent();
+    }, [router]);
 
-    const student = STUDENTS.find(s => s.id === selectedId) ?? STUDENTS[0];
+
+    const student = students.find(s => s.id === selectedId) ?? students[0];
     const unreadCount = notifs.filter(n => n.unread).length;
-    const markAllRead = () => setNotifs(prev => prev.map(n => ({ ...n, unread: false })));
-
-    const handleLogout = async () => {
-        await fetch("/api/auth/logout", { method: "POST" });
-        router.push("/login/guardian");
+    const markAllRead = () => {
+        setNotifs(prev => prev.map(n => ({ ...n, unread: false })));
+        fetch("/api/parents/notifications", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        }).catch(() => null);
     };
 
     function selectStudent(id: string) {
         setSelectedId(id);
-        setDropdownOpen(false);
     }
 
-    function handleNotifClick(notif: typeof INITIAL_NOTIFICATIONS[number]) {
+    function handleNotifClick(notif: ParentNotificationPreview) {
         setNotifs(prev => prev.map(n => n.id === notif.id ? { ...n, unread: false } : n));
-        if (notif.type === "alert" && notif.studentName) {
-            router.push(`/dashboard/parent/attendance?student=${encodeURIComponent(notif.studentName)}`);
-        } else if (notif.type === "message" && notif.teacherName) {
-            router.push(`/dashboard/parent/reports?teacher=${encodeURIComponent(notif.teacherName)}`);
-        } else if (notif.type === "event" && notif.eventId) {
-            router.push(`/dashboard/parent/notifications?event=${encodeURIComponent(notif.eventId)}`);
-        }
+        fetch("/api/parents/notifications", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ notificationId: notif.id }),
+        }).catch(() => null);
+        router.push("/dashboard/parent/notifications");
     }
 
+    if (profileLoading || !student) {
+        return (
+            <div className="flex h-screen bg-[#f4f6fb] font-sans overflow-hidden">
+                <Sidebar />
+                <div className="flex-1 flex items-center justify-center text-slate-400 text-sm font-semibold">
+                    Loading parent dashboard...
+                </div>
+            </div>
+        );
+    }
+
+    // Big stat cards
     const statCards = [
-        { label: "Total Present Days", value: student.stats.totalPresent, delta: student.stats.presentDelta, up: student.stats.presentUp, color: "text-sky-600", highlight: false },
-        { label: "Absent Days", value: student.stats.absentDays, delta: student.stats.absentDelta, up: student.stats.absentUp, color: "text-red-500", highlight: false },
-        { label: "Late Days", value: student.stats.lateDays, delta: student.stats.lateDelta, up: student.stats.lateUp, color: "text-amber-500", highlight: false },
-        { label: "Attendance Rate", value: student.stats.attendanceRate, delta: student.stats.rateLabel, up: true, color: "text-blue-600", highlight: true },
+        {
+            icon: Calendar, value: student.stats.totalPresent, label: "Days Present",
+            delta: `↑ ${student.stats.presentDelta}`, bg: "#1e3a5f", badgeBg: "#1a4a7a",
+        },
+        {
+            icon: Clock, value: student.stats.attendanceRate, label: "Attendance Rate",
+            delta: student.stats.rateLabel, bg: "#174a3a", badgeBg: "#166534",
+        },
+        {
+            icon: Ban, value: student.stats.absentDays, label: "Absences",
+            delta: `↓ ${student.stats.absentDelta}`, bg: "#4a1a1a", badgeBg: "#6b2020",
+        },
+        {
+            icon: Clock, value: student.stats.lateDays, label: "Late Arrivals",
+            delta: `↑ ${student.stats.lateDelta}`, bg: "#3a3010", badgeBg: "#5a4a10",
+        },
     ];
 
+    const hasAbsenceAlert = student.attendance.some(a => a.status === "Absent");
+
     return (
-        <div className="flex h-screen bg-slate-100 font-sans overflow-hidden">
+        <div className="flex h-screen bg-[#f4f6fb] font-sans overflow-hidden">
 
             <Sidebar />
 
             <div className="flex-1 flex flex-col overflow-hidden">
-                <main className="flex-1 overflow-y-auto px-6 py-6">
+                <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-6 pb-24 md:pb-8">
+
+                    {/* ── Header ── */}
                     <div className="mb-5">
                         <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Dashboard</h1>
-                        <p className="text-slate-500 text-sm mt-0.5">Welcome back! Here&apos;s your child&apos;s overview</p>
+                        <p className="text-slate-400 text-sm mt-0.5">
+                            Welcome back, {parentName.split(" ")[0]} — here&apos;s {student.name.split(" ")[0]}&apos;s overview
+                        </p>
                     </div>
 
-                    {/* Student selector */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-5">
-                        <div className="flex items-center justify-between mb-3">
-                            <h2 className="font-bold text-slate-800 text-base">Select Student</h2>
-                            <span className="text-xs text-slate-400">{STUDENTS.length} children enrolled</span>
+                    {/* ── Select Student ── */}
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4 mb-4">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                                <Users className="w-4 h-4 text-blue-500" />
+                            </div>
+                            <div>
+                                <p className="text-sm font-bold text-slate-800 leading-tight">Select Student</p>
+                                <p className="text-xs text-slate-400">{students.length} child linked to this account</p>
+                            </div>
                         </div>
-                        <div className="relative" ref={dropdownRef}>
-                            <button onClick={() => setDropdownOpen(p => !p)}
-                                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors text-left">
-                                <span style={{ width: 40, height: 40, minWidth: 40, borderRadius: "50%", background: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 14 }}>
-                                    {student.initials}
-                                </span>
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-bold text-slate-800">{student.name}</p>
-                                    <p className="text-xs text-slate-500 mt-0.5">{student.grade} &bull; Student ID: {student.studentId}</p>
-                                </div>
-                                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform shrink-0 ${dropdownOpen ? "rotate-180" : ""}`} />
-                            </button>
-                            {dropdownOpen && (
-                                <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl border border-slate-200 shadow-xl z-30 overflow-hidden">
-                                    {STUDENTS.map(s => (
-                                        <button key={s.id} type="button"
-                                            onMouseDown={e => { e.preventDefault(); selectStudent(s.id); }}
-                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-blue-50 ${s.id === selectedId ? "bg-blue-50" : "bg-white"}`}>
-                                            <span style={{ width: 36, height: 36, minWidth: 36, borderRadius: "50%", background: s.id === "1" ? "#2563eb" : "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>
-                                                {s.initials}
-                                            </span>
-                                            <div className="flex-1 min-w-0">
-                                                <p className={`text-sm font-semibold ${s.id === selectedId ? "text-blue-700" : "text-slate-800"}`}>{s.name}</p>
-                                                <p className="text-xs text-slate-400">{s.grade} &bull; {s.studentId}</p>
-                                            </div>
-                                            {s.id === selectedId && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Student info */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-5">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-bold text-slate-800 text-base">Student Information</h2>
-                            <ExternalLink className="w-4 h-4 text-slate-400" />
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            {[
-                                { label: "Student Name", value: student.name },
-                                { label: "Student ID", value: student.studentId },
-                                { label: "Grade & Section", value: student.grade },
-                                { label: "Class Adviser", value: student.adviser },
-                            ].map(({ label, value }) => (
-                                <div key={label}>
-                                    <p className="text-xs text-slate-400 mb-0.5">{label}</p>
-                                    <p className="text-sm font-bold text-slate-800">{value}</p>
-                                </div>
-                            ))}
+                        <div className="flex flex-col sm:flex-row gap-2">
+                            {students.map(s => {
+                                const isActive = s.id === selectedId;
+                                return (
+                                    <button
+                                        key={s.id}
+                                        type="button"
+                                        onClick={() => selectStudent(s.id)}
+                                        className={`flex-1 flex items-center gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${isActive
+                                            ? "border-blue-500 bg-blue-50 shadow-sm"
+                                            : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"
+                                            }`}
+                                    >
+                                        <span
+                                            className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0"
+                                            style={{ background: s.avatarColor }}
+                                        >
+                                            {s.initials}
+                                        </span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className={`text-sm font-bold truncate ${isActive ? "text-blue-700" : "text-slate-800"}`}>
+                                                {s.name}
+                                            </p>
+                                            <p className="text-xs text-slate-400 mt-0.5 truncate">{s.grade}</p>
+                                            <p className="text-[10px] text-slate-300 truncate">{s.studentId}</p>
+                                        </div>
+                                        {isActive && (
+                                            <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
+                                        )}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
 
-                    {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-                        {statCards.map(({ label, value, delta, up, color, highlight }) => (
-                            <div key={label} className={`bg-white rounded-2xl border shadow-sm p-4 ${highlight ? "border-blue-200" : "border-slate-100"}`}>
-                                <p className="text-xs text-slate-400 mb-2">{label}</p>
-                                <p className={`text-3xl font-extrabold ${color}`}>{value}</p>
-                                <div className="flex items-center gap-1 mt-2">
-                                    {up ? <TrendingUp className={`w-3.5 h-3.5 ${highlight ? "text-blue-500" : "text-emerald-500"}`} />
-                                        : <TrendingDown className="w-3.5 h-3.5 text-red-400" />}
-                                    <p className={`text-[11px] font-medium ${highlight ? "text-blue-500" : up ? "text-emerald-500" : "text-red-400"}`}>{delta}</p>
+                    {/* ── Absence Alert Banner ── */}
+                    {hasAbsenceAlert && (
+                        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 mb-4 flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-white border-2 border-red-400 flex items-center justify-center shrink-0">
+                                <AlertCircle className="w-4 h-4 text-red-500" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-bold text-red-600">
+                                    Action needed — {student.attendance.find(a => a.status === "Absent")?.date ?? "Recent absence"}
+                                </p>
+                                <p className="text-xs text-red-400 mt-0.5">
+                                    {student.name.split(" ")[0]} was marked absent. Contact the school office if this is an error.
+                                </p>
+                            </div>
+                            <Link href="/dashboard/parent/reports" className="shrink-0 bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors flex items-center gap-1">
+                                Contact Adviser ↗
+                            </Link>
+                        </div>
+                    )}
+
+                    {/* ── Presence Banner ── */}
+                    <div
+                        className="rounded-2xl px-6 py-5 mb-5 flex items-center justify-between"
+                        style={{ background: "linear-gradient(135deg, #1e2d4d 0%, #16213e 100%)" }}
+                    >
+                        <div>
+                            <p className="text-white font-bold text-base leading-snug">
+                                Good morning, {parentName.split(" ")[0]}! {student.name.split(" ")[0]} is {student.isAtSchool ? "at school" : "not yet in"}.
+                            </p>
+                            <p className="text-slate-400 text-xs mt-1">{student.checkInDay}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Checked in today</p>
+                            <p className="text-white font-extrabold text-2xl leading-tight">{student.checkInTime}</p>
+                            <p className="text-green-400 text-[11px] mt-0.5 font-semibold">
+                                {student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* ── Big Stat Cards ── */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        {statCards.map(({ icon: Icon, value, label, delta, bg, badgeBg }) => (
+                            <div key={label} className="rounded-2xl p-4 flex flex-col" style={{ background: bg }}>
+                                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3" style={{ background: "rgba(255,255,255,0.12)" }}>
+                                    <Icon className="w-4.5 h-4.5 text-white" style={{ width: 18, height: 18 }} />
+                                </div>
+                                <p className="text-white font-extrabold text-3xl md:text-4xl leading-none">{value}</p>
+                                <p className="text-slate-300 text-xs mt-1.5 font-medium">{label}</p>
+                                <div className="mt-3">
+                                    <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full text-white" style={{ background: badgeBg }}>
+                                        {delta}
+                                    </span>
                                 </div>
                             </div>
                         ))}
                     </div>
 
-                    {/* Attendance table */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-5">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-bold text-slate-800 text-base">Monthly Attendance Record</h2>
-                            <button className="flex items-center gap-1.5 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
-                                November 2026 <ChevronDown className="w-3.5 h-3.5" />
-                            </button>
+                    {/* ── Bottom 4 Mini Cards ── */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+
+                        {/* This Week */}
+                        <div className="rounded-2xl bg-white border border-slate-100 shadow-sm p-4">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">This Week</p>
+                            <WeekDots attendance={student.attendance} />
+                            <div className="flex items-center gap-3 mt-3">
+                                <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                                    <span className="w-2 h-2 rounded-full bg-teal-400 inline-block" /> Present
+                                </span>
+                                <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                                    <span className="w-2 h-2 rounded-full bg-yellow-400 inline-block" /> Late
+                                </span>
+                            </div>
                         </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                                <thead>
-                                    <tr className="border-b border-slate-100">
-                                        {["Date", "Day", "Status", "Time In", "Time Out", "RFID Scan"].map(h => (
-                                            <th key={h} className="text-left text-xs font-semibold text-slate-400 pb-3 pr-4">{h}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {student.attendance.map((row, i) => (
-                                        <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 transition-colors">
-                                            <td className="py-3 pr-4 text-slate-700 font-medium text-xs">{row.date}</td>
-                                            <td className="py-3 pr-4 text-slate-500 text-xs">{row.day}</td>
-                                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                                            <td className="py-3 pr-4 text-slate-600 text-xs">{row.timeIn}</td>
-                                            <td className="py-3 pr-4 text-slate-600 text-xs">{row.timeOut}</td>
-                                            <td className="py-3"><RfidBadge value={row.rfid} /></td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+
+                        {/* Reports */}
+                        <div className="rounded-2xl border border-slate-100 shadow-sm p-4" style={{ background: "#1a3a2a" }}>
+                            <p className="text-[10px] font-bold text-green-300 uppercase tracking-widest mb-2">Reports</p>
+                            <div className="flex flex-col gap-2">
+                                {reportsData.map((r, i) => (
+                                    <div key={`${r.title}-${i}`} className="flex items-start gap-2">
+                                        <span className="w-2 h-2 mt-1 rounded-full shrink-0" style={{ background: r.isNew ? "#4ade80" : "#6ee7b7" }} />
+                                        <div>
+                                            <p className="text-white text-xs font-semibold leading-tight">{r.title}</p>
+                                            <p className="text-green-300 text-[10px]">{r.meta}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                                {reportsData.length === 0 && (
+                                    <p className="text-green-200/70 text-xs leading-tight">No reports yet</p>
+                                )}
+                            </div>
                         </div>
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                            <Link href={`/dashboard/parent/attendance?student=${selectedId}`}
-                                className="text-sm font-semibold text-blue-600 hover:text-blue-700 transition-colors">
-                                View full attendance history →
-                            </Link>
+
+                        {/* Announcements */}
+                        <div className="rounded-2xl border border-slate-100 shadow-sm p-4" style={{ background: "#3a1a1a" }}>
+                            <p className="text-[10px] font-bold text-red-300 uppercase tracking-widest mb-2">Announcements</p>
+                            <div className="flex flex-col gap-2">
+                                {notifs.slice(0, 3).map((a) => (
+                                    <div key={a.id} className="flex items-start gap-2">
+                                        <span className="w-2 h-2 mt-1 rounded-full bg-red-400 shrink-0" />
+                                        <div>
+                                            <p className="text-white text-xs font-semibold leading-tight">{a.title}</p>
+                                            <p className="text-red-300 text-[10px]">{a.time}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                                {notifs.length === 0 && (
+                                    <p className="text-red-200/70 text-xs leading-tight">No announcements yet</p>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Messages */}
+                        <div className="rounded-2xl border border-slate-100 shadow-sm p-4" style={{ background: "#1a1a3a" }}>
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest">Messages</p>
+                                {unreadCount > 0 && (
+                                    <span className="bg-green-400 text-black text-[10px] font-bold px-2 py-0.5 rounded-full">{unreadCount} new</span>
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                {messagesData.map((m, i) => (
+                                    <div key={`${m.name}-${i}`} className="flex items-center gap-2">
+                                        <span
+                                            className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                            style={{ background: m.color }}
+                                        >
+                                            {m.initials}
+                                        </span>
+                                        <div className="min-w-0">
+                                            <p className="text-white text-xs font-semibold leading-tight truncate">{m.name}</p>
+                                            <p className="text-indigo-300 text-[10px] truncate">{m.preview}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                                {messagesData.length === 0 && (
+                                    <p className="text-indigo-200/70 text-xs leading-tight">No messages yet</p>
+                                )}
+                            </div>
                         </div>
                     </div>
 
-                    {/* Notifications */}
+
+
+                    {/* ── Notifications ── */}
                     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                         <div className="flex items-center justify-between mb-1">
                             <div>
                                 <h2 className="font-bold text-slate-800 text-base">Notifications</h2>
-                                <p className="text-xs text-slate-400 mt-0.5">{unreadCount} unread message{unreadCount !== 1 ? "s" : ""}</p>
+                                <p className="text-xs text-slate-400 mt-0.5">{unreadCount} unread notification{unreadCount !== 1 ? "s" : ""}</p>
                             </div>
                             {unreadCount > 0 && (
                                 <button onClick={markAllRead}
@@ -327,12 +581,18 @@ export default function ParentDashboard() {
                                     </div>
                                 );
                             })}
+                            {notifs.length === 0 && (
+                                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-xs font-semibold text-slate-400">
+                                    No notifications yet.
+                                </div>
+                            )}
                         </div>
                         <Link href="/dashboard/parent/notifications"
                             className="flex items-center justify-center gap-1.5 w-full mt-4 py-3 border border-slate-200 rounded-xl text-sm font-semibold text-blue-600 hover:bg-blue-50 transition-colors">
                             View All Notifications <span className="text-base">→</span>
                         </Link>
                     </div>
+
                 </main>
             </div>
         </div>

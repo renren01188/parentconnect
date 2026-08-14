@@ -1,22 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
 import Link from "next/link";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 // ─── Grade / Section data ─────────────────────────────────────────────────────
-const GRADE_SECTIONS: Record<string, string[]> = {
-  "Grade 1": ["Sampaguita", "Rosal", "Camia", "Ilang-Ilang"],
-  "Grade 2": ["Narra", "Molave", "Acacia", "Mahogany"],
-  "Grade 3": ["Mabuhay", "Bayanihan", "Kalayaan", "Pagkakaisa"],
-  "Grade 4": ["Rizal", "Bonifacio", "Mabini", "Luna"],
-  "Grade 5": ["Aguinaldo", "Del Pilar", "Jacinto", "Burgos"],
-  "Grade 6": ["Lapu-Lapu", "Soliman", "Tupas", "Sikatuna"],
-};
-
-const GRADE_LEVELS = Object.keys(GRADE_SECTIONS);
-
 const SUFFIXES = ["", "Jr.", "Sr.", "II", "III", "IV"];
+
+function formatName(value: string) {
+  return value.toLocaleUpperCase();
+}
 
 // ─── Custom Select ────────────────────────────────────────────────────────────
 function CustomSelect({
@@ -33,12 +27,25 @@ function CustomSelect({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const listId = useId();
 
   return (
     <div className="relative">
       <button
         type="button"
         onClick={() => !disabled && setOpen(p => !p)}
+        onKeyDown={(event) => {
+          if (disabled) return;
+          if (event.key === "Escape") setOpen(false);
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpen(current => !current);
+          }
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-disabled={disabled}
         className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-sm transition
           ${disabled
             ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed"
@@ -56,11 +63,13 @@ function CustomSelect({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div id={listId} role="listbox" className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
             {options.map(opt => (
               <button
                 key={opt}
                 type="button"
+                role="option"
+                aria-selected={value === opt}
                 onClick={() => { onChange(opt); setOpen(false); }}
                 className={`w-full text-left px-4 py-2.5 text-sm transition-colors hover:bg-amber-50
                   ${value === opt ? "bg-amber-50 text-amber-700 font-semibold" : "text-slate-700"}`}
@@ -98,6 +107,9 @@ const inputCls = "w-full px-4 py-3 rounded-xl border border-slate-200 text-slate
 export default function ReportPage() {
   const [loading,   setLoading]   = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error,     setError]     = useState("");
+  const [optionsError, setOptionsError] = useState("");
+  const [gradeSections, setGradeSections] = useState<Record<string, string[]>>({});
 
   const [form, setForm] = useState({
     firstName:  "",
@@ -108,6 +120,7 @@ export default function ReportPage() {
     section:    "",
     contact:    "",
     concern:    "",
+    website:    "",
   });
 
   const set = (key: string, value: string) => {
@@ -118,16 +131,89 @@ export default function ReportPage() {
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    set(e.target.name, e.target.value);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setTimeout(() => { setLoading(false); setSubmitted(true); }, 2000);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    set(name, ["firstName", "middleName", "lastName"].includes(name) ? formatName(value) : value);
   };
 
-  const sections = form.gradeLevel ? GRADE_SECTIONS[form.gradeLevel] : [];
+  const loadOptions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/student-reports/options", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.gradeSections) {
+        setOptionsError(data?.message || "Unable to load grade levels. Please refresh and try again.");
+        return;
+      }
+      setGradeSections(data.gradeSections);
+      setOptionsError("");
+      // If an ICT user removes the active grade or section, do not leave a
+      // stale selection that can no longer be submitted.
+      setForm(current => {
+        if (!current.gradeLevel || data.gradeSections[current.gradeLevel]) {
+          if (!current.section || data.gradeSections[current.gradeLevel]?.includes(current.section)) return current;
+          return { ...current, section: "" };
+        }
+        return { ...current, gradeLevel: "", section: "" };
+      });
+    } catch {
+      setOptionsError("Unable to load grade levels. Please check your connection and try again.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOptions();
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadOptions();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+
+    // Realtime makes changes from Manage Class Sessions appear immediately.
+    // The focus refresh remains a fallback if database realtime is unavailable.
+    const channel = supabaseBrowser
+      ?.channel("report-section-options")
+      .on("postgres_changes", { event: "*", schema: "public", table: "sections" }, () => void loadOptions())
+      .subscribe();
+
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (channel && supabaseBrowser) void supabaseBrowser.removeChannel(channel);
+    };
+  }, [loadOptions]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.gradeLevel || !form.section || !form.concern.trim()) {
+      setError("Please complete all required fields before submitting your report.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/student-reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setError(data?.message || "Invalid, please input the correct details.");
+        return;
+      }
+
+      setSubmitted(true);
+    } catch {
+      setError("Unable to submit your report right now. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const gradeLevels = Object.keys(gradeSections);
+  const sections = form.gradeLevel ? gradeSections[form.gradeLevel] ?? [] : [];
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
@@ -162,9 +248,9 @@ export default function ReportPage() {
             </div>
           </div>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</a>
-          <a href="#" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</a>
+        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
+          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
         </nav>
       </header>
 
@@ -200,7 +286,7 @@ export default function ReportPage() {
                 </div>
                 <h2 className="text-2xl font-extrabold text-slate-800">Submit a Report or Concern</h2>
                 <p className="text-slate-500 text-sm text-center mt-2 max-w-sm leading-relaxed">
-                  Share your concerns safely. Your information is kept confidential and will only be used to address the issue.
+                  Submit reports or concerns without logging in. Your student name is required and will be kept confidential.
                 </p>
                 <p className="text-slate-400 text-xs text-center mt-1">
                   Please ensure that all information entered below is accurate and truthful.
@@ -208,6 +294,25 @@ export default function ReportPage() {
               </div>
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+
+                <div className="hidden" aria-hidden="true">
+                  <label htmlFor="report-website">Website</label>
+                  <input
+                    id="report-website"
+                    type="text"
+                    name="website"
+                    value={form.website}
+                    onChange={handleChange}
+                    tabIndex={-1}
+                    autoComplete="off"
+                  />
+                </div>
+
+                {optionsError && (
+                  <div role="alert" className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm font-semibold text-red-600">
+                    {optionsError}
+                  </div>
+                )}
 
                 {/* ── Name fields ── */}
                 <div>
@@ -265,7 +370,7 @@ export default function ReportPage() {
                   <CustomSelect
                     placeholder="Select grade level..."
                     value={form.gradeLevel}
-                    options={GRADE_LEVELS}
+                    options={gradeLevels}
                     onChange={v => set("gradeLevel", v)}
                   />
                 </div>
@@ -307,6 +412,12 @@ export default function ReportPage() {
                     className={`${inputCls} resize-none`}
                   />
                 </div>
+
+                {error && (
+                  <div role="alert" className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm font-semibold text-red-600">
+                    {error}
+                  </div>
+                )}
 
                 {/* Privacy notice */}
                 <div className="bg-sky-50 border border-sky-200 rounded-xl p-4 flex gap-3">

@@ -3,10 +3,15 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
+import { sendParentRegistrationConfirmation } from "@/lib/mailer";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Server error.";
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,7 +48,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let payload: any;
+    let payload: { id?: unknown; [key: string]: unknown };
     try {
       const verified = await jwtVerify(token, SECRET);
       payload = verified.payload;
@@ -54,14 +59,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const parentEmail = typeof payload.email === "string" ? payload.email : "";
+    if (!parentEmail) {
+      return NextResponse.json(
+        { success: false, message: "Invalid session. Please log in again." },
+        { status: 401 }
+      );
+    }
+
     const hashed = await bcrypt.hash(newPassword, 10);
 
     const { error } = await supabase
       .from("parents")
       .update({ password: hashed, password_set: 1, temp_password: null })
-      .eq("id", payload.id);
+      .eq("email", parentEmail);
 
     if (error) throw error;
+
+    try {
+      await sendParentRegistrationConfirmation({
+        parentEmail,
+        parentName: String(payload.parentName || "Parent / Guardian"),
+      });
+    } catch (mailError) {
+      console.error("Registration confirmation email failed:", mailError);
+    }
 
     const newPayload = { ...payload, passwordSet: true };
     const newToken = await new SignJWT(newPayload)
@@ -82,10 +104,10 @@ export async function POST(req: NextRequest) {
       message: "Password set successfully. Welcome to ParentConnect!",
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("POST /api/auth/set-password error:", error);
     return NextResponse.json(
-      { success: false, message: error.message || "Server error." },
+      { success: false, message: errorMessage(error) },
       { status: 500 }
     );
   }
