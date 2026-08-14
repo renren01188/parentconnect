@@ -60,6 +60,8 @@ export default function Sidebar() {
 
   const isTransferActive = pathname.startsWith("/dashboard/adviser/transfer-level");
 
+  const isTransferActive = pathname.startsWith("/dashboard/adviser/transfer-level");
+
   return (
     <aside className="w-48 flex-shrink-0 flex flex-col h-screen bg-gradient-to-b from-emerald-600 to-emerald-700">
       {/* Brand */}
