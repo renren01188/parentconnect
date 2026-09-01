@@ -1,0 +1,64 @@
+name: Encrypted Supabase backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 01:17 Asia/Manila (17:17 UTC on the preceding day)
+    - cron: "17 17 * * *"
+
+permissions: {}
+
+jobs:
+  backup:
+    name: Export Supabase to encrypted Google Drive
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RCLONE_CONFIG_B64: ${{ secrets.RCLONE_CONFIG_B64 }}
+      RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
+
+    steps:
+      - name: Install rclone
+        run: sudo apt-get update && sudo apt-get install --yes rclone
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Restore the encrypted rclone configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.config/rclone"
+          printf '%s' "$RCLONE_CONFIG_B64" | base64 --decode > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+
+      - name: Export and upload database backup
+        id: backup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stamp="$(TZ=Asia/Manila date +%Y-%m-%d_%H-%M-%S)"
+          backup_dir="parentconnect-$stamp"
+          archive="$backup_dir.tar.gz"
+          mkdir "$backup_dir"
+
+          supabase db dump --db-url "$SUPABASE_DB_URL" --role-only --file "$backup_dir/roles.sql"
+          supabase db dump --db-url "$SUPABASE_DB_URL" --file "$backup_dir/schema.sql"
+          supabase db dump --db-url "$SUPABASE_DB_URL" --data-only --use-copy --file "$backup_dir/data.sql"
+
+          printf 'ParentConnect Supabase backup created: %s Asia/Manila\n' "$stamp" > "$backup_dir/README.txt"
+          tar -C "$backup_dir" -czf "$archive" roles.sql schema.sql data.sql README.txt
+
+          rclone copyto "$archive" "pcbackup:daily/$archive" --checksum
+          if [ "$(TZ=Asia/Manila date +%d)" = "01" ]; then
+            rclone copyto "$archive" "pcbackup:monthly/$archive" --checksum
+          fi
+
+          rclone delete "pcbackup:daily" --min-age 7d
+          rclone rmdirs "pcbackup:daily"
+          rclone delete "pcbackup:monthly" --min-age 365d
+          rclone rmdirs "pcbackup:monthly"
