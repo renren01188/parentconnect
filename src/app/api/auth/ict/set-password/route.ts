@@ -62,16 +62,21 @@ export async function POST(req: NextRequest) {
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("ict_admins")
       .update({
         password_hash: passwordHash,
         password_set: true,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", payload.id);
+      .eq("id", payload.id)
+      .select("id, password_hash")
+      .single();
 
     if (error) throw error;
+    if (!await bcrypt.compare(newPassword, data.password_hash)) {
+      throw new Error("The ICT password update could not be verified.");
+    }
 
     const newToken = await new SignJWT({ ...payload, passwordSet: true })
       .setProtectedHeader({ alg: "HS256" })

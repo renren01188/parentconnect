@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import {
     Eye, EyeOff, ShieldCheck,
     School, Mail, Phone, Check, CircleAlert,
-    BookOpen, TrendingUp, ClipboardList, CalendarDays,
+    BookOpen, TrendingUp, ClipboardList,
     RefreshCw, Send, Users, FileText,
     Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, Camera, ImagePlus, Trash2, ChevronDown,
 } from "lucide-react";
@@ -339,16 +339,16 @@ function SettingsModal({
 
     return (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 backdrop-blur-sm sm:p-4"
             onClick={onClose}
         >
             <div
-                className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col"
-                style={{ maxHeight: "90vh" }}
+                className="flex w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+                style={{ maxHeight: "calc(100dvh - 1.5rem)" }}
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-100 shrink-0">
+                <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     {(view === "personal-info" || view === "password" || view === "auth" || view === "profile-picture") && (
                         <button
                             type="button"
@@ -358,7 +358,7 @@ function SettingsModal({
                             <ArrowLeft className="w-4 h-4" />
                         </button>
                     )}
-                    <div className="flex-1">
+                    <div className="min-w-0 flex-1">
                         <h2 className="text-base font-extrabold text-slate-800">{viewTitle[view]}</h2>
                         <p className="text-xs text-slate-400 mt-0.5">{viewSubtitle[view]}</p>
                     </div>
@@ -384,21 +384,10 @@ function SettingsModal({
                                     <p className="text-sm font-bold text-slate-800 truncate">{profile.first_name} {profile.last_name}</p>
                                     <p className="text-xs text-slate-400 truncate">{profile.email}</p>
                                 </div>
-                                <span className="ml-auto flex items-center gap-1 text-[11px] font-semibold bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full shrink-0">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Active
-                                </span>
                             </div>
 
                             {/* Menu items */}
                             {[
-                                {
-                                    icon: Camera,
-                                    label: "Change Profile Picture",
-                                    description: "Upload a new profile photo",
-                                    badge: "No approval needed",
-                                    badgeColor: "bg-emerald-50 text-emerald-600 border-emerald-100",
-                                    dest: "profile-picture" as const,
-                                },
                                 {
                                     icon: Pencil,
                                     label: "Request Grade Level & Section Change",
@@ -450,7 +439,7 @@ function SettingsModal({
 
                     {/* ── PERSONAL INFO ── */}
                     {view === "personal-info" && (
-                        <div className="p-6 space-y-4">
+                        <div className="space-y-4 p-4 sm:p-6">
                             <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
                                 <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                                 <p className="text-xs text-amber-700 leading-relaxed">
@@ -459,7 +448,7 @@ function SettingsModal({
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 
                                 {/* First Name — editable */}
                                 <div>
@@ -575,7 +564,7 @@ function SettingsModal({
                                 </div>
 
                                 {/* Advisory Class — multi-section picker */}
-                                <div className="col-span-2">
+                                <div className="sm:col-span-2">
                                     <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
                                         Advisory Class{" "}
                                         <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">
@@ -710,13 +699,13 @@ function SettingsModal({
                                 </p>
                             </div>
 
-                            <div className="flex gap-3 pt-1">
+                            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:gap-3">
                                 <button type="button" onClick={() => setView("menu")}
-                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
                                     Cancel
                                 </button>
                                 <button type="button" onClick={handleSendApproval} disabled={isSending || approvalSent}
-                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-60 transition-colors">
+                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-60 sm:flex-1">
                                     {isSending
                                         ? <><RefreshCw className="h-4 w-4 animate-spin" /> Sending…</>
                                         : approvalSent
@@ -729,7 +718,7 @@ function SettingsModal({
 
                     {/* ── CHANGE PASSWORD ── */}
                     {view === "password" && (
-                        <div className="p-6 space-y-4">
+                        <div className="space-y-4 p-4 sm:p-6">
                             <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
                                 <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
                                 <p className="text-xs text-emerald-700">
@@ -808,14 +797,14 @@ function SettingsModal({
                                 </div>
                             )}
 
-                            <div className="flex gap-3 pt-1">
+                            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:gap-3">
                                 <button type="button" onClick={() => setView("menu")}
-                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
                                     Cancel
                                 </button>
                                 <button type="button" onClick={handleUpdatePassword}
                                     disabled={isSavingPw || !pwValid || newPw !== confirmPw}
-                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-50 transition-colors">
+                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50 sm:flex-1">
                                     {isSavingPw
                                         ? <><RefreshCw className="h-4 w-4 animate-spin" /> Updating…</>
                                         : <><ShieldCheck className="h-4 w-4" /> Update Password</>}
@@ -826,7 +815,7 @@ function SettingsModal({
 
                     {/* ── PROFILE PICTURE ── */}
                     {view === "profile-picture" && (
-                        <div className="p-6 space-y-5">
+                        <div className="space-y-5 p-4 sm:p-6">
                             <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
                                 <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
                                 <p className="text-xs text-emerald-700">
@@ -892,18 +881,18 @@ function SettingsModal({
                                 </div>
                             )}
 
-                            <div className="flex gap-3 pt-1">
+                            <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:gap-3">
                                 <button type="button" onClick={handleRemoveAvatar} disabled={isSavingAvatar}
-                                    className="flex items-center justify-center gap-2 px-4 h-11 rounded-xl border border-red-200 text-sm font-semibold text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors shrink-0">
+                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-semibold text-red-500 transition-colors hover:bg-red-50 disabled:opacity-50 sm:w-auto sm:shrink-0">
                                     <Trash2 className="h-4 w-4" /> Remove
                                 </button>
                                 <button type="button" onClick={() => setView("menu")}
-                                    className="flex-1 h-11 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
                                     Cancel
                                 </button>
                                 <button type="button" onClick={handleSaveAvatar}
                                     disabled={!avatarFile || isSavingAvatar}
-                                    className="flex-1 h-11 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white disabled:opacity-50 transition-colors">
+                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50 sm:flex-1">
                                     {isSavingAvatar
                                         ? <><RefreshCw className="h-4 w-4 animate-spin" /> Saving…</>
                                         : <><Camera className="h-4 w-4" /> Save Photo</>}
@@ -967,19 +956,19 @@ export default function AdviserProfilePage() {
             : "bg-amber-50 border-amber-200 text-amber-800";
 
     return (
-        <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 font-sans">
+        <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-100 px-4 py-4 font-sans sm:px-6 sm:py-6">
 
             {/* Page header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">My Profile</h1>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                    <h1 className="text-xl font-extrabold tracking-tight text-slate-800 sm:text-2xl">My Profile</h1>
                     <p className="text-slate-400 text-sm mt-0.5">View your account information</p>
                 </div>
                 {profile && (
                     <button
                         type="button"
                         onClick={() => setShowSettings(true)}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50 transition-all shadow-sm"
+                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 sm:w-auto"
                     >
                         <Settings className="h-4 w-4" />
                         Settings
@@ -1005,23 +994,19 @@ export default function AdviserProfilePage() {
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
 
                     {/* Left column */}
-                    <div className="xl:col-span-4 flex flex-col gap-5">
+                    <div className="flex flex-col gap-5 xl:col-span-4">
                         {/* Avatar card */}
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                             <div className="h-20 bg-gradient-to-r from-emerald-600 to-emerald-500" />
-                            <div className="px-6 pb-6">
+                            <div className="px-4 pb-5 sm:px-6 sm:pb-6">
                                 <div className="-mt-10 mb-4 flex justify-center">
                                     <div className="flex h-20 w-20 overflow-hidden items-center justify-center rounded-full bg-emerald-600 text-white text-2xl font-extrabold ring-4 ring-white shadow-md">
-                                        {profile.profile_picture ? <img src={profile.profile_picture} alt="Profile" className="h-full w-full object-cover" /> : initials}
+                                        {initials}
                                     </div>
                                 </div>
                                 <div className="text-center">
-                                    <h3 className="text-xl font-extrabold text-slate-800">{profile.first_name} {profile.last_name}</h3>
+                                    <h3 className="break-words text-xl font-extrabold text-slate-800">{profile.first_name} {profile.last_name}</h3>
                                     <p className="text-sm text-slate-400 mt-0.5">Class Adviser</p>
-                                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                        {profile.status === "active" ? "Active" : "Inactive"}
-                                    </span>
                                 </div>
                                 <div className="mt-5 space-y-2.5">
                                     {[
@@ -1032,7 +1017,7 @@ export default function AdviserProfilePage() {
                                     ].map(({ icon: Icon, text }) => (
                                         <div key={text} className="flex items-center gap-2.5 text-sm text-slate-600">
                                             <Icon className="h-4 w-4 text-slate-400 shrink-0" />
-                                            <span className="truncate">{text}</span>
+                                            <span className="min-w-0 break-words">{text}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -1040,20 +1025,19 @@ export default function AdviserProfilePage() {
                         </div>
 
                         {/* Class Overview */}
-                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5">
                             <h4 className="text-sm font-bold text-slate-700 mb-4">My Class Overview</h4>
                             <div className="space-y-3">
                                 {[
                                     { icon: Users, label: "Total Students", value: String(profile.student_count), color: "text-emerald-600" },
                                     { icon: TrendingUp, label: "Advisory Class", value: advisoryClass, color: "text-emerald-600" },
                                     { icon: ClipboardList, label: "Employee ID", value: profile.employee_id, color: "text-amber-500" },
-                                    { icon: CalendarDays, label: "Account Status", value: profile.status, color: "text-blue-500" },
                                 ].map(({ icon: Icon, label, value, color }) => (
-                                    <div key={label} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                                    <div key={label} className="flex flex-col gap-1 border-b border-slate-50 py-2 last:border-0 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="flex items-center gap-2.5 text-sm text-slate-600">
-                                            <Icon className="h-4 w-4 text-slate-400" />{label}
+                                            <Icon className="h-4 w-4 shrink-0 text-slate-400" />{label}
                                         </div>
-                                        <span className={`text-sm font-bold ${color}`}>{value}</span>
+                                        <span className={`break-words text-sm font-bold ${color}`}>{value}</span>
                                     </div>
                                 ))}
                             </div>
@@ -1061,11 +1045,11 @@ export default function AdviserProfilePage() {
                     </div>
 
                     {/* Right column — read-only */}
-                    <div className="xl:col-span-8 flex flex-col gap-5">
+                    <div className="flex flex-col gap-5 xl:col-span-8">
                         {request && (
                             <div className={`rounded-2xl border px-5 py-4 ${requestStyle}`}>
-                                <div className="flex items-start justify-between gap-4">
-                                    <div>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
                                         <h3 className="text-sm font-extrabold">Assignment change request: {request.status}</h3>
                                         <p className="mt-1 text-xs opacity-80">
                                             Submitted {new Date(request.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}.
@@ -1078,10 +1062,10 @@ export default function AdviserProfilePage() {
                             </div>
                         )}
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4 sm:px-6">
                                 <h3 className="text-base font-bold text-slate-800">Personal Information</h3>
                             </div>
-                            <div className="p-6">
+                            <div className="p-4 sm:p-6">
                                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                     {[
                                         { label: "First Name", value: profile.first_name, icon: null },
@@ -1098,7 +1082,7 @@ export default function AdviserProfilePage() {
                                             <div className="relative">
                                                 {Icon && <Icon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />}
                                                 <input value={value} disabled
-                                                    className={`h-11 w-full rounded-xl border border-slate-200 bg-slate-50 ${Icon ? "pl-9" : "px-4"} pr-4 text-sm text-slate-500 cursor-default outline-none`} />
+                                                    className={`h-11 min-w-0 w-full rounded-xl border border-slate-200 bg-slate-50 ${Icon ? "pl-9" : "px-4"} pr-4 text-sm text-slate-500 cursor-default outline-none`} />
                                             </div>
                                         </div>
                                     ))}
@@ -1106,12 +1090,12 @@ export default function AdviserProfilePage() {
                                         <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Advisory Class</label>
                                         <div className="flex flex-wrap gap-2">
                                             {allSections.length > 0 ? allSections.map(sec => (
-                                                <div key={sec} className="relative flex-1 min-w-[180px]">
+                                                <div key={sec} className="relative min-w-0 flex-1 sm:min-w-[180px]">
                                                     <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                                                     <input
                                                         value={`${formatGradeLabel(profile.grade ?? "")} · ${sec} · ${profile.student_count} Student${profile.student_count !== 1 ? "s" : ""}`}
                                                         disabled
-                                                        className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none"
+                                                        className="h-11 min-w-0 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-4 text-sm text-slate-500 cursor-default outline-none"
                                                     />
                                                 </div>
                                             )) : (

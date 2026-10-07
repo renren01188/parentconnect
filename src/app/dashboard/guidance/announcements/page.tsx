@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, UserRound } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Bell, Calendar, Clock, Edit2, Eye, Monitor, Plus, Trash2, UserRound, X } from "lucide-react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { useNotifContext } from "../context/NotificationContext";
 
-type Tab = "principal" | "mine";
+type Tab = "incoming" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
 
 type Announcement = {
@@ -13,75 +14,116 @@ type Announcement = {
   message: string;
   created_at?: string;
   scheduled_at?: string;
-  guidance_name?: string;
   audience: string;
   status?: AnnouncementStatus;
 };
 
-type PrincipalAnnouncement = {
-  id: number;
+type IncomingAnnouncement = {
+  id: string;
+  source: "principal" | "ict";
+  notificationKey: string;
   title: string;
   message: string;
   created_at?: string;
-  guidance_name?: string;
-  audience: string;
+  senderName: string;
+  senderRole: "Principal" | "ICT";
+  audience: string | string[];
   read: boolean;
-  profilePicture?: string | null;
 };
 
 const emptyForm = { title: "", body: "", audience: "Both", scheduleDate: "" };
 
 function formatDisplay(value?: string) {
   if (!value) return "";
-  return new Date(value).toLocaleDateString("en-US", {
-    month: "long", day: "numeric", year: "numeric",
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
   });
 }
 
-function toDateInputValue(isoString?: string) {
-  if (!isoString) return "";
-  const d = new Date(isoString);
-  if (isNaN(d.getTime())) return "";
-  return d.toISOString().slice(0, 10);
+function audienceLabel(audience: string | string[]) {
+  return Array.isArray(audience) ? audience.join(", ") : audience;
+}
+
+function toDateInputValue(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
 }
 
 export default function AnnouncementsPage() {
-  const { markPrincipalAnnouncementRead } = useNotifContext();
-  const [activeTab, setActiveTab] = useState<Tab>("principal");
+  const { markAnnouncementRead } = useNotifContext();
+  const [activeTab, setActiveTab] = useState<Tab>("incoming");
   const [showCompose, setShowCompose] = useState(false);
-  const [form, setForm] = useState(emptyForm);
   const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
-  const [viewAnn, setViewAnn] = useState<PrincipalAnnouncement | null>(null);
+  const [viewAnn, setViewAnn] = useState<IncomingAnnouncement | null>(null);
+  const [form, setForm] = useState(emptyForm);
   const [myAnnouncements, setMyAnnouncements] = useState<Announcement[]>([]);
-  const [principalAnnouncements, setPrincipalAnnouncements] = useState<PrincipalAnnouncement[]>([]);
+  const [incomingAnnouncements, setIncomingAnnouncements] = useState<IncomingAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const isFormReady = Boolean(form.title.trim() && form.body.trim());
 
-  const isFormReady = form.title.trim() && form.body.trim();
-
-  const activeAnnouncements = useMemo(
-    () => (activeTab === "principal" ? principalAnnouncements : myAnnouncements),
-    [activeTab, myAnnouncements, principalAnnouncements],
-  );
-
-  // ── Fetch my announcements ────────────────────────────────────────────────
-  useEffect(() => {
-    fetch("/api/guidance/announcements")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) setMyAnnouncements(data.announcements);
-      })
-      .finally(() => setLoading(false));
+  const loadMyAnnouncements = useCallback(async () => {
+    try {
+      const response = await fetch("/api/guidance/announcements", { cache: "no-store" });
+      const data = await response.json().catch(() => null);
+      if (response.ok && data?.success) setMyAnnouncements(data.announcements ?? []);
+    } catch {
+      // Keep the last confirmed list during a transient refresh failure.
+    }
   }, []);
 
-  // ── Fetch principal announcements ─────────────────────────────────────────
-  useEffect(() => {
-    fetch("/api/guidance/principal-announcements")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) setPrincipalAnnouncements(data.announcements);
-      });
+  const loadIncomingAnnouncements = useCallback(async () => {
+    try {
+      const response = await fetch("/api/guidance/principal-announcements", { cache: "no-store" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) return;
+
+      // The API gives each source a distinct ID. Dedupe again at the UI edge
+      // so reconnects and fallback refreshes cannot render duplicate cards.
+      const uniqueAnnouncements = [...new Map(
+        ((data.announcements ?? []) as IncomingAnnouncement[]).map((announcement) => [announcement.id, announcement])
+      ).values()];
+      setIncomingAnnouncements(uniqueAnnouncements);
+    } catch {
+      // Keep the last confirmed list during a transient refresh failure.
+    }
   }, []);
+
+  useEffect(() => {
+    void (async () => {
+      await Promise.all([loadMyAnnouncements(), loadIncomingAnnouncements()]);
+      setLoading(false);
+    })();
+  }, [loadIncomingAnnouncements, loadMyAnnouncements]);
+
+  useEffect(() => {
+    // The authenticated route is the fallback for custom-cookie sessions
+    // where browser table events are restricted by RLS.
+    const refreshInterval = window.setInterval(() => void loadIncomingAnnouncements(), 15_000);
+    const client = supabaseBrowser;
+    if (!client) return () => window.clearInterval(refreshInterval);
+
+    const channel = client
+      .channel("guidance-incoming-announcements")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "principal_announcements" }, () => void loadIncomingAnnouncements())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ict_announcements" }, () => void loadIncomingAnnouncements())
+      .subscribe();
+
+    return () => {
+      window.clearInterval(refreshInterval);
+      client.removeChannel(channel);
+    };
+  }, [loadIncomingAnnouncements]);
 
   const openNewAnnouncement = () => {
     setEditingAnnouncement(null);
@@ -89,13 +131,13 @@ export default function AnnouncementsPage() {
     setShowCompose(true);
   };
 
-  const openEditAnnouncement = (ann: Announcement) => {
-    setEditingAnnouncement(ann);
+  const openEditAnnouncement = (announcement: Announcement) => {
+    setEditingAnnouncement(announcement);
     setForm({
-      title: ann.title,
-      body: ann.message,
-      audience: ann.audience,
-      scheduleDate: ann.status === "Scheduled" ? toDateInputValue(ann.scheduled_at) : "",
+      title: announcement.title,
+      body: announcement.message,
+      audience: announcement.audience,
+      scheduleDate: announcement.status === "Scheduled" ? toDateInputValue(announcement.scheduled_at) : "",
     });
     setShowCompose(true);
   };
@@ -109,297 +151,120 @@ export default function AnnouncementsPage() {
   const handleSaveAnnouncement = async () => {
     if (!isFormReady || saving) return;
     setSaving(true);
-
-    const payload = {
-      title: form.title.trim(),
-      message: form.body.trim(),
-      audience: form.audience,
-      scheduled_at: form.scheduleDate ? `${form.scheduleDate}T00:00:00` : null,
-    };
-
-    const url = editingAnnouncement
-      ? `/api/guidance/announcements/${editingAnnouncement.id}`
-      : "/api/guidance/announcements";
-    const method = editingAnnouncement ? "PATCH" : "POST";
-
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    setSaving(false);
-    if (!data.success) return;
-
-    if (editingAnnouncement) {
-      setMyAnnouncements(prev =>
-        prev.map(a => a.id === editingAnnouncement.id ? data.announcement : a)
+    try {
+      const response = await fetch(
+        editingAnnouncement ? `/api/guidance/announcements/${editingAnnouncement.id}` : "/api/guidance/announcements",
+        {
+          method: editingAnnouncement ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: form.title.trim(),
+            message: form.body.trim(),
+            audience: form.audience,
+            scheduled_at: form.scheduleDate ? `${form.scheduleDate}T00:00:00` : null,
+          }),
+        },
       );
-    } else {
-      setMyAnnouncements(prev => [data.announcement, ...prev]);
-    }
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) return;
 
-    setActiveTab("mine");
-    closeCompose();
+      if (editingAnnouncement) {
+        setMyAnnouncements((current) => current.map((item) => item.id === editingAnnouncement.id ? data.announcement : item));
+      } else {
+        setMyAnnouncements((current) => [data.announcement, ...current]);
+      }
+      setActiveTab("mine");
+      closeCompose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
-    const res = await fetch(`/api/guidance/announcements/${id}`, { method: "DELETE" });
-    const data = await res.json();
-    if (data.success) {
-      setMyAnnouncements(prev => prev.filter(a => a.id !== id));
-    }
+    const response = await fetch(`/api/guidance/announcements/${id}`, { method: "DELETE" });
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.success) setMyAnnouncements((current) => current.filter((item) => item.id !== id));
   };
 
-  const handleViewPrincipalAnnouncement = (ann: PrincipalAnnouncement) => {
-    setViewAnn(ann);
-    markPrincipalAnnouncementRead(ann.id);
-    setPrincipalAnnouncements(prev =>
-      prev.map(a => a.id === ann.id ? { ...a, read: true } : a)
-    );
+  const handleViewIncomingAnnouncement = (announcement: IncomingAnnouncement) => {
+    const viewed = { ...announcement, read: true };
+    setViewAnn(viewed);
+    setIncomingAnnouncements((current) => current.map((item) => item.id === announcement.id ? viewed : item));
+    if (!announcement.read) markAnnouncementRead(announcement.notificationKey);
   };
 
   return (
-    <div className="page">
-      <header className="page-header">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <span className="eyebrow">Guidance Office</span>
-          <h1 className="page-title">Announcements</h1>
-          <p className="page-meta">Create announcements for staff and view messages from the principal</p>
+          <p className="text-xs font-extrabold uppercase tracking-[0.08em] text-sky-600">Guidance Office</p>
+          <h1 className="mt-1 text-3xl font-extrabold tracking-tight text-slate-900">Announcements</h1>
+          <p className="mt-2 text-sm font-semibold text-slate-500">Create announcements for staff and view incoming messages from the Principal and ICT.</p>
         </div>
-        <button className="btn-primary" onClick={openNewAnnouncement}>
-          <Plus size={14} />
-          New Announcement
-        </button>
+        <button type="button" onClick={openNewAnnouncement} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-sky-600"><Plus className="h-4 w-4" />New Announcement</button>
       </header>
 
-      <div className="tabs" role="tablist" aria-label="Announcement source">
-        <button
-          className={`tab ${activeTab === "principal" ? "tab-active" : ""}`}
-          onClick={() => setActiveTab("principal")}
-          role="tab"
-          aria-selected={activeTab === "principal"}
-        >
-          From Principal
-          
-        </button>
-        <button
-          className={`tab ${activeTab === "mine" ? "tab-active" : ""}`}
-          onClick={() => setActiveTab("mine")}
-          role="tab"
-          aria-selected={activeTab === "mine"}
-        >
-          My Announcements
-          
-        </button>
+      <div className="inline-flex w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:w-fit" role="tablist" aria-label="Announcement source">
+        <button type="button" role="tab" aria-selected={activeTab === "incoming"} onClick={() => setActiveTab("incoming")} className={`min-h-11 flex-1 px-4 text-sm font-bold transition sm:flex-none ${activeTab === "incoming" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"}`}>Incoming Announcements</button>
+        <button type="button" role="tab" aria-selected={activeTab === "mine"} onClick={() => setActiveTab("mine")} className={`min-h-11 flex-1 px-4 text-sm font-bold transition sm:flex-none ${activeTab === "mine" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"}`}>My Announcements</button>
       </div>
 
-      <section className="ann-list">
-        {loading && activeTab === "mine" ? (
-          <div className="card empty-state"><p>Loading...</p></div>
-        ) : activeAnnouncements.length === 0 ? (
-          <div className="card empty-state">
-            <h2>No announcements yet</h2>
-            <p>Your published and scheduled announcements will appear here.</p>
-          </div>
+      {loading ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm font-semibold text-slate-400">Loading announcements...</div>
+      ) : activeTab === "incoming" ? (
+        incomingAnnouncements.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><p className="font-bold text-slate-700">No incoming announcements yet.</p><p className="mt-1 text-sm text-slate-400">Published Principal and ICT announcements addressed to Guidance will appear here.</p></div>
         ) : (
-          activeAnnouncements.map((ann) => (
-            <article key={ann.id} className="card ann-card">
-              <div className="ann-card-top">
-                {activeTab === "principal" ? (
-                  <div className="ann-card-top-left" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ width: 26, height: 26, overflow: "hidden", borderRadius: "50%", background: "#522081", color: "white", fontSize: 11, fontWeight: 700, display: "grid", placeItems: "center" }}>
-                      {(ann as PrincipalAnnouncement).profilePicture ? <img src={(ann as PrincipalAnnouncement).profilePicture!} alt="Principal profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "P"}
-                    </div>
-                    <div className="ann-author-badge">
-                      <UserRound size={13} />
-                      {(ann as PrincipalAnnouncement).guidance_name ?? "Principal"}
-                    </div>
-                    {!(ann as PrincipalAnnouncement).read && (
-                      <span className="badge badge-red" style={{ fontSize: 11 }}>New</span>
-                    )}
+          <section className="flex flex-col gap-3">
+            {incomingAnnouncements.map((announcement) => (
+              <article key={announcement.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-extrabold text-white ${announcement.source === "ict" ? "bg-emerald-700" : "bg-violet-800"}`}>{announcement.source === "ict" ? "I" : "P"}</div>
+                    <div className="min-w-0"><p className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600"><UserRound className="h-3.5 w-3.5" />From {announcement.senderRole}</p>{!announcement.read && <span className="ml-2 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">New</span>}</div>
                   </div>
-                ) : (
-                  <span className={`badge ${(ann as Announcement).status === "Scheduled" ? "badge-amber" : "badge-green"}`}>
-                    {(ann as Announcement).status === "Scheduled" ? <Clock size={11} /> : null}
-                    {(ann as Announcement).status}
-                  </span>
-                )}
-                <div className="ann-meta-right">
-                  <span className="ann-audience badge badge-blue">{ann.audience}</span>
-                  <span className="ann-date">
-                    <Calendar size={12} />
-                    {activeTab === "mine" && (ann as Announcement).status === "Scheduled"
-                      ? `Scheduled: ${formatDisplay((ann as Announcement).scheduled_at)}`
-                      : formatDisplay(ann.created_at)}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-400"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">{audienceLabel(announcement.audience)}</span><span className="inline-flex items-center gap-1"><Calendar className="h-3.5 w-3.5" />{formatDisplay(announcement.created_at)}</span></div>
                 </div>
-              </div>
-              <h2 className="ann-title">{ann.title}</h2>
-              <p className="ann-body">{ann.message}</p>
-              {activeTab === "principal" ? (
-                <button className="btn-secondary ann-view-btn" onClick={() => handleViewPrincipalAnnouncement(ann as PrincipalAnnouncement)}>
-                  <Eye size={13} />
-                  View Full Announcement
-                </button>
-              ) : (
-                <div className="ann-actions">
-                  <button className="icon-btn" title="Edit" onClick={() => openEditAnnouncement(ann as Announcement)}>
-                    <Edit2 size={13} />
-                  </button>
-                  <button className="icon-btn delete-btn" title="Delete" onClick={() => handleDelete(ann.id)}>
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              )}
+                <h2 className="mt-4 break-words text-base font-extrabold text-slate-800">{announcement.title}</h2>
+                <p className="mt-2 break-words text-sm leading-relaxed text-slate-600">{announcement.message}</p>
+                <button type="button" onClick={() => handleViewIncomingAnnouncement(announcement)} className="mt-4 inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700"><Eye className="h-3.5 w-3.5" />View Full Announcement</button>
+              </article>
+            ))}
+          </section>
+        )
+      ) : myAnnouncements.length === 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><p className="font-bold text-slate-700">No announcements yet.</p><p className="mt-1 text-sm text-slate-400">Your published and scheduled announcements will appear here.</p></div>
+      ) : (
+        <section className="flex flex-col gap-3">
+          {myAnnouncements.map((announcement) => (
+            <article key={announcement.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><span className={`inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${announcement.status === "Scheduled" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{announcement.status === "Scheduled" && <Clock className="h-3.5 w-3.5" />}{announcement.status}</span><div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-400"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">{announcement.audience}</span><span className="inline-flex items-center gap-1"><Calendar className="h-3.5 w-3.5" />{announcement.status === "Scheduled" ? `Scheduled: ${formatDisplay(announcement.scheduled_at)}` : formatDisplay(announcement.created_at)}</span></div></div>
+              <h2 className="mt-4 break-words text-base font-extrabold text-slate-800">{announcement.title}</h2><p className="mt-2 break-words text-sm leading-relaxed text-slate-600">{announcement.message}</p>
+              <div className="mt-4 flex justify-end gap-2"><button type="button" aria-label="Edit announcement" onClick={() => openEditAnnouncement(announcement)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700"><Edit2 className="h-4 w-4" /></button><button type="button" aria-label="Delete announcement" onClick={() => handleDelete(announcement.id)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button></div>
             </article>
-          ))
-        )}
-      </section>
+          ))}
+        </section>
+      )}
 
       {showCompose && (
-        <div className="modal-overlay" onClick={closeCompose}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">{editingAnnouncement ? "Edit Announcement" : "New Announcement"}</h2>
-              <button className="modal-close" onClick={closeCompose}><X size={16} /></button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Title</label>
-                <input
-                  className="form-input"
-                  placeholder="Announcement title..."
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Message</label>
-                <textarea
-                  className="form-input form-textarea"
-                  placeholder="Write your announcement here..."
-                  rows={5}
-                  value={form.body}
-                  onChange={(e) => setForm({ ...form, body: e.target.value })}
-                />
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Audience</label>
-                  <select
-                    className="form-input"
-                    value={form.audience}
-                    onChange={(e) => setForm({ ...form, audience: e.target.value })}
-                  >
-                    <option value="Both">Parents & Class Advisers</option>
-                    <option value="Parents">Parents Only</option>
-                    <option value="Class Advisers">Class Advisers Only</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Schedule Date</label>
-                  <input
-                    type="date"
-                    className="form-input"
-                    value={form.scheduleDate}
-                    onChange={(e) => setForm({ ...form, scheduleDate: e.target.value })}
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={closeCompose}>Cancel</button>
-              <button className="btn-primary" onClick={handleSaveAnnouncement} disabled={!isFormReady || saving}>
-                {form.scheduleDate ? <Clock size={13} /> : <Plus size={13} />}
-                {saving ? "Saving..." : editingAnnouncement ? "Save Changes" : form.scheduleDate ? "Schedule" : "Publish Now"}
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 backdrop-blur-[2px] sm:p-4" onClick={closeCompose}>
+          <div role="dialog" aria-modal="true" aria-labelledby="guidance-compose-title" className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6"><h2 id="guidance-compose-title" className="text-base font-bold text-slate-800">{editingAnnouncement ? "Edit Announcement" : "New Announcement"}</h2><button type="button" aria-label="Close announcement form" onClick={closeCompose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div>
+            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Title<input className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Announcement title..." /></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Message<textarea className="mt-1.5 min-h-32 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="Write your announcement here..." rows={5} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Audience<select className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.audience} onChange={(event) => setForm({ ...form, audience: event.target.value })}><option value="Both">Parents & Class Advisers</option><option value="Parents">Parents Only</option><option value="Class Advisers">Class Advisers Only</option></select></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Schedule Date<input type="date" className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.scheduleDate} onChange={(event) => setForm({ ...form, scheduleDate: event.target.value })} /></label></div></div>
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-4 py-3 sm:flex-row sm:justify-end sm:px-6"><button type="button" onClick={closeCompose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">Cancel</button><button type="button" disabled={!isFormReady || saving} onClick={handleSaveAnnouncement} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="h-4 w-4" />{saving ? "Saving..." : editingAnnouncement ? "Save Changes" : form.scheduleDate ? "Schedule" : "Publish Now"}</button></div>
           </div>
         </div>
       )}
 
       {viewAnn && (
-        <div className="modal-overlay" onClick={() => setViewAnn(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h2 className="modal-title">{viewAnn.title}</h2>
-                <div className="modal-subtitle">
-                  {viewAnn.guidance_name} — {formatDisplay(viewAnn.created_at)}
-                </div>
-              </div>
-              <button className="modal-close" onClick={() => setViewAnn(null)}><X size={16} /></button>
-            </div>
-            <div className="modal-body">
-              <p className="modal-copy">{viewAnn.message}</p>
-              <span className="badge badge-blue audience-chip">{viewAnn.audience}</span>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setViewAnn(null)}>Close</button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 backdrop-blur-[2px] sm:p-4" onClick={() => setViewAnn(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="guidance-announcement-title" className="max-h-[calc(100dvh-1.5rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6"><div className="flex min-w-0 items-center gap-2.5"><div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${viewAnn.senderRole === "ICT" ? "bg-emerald-100" : "bg-violet-100"}`}>{viewAnn.senderRole === "ICT" ? <Monitor className="h-4 w-4 text-emerald-700" /> : <Bell className="h-4 w-4 text-violet-700" />}</div><div className="min-w-0"><p className="text-[10.5px] font-bold uppercase tracking-wider text-sky-600">{viewAnn.senderRole}</p><h2 id="guidance-announcement-title" className="break-words text-base font-bold text-slate-800">{viewAnn.title}</h2></div></div><button type="button" aria-label="Close announcement" onClick={() => setViewAnn(null)} className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><X className="h-4 w-4" /></button></div>
+            <div className="space-y-5 px-4 py-4 sm:px-6 sm:py-5"><p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">{viewAnn.message}</p><dl className="grid gap-3 border-t border-slate-100 pt-4 text-sm sm:grid-cols-2"><div><dt className="text-xs font-semibold text-slate-400">Sender</dt><dd className="mt-1 font-semibold text-slate-700">{viewAnn.senderName}</dd></div><div><dt className="text-xs font-semibold text-slate-400">Role</dt><dd className="mt-1 font-semibold text-slate-700">{viewAnn.senderRole}</dd></div><div><dt className="text-xs font-semibold text-slate-400">Date and time</dt><dd className="mt-1 font-semibold text-slate-700">{formatDateTime(viewAnn.created_at)}</dd></div><div><dt className="text-xs font-semibold text-slate-400">Status</dt><dd className="mt-1"><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-bold ${viewAnn.read ? "bg-slate-100 text-slate-600" : "bg-sky-100 text-sky-700"}`}>{viewAnn.read ? "Read" : "Unread"}</span></dd></div></dl></div>
+            <div className="flex justify-end border-t border-slate-100 px-4 py-3 sm:px-6"><button type="button" onClick={() => setViewAnn(null)} className="rounded-xl bg-slate-100 px-5 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200">Close</button></div>
           </div>
         </div>
       )}
-
-      <style jsx>{`
-        .page { width: 100%; max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
-        .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-        .eyebrow { color: #0284c7; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-        .page-title { margin-top: 4px; color: #0f2437; font-size: 32px; line-height: 1.1; font-weight: 800; letter-spacing: -0.03em; }
-        .page-meta { margin-top: 8px; color: #64748b; font-size: 14px; font-weight: 600; }
-        .tabs { display: inline-flex; gap: 0; width: fit-content; overflow: hidden; background: white; border: 1px solid #e2e8f0; border-radius: 14px; box-shadow: 0 18px 50px rgba(15, 35, 55, 0.06); }
-        .tab { min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border: 0; background: transparent; color: #64748b; cursor: pointer; font-family: "DM Sans", sans-serif; font-size: 13.5px; font-weight: 800; transition: all 0.15s ease; }
-        .tab-active { background: #0f2437; color: white; }
-        .tab-count { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.2); color: inherit; font-size: 11px; font-weight: 800; }
-        .tab:not(.tab-active) .tab-count { background: #f1f5f9; color: #64748b; }
-        .ann-list { display: flex; flex-direction: column; gap: 14px; }
-        .ann-card, .empty-state { padding: 18px; }
-        .ann-card { display: flex; flex-direction: column; gap: 12px; }
-        .ann-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-        .ann-author-badge { display: inline-flex; align-items: center; gap: 7px; color: #0284c7; font-size: 12.5px; font-weight: 800; }
-        .ann-meta-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-        .ann-audience { font-size: 11px; }
-        .badge-red { background: #fee2e2; color: #dc2626; }
-        .ann-date { display: inline-flex; align-items: center; gap: 5px; color: #64748b; font-size: 12px; font-weight: 700; }
-        .ann-title { color: #0f2437; font-size: 17px; line-height: 1.25; font-weight: 800; }
-        .ann-body { color: #475569; font-size: 13.5px; line-height: 1.65; font-weight: 600; }
-        .ann-view-btn { align-self: flex-start; font-size: 12.5px; }
-        .ann-actions { display: flex; gap: 8px; align-self: flex-end; }
-        .icon-btn { width: 32px; height: 32px; border-radius: 10px; border: 1px solid #cbd5e1; background: white; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: all 0.15s ease; }
-        .icon-btn:hover { background: #0ea5e9; color: white; border-color: #0ea5e9; }
-        .delete-btn:hover { background: #dc2626; border-color: #dc2626; }
-        .empty-state h2 { color: #0f2437; font-size: 16px; font-weight: 800; }
-        .empty-state p { margin-top: 5px; color: #64748b; font-size: 13px; font-weight: 600; }
-        .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.36); display: flex; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(2px); }
-        .modal { width: 540px; max-width: 90vw; background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(15,23,42,0.18); overflow: hidden; }
-        .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 22px; border-bottom: 1px solid #e2e8f0; }
-        .modal-title { color: #0f2437; font-size: 16px; font-weight: 800; }
-        .modal-subtitle { margin-top: 4px; color: #64748b; font-size: 12px; font-weight: 700; }
-        .modal-close { flex: 0 0 auto; border: 0; background: transparent; cursor: pointer; color: #64748b; display: flex; align-items: center; padding: 4px; border-radius: 8px; }
-        .modal-close:hover { background: #f1f5f9; }
-        .modal-body { padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
-        .modal-copy { color: #334155; font-size: 14px; line-height: 1.7; }
-        .audience-chip { align-self: flex-start; }
-        .modal-footer { display: flex; gap: 10px; justify-content: flex-end; padding: 14px 22px; border-top: 1px solid #e2e8f0; }
-        .form-group { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-        .form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .form-label { color: #64748b; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
-        .form-input { width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 12px; background: #f8fafc; color: #0f2437; font-family: "DM Sans", sans-serif; font-size: 13.5px; outline: 0; transition: border 0.15s ease, background 0.15s ease; }
-        .form-input:focus { border-color: #0ea5e9; background: white; }
-        .form-textarea { resize: vertical; min-height: 130px; }
-        .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
-        @media (max-width: 760px) {
-          .page-header, .ann-card-top { flex-direction: column; align-items: stretch; }
-          .page-title { font-size: 28px; }
-          .tabs { width: 100%; }
-          .tab { flex: 1; justify-content: center; padding: 0 10px; }
-          .ann-meta-right { justify-content: flex-start; }
-          .form-row { grid-template-columns: 1fr; }
-          .modal { width: calc(100vw - 28px); }
-          .modal-footer { flex-direction: column-reverse; }
-        }
-      `}</style>
     </div>
   );
 }

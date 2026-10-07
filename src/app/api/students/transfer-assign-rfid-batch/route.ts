@@ -1,6 +1,6 @@
 // app/api/students/transfer-assign-rfid-batch/route.ts
 // Activates selected standby students after password authorization.
-// Existing RFID cards are kept.
+// Existing RFID cards are kept; students without one can receive it later.
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `${results.length} student${results.length !== 1 ? "s" : ""} successfully transferred and activated with existing RFID.`,
+      message: `${results.length} student${results.length !== 1 ? "s" : ""} successfully transferred and activated. Existing RFID cards were kept.`,
       transferred: results,
     });
   } catch (error: unknown) {

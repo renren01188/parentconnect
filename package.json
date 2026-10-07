@@ -6,11 +6,24 @@
     "dev": "next dev -p 3001 --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:sf1-names": "node scripts/test-sf1-names.cjs",
+    "test:attendance-sms": "node scripts/test-attendance-sms.cjs",
+    "test:attendance-notifications": "node scripts/test-attendance-notification-settings.cjs",
+    "test:rfid-attendance": "node scripts/test-rfid-attendance.cjs",
+    "test:parent-enrollment": "node scripts/test-parent-enrollment.cjs",
+    "test:parent-data-isolation": "node scripts/test-parent-data-isolation.cjs",
+    "test:ict-shared-family": "node scripts/test-ict-shared-family.cjs",
+    "test:ict-user-search": "node scripts/test-ict-user-search.cjs",
+    "test:ict-adviser-direct-edit": "node scripts/test-ict-adviser-direct-edit.mjs",
+    "test:login-lockout": "node scripts/test-login-lockout.cjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.3",
     "bcryptjs": "^3.0.3",
     "exceljs": "^4.4.0",
+    "iron-session": "^8.0.4",
+    "jose": "^6.2.1",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.577.0",
     "mysql2": "^3.19.1",
@@ -25,12 +38,11 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
-    "@types/nodemailer": "^7.0.11",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "5.9.3"
   }
 }

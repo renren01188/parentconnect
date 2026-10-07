@@ -5,19 +5,13 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   Activity, LogIn, Edit3, ShieldAlert, Eye,
   Calendar, X, Clock, Monitor,
-  MessageSquare, UserX, Settings,
+  MessageSquare, Settings,
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
 
 // ─── Types ───────────────────────────────────────────────────
-type ActionType =
-  | "Login" | "Logout" | "Create" | "Update"
-  | "Deactivate" | "Delete" | "Message" | "System"
-  | "Security Alert" | "Password Reset" | "Export" | "Submit Report";
-
-type UserRole = "ICT Admin" | "ICT" | "Adviser" | "Parent" | "Principal" | "Student";
-
 interface AuditEvent {
   id: string;
   timestamp: string;
@@ -64,7 +58,6 @@ const ACTION_META: Record<string, { label: string; bg: string; text: string; bor
   Logout:          { label: "Logout",         bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: LogIn          },
   Create:          { label: "Create",         bg: "#f0fdf4", text: "#059669", border: "#6ee7b7", Icon: Plus           },
   Update:          { label: "Update",         bg: "#fefce8", text: "#ca8a04", border: "#fde68a", Icon: Edit3          },
-  Deactivate:      { label: "Deactivate",     bg: "#fff7ed", text: "#ea580c", border: "#fed7aa", Icon: UserX          },
   Delete:          { label: "Delete",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2         },
   Message:         { label: "Message",        bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare  },
   System:          { label: "System",         bg: "#f0f9ff", text: "#0284c7", border: "#bae6fd", Icon: Settings       },
@@ -77,12 +70,12 @@ const ACTION_META: Record<string, { label: string; bg: string; text: string; bor
 };
 
 const ROLE_META: Record<string, { bg: string; text: string; border: string }> = {
-  "ICT Admin":  { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
   "ICT":        { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
   "Adviser":    { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
-  "Parent":     { bg: "#fdf4ff", text: "#7e22ce", border: "#e9d5ff" },
+  "Guidance":   { bg: "#f3e8ff", text: "#7e22ce", border: "#e9d5ff" },
   "Principal":  { bg: "#fefce8", text: "#92400e", border: "#fde68a" },
   "Student":    { bg: "#fff7ed", text: "#c2410c", border: "#fed7aa" },
+  "Subject Teacher": { bg: "#f0f9ff", text: "#0369a1", border: "#bae6fd" },
 };
 
 // Derive avatar initials from a full name
@@ -108,6 +101,8 @@ function avatarColor(name: string): string {
 // Resolve a friendly action label
 function resolveAction(raw: string): string {
   if (!raw) return "System";
+  const canonical = normalizeAuditAction(raw);
+  if (canonical !== raw) return canonical;
   // Try exact match first
   if (ACTION_META[raw]) return raw;
   // Try case-insensitive
@@ -131,7 +126,7 @@ function toAuditEvent(row: AuditRealtimeRow): AuditEvent {
     targetRole: row.target_role ?? "",
     targetEmail: row.target_email ?? "",
     performedBy: row.performed_by ?? "",
-    performedByRole: row.performed_by_role ?? "",
+    performedByRole: normalizeAuditRole(row.performed_by_role),
     module: row.module ?? "",
     ipAddress: row.ip_address ?? "",
     browser: row.browser ?? "",
@@ -196,16 +191,16 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: m.bg }}>
               <m.Icon className="w-5 h-5" style={{ color: m.text }} />
             </div>
@@ -216,14 +211,15 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+            aria-label="Close event details"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
           {/* Action type */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-500">Action Type</span>
@@ -241,7 +237,7 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
           </div>
 
           {/* Details grid */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {[
               { label: "Timestamp",  value: event.timestamp,  icon: Clock    },
               { label: "Module",     value: event.module || "—",      icon: Monitor  },
@@ -273,7 +269,7 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
           </div>
         </div>
 
-        <div className="px-6 pb-6">
+        <div className="shrink-0 px-4 pb-4 sm:px-6 sm:pb-6">
           <button
             onClick={onClose}
             className="w-full py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition"
@@ -292,7 +288,10 @@ export default function AuditTrailPage() {
   const [query,        setQuery]       = useState("");
   const [actionFilter, setActionFilter]= useState("");
   const [roleFilter,   setRoleFilter]  = useState("");
+  const [moduleFilter, setModuleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [dateFilter,   setDateFilter]  = useState("");
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">("active");
   const [page,         setPage]        = useState(1);
   const [perPage,      setPerPage]     = useState(8);
 
@@ -307,7 +306,7 @@ export default function AuditTrailPage() {
   const [loading,      setLoading]     = useState(true);
   const [error,        setError]       = useState<string | null>(null);
   const [refreshKey,   setRefreshKey]  = useState(0);
-  const liveStateRef = useRef({ query: "", actionFilter: "", roleFilter: "", dateFilter: "", page: 1, perPage: 8 });
+  const liveStateRef = useRef({ query: "", actionFilter: "", roleFilter: "", dateFilter: "", archiveFilter: "active" as "active" | "archived", page: 1, perPage: 8 });
 
   // ── Debounce search ──
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -324,7 +323,10 @@ export default function AuditTrailPage() {
       if (query)        params.set("search", query);
       if (actionFilter) params.set("action", actionFilter);
       if (roleFilter)   params.set("role",   roleFilter);
+      if (moduleFilter) params.set("module", moduleFilter);
+      if (statusFilter) params.set("status", statusFilter);
       if (dateFilter)   params.set("date",   dateFilter);
+      params.set("archive", archiveFilter);
 
       const res = await fetch(`/api/ict/audit-log?${params.toString()}`);
       const json = await res.json();
@@ -340,15 +342,15 @@ export default function AuditTrailPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, query, actionFilter, roleFilter, dateFilter, refreshKey]); // eslint-disable-line
+  }, [page, perPage, query, actionFilter, roleFilter, moduleFilter, statusFilter, dateFilter, archiveFilter, refreshKey]); // eslint-disable-line
 
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
 
   useEffect(() => {
-    liveStateRef.current = { query, actionFilter, roleFilter, dateFilter, page, perPage };
-  }, [actionFilter, dateFilter, page, perPage, query, roleFilter]);
+    liveStateRef.current = { query, actionFilter, roleFilter, dateFilter, archiveFilter, page, perPage };
+  }, [actionFilter, archiveFilter, dateFilter, page, perPage, query, roleFilter]);
 
   // Receive newly created logs from the authenticated server stream. No page
   // or list reload occurs, preserving filters, scroll position and UI state.
@@ -359,9 +361,10 @@ export default function AuditTrailPage() {
         const current = liveStateRef.current;
         const searchText = `${event.performedBy} ${event.description} ${event.action}`.toLowerCase();
         const matchesFilters =
+          current.archiveFilter === "active" &&
           (!current.query || searchText.includes(current.query.toLowerCase())) &&
-          (!current.actionFilter || event.action.toLowerCase().includes(current.actionFilter.toLowerCase())) &&
-          (!current.roleFilter || event.performedByRole.toLowerCase().includes(current.roleFilter.toLowerCase())) &&
+          matchesAuditActionFilter(event.action, current.actionFilter) &&
+          matchesAuditRoleFilter(event.performedByRole, current.roleFilter) &&
           (!current.dateFilter || new Date(event.timestampMs).toISOString().slice(0, 10) === current.dateFilter);
         if (!matchesFilters) return;
 
@@ -389,7 +392,7 @@ export default function AuditTrailPage() {
 
   // ── Derived values ──
   const totalPages = Math.max(1, Math.ceil(total / perPage));
-  const hasFilters = !!(query || actionFilter || roleFilter || dateFilter);
+  const hasFilters = !!(query || actionFilter || roleFilter || moduleFilter || statusFilter || dateFilter || archiveFilter === "archived");
 
   const stats = useMemo(() => ({
     total,
@@ -398,12 +401,9 @@ export default function AuditTrailPage() {
     security: events.filter(e => resolveAction(e.action) === "Security Alert").length,
   }), [events, total]);
 
-  const ACTION_TYPES = ["Login", "Logout", "Submit Report", "Message", "Escalate", "Resolve"];
-  const ROLE_OPTIONS = ["Principal", "ICT Admin", "Adviser", "Parent"];
-
   function resetFilters() {
     setQuery(""); setActionFilter("");
-    setRoleFilter(""); setDateFilter(""); setPage(1);
+    setRoleFilter(""); setModuleFilter(""); setStatusFilter(""); setDateFilter(""); setArchiveFilter("active"); setPage(1);
   }
 
   const statCards = [
@@ -415,12 +415,12 @@ export default function AuditTrailPage() {
 
   return (
     <div
-      className="p-6 min-h-screen bg-gray-100"
+      className="min-h-screen min-w-0 overflow-x-clip bg-gray-100 p-4 sm:p-6"
       onClick={() => { setActionOpen(false); setRoleOpen(false); }}
     >
       {/* ── Header ── */}
-      <div className="mb-5 flex items-center justify-between">
-        <div>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900">Audit Trail</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             Complete log of all system actions performed by users and administrators.
@@ -431,7 +431,7 @@ export default function AuditTrailPage() {
         <button
           onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
           disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[#274e13] border border-[#274e13]/30 rounded-xl hover:bg-green-50 disabled:opacity-50 transition"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#274e13]/30 px-4 py-2 text-sm font-semibold text-[#274e13] transition hover:bg-green-50 disabled:opacity-50 sm:w-auto"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -439,9 +439,9 @@ export default function AuditTrailPage() {
       </div>
 
       {/* ── Stats ── */}
-      <div className="grid grid-cols-4 gap-4 mb-5">
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map(({ label, value, icon: Icon, color, bg }) => (
-          <div key={label} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm flex items-center gap-4">
+          <div key={label} className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
             <div className={`w-12 h-12 rounded-xl ${bg} flex items-center justify-center shrink-0`}>
               <Icon className="w-5 h-5" style={{ color }} />
             </div>
@@ -461,14 +461,30 @@ export default function AuditTrailPage() {
 
       {/* ── Table card ── */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm">
+        <div className="flex items-end gap-4 border-b border-gray-100 px-4 pt-3 sm:px-5" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            onClick={() => { setArchiveFilter("active"); setPage(1); }}
+            className={`border-b-2 px-1 pb-3 text-sm font-bold transition ${archiveFilter === "active" ? "border-[#274e13] text-[#274e13]" : "border-transparent text-gray-400 hover:text-gray-600"}`}
+          >
+            Recent
+          </button>
+          <button
+            type="button"
+            onClick={() => { setArchiveFilter("archived"); setPage(1); }}
+            className={`border-b-2 px-1 pb-3 text-sm font-bold transition ${archiveFilter === "archived" ? "border-[#274e13] text-[#274e13]" : "border-transparent text-gray-400 hover:text-gray-600"}`}
+          >
+            Archived
+          </button>
+        </div>
 
         {/* Filters bar */}
         <div
-          className="relative px-5 py-4 border-b border-gray-100 flex items-center gap-3 flex-wrap rounded-t-2xl"
+          className="relative flex flex-col gap-3 border-b border-gray-100 px-4 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:px-5"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Search */}
-          <div className="relative flex-1 min-w-64">
+          <div className="relative w-full min-w-0 flex-1 sm:min-w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
             <input
               value={query}
@@ -479,21 +495,28 @@ export default function AuditTrailPage() {
           </div>
 
           {/* Date filter */}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
             <input
               type="date"
               value={dateFilter}
               onChange={(e) => { setDateFilter(e.target.value); setPage(1); }}
-              className="pl-9 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white text-gray-700 w-44"
+              className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-3 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] sm:w-44"
             />
           </div>
 
+          <select aria-label="Filter by module" value={moduleFilter} onChange={(e) => { setModuleFilter(e.target.value); setPage(1); }} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-700 sm:w-auto">
+            <option value="">All Modules</option><option>Reports</option><option>Student Reports</option><option>Guidance Tickets</option><option>Attendance</option><option>Students</option><option>Auth</option><option>School Year Control</option>
+          </select>
+          <select aria-label="Filter by status" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-700 sm:w-auto">
+            <option value="">All Statuses</option><option>new</option><option>ongoing</option><option>resolved</option><option>accepted</option><option>rejected</option><option>Active</option><option>Ended</option><option>Absent</option>
+          </select>
+
           {/* Action type filter */}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <button
               onClick={(e) => { e.stopPropagation(); setActionOpen(p => !p); setRoleOpen(false); }}
-              className="flex items-center gap-2 pl-3.5 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-white hover:border-gray-300 transition min-w-36 justify-between"
+              className="flex w-full items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white py-2.5 pl-3.5 pr-3 text-sm transition hover:border-gray-300 sm:min-w-36"
               style={actionFilter ? { borderColor: "#274e13", color: "#274e13" } : { color: "#6b7280" }}
             >
               <span className="truncate">{actionFilter || "All Actions"}</span>
@@ -507,16 +530,16 @@ export default function AuditTrailPage() {
                 >
                   All Actions
                 </button>
-                {ACTION_TYPES.map((a) => {
-                  const m = ACTION_META[a];
+                {AUDIT_ACTION_OPTIONS.map((option) => {
+                  const m = ACTION_META[option.label];
                   return (
                     <button
-                      key={a}
-                      onClick={() => { setActionFilter(a); setActionOpen(false); setPage(1); }}
-                      className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition flex items-center gap-2 ${actionFilter === a ? "font-bold text-[#274e13] bg-green-50" : "text-gray-700"}`}
+                      key={option.value}
+                      onClick={() => { setActionFilter(option.value); setActionOpen(false); setPage(1); }}
+                      className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition flex items-center gap-2 ${actionFilter === option.value ? "font-bold text-[#274e13] bg-green-50" : "text-gray-700"}`}
                     >
                       {m && <m.Icon className="w-3.5 h-3.5 shrink-0" style={{ color: m.text }} />}
-                      {a}
+                      {option.label}
                     </button>
                   );
                 })}
@@ -525,10 +548,10 @@ export default function AuditTrailPage() {
           </div>
 
           {/* Role filter */}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <button
               onClick={(e) => { e.stopPropagation(); setRoleOpen(p => !p); setActionOpen(false); }}
-              className="flex items-center gap-2 pl-3.5 pr-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-white hover:border-gray-300 transition min-w-32 justify-between"
+              className="flex w-full items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white py-2.5 pl-3.5 pr-3 text-sm transition hover:border-gray-300 sm:min-w-32"
               style={roleFilter ? { borderColor: "#274e13", color: "#274e13" } : { color: "#6b7280" }}
             >
               <span className="truncate">{roleFilter || "All Roles"}</span>
@@ -542,16 +565,16 @@ export default function AuditTrailPage() {
                 >
                   All Roles
                 </button>
-                {ROLE_OPTIONS.map((r) => {
-                  const m = ROLE_META[r] ?? { text: "#6b7280" };
+                {AUDIT_ROLE_OPTIONS.map((option) => {
+                  const m = ROLE_META[option.label] ?? { text: "#6b7280" };
                   return (
                     <button
-                      key={r}
-                      onClick={() => { setRoleFilter(r); setRoleOpen(false); setPage(1); }}
-                      className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition flex items-center gap-2 ${roleFilter === r ? "font-bold text-[#274e13] bg-green-50" : "text-gray-700"}`}
+                      key={option.value}
+                      onClick={() => { setRoleFilter(option.value); setRoleOpen(false); setPage(1); }}
+                      className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition flex items-center gap-2 ${roleFilter === option.value ? "font-bold text-[#274e13] bg-green-50" : "text-gray-700"}`}
                     >
                       <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: m.text }} />
-                      {r}
+                      {option.label}
                     </button>
                   );
                 })}
@@ -563,7 +586,7 @@ export default function AuditTrailPage() {
           {hasFilters && (
             <button
               onClick={resetFilters}
-              className="flex items-center gap-1.5 text-xs font-bold text-red-500 hover:text-red-700 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition"
+              className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-500 transition hover:bg-red-50 sm:w-auto"
             >
               <X className="w-3.5 h-3.5" />Clear
             </button>
@@ -585,8 +608,8 @@ export default function AuditTrailPage() {
         )}
 
         {/* Table */}
-        <div className="overflow-x-auto rounded-b-2xl">
-          <table className="w-full">
+        <div className="max-w-full overflow-x-auto overscroll-x-contain rounded-b-2xl">
+          <table className="min-w-[860px] w-full">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
                 <th className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3 w-12">#</th>
@@ -696,7 +719,7 @@ export default function AuditTrailPage() {
 
         {/* Pagination */}
         <div
-          className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl"
+          className="flex flex-col gap-3 rounded-b-2xl border-t border-gray-100 bg-gray-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Showing count */}
@@ -711,7 +734,7 @@ export default function AuditTrailPage() {
           </p>
 
           {/* Page buttons */}
-          <div className="flex items-center gap-1">
+          <div className="flex max-w-full items-center gap-1 overflow-hidden">
             <button
               onClick={() => setPage(p => Math.max(p - 1, 1))}
               disabled={page === 1 || loading}
@@ -763,7 +786,7 @@ export default function AuditTrailPage() {
           </div>
 
           {/* Rows per page */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             <span className="text-xs text-gray-400">Rows per page:</span>
             <div className="relative">
               <select

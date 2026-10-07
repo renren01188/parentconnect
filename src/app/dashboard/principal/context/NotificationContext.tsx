@@ -2,11 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
-
-type PrincipalReportSummary = {
-  status?: string;
-  escalatedToPrincipal?: boolean;
-};
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 
 type PrincipalConversationSummary = {
   status?: string;
@@ -22,7 +18,6 @@ interface NotifContextType {
   ictMessageCount: number;
   setIctMessageCount: (n: number) => void;
   refreshCounts: () => Promise<void>;
-  annUnreadCount: number;
   principalNotifCount: number;
 }
 
@@ -36,39 +31,25 @@ const NotifContext = createContext<NotifContextType>({
   ictMessageCount: 0,
   setIctMessageCount: () => { },
   refreshCounts: async () => { },
-  annUnreadCount: 0,
   principalNotifCount: 0,
 });
-
-function isActionablePrincipalReport(report: PrincipalReportSummary) {
-  return Boolean(report.escalatedToPrincipal) && (report.status === "Escalated" || report.status === "New");
-}
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [reportCount, setReportCount] = useState(0);
   const [adviserMessageCount, setAdviserMessageCount] = useState(0);
   const [ictMessageCount, setIctMessageCount] = useState(0);
-  const [annUnreadCount, setAnnUnreadCount] = useState(0);
   const [principalNotifCount, setPrincipalNotifCount] = useState(0);
   const unreadCount = reportCount + adviserMessageCount + ictMessageCount;
 
   const refreshCounts = useCallback(async () => {
-    const [reportsRes, messagesRes, ictRes, annRes] = await Promise.all([
-      fetch("/api/reports/parent-adviser?role=principal", { cache: "no-store" }),
-      fetch("/api/reports/principal-messages", { cache: "no-store" }),
-      fetch("/api/principal-ict/messages", { cache: "no-store" }),
-      fetch("/api/principal/notifications", { cache: "no-store" }),
+    const [messagesResult, ictResult, notifResult] = await Promise.all([
+      fetchJsonWithRetry<any>("/api/reports/principal-messages", { cache: "no-store" }),
+      fetchJsonWithRetry<any>("/api/principal-ict/messages", { cache: "no-store" }),
+      fetchJsonWithRetry<any>("/api/principal/notifications", { cache: "no-store" }),
     ]);
-
-    const reportsData = await reportsRes.json().catch(() => null);
-    const messagesData = await messagesRes.json().catch(() => null);
-    const ictData = await ictRes.json().catch(() => null);
-    const annData = await annRes.json().catch(() => null);
-
-    if (reportsRes.ok) {
-      const reports = (reportsData?.reports ?? []) as PrincipalReportSummary[];
-      setReportCount(reports.filter(isActionablePrincipalReport).length);
-    }
+    const { response: messagesRes, data: messagesData } = messagesResult;
+    const { response: ictRes, data: ictData } = ictResult;
+    const { response: notifRes, data: notifData } = notifResult;
 
     if (messagesRes.ok) {
       const conversations = (messagesData?.inbox ?? []) as PrincipalConversationSummary[];
@@ -79,9 +60,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setIctMessageCount(Number(ictData?.unreadCount ?? 0));
     }
 
-    if (annRes.ok) {
-      setAnnUnreadCount(Number(annData?.unreadCount ?? 0));
-      setPrincipalNotifCount(Number(annData?.unreadCount ?? 0));
+    if (notifRes.ok) {
+      setReportCount(Number(notifData?.reportUnreadCount ?? 0));
+      setPrincipalNotifCount(Number(notifData?.unreadCount ?? 0));
     }
   }, []);
 
@@ -89,17 +70,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const timer = window.setTimeout(() => {
       refreshCounts().catch(() => null);
     }, 0);
+    // Server routes remain the authority for Principal notification counts.
+    const refreshInterval = window.setInterval(() => {
+      refreshCounts().catch(() => null);
+    }, 30_000);
 
     const client = supabaseBrowser;
     if (!client) {
       return () => {
         window.clearTimeout(timer);
+        window.clearInterval(refreshInterval);
       };
     }
 
     const channel = client
       .channel("principal-sidebar-counts")
       .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
+        refreshCounts().catch(() => null);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_report_guidance_tickets" }, () => {
         refreshCounts().catch(() => null);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "adviser_principal_messages" }, () => {
@@ -111,12 +100,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
         refreshCounts().catch(() => null);
       })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "adviser_announcements" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "guidance_announcements" }, () => {
-        refreshCounts().catch(() => null);
-      })
       .on("postgres_changes", { event: "*", schema: "public", table: "principal_notification_reads" }, () => {
         refreshCounts().catch(() => null);
       })
@@ -124,6 +107,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     return () => {
       window.clearTimeout(timer);
+      window.clearInterval(refreshInterval);
       client.removeChannel(channel);
     };
   }, [refreshCounts]);
@@ -143,7 +127,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ictMessageCount,
       setIctMessageCount,
       refreshCounts,
-      annUnreadCount,
       principalNotifCount,
     }}>
       {children}

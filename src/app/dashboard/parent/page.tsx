@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-    AlertCircle, MessageSquare, CheckCheck,
+    MessageSquare, CheckCheck,
     Clock, Ban, Calendar, Users,
 } from "lucide-react";
 import Link from "next/link";
 import Sidebar from "./components/Sidebar";
+import ParentDashboardGuide from "./components/ParentDashboardGuide";
 
 interface StudentInfo {
     id: string;
@@ -138,6 +139,7 @@ export default function ParentDashboard() {
     const [profileLoading, setProfileLoading] = useState(true);
     const [reportsData, setReportsData] = useState<{ title: string; meta: string; isNew: boolean }[]>([]);
     const [messagesData, setMessagesData] = useState<{ initials: string; name: string; preview: string; color: string }[]>([]);
+    const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
     useEffect(() => {
         async function loadParentStudent() {
@@ -286,6 +288,13 @@ export default function ParentDashboard() {
 
     const student = students.find(s => s.id === selectedId) ?? students[0];
     const unreadCount = notifs.filter(n => n.unread).length;
+    const guideHighlight = (target: string) => guideTarget === target
+        ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-[#f4f6fb]"
+        : "";
+    const handleGuideStepChange = useCallback((target: string | null) => {
+        setGuideTarget(target);
+        window.dispatchEvent(new CustomEvent("parent-dashboard-guide-target", { detail: target }));
+    }, []);
     const markAllRead = () => {
         setNotifs(prev => prev.map(n => ({ ...n, unread: false })));
         fetch("/api/parents/notifications", {
@@ -311,9 +320,9 @@ export default function ParentDashboard() {
 
     if (profileLoading || !student) {
         return (
-            <div className="flex h-screen bg-[#f4f6fb] font-sans overflow-hidden">
+            <div className="flex min-h-screen flex-col overflow-x-clip bg-[#f4f6fb] font-sans md:flex-row md:overflow-visible">
                 <Sidebar />
-                <div className="flex-1 flex items-center justify-center text-slate-400 text-sm font-semibold">
+                <div className="flex flex-1 items-center justify-center text-sm font-semibold text-slate-400">
                     Loading parent dashboard...
                 </div>
             </div>
@@ -340,15 +349,13 @@ export default function ParentDashboard() {
         },
     ];
 
-    const hasAbsenceAlert = student.attendance.some(a => a.status === "Absent");
-
     return (
-        <div className="flex h-screen bg-[#f4f6fb] font-sans overflow-hidden">
+        <div className="flex min-h-screen flex-col overflow-x-clip bg-[#f4f6fb] font-sans md:flex-row md:overflow-visible">
 
             <Sidebar />
 
-            <div className="flex-1 flex flex-col overflow-hidden">
-                <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-6 pb-24 md:pb-8">
+            <div className="flex min-w-0 flex-1 flex-col">
+                <main className="flex-1 px-3 py-5 pb-8 sm:px-4 md:px-8 md:py-6 md:pb-8">
 
                     {/* ── Header ── */}
                     <div className="mb-5">
@@ -359,7 +366,7 @@ export default function ParentDashboard() {
                     </div>
 
                     {/* ── Select Student ── */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4 mb-4">
+                    <div data-parent-guide="student-switcher" className={`mb-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm sm:px-5 ${guideHighlight("student-switcher")}`}>
                         <div className="flex items-center gap-3 mb-3">
                             <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
                                 <Users className="w-4 h-4 text-blue-500" />
@@ -369,7 +376,7 @@ export default function ParentDashboard() {
                                 <p className="text-xs text-slate-400">{students.length} child linked to this account</p>
                             </div>
                         </div>
-                        <div className="flex flex-col sm:flex-row gap-2">
+                        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
                             {students.map(s => {
                                 const isActive = s.id === selectedId;
                                 return (
@@ -377,7 +384,7 @@ export default function ParentDashboard() {
                                         key={s.id}
                                         type="button"
                                         onClick={() => selectStudent(s.id)}
-                                        className={`flex-1 flex items-center gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${isActive
+                                        className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all md:min-w-[240px] md:flex-1 ${isActive
                                             ? "border-blue-500 bg-blue-50 shadow-sm"
                                             : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"
                                             }`}
@@ -405,37 +412,19 @@ export default function ParentDashboard() {
                     </div>
 
                     {/* ── Absence Alert Banner ── */}
-                    {hasAbsenceAlert && (
-                        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 mb-4 flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-white border-2 border-red-400 flex items-center justify-center shrink-0">
-                                <AlertCircle className="w-4 h-4 text-red-500" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-sm font-bold text-red-600">
-                                    Action needed — {student.attendance.find(a => a.status === "Absent")?.date ?? "Recent absence"}
-                                </p>
-                                <p className="text-xs text-red-400 mt-0.5">
-                                    {student.name.split(" ")[0]} was marked absent. Contact the school office if this is an error.
-                                </p>
-                            </div>
-                            <Link href="/dashboard/parent/reports" className="shrink-0 bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors flex items-center gap-1">
-                                Contact Adviser ↗
-                            </Link>
-                        </div>
-                    )}
-
                     {/* ── Presence Banner ── */}
                     <div
-                        className="rounded-2xl px-6 py-5 mb-5 flex items-center justify-between"
+                        data-parent-guide="today-status"
+                        className={`mb-5 flex flex-col gap-4 rounded-2xl px-4 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6 ${guideHighlight("today-status")}`}
                         style={{ background: "linear-gradient(135deg, #1e2d4d 0%, #16213e 100%)" }}
                     >
-                        <div>
+                        <div className="min-w-0">
                             <p className="text-white font-bold text-base leading-snug">
                                 Good morning, {parentName.split(" ")[0]}! {student.name.split(" ")[0]} is {student.isAtSchool ? "at school" : "not yet in"}.
                             </p>
                             <p className="text-slate-400 text-xs mt-1">{student.checkInDay}</p>
                         </div>
-                        <div className="text-right shrink-0">
+                        <div className="shrink-0 sm:text-right">
                             <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Checked in today</p>
                             <p className="text-white font-extrabold text-2xl leading-tight">{student.checkInTime}</p>
                             <p className="text-green-400 text-[11px] mt-0.5 font-semibold">
@@ -445,7 +434,7 @@ export default function ParentDashboard() {
                     </div>
 
                     {/* ── Big Stat Cards ── */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div data-parent-guide="attendance-summary" className={`mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 ${guideHighlight("attendance-summary")}`}>
                         {statCards.map(({ icon: Icon, value, label, delta, bg, badgeBg }) => (
                             <div key={label} className="rounded-2xl p-4 flex flex-col" style={{ background: bg }}>
                                 <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3" style={{ background: "rgba(255,255,255,0.12)" }}>
@@ -463,7 +452,7 @@ export default function ParentDashboard() {
                     </div>
 
                     {/* ── Bottom 4 Mini Cards ── */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                    <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
 
                         {/* This Week */}
                         <div className="rounded-2xl bg-white border border-slate-100 shadow-sm p-4">
@@ -486,9 +475,9 @@ export default function ParentDashboard() {
                                 {reportsData.map((r, i) => (
                                     <div key={`${r.title}-${i}`} className="flex items-start gap-2">
                                         <span className="w-2 h-2 mt-1 rounded-full shrink-0" style={{ background: r.isNew ? "#4ade80" : "#6ee7b7" }} />
-                                        <div>
-                                            <p className="text-white text-xs font-semibold leading-tight">{r.title}</p>
-                                            <p className="text-green-300 text-[10px]">{r.meta}</p>
+                                        <div className="min-w-0 break-words">
+                                            <p className="break-words text-xs font-semibold leading-tight text-white">{r.title}</p>
+                                            <p className="break-words text-[10px] text-green-300">{r.meta}</p>
                                         </div>
                                     </div>
                                 ))}
@@ -505,9 +494,9 @@ export default function ParentDashboard() {
                                 {notifs.slice(0, 3).map((a) => (
                                     <div key={a.id} className="flex items-start gap-2">
                                         <span className="w-2 h-2 mt-1 rounded-full bg-red-400 shrink-0" />
-                                        <div>
-                                            <p className="text-white text-xs font-semibold leading-tight">{a.title}</p>
-                                            <p className="text-red-300 text-[10px]">{a.time}</p>
+                                        <div className="min-w-0 break-words">
+                                            <p className="break-words text-xs font-semibold leading-tight text-white">{a.title}</p>
+                                            <p className="break-words text-[10px] text-red-300">{a.time}</p>
                                         </div>
                                     </div>
                                 ))}
@@ -550,15 +539,15 @@ export default function ParentDashboard() {
 
 
                     {/* ── Notifications ── */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-                        <div className="flex items-center justify-between mb-1">
+                    <div data-parent-guide="notifications" className={`rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5 ${guideHighlight("notifications")}`}>
+                        <div className="mb-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h2 className="font-bold text-slate-800 text-base">Notifications</h2>
                                 <p className="text-xs text-slate-400 mt-0.5">{unreadCount} unread notification{unreadCount !== 1 ? "s" : ""}</p>
                             </div>
                             {unreadCount > 0 && (
                                 <button onClick={markAllRead}
-                                    className="flex items-center gap-1.5 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:min-h-0 sm:w-auto sm:py-1.5">
                                     <CheckCheck className="w-3.5 h-3.5" /> Mark all
                                 </button>
                             )}
@@ -568,14 +557,14 @@ export default function ParentDashboard() {
                                 const { id, icon: Icon, title, time, msg, unread, color, iconColor } = notif;
                                 return (
                                     <div key={id} onClick={() => handleNotifClick(notif)}
-                                        className={`flex gap-3 border rounded-xl p-4 relative transition-all cursor-pointer hover:shadow-md hover:brightness-95 ${color}`}>
+                                        className={`relative flex gap-3 rounded-xl border p-4 transition-all cursor-pointer hover:shadow-md hover:brightness-95 ${color}`}>
                                         <div className={`w-9 h-9 rounded-xl ${iconColor} flex items-center justify-center shrink-0`}>
                                             <Icon className="w-[18px] h-[18px] text-white" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-bold text-slate-800">{title}</p>
+                                            <p className="break-words text-sm font-bold text-slate-800">{title}</p>
                                             <p className="text-xs text-slate-400 mb-1">{time}</p>
-                                            <p className="text-xs text-slate-600 leading-relaxed">{msg}</p>
+                                            <p className="break-words text-xs leading-relaxed text-slate-600">{msg}</p>
                                         </div>
                                         {unread && <span className="w-2 h-2 bg-red-500 rounded-full absolute top-4 right-4" />}
                                     </div>
@@ -588,13 +577,14 @@ export default function ParentDashboard() {
                             )}
                         </div>
                         <Link href="/dashboard/parent/notifications"
-                            className="flex items-center justify-center gap-1.5 w-full mt-4 py-3 border border-slate-200 rounded-xl text-sm font-semibold text-blue-600 hover:bg-blue-50 transition-colors">
+                            className="mt-4 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-3 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50">
                             View All Notifications <span className="text-base">→</span>
                         </Link>
                     </div>
 
                 </main>
             </div>
+            <ParentDashboardGuide onStepChange={handleGuideStepChange} />
         </div>
     );
 }

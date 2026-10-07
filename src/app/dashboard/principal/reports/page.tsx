@@ -1,7 +1,8 @@
 "use client";
 
 import ExcelJS from "exceljs";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   CheckCircle,
   ChevronRight,
@@ -17,14 +18,15 @@ import {
   X,
 } from "lucide-react";
 import { type Report, type ReportStatus } from "../../adviser/data";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { UserAvatar } from "@/components/UserAvatar";
-import { useNotifContext } from "../context/NotificationContext";
+import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
+import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
 
 type MainTab = "Escalated" | "Monitoring" | "Messages";
 type FilterTab = "All" | "Pending" | "Ongoing" | "Escalated" | "Resolved";
 type MonitoringPriority = "low" | "medium" | "high";
-type MonitoringStatus = "Pending" | "Under Review" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved";
+type MonitoringStatus = "Pending" | "Under Review" | "Accepted Ticket" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved";
 type ExportFormat = "excel" | "pdf";
 
 type MonitoringEntry = {
@@ -231,12 +233,10 @@ function getAvatarColor(name: string) {
 }
 
 function ParentAvatar({ name, profilePicture, initials, className }: { name: string; profilePicture?: string | null; initials: string; className: string }) {
-  const [imageFailed, setImageFailed] = useState(false);
+  void profilePicture;
   return (
     <div className={`${className} ${getAvatarColor(name)} overflow-hidden flex items-center justify-center text-white font-extrabold shrink-0`}>
-      {profilePicture && !imageFailed
-        ? <img src={profilePicture} alt={`${name}'s profile`} className="h-full w-full object-cover" onError={() => setImageFailed(true)} />
-        : initials}
+      {initials}
     </div>
   );
 }
@@ -249,6 +249,23 @@ function getStatusStyle(status: ReportStatus) {
     case "Resolved": return "bg-emerald-100 text-emerald-700";
     case "Escalated": return "bg-red-100 text-red-600";
   }
+}
+
+function principalReportStatusLabel(report: Report) {
+  if (report.status === "Resolved") return "Resolved";
+  if (report.escalatedToPrincipal) return "Escalated to Principal";
+  if (report.escalatedToGuidance) return "Escalated from Guidance";
+  if (report.ticketStatus === "accepted" && !report.escalatedToPrincipal) return "Accepted Ticket";
+  return report.status === "Ongoing" ? "On Going" : report.status;
+}
+
+function principalReportStatusClass(report: Report) {
+  if (report.status === "Resolved") return "bg-emerald-100 text-emerald-700";
+  if (report.escalatedToPrincipal) return "bg-red-100 text-red-700";
+  if (report.escalatedToGuidance) return "bg-violet-100 text-violet-700";
+  return report.ticketStatus === "accepted" && !report.escalatedToPrincipal
+    ? "bg-sky-100 text-sky-700"
+    : getStatusStyle(report.status);
 }
 
 function principalHistoryRoleStyle(role?: PrincipalReply["senderRole"]) {
@@ -269,6 +286,7 @@ function monitoringPriorityClass(priority: MonitoringPriority) {
 
 function monitoringStatusClass(status: MonitoringStatus) {
   if (status === "Escalated to Principal") return "bg-red-600 text-white";
+  if (status === "Accepted Ticket") return "bg-sky-600 text-white";
   if (status === "Escalated to Guidance") return "bg-violet-600 text-white";
   if (status === "Resolved") return "bg-emerald-100 text-emerald-700";
   if (status === "Under Review") return "bg-blue-100 text-blue-700";
@@ -277,6 +295,7 @@ function monitoringStatusClass(status: MonitoringStatus) {
 
 function monitoringStatusFromReport(report: Report): MonitoringStatus {
   if (report.escalatedToPrincipal) return "Escalated to Principal";
+  if (report.ticketStatus === "accepted") return "Accepted Ticket";
   if (report.escalatedToGuidance) return "Escalated to Guidance";
   if (report.status === "Resolved") return "Resolved";
   if (report.status === "Ongoing" || report.status === "Read") return "Under Review";
@@ -292,11 +311,14 @@ function monitoringPriorityFromLevel(level: number): MonitoringPriority {
 function reportsToMonitoringEntries(reports: Report[]): MonitoringEntry[] {
   return reports.map((report) => {
     const fromName = parentDisplayName(report);
+    const acceptedByGuidanceTicket = report.ticketStatus === "accepted";
     return {
       id: `parent:${report.id}`,
       date: report.submitted_at,
       from: { name: fromName, role: "Parent", initials: getInitials(fromName) },
-      to: { name: "School Staff", role: "Adviser", initials: "SS" },
+      to: acceptedByGuidanceTicket
+        ? { name: "Guidance Counselor", role: "Guidance", initials: "GC" }
+        : { name: "School Staff", role: "Adviser", initials: "SS" },
       category: report.categories[0] ?? report.category,
       concern: report.subject,
       student: report.student_name,
@@ -573,9 +595,9 @@ function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; o
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-5" onClick={onClose}>
-      <div className="w-full max-w-[520px] overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:p-5" onClick={onClose}>
+      <div className="max-h-[calc(100vh-24px)] w-full max-w-[520px] overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
           <div>
             <h2 className="text-xl font-extrabold text-slate-900">Export Report Monitoring</h2>
             <p className="mt-1 text-sm text-slate-400">Choose a polished Excel or PDF copy of the monitoring table.</p>
@@ -585,7 +607,7 @@ function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; o
           </button>
         </div>
 
-        <div className="space-y-4 px-6 py-5">
+        <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
           <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
             <p className="text-sm font-extrabold text-violet-800">Included Data</p>
             <p className="mt-1 text-xs leading-relaxed text-violet-700">
@@ -620,14 +642,14 @@ function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; o
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50 px-6 py-4">
-          <button onClick={onClose} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100">
+        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
+          <button onClick={onClose} className="min-h-11 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100">
             Cancel
           </button>
           <button
             onClick={handleExport}
             disabled={exporting}
-            className="flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
           >
             <FileDown className="h-4 w-4" />
             {exporting ? "Exporting..." : `Export ${format.toUpperCase()}`}
@@ -672,9 +694,9 @@ function priorityClass(level: number) {
   return "bg-sky-500 text-white";
 }
 
-function PriorityBadge({ level, large = false }: { level: number; large?: boolean }) {
+function PriorityBadge({ level, large = false, compact = false }: { level: number; large?: boolean; compact?: boolean }) {
   return (
-    <span className={`${large ? "px-3 py-1.5 text-xs" : "px-2 py-0.5 text-[11px]"} rounded-lg font-extrabold ${priorityClass(level)}`}>
+    <span className={`${large ? "px-3 py-1.5 text-xs" : compact ? "px-2 py-1 text-[10px] leading-none" : "px-2 py-0.5 text-[11px]"} rounded-full font-extrabold ${priorityClass(level)}`}>
       {priorityLabel(level)}
     </span>
   );
@@ -793,9 +815,9 @@ function NewMessageModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/45 p-5" onClick={onClose}>
-      <div className="flex max-h-[calc(100vh-40px)] w-[500px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:items-start sm:justify-end sm:p-5" onClick={onClose}>
+      <div className="flex max-h-[calc(100vh-24px)] w-full max-w-[500px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
           <div>
             <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
             <p className="mt-1 text-sm text-slate-400">Send a message about a monitored or escalated report</p>
@@ -1104,8 +1126,10 @@ function groupByStudentParent(reports: Report[]): ParentGroup[] {
   }));
 }
 
-export default function PrincipalReportsPage() {
-  const { setReportCount } = useNotifContext();
+function PrincipalReportsPageContent() {
+  const searchParams = useSearchParams();
+  const requestedReportId = Number(searchParams.get("reportId"));
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("Escalated");
   const [filterTab, setFilterTab] = useState<FilterTab>("All");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -1123,31 +1147,34 @@ export default function PrincipalReportsPage() {
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
+  const [sendingReply, setSendingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [showExportMonitoring, setShowExportMonitoring] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [conversationReply, setConversationReply] = useState("");
   const [conversationReplyAttachments, setConversationReplyAttachments] = useState<File[]>([]);
   const conversationMessagesRef = useRef<HTMLDivElement>(null);
   const reportMessagesRef = useRef<HTMLDivElement>(null);
+  const openedNotificationReportRef = useRef<number | null>(null);
+  const [resolveTargetId, setResolveTargetId] = useState<number | null>(null);
+  const [resolving, setResolving] = useState(false);
 
-  // ── Sync sidebar Reports badge directly from local state (avoids API timing issues) ──
-  useEffect(() => {
-    const count = reports.filter(
-      (r) => r.escalatedToPrincipal && (r.status === "Escalated" || r.status === "New")
-    ).length;
-    setReportCount(count);
-  }, [reports, setReportCount]);
-
-  const escalatedReports = reports.filter((report) => report.escalatedToPrincipal);
-  const currentReports = mainTab === "Escalated" ? escalatedReports : reports;
+  const escalatedReports = reports.filter((report) => report.escalatedToPrincipal || report.ticketStatus === "accepted");
+  // The Principal's report list is a monitoring inbox, not an escalation-only
+  // queue. Every report visible to its parent remains available here.
+  const currentReports = reports;
   const allCategories = Array.from(new Set(currentReports.flatMap((report) => report.categories))).sort();
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
   const unreadMessageCount = conversations.filter((conversation) => conversation.status === "New Message" || conversation.status === "Unread").length;
   const selectedConversationMessageCount = selectedConversation?.messages.length ?? 0;
   const selectedReportId = selectedReport?.id ?? null;
   const selectedReportReplies = selectedReport ? (principalReplies[selectedReport.id] ?? []) : [];
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] rounded-2xl ring-4 ring-violet-400 ring-offset-4 ring-offset-slate-50"
+    : "";
 
   useEffect(() => {
     if (mainTab !== "Messages" || !selectedConversationId) return;
@@ -1174,17 +1201,14 @@ export default function PrincipalReportsPage() {
     studentReports: monitoringEntries.filter((entry) => entry.from.role === "Student").length,
     escalatedToPrincipal: monitoringEntries.filter((entry) => entry.status === "Escalated to Principal").length,
     escalatedToGuidance: monitoringEntries.filter((entry) => entry.status === "Escalated to Guidance").length,
+    acceptedGuidanceTickets: monitoringEntries.filter((entry) => entry.status === "Accepted Ticket").length,
   };
   const monitoringCategoryTotals = MESSAGE_CATEGORIES.map((category) => ({
     name: category.name,
     count: monitoringEntries.filter((entry) => entry.category === category.name).length,
   })).filter((category) => category.count > 0);
 
-  const reportsForActiveTab = useCallback((items: Report[]) => (
-    mainTab === "Escalated"
-      ? items.filter((report) => report.escalatedToPrincipal)
-      : items
-  ), [mainTab]);
+  const reportsForActiveTab = useCallback((items: Report[]) => items, []);
 
   const loadPrincipalReports = useCallback(async () => {
     const [parentRes, studentRes] = await Promise.all([
@@ -1257,12 +1281,6 @@ export default function PrincipalReportsPage() {
     );
   }, []);
 
-  const loadPrincipalReportsRef = useRef(loadPrincipalReports);
-
-  useEffect(() => {
-    loadPrincipalReportsRef.current = loadPrincipalReports;
-  }, [loadPrincipalReports]);
-
   useEffect(() => {
     let mounted = true;
     async function loadInitial() {
@@ -1282,56 +1300,61 @@ export default function PrincipalReportsPage() {
     };
   }, [loadPrincipalMessages, loadPrincipalReports]);
 
-
-  const loadPrincipalMessagesRef = useRef(loadPrincipalMessages);
-
-  useEffect(() => { loadPrincipalReportsRef.current = loadPrincipalReports; }, [loadPrincipalReports]);
-  useEffect(() => { loadPrincipalMessagesRef.current = loadPrincipalMessages; }, [loadPrincipalMessages]);
+  // Report updates are applied in place. In particular, this changes canReply
+  // only after Guidance persists escalated_to_principal, rather than relying
+  // on the generic report status from an Adviser-to-Guidance handoff.
+  const liveUpdateNotice = useReportMessagesRealtime("principal-reports-live-list", loadPrincipalReports);
 
   useEffect(() => {
-    const client = supabaseBrowser;
-    if (!client) return;
+    if (!Number.isSafeInteger(requestedReportId) || openedNotificationReportRef.current === requestedReportId) return;
+    const report = reports.find((item) => item.id === requestedReportId);
+    if (!report) return;
+    const parent = groupByStudentParent(reports).find((group) => group.reports.some((item) => item.id === report.id));
+    if (!parent) return;
 
-    const uniqueChannel = `principal-reports-${Math.random().toString(36).slice(2)}`;
+    openedNotificationReportRef.current = requestedReportId;
+    setMainTab("Escalated");
+    setSelectedParent(parent);
+    setSelectedReport(report);
+    setReplyText("");
+    setReplyAttachments([]);
+    setViewStep("detail");
+    // A new Principal handoff is acknowledged by Start Conversation. Read-only
+    // monitoring reports may still be marked viewed as soon as they are opened.
+    if (!report.canReply) markReportStatus(report.id, "Read").catch(() => null);
+  }, [reports, requestedReportId]);
 
-    const channel = client
-      .channel(uniqueChannel)
-      .on("postgres_changes", { event: "*", schema: "public", table: "adviser_principal_messages" }, () => {
-        loadPrincipalMessagesRef.current().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "principal_staff_messages" }, () => {
-        loadPrincipalMessagesRef.current().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        loadPrincipalMessagesRef.current().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-        Promise.all([
-          loadPrincipalReportsRef.current(),
-          loadPrincipalMessagesRef.current(),
-        ]).catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
-        Promise.all([
-          loadPrincipalReportsRef.current(),
-          loadPrincipalMessagesRef.current(),
-        ]).catch(() => null);
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "parents" }, () => { loadPrincipalReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "advisers" }, () => { loadPrincipalReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "guidance_counselors" }, () => { loadPrincipalReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "principals" }, () => { loadPrincipalReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_reports" }, () => {
-        loadPrincipalReportsRef.current().catch(() => null);
-      })
-      .subscribe((status) => {
-        console.log("📡 Principal realtime status:", status);
-      });
 
-    return () => {
-      client.removeChannel(channel);
+  useEffect(() => {
+    const reportId = selectedReport?.id;
+    if (!reportId) return;
+    let cancelled = false;
+    let polling = false;
+    const refreshOpenConversation = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const response = await fetch(`/api/reports/parent-adviser?role=principal&reportId=${reportId}`, { cache: "no-store" });
+        const data = await response.json().catch(() => null);
+        const refreshed = data?.reports?.[0] as Report | undefined;
+        if (!cancelled && response.ok && refreshed) {
+          setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
+          setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
+          setPrincipalReplies((current) => ({
+            ...current,
+            [refreshed.id]: (refreshed.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
+          }));
+        }
+      } catch {
+        // Keep the current conversation visible until the next poll succeeds.
+      } finally {
+        polling = false;
+      }
     };
-  }, []);
+    void refreshOpenConversation();
+    const timer = window.setInterval(() => { void refreshOpenConversation(); }, 3_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selectedReport?.id]);
 
   const filteredGroups = (() => {
     const term = search.trim().toLowerCase();
@@ -1349,11 +1372,18 @@ export default function PrincipalReportsPage() {
   })();
 
   const showReportsPanel = viewStep === "reports" || (viewStep === "detail" && !!selectedParent);
-  const detailPosition = selectedParent ? "left-[520px]" : "left-0";
+  const detailPosition = selectedParent ? "left-[420px]" : "left-0";
   const detailWidth = selectedParent ? "right-0 w-auto" : "w-full max-w-[860px]";
 
-  function panelClass(visible: boolean, bg: string, width: string, position = "left-0") {
-    return `absolute inset-y-0 ${position} ${width} h-full flex flex-col overflow-hidden border-r border-slate-100 shadow-sm transition-all duration-200 ease-out ${bg} ${visible ? "opacity-100 translate-y-0 scale-100 pointer-events-auto" : "opacity-0 translate-y-2 scale-[0.99] pointer-events-none"
+  function panelClass(visible: boolean, bg: string, width: string, position = "left-0", mobileVisible = visible) {
+    const desktopPosition = position === "left-[420px]" ? "md:left-[420px]" : "md:left-0";
+    const desktopWidth = width === "right-0 w-auto"
+      ? "md:right-0 md:w-auto"
+      : width.includes("max-w-[860px]")
+        ? "md:w-full md:max-w-[860px]"
+        : "md:w-full md:max-w-[420px]";
+
+    return `relative h-full w-full max-w-none flex-col overflow-hidden ${bg} ${mobileVisible ? "flex" : "hidden"} md:absolute md:inset-y-0 ${desktopPosition} ${desktopWidth} md:flex md:border-r md:border-slate-100 md:shadow-sm md:transition-all md:duration-200 md:ease-out ${visible ? "md:opacity-100 md:translate-y-0 md:scale-100 md:pointer-events-auto" : "md:opacity-0 md:translate-y-2 md:scale-[0.99] md:pointer-events-none"
       }`;
   }
 
@@ -1364,13 +1394,16 @@ export default function PrincipalReportsPage() {
   }
 
   async function markReportStatus(id: number, status: ReportStatus) {
-    statusOverridesRef.current[id] = { status, at: Date.now() };
-    setReports((prev) => {
-      const next = prev.map((report) => report.id === id ? { ...report, status } : report);
-      refreshSelectedParent(next, selectedParent);
-      return next;
-    });
-    setSelectedReport((prev) => prev?.id === id ? { ...prev, status } : prev);
+    const isReadReceipt = status === "Read";
+    if (!isReadReceipt) {
+      statusOverridesRef.current[id] = { status, at: Date.now() };
+      setReports((prev) => {
+        const next = prev.map((report) => report.id === id ? { ...report, status } : report);
+        refreshSelectedParent(next, selectedParent);
+        return next;
+      });
+      setSelectedReport((prev) => prev?.id === id ? { ...prev, status } : prev);
+    }
 
     try {
       const res = await fetch(`/api/reports/principal/${id}/status`, {
@@ -1381,7 +1414,9 @@ export default function PrincipalReportsPage() {
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         console.error("Unable to update principal report status:", data?.message || res.statusText);
-        return;
+        if (!isReadReceipt) delete statusOverridesRef.current[id];
+        await loadPrincipalReports().catch(() => null);
+        return false;
       }
       if (data?.report) {
         const updated = data.report as Report;
@@ -1396,8 +1431,23 @@ export default function PrincipalReportsPage() {
           [id]: (updated.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
         }));
       }
+      if (status === "Resolved") await loadPrincipalReports();
+      return true;
     } catch (error) {
       console.error("Unable to update principal report status:", error);
+      if (!isReadReceipt) delete statusOverridesRef.current[id];
+      await loadPrincipalReports().catch(() => null);
+      return false;
+    }
+  }
+
+  async function confirmResolve() {
+    if (resolveTargetId === null || resolving) return;
+    setResolving(true);
+    try {
+      if (await markReportStatus(resolveTargetId, "Resolved")) setResolveTargetId(null);
+    } finally {
+      setResolving(false);
     }
   }
 
@@ -1413,45 +1463,38 @@ export default function PrincipalReportsPage() {
     setSelectedReport(report);
     setReplyText("");
     setReplyAttachments([]);
+    setReplyError(null);
     setViewStep("detail");
-    if (report.status === "Escalated") markReportStatus(report.id, "Ongoing").catch(() => null);
-    else if (report.status === "New") markReportStatus(report.id, "Read").catch(() => null);
+    if (!report.canReply) markReportStatus(report.id, "Read").catch(() => null);
   }
 
-  function unlockReport(report: Report) {
+  async function unlockReport(report: Report) {
     setUnlockedReports((prev) => new Set(prev).add(report.id));
-    if (report.status !== "Resolved") markReportStatus(report.id, "Ongoing").catch(() => null);
+    if (report.status !== "Resolved") {
+      const started = await markReportStatus(report.id, "Ongoing");
+      if (!started) {
+        setUnlockedReports((prev) => {
+          const next = new Set(prev);
+          next.delete(report.id);
+          return next;
+        });
+      }
+    }
   }
 
   async function sendReply() {
-    if (!selectedReport || selectedReport.status === "Resolved") return;
+    if (sendingReply || !selectedReport || selectedReport.status === "Resolved" || !selectedReport.canReply) return;
     const message = replyText.trim();
     if (!message && replyAttachments.length === 0) return;
 
-    const validFiles = replyAttachments.filter(f => f.size <= MAX_ATTACHMENT_BYTES);
-    const cleanedAttachments = await filesToAttachments(validFiles);
-
-    setPrincipalReplies((prev) => ({
-      ...prev,
-      [selectedReport.id]: [
-        ...(prev[selectedReport.id] ?? []),
-        {
-          sender: "Principal",
-          message,
-          attachments: cleanedAttachments,
-          sent_at: new Date().toLocaleString(),
-        },
-      ],
-    }));
-
-    setReplyText("");
-    setReplyAttachments([]);
-    if (selectedReport.status !== "Ongoing") markReportStatus(selectedReport.id, "Ongoing").catch(() => null);
-
+    setSendingReply(true);
+    setReplyError(null);
     try {
+      const validFiles = replyAttachments.filter(f => f.size <= MAX_ATTACHMENT_BYTES);
+      const cleanedAttachments = await filesToAttachments(validFiles);
       const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           body: message,
           role: "principal",
@@ -1461,10 +1504,16 @@ export default function PrincipalReportsPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        console.error("Reply failed:", data?.message);
+        throw new Error(data?.message || "Reply failed.");
       }
+      setReplyText("");
+      setReplyAttachments([]);
+      if (selectedReport.status !== "Ongoing") await markReportStatus(selectedReport.id, "Ongoing");
+      await loadPrincipalReports();
     } catch (error) {
-      console.error("Reply error:", error);
+      setReplyError(error instanceof Error ? error.message : "Your reply could not be sent. Please try again.");
+    } finally {
+      setSendingReply(false);
     }
   }
 
@@ -1479,6 +1528,7 @@ export default function PrincipalReportsPage() {
     setReplyAttachments([]);
     setConversationReply("");
     setConversationReplyAttachments([]);
+    setMobileConversationOpen(false);
     if (tab === "Messages" && !selectedConversationId) setSelectedConversationId(conversations[0]?.id ?? null);
   }
 
@@ -1493,6 +1543,7 @@ export default function PrincipalReportsPage() {
 
   function selectConversation(conversation: Conversation) {
     setSelectedConversationId(conversation.id);
+    setMobileConversationOpen(true);
     setConversationReply("");
     setConversationReplyAttachments([]);
     if (conversation.status === "New Message" || conversation.status === "Unread") {
@@ -1584,14 +1635,17 @@ export default function PrincipalReportsPage() {
     if (data?.conversationId) setSelectedConversationId(data.conversationId);
   }
 
-  function renderTopTabs() {
+  function renderTopTabs(mobile = false) {
     return (
-      <div className="flex flex-col gap-2 px-3 pb-2 pt-4">
+      <div
+        data-parent-guide="principal-reports-tabs"
+        className={`${mobile ? "flex items-center gap-1 overflow-x-auto px-3 py-2" : "hidden flex-col gap-2 px-3 pb-2 pt-4 md:flex"} ${guideHighlight("principal-reports-tabs")}`}
+      >
         <button
           onClick={() => switchMainTab("Escalated")}
-          className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Escalated" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
+          className={`flex shrink-0 items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Escalated" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
         >
-          <span className="flex items-center gap-2.5"><Shield className="h-4 w-4" /> Escalated Reports</span>
+          <span className="flex items-center gap-2.5"><Shield className="h-4 w-4" /> Parent Reports</span>
           {escalatedReports.filter(r => r.status === "Escalated" || r.status === "New").length > 0 && (
             <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-extrabold ${mainTab === "Escalated" ? "bg-violet-600 text-white" : "bg-red-500 text-white"}`}>
               {escalatedReports.filter(r => r.status === "Escalated" || r.status === "New").length}
@@ -1600,13 +1654,13 @@ export default function PrincipalReportsPage() {
         </button>
         <button
           onClick={() => switchMainTab("Monitoring")}
-          className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Monitoring" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
+          className={`flex shrink-0 items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Monitoring" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
         >
           <span className="flex items-center gap-2.5"><Eye className="h-4 w-4" /> Report Monitoring</span>
         </button>
         <button
           onClick={() => switchMainTab("Messages")}
-          className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Messages" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
+          className={`flex shrink-0 items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${mainTab === "Messages" ? "bg-violet-50 text-violet-700" : "text-slate-600 hover:bg-slate-50"}`}
         >
           <span className="flex items-center gap-2.5"><MessageSquare className="h-4 w-4" /> Messages</span>
           {unreadMessageCount > 0 && (
@@ -1618,13 +1672,17 @@ export default function PrincipalReportsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-slate-50">
-      <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
+    <div className="flex h-full min-h-0 flex-col overflow-x-hidden bg-slate-50">
+      {liveUpdateNotice && <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 sm:px-6">{liveUpdateNotice}</div>}
+      <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-xl font-extrabold tracking-tight text-slate-900">Reports</h1>
           <p className="mt-0.5 text-xs text-slate-400">Monitor parent concerns and reports escalated to the principal</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div
+          data-parent-guide="principal-reports-new-message"
+          className={`flex flex-wrap items-center gap-2 ${guideHighlight("principal-reports-new-message")}`}
+        >
           <span className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-extrabold text-rose-700">
             {escalatedReports.length} Escalated
           </span>
@@ -1633,18 +1691,22 @@ export default function PrincipalReportsPage() {
           </span>
           <button
             onClick={() => setShowNewMessage(true)}
-            className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700"
+            className="flex min-h-11 items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700"
           >
             <MessageSquare className="h-3.5 w-3.5" /> New Message
           </button>
         </div>
       </div>
 
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="shrink-0 border-b border-slate-100 bg-white md:hidden">
+        {renderTopTabs(true)}
+      </div>
+
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div className="relative h-full w-full">
           {mainTab === "Messages" ? (
             <>
-              <div className={panelClass(true, "bg-white", "w-full max-w-[420px]")}>
+              <div className={panelClass(true, "bg-white", "w-full max-w-[420px]", "left-0", !mobileConversationOpen)}>
                 {renderTopTabs()}
                 <div className="mx-3 h-px bg-slate-100" />
                 <div className="px-4 py-4">
@@ -1708,12 +1770,20 @@ export default function PrincipalReportsPage() {
                 </div>
               </div>
 
-              <div className="absolute inset-y-0 left-[420px] right-0 flex flex-col overflow-hidden bg-slate-50">
+              <div className={`${mobileConversationOpen ? "flex" : "hidden"} relative h-full w-full flex-col overflow-hidden bg-slate-50 md:absolute md:inset-y-0 md:left-[420px] md:right-0 md:flex`}>
                 {selectedConversation ? (
                   <>
-                    <div className="shrink-0 border-b border-slate-100 bg-white px-6 py-5">
+                    <div className="shrink-0 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="flex min-w-0 items-start gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setMobileConversationOpen(false)}
+                            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-600 md:hidden"
+                            aria-label="Back to messages"
+                          >
+                            <ChevronRight className="h-4 w-4 rotate-180" />
+                          </button>
                           <ConversationAvatar sender={selectedConversation.sender} />
                           <div className="min-w-0">
                             <h2 className="truncate text-base font-extrabold text-slate-900">{selectedConversation.subject}</h2>
@@ -1734,7 +1804,7 @@ export default function PrincipalReportsPage() {
                       </div>
                     </div>
 
-                    <div ref={conversationMessagesRef} className="flex-1 overflow-y-auto px-6 py-5">
+                    <div ref={conversationMessagesRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
                       {selectedConversation.messages.map((message) => {
                         const mine = message.sender === "principal";
                         return (
@@ -1763,7 +1833,7 @@ export default function PrincipalReportsPage() {
                       })}
                     </div>
 
-                    <div className="shrink-0 border-t border-slate-100 bg-white px-6 py-4">
+                    <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
                         <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                           <Paperclip className="h-4 w-4" />
@@ -1832,7 +1902,7 @@ export default function PrincipalReportsPage() {
             </>
           ) : mainTab === "Monitoring" ? (
             <>
-              <div className={panelClass(true, "bg-white", "w-full max-w-[420px]")}>
+              <div className={panelClass(true, "bg-white", "w-full max-w-[420px]", "left-0", false)}>
                 {renderTopTabs()}
                 <div className="mx-3 h-px bg-slate-100" />
                 <div className="px-4 py-5">
@@ -1845,8 +1915,8 @@ export default function PrincipalReportsPage() {
                 </div>
               </div>
 
-              <div className="absolute inset-y-0 left-[420px] right-0 overflow-y-auto bg-slate-50 p-6">
-                <section className="min-h-[690px] rounded-2xl border border-slate-200 bg-white p-6 shadow-sm shadow-slate-200/70">
+              <div className="relative h-full w-full overflow-y-auto bg-slate-50 p-4 md:absolute md:inset-y-0 md:left-[420px] md:right-0 md:p-6">
+                <section className="min-h-full rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/70 sm:p-6 md:min-h-[690px]">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <h2 className="text-base font-extrabold text-slate-900">Report Monitoring</h2>
@@ -1866,12 +1936,13 @@ export default function PrincipalReportsPage() {
                     </div>
                   </div>
 
-                  <div className="mt-6 grid gap-3 md:grid-cols-4">
+                  <div className="mt-6 grid gap-3 md:grid-cols-4 xl:grid-cols-5">
                     {[
                       { label: "Reports from Parents", value: monitoringTotals.parentReports, tone: "border-sky-100 bg-sky-50 text-sky-700" },
                       { label: "Reports from Students", value: monitoringTotals.studentReports, tone: "border-emerald-100 bg-emerald-50 text-emerald-700" },
                       { label: "Escalated to Principal", value: monitoringTotals.escalatedToPrincipal, tone: "border-red-100 bg-red-50 text-red-700" },
                       { label: "Escalated to Guidance", value: monitoringTotals.escalatedToGuidance, tone: "border-violet-100 bg-violet-50 text-violet-700" },
+                      { label: "Accepted Guidance Tickets", value: monitoringTotals.acceptedGuidanceTickets, tone: "border-sky-100 bg-sky-50 text-sky-700" },
                     ].map((item) => (
                       <div key={item.label} className={`rounded-2xl border px-4 py-3 ${item.tone}`}>
                         <p className="text-[11px] font-extrabold uppercase tracking-wide opacity-75">{item.label}</p>
@@ -1891,7 +1962,7 @@ export default function PrincipalReportsPage() {
                     </div>
                   </div>
 
-                  <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-100">
+                  <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-100 [-webkit-overflow-scrolling:touch]">
                     {monitoringEntries.length === 0 ? (
                       <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-12 text-center">
                         <Eye className="h-9 w-9 text-slate-300" />
@@ -1988,7 +2059,10 @@ export default function PrincipalReportsPage() {
 
                 <div className="mx-3 h-px bg-slate-100" />
 
-                <div className="space-y-2 px-3 py-3">
+                <div
+                  data-parent-guide="principal-reports-filters"
+                  className={`space-y-2 px-3 py-3 ${guideHighlight("principal-reports-filters")}`}
+                >
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                     <input
@@ -2024,7 +2098,10 @@ export default function PrincipalReportsPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-2">
+                <div
+                  data-parent-guide="principal-reports-list"
+                  className={`flex flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-2 ${guideHighlight("principal-reports-list")}`}
+                >
                   {loadingReports ? (
                     <p className="mt-8 text-center text-xs text-slate-400">Loading reports...</p>
                   ) : filteredGroups.length === 0 && (
@@ -2035,13 +2112,15 @@ export default function PrincipalReportsPage() {
                     const allResolved = group.reports.every((report) => report.status === "Resolved");
                     const activeReports = group.reports.filter((report) => report.status !== "Resolved");
                     const activeLevel = allResolved ? 0 : Math.max(...activeReports.map((report) => report.concernLevel), 0);
-                    const hasEscalated = group.reports.some((report) => report.escalatedToPrincipal);
+                    const hasEscalatedFromGuidance = group.reports.some((report) => report.escalatedToPrincipal);
+                    const hasEscalatedToGuidance = group.reports.some((report) => report.escalatedToGuidance && !report.escalatedToPrincipal);
+                    const hasAcceptedGuidanceTicket = group.reports.some((report) => report.ticketStatus === "accepted");
 
                     return (
                       <button
                         key={group.key}
                         onClick={() => selectParent(group)}
-                        className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${isActive ? "border-violet-200 bg-violet-50" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}
+                        className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${isActive ? "border-violet-200 bg-violet-50" : hasEscalatedFromGuidance ? "border-red-100 bg-red-50 hover:bg-red-100" : hasEscalatedToGuidance ? "border-violet-100 bg-violet-50 hover:bg-violet-100" : hasAcceptedGuidanceTicket ? "border-sky-100 bg-sky-50 hover:bg-sky-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}
                       >
                         <div className="flex items-center gap-2.5">
                           <ParentAvatar name={group.displayName} profilePicture={group.profilePicture} initials={group.initials} className="h-9 w-9 rounded-full text-xs" />
@@ -2059,10 +2138,22 @@ export default function PrincipalReportsPage() {
                           )}
                           <span className="text-[10px] text-slate-400">{group.reports.length} report{group.reports.length === 1 ? "" : "s"}</span>
                         </div>
-                          {hasEscalated && !allResolved && (
+                          {hasEscalatedFromGuidance && !allResolved && (
                           <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-red-600">
                             <TriangleAlert className="h-3 w-3" />
                             Escalated from Guidance
+                          </div>
+                        )}
+                        {!hasEscalatedFromGuidance && hasEscalatedToGuidance && !allResolved && (
+                          <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-violet-700">
+                            <TriangleAlert className="h-3 w-3" />
+                            Escalated to Guidance
+                          </div>
+                        )}
+                        {!hasEscalatedFromGuidance && !hasEscalatedToGuidance && hasAcceptedGuidanceTicket && !allResolved && (
+                          <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-sky-700">
+                            <Shield className="h-3 w-3" />
+                            Guidance ticket accepted · Read only
                           </div>
                         )}
                       </button>
@@ -2071,7 +2162,7 @@ export default function PrincipalReportsPage() {
                 </div>
               </div>
 
-              <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[520px]")}>
+              <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[420px]", "left-0", viewStep === "reports")}>
                 <div className="flex items-center gap-2 border-b border-slate-100 px-3 pb-1 pt-3">
                   <button
                     onClick={() => { setSelectedParent(null); setSelectedReport(null); setViewStep("list"); }}
@@ -2104,29 +2195,30 @@ export default function PrincipalReportsPage() {
                           {selectedParent.reports.map((report) => {
                             const isActive = selectedReport?.id === report.id;
                             const isResolvedReport = report.status === "Resolved";
-                            const isEscalated = Boolean(report.escalatedToPrincipal);
+                            const isEscalatedFromGuidance = Boolean(report.escalatedToPrincipal);
+                            const isAcceptedGuidanceTicket = report.ticketStatus === "accepted";
                             return (
                               <button
                                 key={report.id}
                                 onClick={() => selectReport(report)}
-                                className={`w-full rounded-xl border px-3 py-3 text-left transition ${isActive ? "border-violet-200 bg-violet-50" : isResolvedReport ? "border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50" : isEscalated ? "border-red-100 bg-red-50" : "border-slate-100 bg-white hover:bg-slate-50"}`}
+                                className={`w-full rounded-xl border px-3.5 py-3.5 text-left shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 ${isActive ? "border-violet-300 bg-violet-50 shadow-violet-100 ring-1 ring-violet-100" : isResolvedReport ? "border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50" : isEscalatedFromGuidance ? "border-red-100 bg-red-50 hover:bg-red-100" : isAcceptedGuidanceTicket ? "border-sky-100 bg-sky-50 hover:bg-sky-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/40"}`}
                               >
-                                <div className="mb-1.5 flex items-start justify-between gap-2">
-                                  <p className="flex-1 text-xs font-bold leading-snug text-slate-800">{report.subject}</p>
-                                  <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${getStatusStyle(report.status)}`}>
-                                    {report.status === "Ongoing" ? "On Going" : report.status}
+                                <div className="flex items-start justify-between gap-3">
+                                  <p className="min-w-0 flex-1 break-words text-sm font-extrabold leading-snug text-slate-800">{report.subject}</p>
+                                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold leading-none ${principalReportStatusClass(report)}`}>
+                                    {principalReportStatusLabel(report)}
                                   </span>
                                 </div>
-                                <div className="mb-2 flex flex-wrap gap-1">
+                                <div className="mt-2.5 flex flex-wrap gap-1.5">
                                   {report.categories.map((category) => (
-                                    <span key={category} className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">{category}</span>
+                                    <span key={category} className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold leading-none text-slate-600">{category}</span>
                                   ))}
                                 </div>
                                 {/* ConcernBar removed per UX request */}
-                                <div className="mt-1.5 flex items-center justify-between">
-                                  {!isResolvedReport && <PriorityBadge level={report.concernLevel} />}
+                                <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-2.5">
+                                  {!isResolvedReport ? <PriorityBadge level={report.concernLevel} compact /> : <ResolvedBadge />}
+                                  <p className="shrink-0 text-right text-[10px] font-medium leading-none text-slate-400">{report.submitted_at}</p>
                                 </div>
-                                <p className="mt-1.5 text-[10px] text-slate-400">{report.submitted_at}</p>
                               </button>
                             );
                           })}
@@ -2157,7 +2249,12 @@ export default function PrincipalReportsPage() {
                   const replies = principalReplies[selectedReport.id] ?? [];
                   const isResolved = selectedReport.status === "Resolved";
                   const hasPrincipalReply = replies.some((reply) => reply.sender === "Principal");
-                  const isUnlocked = isResolved || unlockedReports.has(selectedReport.id) || selectedReport.status !== "Escalated" || replies.length > 0;
+                  const canReply = Boolean(selectedReport.canReply);
+                  const escalatedFromGuidance = Boolean(selectedReport.escalatedToPrincipal);
+                  const canStartConversation = canReply
+                    && (selectedReport.status === "New" || selectedReport.status === "Escalated")
+                    && !selectedReport.principalHasRead;
+                  const isUnlocked = !canStartConversation || unlockedReports.has(selectedReport.id);
 
                   if (!isUnlocked) {
                     return (
@@ -2176,7 +2273,7 @@ export default function PrincipalReportsPage() {
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-2">
                               <PriorityBadge level={selectedReport.concernLevel} large />
-                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${getStatusStyle(selectedReport.status)}`}>{selectedReport.status}</span>
+                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${principalReportStatusClass(selectedReport)}`}>{principalReportStatusLabel(selectedReport)}</span>
                             </div>
                           </div>
                           <div className="mt-3 max-w-xs">
@@ -2207,10 +2304,10 @@ export default function PrincipalReportsPage() {
                               <p className="mt-3 text-sm font-extrabold text-slate-900">Principal review required</p>
                               <p className="mt-2 text-xs leading-relaxed text-slate-500">Previous parent-guidance conversations stay private. Start a new principal-parent thread to continue.</p>
                               <button
-                                onClick={() => unlockReport(selectedReport)}
+                                onClick={() => { void unlockReport(selectedReport); }}
                                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-violet-700"
                               >
-                                <Eye className="h-4 w-4" /> See the Concern
+                                <Eye className="h-4 w-4" /> Start Conversation
                               </button>
                             </div>
                           </div>
@@ -2221,11 +2318,11 @@ export default function PrincipalReportsPage() {
 
                   return (
                     <div className="flex flex-1 flex-col overflow-hidden">
-                      <div className={`border-b border-slate-100 bg-white px-6 py-5 ${selectedReport.status === "Escalated" ? "border-l-4 border-l-red-500" : ""}`}>
-                        {selectedReport.status === "Escalated" && (
+                      <div className={`border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5 ${escalatedFromGuidance ? "border-l-4 border-l-red-500" : ""}`}>
+                        {escalatedFromGuidance && (
                           <div className="mb-3 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
                             <TriangleAlert className="h-4 w-4 shrink-0 text-red-600" />
-                            <p className="text-xs font-bold text-red-700">This report has been escalated to the Principal.</p>
+                            <p className="text-xs font-bold text-red-700">Escalated from Guidance to the Principal.</p>
                           </div>
                         )}
                         <div className="flex items-start justify-between gap-4">
@@ -2241,7 +2338,7 @@ export default function PrincipalReportsPage() {
                           <div className="flex shrink-0 flex-col items-end gap-2">
                             {isResolved ? <ResolvedBadge large /> : <PriorityBadge level={selectedReport.concernLevel} large />}
                             {!isResolved && (
-                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${getStatusStyle(selectedReport.status)}`}>{selectedReport.status}</span>
+                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${principalReportStatusClass(selectedReport)}`}>{principalReportStatusLabel(selectedReport)}</span>
                             )}
                           </div>
                         </div>
@@ -2251,9 +2348,14 @@ export default function PrincipalReportsPage() {
                             <ConcernBar level={selectedReport.concernLevel} />
                           </div>
                         )}
+                        {selectedReport.ticketStatus === "rejected" && selectedReport.ticketRejectionReason && (
+                          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                            Guidance ticket rejected: {selectedReport.ticketRejectionReason}
+                          </div>
+                        )}
                       </div>
 
-                      <div ref={reportMessagesRef} className="flex-1 overflow-y-auto px-6 py-5">
+                      <div ref={reportMessagesRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
                         {!hasPrincipalReply && (
                           <>
                             <div className="mb-5 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
@@ -2261,7 +2363,7 @@ export default function PrincipalReportsPage() {
                                 <Shield className="h-4 w-4 text-violet-600" />
                                 <p className="text-xs font-extrabold text-violet-800">Principal-parent conversation</p>
                               </div>
-                              <p className="text-xs leading-relaxed text-violet-700">The parent-guidance conversation is kept private. The principal can review the summary and continue in this separate thread.</p>
+                              <p className="text-xs leading-relaxed text-violet-700">You can monitor the parent, adviser, and Guidance history. Replying is enabled only after Guidance escalates this report to you.</p>
                             </div>
 
                             <div className="mb-5 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
@@ -2290,7 +2392,7 @@ export default function PrincipalReportsPage() {
                           const mine = reply.sender === "Principal";
                           return (
                             <div key={`${reply.sent_at}-${index}`} className={`mb-4 flex items-start gap-3 ${mine ? "flex-row-reverse" : ""}`}>
-                              <UserAvatar name={reply.senderName || (mine ? "Principal" : reply.sender)} src={reply.profilePicture} className="mt-0.5 h-9 w-9 rounded-full" fallbackClassName={mine ? "bg-violet-600" : getAvatarColor(reply.senderName || reply.sender)} />
+                              <UserAvatar name={reply.senderName || (mine ? "Principal" : reply.sender)} className="mt-0.5 h-9 w-9 rounded-full" fallbackClassName={mine ? "bg-violet-600" : getAvatarColor(reply.senderName || reply.sender)} />
                               <div className={`flex flex-1 flex-col ${mine ? "items-end" : "items-start"}`}>
                                 <div className={`mb-1 flex items-center gap-2 ${mine ? "" : "flex-row-reverse"}`}>
                                   <span className="text-[10px] text-slate-400">{reply.sent_at}</span>
@@ -2327,17 +2429,23 @@ export default function PrincipalReportsPage() {
                         })}
                       </div>
 
-                      <div className="border-t border-slate-100 bg-white px-6 py-4">
+                      <div className="border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
                         <div className="mb-4 flex flex-wrap gap-2">
-                          {selectedReport.status !== "Resolved" && (
+                          {selectedReport.status !== "Resolved" && canReply && (
                             <button
-                              onClick={() => markReportStatus(selectedReport.id, "Resolved")}
+                              onClick={() => setResolveTargetId(selectedReport.id)}
                               className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100"
                             >
                               <CheckCircle className="h-3.5 w-3.5" /> Resolve
                             </button>
                           )}
                         </div>
+
+                        {replyError && (
+                          <div role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                            {replyError}
+                          </div>
+                        )}
 
                         {replyAttachments.length > 0 && (
                           <div className="mb-3 flex flex-wrap gap-2">
@@ -2361,7 +2469,7 @@ export default function PrincipalReportsPage() {
                           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
                             This report has been resolved. Messaging is unavailable.
                           </div>
-                        ) : <div className="flex items-end gap-3">
+                        ) : !canReply ? <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">Read-only monitoring. Guidance must escalate this report to the Principal before you can reply.</div> : <div className="flex items-end gap-3">
                           <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
                             <textarea
                               value={replyText}
@@ -2397,8 +2505,8 @@ export default function PrincipalReportsPage() {
                           </label>
                           <button
                             onClick={sendReply}
-                            disabled={isResolved || (!replyText.trim() && replyAttachments.length === 0)}
-                            className={`rounded-xl p-2.5 transition ${!isResolved && (replyText.trim() || replyAttachments.length > 0) ? "bg-violet-600 text-white hover:bg-violet-700" : "cursor-not-allowed bg-slate-100 text-slate-300"}`}
+                            disabled={sendingReply || isResolved || (!replyText.trim() && replyAttachments.length === 0)}
+                            className={`rounded-xl p-2.5 transition ${!sendingReply && !isResolved && (replyText.trim() || replyAttachments.length > 0) ? "bg-violet-600 text-white hover:bg-violet-700" : "cursor-not-allowed bg-slate-100 text-slate-300"}`}
                           >
                             <Send className="h-4 w-4" />
                           </button>
@@ -2427,6 +2535,21 @@ export default function PrincipalReportsPage() {
         />
       )}
       {showExportMonitoring && <ExportMonitoringModal items={monitoringEntries} onClose={() => setShowExportMonitoring(false)} />}
+      <ResolveConfirmationModal
+        open={resolveTargetId !== null}
+        saving={resolving}
+        onCancel={() => { if (!resolving) setResolveTargetId(null); }}
+        onConfirm={() => { void confirmResolve(); }}
+      />
+      <PrincipalReportsGuide onStepChange={setGuideTarget} />
     </div>
+  );
+}
+
+export default function PrincipalReportsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <PrincipalReportsPageContent />
+    </Suspense>
   );
 }

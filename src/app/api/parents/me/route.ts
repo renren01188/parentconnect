@@ -24,6 +24,26 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
 }
 
+type LinkedStudentRow = {
+  id: number;
+  student_id: string;
+  first_name: string;
+  middle_name?: string | null;
+  last_name: string;
+  suffix?: string | null;
+  grade: string;
+  section: string;
+  house_street_sitio_purok?: string | null;
+  barangay?: string | null;
+  municipality_city?: string | null;
+  province?: string | null;
+};
+
+type ParentStudentLink = {
+  student_id: string;
+  students: LinkedStudentRow | LinkedStudentRow[] | null;
+};
+
 export async function GET() {
   try {
     const cookieStore = await cookies();
@@ -38,38 +58,36 @@ export async function GET() {
 
     const verified = await jwtVerify(token, SECRET);
     const parentId = Number(verified.payload.id);
-    const parentEmail = typeof verified.payload.email === "string" ? verified.payload.email : "";
 
-    if (!parentId || !parentEmail) {
+    if (!parentId || verified.payload.role !== "parent") {
       return NextResponse.json(
         { success: false, message: "Invalid session." },
         { status: 401 }
       );
     }
 
-    const { data: parentRows, error } = await supabase
+    const { data: primaryParent, error } = await supabase
       .from("parents")
-      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, contact_number, address, profile_picture, student_id")
-      .eq("email", parentEmail)
-      .order("id", { ascending: true });
+      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, contact_number, address, student_id")
+      .eq("id", parentId)
+      .maybeSingle();
 
     if (error) throw error;
 
-    if (!parentRows || parentRows.length === 0) {
+    if (!primaryParent) {
       return NextResponse.json(
         { success: false, message: "Parent account not found." },
         { status: 404 }
       );
     }
 
-    const primaryParent = parentRows.find((row) => row.id === parentId) ?? parentRows[0];
-
     const { data: linkRows, error: linkError } = await supabase
       .from("parent_student_links")
       .select(`
         student_id,
         students!inner (
-          id, student_id, first_name, middle_name, last_name, suffix, grade, section
+          id, student_id, first_name, middle_name, last_name, suffix, grade, section,
+          house_street_sitio_purok, barangay, municipality_city, province
         )
       `)
       .eq("parent_id", primaryParent.id)
@@ -77,65 +95,64 @@ export async function GET() {
 
     if (linkError) throw linkError;
 
-    let linkedRows = linkRows ?? [];
+    let linkedRows = (linkRows ?? []) as unknown as ParentStudentLink[];
 
     if (linkedRows.length === 0 && primaryParent.student_id) {
       const { data: legacyStudentRows, error: legacyStudentError } = await supabase
         .from("students")
-        .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section")
+        .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section, house_street_sitio_purok, barangay, municipality_city, province")
         .eq("student_id", primaryParent.student_id)
         .limit(1);
 
       if (legacyStudentError) throw legacyStudentError;
       linkedRows = (legacyStudentRows ?? []).map((student) => ({
         student_id: student.student_id,
-        students: student as any
+        students: student as LinkedStudentRow
       }));
     }
 
-    const students = linkedRows.map((link) => {
-      const student = link.students as unknown as {
-        id: number;
-        student_id: string;
-        first_name: string;
-        middle_name?: string | null;
-        last_name: string;
-        suffix?: string | null;
-        grade: string;
-        section: string;
-      };
+    const students = linkedRows.flatMap((link) => {
+      const student = Array.isArray(link.students) ? link.students[0] : link.students;
+      if (!student) return [];
 
-      return {
+      return [{
         id: student.id,
         lrn: student.student_id,
         name: fullName(student),
         grade: student.grade,
         section: student.section,
-      };
+        address: [student.house_street_sitio_purok, student.barangay, student.municipality_city, student.province]
+          .filter(Boolean)
+          .join(", "),
+      }];
     });
 
-    return NextResponse.json({
-      success: true,
-      parent: {
-        id: primaryParent.id,
-        email: primaryParent.email,
-        firstName: primaryParent.parent_first_name ?? "",
-        middleName: primaryParent.parent_middle_name ?? "",
-        lastName: primaryParent.parent_last_name ?? "",
-        suffix: primaryParent.parent_suffix ?? "",
-        phone: primaryParent.contact_number ?? "",
-        address: primaryParent.address ?? "",
-        profilePicture: primaryParent.profile_picture ?? "",
-        name: [
-          primaryParent.parent_first_name,
-          primaryParent.parent_middle_name,
-          primaryParent.parent_last_name,
-          primaryParent.parent_suffix,
-        ].filter(Boolean).join(" "),
+    return NextResponse.json(
+      {
+        success: true,
+        parent: {
+          id: primaryParent.id,
+          email: primaryParent.email,
+          firstName: primaryParent.parent_first_name ?? "",
+          middleName: primaryParent.parent_middle_name ?? "",
+          lastName: primaryParent.parent_last_name ?? "",
+          suffix: primaryParent.parent_suffix ?? "",
+          phone: primaryParent.contact_number ?? "",
+          // Student registration is the single source of truth for the
+          // household address displayed to a parent.
+          address: students[0]?.address || primaryParent.address || "",
+          name: [
+            primaryParent.parent_first_name,
+            primaryParent.parent_middle_name,
+            primaryParent.parent_last_name,
+            primaryParent.parent_suffix,
+          ].filter(Boolean).join(" "),
+        },
+        student: students[0],
+        students,
       },
-      student: students[0],
-      students,
-    });
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (error: unknown) {
     console.error("GET /api/parents/me error:", error);
     return NextResponse.json(
@@ -159,9 +176,8 @@ export async function PATCH(req: NextRequest) {
 
     const verified = await jwtVerify(token, SECRET);
     const parentId = Number(verified.payload.id);
-    const currentEmail = typeof verified.payload.email === "string" ? verified.payload.email : "";
 
-    if (!parentId || !currentEmail) {
+    if (!parentId || verified.payload.role !== "parent") {
       return NextResponse.json(
         { success: false, message: "Invalid session." },
         { status: 401 }
@@ -176,7 +192,6 @@ export async function PATCH(req: NextRequest) {
       email,
       phone,
       address,
-      profilePicture,
       currentPassword,
     } = await req.json();
 
@@ -194,10 +209,6 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    if (profilePicture && (typeof profilePicture !== "string" || !/^data:image\/(png|jpe?g|webp);base64,/.test(profilePicture) || profilePicture.length > 14_000_000)) {
-      return NextResponse.json({ success: false, message: "Use a PNG, JPG, or WebP image up to 10 MB." }, { status: 400 });
-    }
-
     const { data: currentRows, error: currentError } = await supabase
       .from("parents")
       .select("id, email, password")
@@ -211,6 +222,7 @@ export async function PATCH(req: NextRequest) {
         { status: 404 }
       );
     }
+    const currentEmail = currentRows[0].email?.trim().toLowerCase() ?? "";
 
     const passwordMatch = await bcrypt.compare(currentPassword, currentRows[0].password);
     if (!passwordMatch) {
@@ -221,12 +233,12 @@ export async function PATCH(req: NextRequest) {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    if (normalizedEmail !== currentEmail.toLowerCase()) {
+    if (normalizedEmail !== currentEmail) {
       const { data: existingEmail, error: existingError } = await supabase
         .from("parents")
         .select("id")
         .eq("email", normalizedEmail)
-        .neq("email", currentEmail)
+        .neq("id", parentId)
         .limit(1);
 
       if (existingError) throw existingError;
@@ -238,20 +250,6 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // A parent can have one row for each linked child. Keep every one of those
-    // rows aligned so staff views which join through a student never see a
-    // different version of the parent's details.
-    const { data: linkedParentRows, error: linkedParentsError } = await supabase
-      .from("parents")
-      .select("id")
-      .eq("email", currentEmail);
-
-    if (linkedParentsError) throw linkedParentsError;
-
-    const linkedParentIds = (linkedParentRows ?? [])
-      .map((row) => Number(row.id))
-      .filter(Number.isFinite);
-
     const updatePayload = {
       parent_first_name: firstName.trim(),
       parent_middle_name: middleName?.trim() || null,
@@ -260,21 +258,17 @@ export async function PATCH(req: NextRequest) {
       email: normalizedEmail,
       contact_number: phone?.trim() || "",
       address: address?.trim() || null,
-      profile_picture: typeof profilePicture === "string" ? profilePicture : undefined,
     };
 
     const { error: updateError } = await supabase
       .from("parents")
       .update(updatePayload)
-      .eq("email", currentEmail);
+      .eq("id", parentId);
 
     if (updateError) throw updateError;
 
-    // Reports intentionally store parent contact details as a snapshot so they
-    // can be rendered without extra joins. Refresh that snapshot after a
-    // profile edit; otherwise Adviser, Guidance, and Principal dashboards keep
-    // showing the old parent name/email. The email condition also covers legacy
-    // reports created before parent_id was consistently stored.
+    // Reports store a snapshot for staff rendering. Update only rows owned by
+    // this account; never use a shared email address as an ownership key.
     const updatedParentName = [
       updatePayload.parent_first_name,
       updatePayload.parent_middle_name,
@@ -294,15 +288,10 @@ export async function PATCH(req: NextRequest) {
       details: "Updated their profile.",
     });
 
-    const reportMatch = [
-      linkedParentIds.length > 0 ? `parent_id.in.(${linkedParentIds.join(",")})` : "",
-      `parent_email.eq.${currentEmail}`,
-    ].filter(Boolean).join(",");
-
     const { data: linkedReports, error: reportsError } = await supabase
       .from("parent_adviser_reports")
-      .update({ parent_name: updatedParentName, parent_email: normalizedEmail, parent_profile_picture: updatePayload.profile_picture })
-      .or(reportMatch)
+      .update({ parent_name: updatedParentName, parent_email: normalizedEmail })
+      .eq("parent_id", parentId)
       .select("id");
 
     if (reportsError) throw reportsError;
@@ -349,7 +338,6 @@ export async function PATCH(req: NextRequest) {
         email: normalizedEmail,
         phone: updatePayload.contact_number,
         address: updatePayload.address ?? "",
-        profilePicture: updatePayload.profile_picture ?? "",
       },
       message: "Profile updated successfully.",
     });
@@ -376,10 +364,9 @@ export async function PUT(req: NextRequest) {
 
     const verified = await jwtVerify(token, SECRET);
     const parentId = Number(verified.payload.id);
-    const parentEmail = typeof verified.payload.email === "string" ? verified.payload.email : "";
     const { currentPassword, newPassword } = await req.json();
 
-    if (!parentId || !parentEmail) {
+    if (!parentId || verified.payload.role !== "parent") {
       return NextResponse.json(
         { success: false, message: "Invalid session." },
         { status: 401 }
@@ -419,7 +406,7 @@ export async function PUT(req: NextRequest) {
     const { error: updateError } = await supabase
       .from("parents")
       .update({ password, password_set: 1, temp_password: null })
-      .eq("email", parentEmail);
+      .eq("id", parentId);
 
     if (updateError) throw updateError;
 

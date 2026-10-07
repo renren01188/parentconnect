@@ -1,12 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
 import Link from "next/link";
+import Script from "next/script";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+
+type RecaptchaApi = {
+  render: (container: HTMLElement, options: {
+    sitekey: string;
+    callback: (token: string) => void;
+    "expired-callback": () => void;
+    "error-callback": () => void;
+  }) => number;
+  reset: (widgetId?: number) => void;
+};
+
+declare global {
+  interface Window {
+    grecaptcha?: RecaptchaApi;
+  }
+}
 
 // ─── Grade / Section data ─────────────────────────────────────────────────────
 const SUFFIXES = ["", "Jr.", "Sr.", "II", "III", "IV"];
+const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? "";
 
 function formatName(value: string) {
   return value.toLocaleUpperCase();
@@ -110,6 +128,11 @@ export default function ReportPage() {
   const [error,     setError]     = useState("");
   const [optionsError, setOptionsError] = useState("");
   const [gradeSections, setGradeSections] = useState<Record<string, string[]>>({});
+  const [recaptchaLoaded, setRecaptchaLoaded] = useState(false);
+  const [recaptchaToken, setRecaptchaToken] = useState("");
+  const [recaptchaError, setRecaptchaError] = useState("");
+  const captchaContainerRef = useRef<HTMLDivElement>(null);
+  const captchaWidgetIdRef = useRef<number | null>(null);
 
   const [form, setForm] = useState({
     firstName:  "",
@@ -118,10 +141,21 @@ export default function ReportPage() {
     suffix:     "",
     gradeLevel: "",
     section:    "",
-    contact:    "",
     concern:    "",
     website:    "",
   });
+
+  // Keep the call-to-action unavailable until the same required fields that
+  // the API validates are complete. Server-side validation remains in place
+  // because a browser can never be treated as a security boundary.
+  const hasRequiredReportDetails = Boolean(
+    form.firstName.trim()
+    && form.lastName.trim()
+    && form.gradeLevel
+    && form.section
+    && form.concern.trim(),
+  );
+  const canSubmit = hasRequiredReportDetails && Boolean(recaptchaToken) && !loading;
 
   const set = (key: string, value: string) => {
     if (key === "gradeLevel") {
@@ -160,6 +194,32 @@ export default function ReportPage() {
     }
   }, []);
 
+  const resetRecaptcha = useCallback(() => {
+    setRecaptchaToken("");
+    if (captchaWidgetIdRef.current !== null && typeof window.grecaptcha?.reset === "function") {
+      window.grecaptcha.reset(captchaWidgetIdRef.current);
+    }
+  }, []);
+
+  const renderRecaptcha = useCallback(() => {
+    if (!RECAPTCHA_SITE_KEY) {
+      setRecaptchaError("reCAPTCHA is not configured. Please contact the school administrator.");
+      return false;
+    }
+    const captcha = window.grecaptcha;
+    if (!captchaContainerRef.current || !captcha || captchaWidgetIdRef.current !== null || typeof captcha.render !== "function") {
+      return false;
+    }
+
+    captchaWidgetIdRef.current = captcha.render(captchaContainerRef.current, {
+      sitekey: RECAPTCHA_SITE_KEY,
+      callback: (token) => { setRecaptchaToken(token); setRecaptchaError(""); },
+      "expired-callback": () => { setRecaptchaToken(""); setRecaptchaError("reCAPTCHA expired. Please complete it again."); },
+      "error-callback": () => { setRecaptchaToken(""); setRecaptchaError("reCAPTCHA could not load. Check your connection and try again."); },
+    });
+    return true;
+  }, []);
+
   useEffect(() => {
     void loadOptions();
 
@@ -183,6 +243,29 @@ export default function ReportPage() {
     };
   }, [loadOptions]);
 
+  useEffect(() => {
+    if (!recaptchaLoaded) return;
+
+    // The Google loader can create window.grecaptcha before its checkbox
+    // render API is ready. Retry briefly instead of calling a partial API.
+    let attempts = 0;
+    let retryId: number | undefined;
+    const initialize = () => {
+      if (renderRecaptcha()) return;
+      attempts += 1;
+      if (attempts >= 50) {
+        setRecaptchaError("reCAPTCHA could not initialize. Please refresh and try again.");
+        return;
+      }
+      retryId = window.setTimeout(initialize, 100);
+    };
+
+    initialize();
+    return () => {
+      if (retryId !== undefined) window.clearTimeout(retryId);
+    };
+  }, [recaptchaLoaded, renderRecaptcha]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -190,17 +273,22 @@ export default function ReportPage() {
       setError("Please complete all required fields before submitting your report.");
       return;
     }
+    if (!recaptchaToken) {
+      setError("Complete the reCAPTCHA verification before submitting your report.");
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch("/api/student-reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, recaptchaToken }),
       });
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
         setError(data?.message || "Invalid, please input the correct details.");
+        if (res.status === 400 && /recaptcha verification/i.test(data?.message || "")) resetRecaptcha();
         return;
       }
 
@@ -216,47 +304,55 @@ export default function ReportPage() {
   const sections = form.gradeLevel ? gradeSections[form.gradeLevel] ?? [] : [];
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen overflow-x-hidden bg-slate-100 flex flex-col font-sans">
+      {RECAPTCHA_SITE_KEY && (
+        <Script
+          src="https://www.google.com/recaptcha/api.js?render=explicit"
+          strategy="afterInteractive"
+          onLoad={() => setRecaptchaLoaded(true)}
+          onError={() => setRecaptchaError("reCAPTCHA could not load. Check your connection and try again.")}
+        />
+      )}
 
       {/* Hero Header */}
-      <header className="relative w-full h-48 overflow-hidden">
+      <header className="relative w-full min-h-[250px] overflow-hidden sm:h-48 sm:min-h-0">
         <div className="absolute inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')` }} />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
-        <div className="relative z-10 flex items-center justify-between h-full px-8">
-          <div>
+        <div className="relative z-10 flex flex-col items-center justify-center gap-3 px-4 py-5 pb-10 text-center sm:h-full sm:flex-row sm:justify-between sm:px-8 sm:py-0 sm:pb-0 sm:text-left">
+          <div className="max-w-xl">
             <p className="text-white/70 text-xs font-semibold tracking-widest uppercase mb-1">
               Santiago Elementary School
             </p>
-            <h1 className="text-white font-bold text-xl md:text-2xl">
+            <h1 className="text-lg font-bold text-white sm:text-xl md:text-2xl">
               ParentConnect:{" "}
               <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
             </h1>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
+          <div className="flex shrink-0 items-center gap-3 sm:gap-4">
             <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-white/10 border-2 border-white/30 flex items-center justify-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/30 bg-white/10 sm:h-14 sm:w-14">
                 <span className="text-yellow-300 font-black text-sm">DepED</span>
               </div>
               <span className="text-white/60 text-[9px] mt-1 text-center">DEPARTMENT OF<br />EDUCATION</span>
             </div>
             <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-amber-700/40 border-2 border-amber-400/50 flex items-center justify-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-amber-400/50 bg-amber-700/40 sm:h-14 sm:w-14">
                 <AlertCircle className="w-6 h-6 text-amber-300" />
               </div>
               <span className="text-white/60 text-[9px] mt-1 text-center">SANTIAGO<br />ELEM. SCHOOL</span>
             </div>
           </div>
         </div>
-        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
+        <nav className="absolute bottom-0 left-0 right-0 z-10 flex justify-center gap-5 bg-black/60 py-2 backdrop-blur-sm sm:gap-8">
           <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
           <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
         </nav>
       </header>
 
       {/* Main */}
-      <main className="flex-1 flex items-start justify-center py-12 px-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-100 w-full max-w-lg p-8">
+      <main className="flex flex-1 items-start justify-center px-3 py-6 sm:px-4 sm:py-12">
+        <div className="w-full max-w-lg rounded-2xl border border-slate-100 bg-white p-4 shadow-lg sm:p-8">
 
           <Link href="/"
             className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium mb-6 transition-colors w-fit">
@@ -316,9 +412,9 @@ export default function ReportPage() {
 
                 {/* ── Name fields ── */}
                 <div>
-                  <FieldLabel label="Full Name" required />
+                  <FieldLabel label="Student Name" required />
                   {/* First + Last */}
-                  <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <p className="text-xs text-slate-500 mb-1 font-medium">First Name</p>
                       <input
@@ -337,7 +433,7 @@ export default function ReportPage() {
                     </div>
                   </div>
                   {/* Middle + Suffix */}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <p className="text-xs text-slate-500 mb-1 font-medium flex items-center gap-1">
                         Middle Name
@@ -392,16 +488,6 @@ export default function ReportPage() {
                   )}
                 </div>
 
-                {/* ── Contact ── */}
-                <div>
-                  <FieldLabel label="Contact Number or Email" />
-                  <input
-                    type="text" name="contact" value={form.contact}
-                    onChange={handleChange} placeholder="Your contact (optional)"
-                    className={inputCls}
-                  />
-                </div>
-
                 {/* ── Concern ── */}
                 <div>
                   <FieldLabel label="Your Report or Concern" required />
@@ -411,6 +497,18 @@ export default function ReportPage() {
                     placeholder="Describe your concern in detail. Include what happened, when it happened, and who was involved..."
                     className={`${inputCls} resize-none`}
                   />
+                </div>
+
+                <div>
+                  <FieldLabel label="Security Verification" required />
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    {!RECAPTCHA_SITE_KEY ? (
+                      <p role="alert" className="text-xs font-medium text-red-600">reCAPTCHA is not configured. Please contact the school administrator.</p>
+                    ) : (
+                      <div className="report-captcha-shell"><div ref={captchaContainerRef} className="report-captcha" /></div>
+                    )}
+                    {recaptchaError && <p role="alert" className="mt-2 text-xs font-medium text-red-600">{recaptchaError}</p>}
+                  </div>
                 </div>
 
                 {error && (
@@ -425,8 +523,7 @@ export default function ReportPage() {
                   <div>
                     <p className="text-sky-700 font-semibold text-sm mb-0.5">Your privacy matters</p>
                     <p className="text-sky-600 text-xs leading-relaxed">
-                      This information will be reviewed by school administrators and will remain confidential.
-                      You may be contacted for follow-up if you provided contact information.
+                      This report will be reviewed by authorized school personnel and handled confidentially under school privacy practices.
                     </p>
                   </div>
                 </div>
@@ -434,7 +531,7 @@ export default function ReportPage() {
                 {/* Submit */}
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={!canSubmit}
                   className="flex items-center justify-center gap-2 w-full bg-amber-400 hover:bg-amber-500 disabled:bg-amber-300 text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md shadow-amber-200 text-sm mt-1"
                 >
                   {loading ? (

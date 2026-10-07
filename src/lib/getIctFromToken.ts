@@ -1,9 +1,9 @@
 import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { getJwtSecret } from "@/lib/authSecret";
+import { supabase } from "@/lib/supabase";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 export interface IctPayload {
   id: number;
@@ -26,7 +26,10 @@ export async function getIctFromToken(): Promise<IctPayload | null> {
     const { payload } = await jwtVerify(token, SECRET);
     if (payload.role !== "ict") return null;
 
-    return payload as unknown as IctPayload;
+    const ict = payload as unknown as IctPayload;
+    const { data, error } = await supabase.from("ict_admins").select("status, archive_status").eq("id", ict.id).maybeSingle();
+    if (error || !data || data.status !== "active" || data.archive_status === "archived") return null;
+    return ict;
   } catch {
     return null;
   }

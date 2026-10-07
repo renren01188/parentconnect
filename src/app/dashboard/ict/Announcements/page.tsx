@@ -28,7 +28,8 @@ type Announcement = {
 
 
 
-const emptyForm = { title: "", body: "", audience: [] as string[], scheduleDate: "" };
+const ICT_AUDIENCES = ["Parents", "Class Advisers", "Guidance", "Principal"] as const;
+const emptyForm = { title: "", body: "", audience: "", scheduleDate: "" };
 
 
 
@@ -42,11 +43,60 @@ function toDateInputValue(value?: string) {
   return `${year}-${month}-${day}`;
 }
 
+function formatAnnouncementDateTime(value?: string) {
+  if (!value) return { date: "Date unavailable", time: "Time unavailable" };
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return { date: "Date unavailable", time: "Time unavailable" };
+  return {
+    date: parsed.toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+    time: parsed.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toAnnouncement(value: unknown): Announcement | null {
+  const source = record(value);
+  const id = stringValue(source?.id);
+  if (!source || !id) return null;
+
+  const status = stringValue(source.status);
+  return {
+    id,
+    title: stringValue(source.title) ?? "",
+    body: stringValue(source.message) ?? stringValue(source.body) ?? "",
+    message: stringValue(source.message),
+    date: stringValue(source.date),
+    scheduled_at: stringValue(source.scheduled_at),
+    author: stringValue(source.author),
+    sender_name: stringValue(source.sender_name),
+    audience: Array.isArray(source.audience) ? source.audience.filter((audience): audience is string => typeof audience === "string") : [],
+    status: status === "Published" || status === "Scheduled" ? status : undefined,
+    source: stringValue(source.source),
+    created_at: stringValue(source.created_at),
+    profilePicture: stringValue(source.profilePicture) ?? null,
+  };
+}
+
+function announcementsFromPayload(value: unknown) {
+  const payload = record(value);
+  const entries = Array.isArray(payload?.announcements) ? payload.announcements : [];
+  return entries.map(toAnnouncement).filter((announcement): announcement is Announcement => announcement !== null);
+}
+
 export default function ICTAnnouncementsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("principal");
   const [showCompose, setShowCompose] = useState(false);
   const [form, setForm] = useState<{
-    title: string; body: string; audience: string[]; scheduleDate: string;
+    title: string; body: string; audience: string; scheduleDate: string;
   }>(emptyForm);
   const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
   const [viewAnn, setViewAnn] = useState<Announcement | null>(null);
@@ -62,32 +112,27 @@ export default function ICTAnnouncementsPage() {
         fetch("/api/ict/announcements", { cache: "no-store" }),
         fetch("/api/ict/principal-announcements", { cache: "no-store" }),
       ]);
-      const [data, principalData] = await Promise.all([
+      const [data, principalData]: [unknown, unknown] = await Promise.all([
         ictRes.json(),
         principalRes.json(),
       ]);
 
-      const mine: Announcement[] = (data.announcements ?? []).map((a: any) => ({
-        ...a,
-        id: String(a.id),
-        body: a.message ?? a.body ?? "",
-        audience: Array.isArray(a.audience) ? a.audience : [],
-      }));
-
-      const fromPrincipal: Announcement[] = (principalData.announcements ?? []).map((a: any) => ({
-        ...a,
-        id: String(a.id),
-        body: a.message ?? a.body ?? "",
-        audience: Array.isArray(a.audience) ? a.audience : [],
-      }));
+      const mine = announcementsFromPayload(data);
+      const fromPrincipal = announcementsFromPayload(principalData)
+        .filter((announcement) => announcement.source === "principal");
 
       setMyAnnouncements(mine);
       setPrincipalAnnouncements(fromPrincipal);
       const notifRes = await fetch("/api/ict/notifications", { cache: "no-store" });
-      const notifData = await notifRes.json();
-      if (notifData?.success) {
+      const notifData: unknown = await notifRes.json();
+      const notifications = record(notifData)?.notifications;
+      if (record(notifData)?.success === true && Array.isArray(notifications)) {
         setReadKeys(new Set(
-          (notifData.notifications ?? []).filter((n: any) => n.read).map((n: any) => n.id)
+          notifications.flatMap((notification) => {
+            const item = record(notification);
+            const id = stringValue(item?.id);
+            return item?.read === true && id ? [id] : [];
+          })
         ));
       }
     } finally {
@@ -106,7 +151,11 @@ export default function ICTAnnouncementsPage() {
     const channel = client
       .channel("ict-announcements-status")
       .on("postgres_changes",
-        { event: "UPDATE", schema: "public", table: "ict_announcements" },
+        { event: "*", schema: "public", table: "ict_announcements" },
+        () => { loadAnnouncements(); }
+      )
+      .on("postgres_changes",
+        { event: "*", schema: "public", table: "principal_announcements" },
         () => { loadAnnouncements(); }
       )
       .subscribe();
@@ -114,7 +163,7 @@ export default function ICTAnnouncementsPage() {
     return () => { client.removeChannel(channel); };
   }, [loadAnnouncements]);
 
-  const isFormReady = form.title.trim() && form.body.trim() && form.audience.length > 0;
+  const isFormReady = Boolean(form.title.trim() && form.body.trim() && form.audience);
   const activeAnnouncements = useMemo(
     () => (activeTab === "principal" ? principalAnnouncements : myAnnouncements),
     [activeTab, myAnnouncements, principalAnnouncements],
@@ -131,7 +180,7 @@ export default function ICTAnnouncementsPage() {
     setForm({
       title: announcement.title,
       body: announcement.body,
-      audience: announcement.audience,
+      audience: announcement.audience.find((audience) => ICT_AUDIENCES.includes(audience as typeof ICT_AUDIENCES[number])) ?? "",
       scheduleDate: announcement.status === "Scheduled" ? toDateInputValue(announcement.scheduled_at) : "",
     });
     setShowCompose(true);
@@ -150,7 +199,7 @@ export default function ICTAnnouncementsPage() {
     const payload = {
       title: form.title.trim(),
       message: form.body.trim(),
-      audience: form.audience,
+      audience: [form.audience],
       scheduled_at: form.scheduleDate ? `${form.scheduleDate}T00:00:00` : null,
     };
 
@@ -216,10 +265,10 @@ export default function ICTAnnouncementsPage() {
   };
 
   return (
-    <div className="p-6 min-h-screen bg-gray-50" style={{ maxWidth: 1040, margin: "0 auto" }}>
+    <div className="min-h-screen min-w-0 overflow-x-clip bg-gray-50 p-4 sm:p-6" style={{ maxWidth: 1040, margin: "0 auto" }}>
 
       {/* ── Header ── */}
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Announcements</h1>
           <p className="text-sm text-gray-400 mt-0.5">
@@ -228,7 +277,7 @@ export default function ICTAnnouncementsPage() {
         </div>
         <button
           onClick={openNewAnnouncement}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#274e13] rounded-xl hover:bg-[#1e3d0f] transition shadow-sm"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e3d0f] sm:min-h-0 sm:w-auto"
         >
           <Plus size={15} />
           New Announcement
@@ -236,7 +285,7 @@ export default function ICTAnnouncementsPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="inline-flex overflow-hidden bg-white border border-gray-200 rounded-xl shadow-sm mb-5" role="tablist" aria-label="Announcement source">
+      <div className="mb-5 max-w-full overflow-x-auto" role="tablist" aria-label="Announcement source"><div className="inline-flex min-w-max overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <button
           className={`px-5 py-2.5 text-sm font-semibold transition ${activeTab === "principal" ? "bg-[#274e13] text-white" : "text-gray-500 hover:text-gray-700"}`}
           onClick={() => setActiveTab("principal")}
@@ -253,7 +302,7 @@ export default function ICTAnnouncementsPage() {
         >
           My Announcements
         </button>
-      </div>
+      </div></div>
 
       {/* ── Announcement list ── */}
       <div className="flex flex-col gap-3">
@@ -268,13 +317,13 @@ export default function ICTAnnouncementsPage() {
           </div>
         ) : (
           activeAnnouncements.map((announcement) => (
-            <article key={announcement.id} className="bg-white border border-gray-100 rounded-xl shadow-sm p-5 flex flex-col gap-3">
+            <article key={announcement.id} className="flex min-w-0 flex-col gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
               {/* top row */}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 {activeTab === "principal" ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <div className="h-7 w-7 overflow-hidden rounded-full bg-[#274e13] text-center text-[10px] font-bold leading-7 text-white">
-                      {announcement.profilePicture ? <img src={announcement.profilePicture} alt="Principal profile" className="h-full w-full object-cover" /> : "P"}
+                      {"P"}
                     </div>
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-700">
                       <UserRound size={13} />
@@ -297,7 +346,7 @@ export default function ICTAnnouncementsPage() {
                   </span>
                 )}
 
-                <div className="flex items-center gap-2 flex-wrap justify-end ml-auto">
+                <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
                   {announcement.audience.map((a) => (
                     <span key={a} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">
                       {a === "Advisers" ? "School Staffs" : a}
@@ -323,7 +372,7 @@ export default function ICTAnnouncementsPage() {
               {/* actions */}
               {activeTab === "principal" ? (
                 <button
-                  className="self-start flex items-center gap-1.5 text-xs font-semibold text-[#274e13] border border-[#274e13]/30 px-3 py-1.5 rounded-lg hover:bg-green-50 transition"
+                  className="flex min-h-11 w-full self-start items-center justify-center gap-1.5 rounded-lg border border-[#274e13]/30 px-3 py-1.5 text-xs font-semibold text-[#274e13] transition hover:bg-green-50 sm:min-h-0 sm:w-auto"
                   onClick={() => handleViewPrincipalAnnouncement(announcement)}
                 >
                   <Eye size={13} />
@@ -355,29 +404,29 @@ export default function ICTAnnouncementsPage() {
       {/* ── Compose / Edit Modal ── */}
       {showCompose && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 p-3 backdrop-blur-sm sm:p-4"
           onClick={closeCompose}
         >
           <div
-            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-4 sm:px-6">
               <h2 className="text-sm font-bold text-gray-900">
                 {editingAnnouncement ? "Edit Announcement" : "New Announcement"}
               </h2>
               <button
                 onClick={closeCompose}
                 aria-label="Close"
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"
               >
                 <X size={16} />
               </button>
             </div>
 
             {/* body */}
-            <div className="p-6 flex flex-col gap-4">
+            <div className="flex flex-col gap-4 overflow-y-auto p-4 sm:p-6">
               {/* title */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Title</label>
@@ -402,27 +451,19 @@ export default function ICTAnnouncementsPage() {
               </div>
 
               {/* audience + schedule */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Audience</label>
-                  <div className="flex flex-col gap-2 px-3 py-2.5 border border-gray-200 rounded-xl bg-gray-50">
-                    {["Parents", "Class Advisers", "Guidance", "Principal"].map(group => (
-                      <label key={group} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="w-3.5 h-3.5 accent-[#274e13]"
-                          checked={form.audience.includes(group)}
-                          onChange={e => setForm(f => ({
-                            ...f,
-                            audience: e.target.checked
-                              ? [...f.audience, group]
-                              : f.audience.filter(a => a !== group)
-                          }))}
-                        />
-                        {group}
-                      </label>
+                  <select
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
+                    value={form.audience}
+                    onChange={(event) => setForm({ ...form, audience: event.target.value })}
+                  >
+                    <option value="">Select audience</option>
+                    {ICT_AUDIENCES.map((audience) => (
+                      <option key={audience} value={audience}>{audience}</option>
                     ))}
-                  </div>
+                  </select>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
@@ -438,17 +479,17 @@ export default function ICTAnnouncementsPage() {
             </div>
 
             {/* footer */}
-            <div className="flex gap-2 justify-end px-6 py-4 border-t border-gray-100">
+            <div className="flex flex-col-reverse gap-2 border-t border-gray-100 px-4 py-4 sm:flex-row sm:justify-end sm:px-6">
               <button
                 onClick={closeCompose}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+                className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveAnnouncement}
                 disabled={!isFormReady || saving}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-[#274e13] rounded-xl hover:bg-[#1e3d0f] disabled:opacity-50 disabled:cursor-not-allowed transition shadow-sm"
+                className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-[#274e13] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e3d0f] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {form.scheduleDate ? <Clock size={13} /> : <Plus size={13} />}
                 {editingAnnouncement ? "Save Changes" : form.scheduleDate ? "Schedule" : "Publish Now"}
@@ -461,18 +502,18 @@ export default function ICTAnnouncementsPage() {
       {/* ── View Principal Announcement Modal ── */}
       {viewAnn && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 p-3 backdrop-blur-sm sm:p-4"
           onClick={() => setViewAnn(null)}
         >
           <div
-            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* header */}
-            <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-start justify-between border-b border-gray-100 px-4 py-4 sm:px-6">
               <div>
                 <h2 className="text-sm font-bold text-gray-900">{viewAnn.title}</h2>
-                <p className="text-xs text-gray-400 mt-0.5">{viewAnn.author} — {viewAnn.date}</p>
+                <p className="mt-0.5 text-xs text-gray-400">{viewAnn.author ?? "Principal"} · {formatAnnouncementDateTime(viewAnn.created_at ?? viewAnn.date).date}</p>
               </div>
               <button
                 onClick={() => setViewAnn(null)}
@@ -484,8 +525,14 @@ export default function ICTAnnouncementsPage() {
             </div>
 
             {/* body */}
-            <div className="p-6 flex flex-col gap-4">
-              <p className="text-sm text-gray-700 leading-relaxed">{viewAnn.body}</p>
+            <div className="flex flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{viewAnn.body}</p>
+              <dl className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-4 text-sm sm:grid-cols-2">
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Sender</dt><dd className="mt-0.5 font-semibold text-gray-700">{viewAnn.author ?? "Principal"}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Role</dt><dd className="mt-0.5 font-semibold text-gray-700">Principal</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Date</dt><dd className="mt-0.5 font-semibold text-gray-700">{formatAnnouncementDateTime(viewAnn.created_at ?? viewAnn.date).date}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Time</dt><dd className="mt-0.5 font-semibold text-gray-700">{formatAnnouncementDateTime(viewAnn.created_at ?? viewAnn.date).time}</dd></div>
+              </dl>
               <div className="flex gap-2 flex-wrap">
                 {viewAnn.audience.map((a) => (
                   <span key={a} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">
@@ -496,7 +543,7 @@ export default function ICTAnnouncementsPage() {
             </div>
 
             {/* footer */}
-            <div className="flex justify-end px-6 py-4 border-t border-gray-100">
+            <div className="flex justify-end border-t border-gray-100 px-4 py-4 sm:px-6">
               <button
                 onClick={() => setViewAnn(null)}
                 className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"

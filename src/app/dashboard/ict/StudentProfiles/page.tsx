@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   Search, ChevronDown, Eye, Pencil, UserPlus,
   X, CheckCircle, AlertTriangle, CreditCard,
@@ -77,6 +77,15 @@ interface ClassControl {
   lateAfter: string;
   absentAfter: string;
 }
+
+type AttendanceNotificationDelivery = "sms" | "email" | "both" | "none";
+type AttendanceNotificationSettings = {
+  delivery: AttendanceNotificationDelivery;
+  lowCreditThreshold: number;
+  smsCreditBalance: number | null;
+  smsCreditsCheckedAt: string | null;
+  smsCreditsCheckError: string | null;
+};
 
 // ─── Constants ──────────────────────────────────────────────────
 const SUFFIXES = ["None", "Jr.", "Sr.", "II", "III", "IV"];
@@ -160,15 +169,18 @@ function RFIDScanner({ value, onChange, studentName, editExisting = false, onCon
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (manual) inputRef.current?.focus();
-  }, [manual]);
+    if (scanning || manual) inputRef.current?.focus();
+  }, [manual, scanning]);
 
   function handleScan() {
-    setScanning(false);
-    setManual(true);
+    // USB RFID readers usually behave like a keyboard. Keep a real input focused
+    // while scanning so the UID sent by the reader is captured by this modal.
+    if (value) onChange("");
+    setManual(false);
+    setScanning(true);
   }
 
-  if (value && !manual && !editExisting) return (
+  if (value && !manual && !editExisting && !onConfirm) return (
     <div className="rounded-xl border border-[#274e13]/25 bg-[#274e13]/5 p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
@@ -201,8 +213,8 @@ function RFIDScanner({ value, onChange, studentName, editExisting = false, onCon
           </div>
         </div>
       ) : (
-        <div>
-          <button onClick={handleScan} disabled={scanning} className="w-full flex flex-col items-center justify-center gap-3 py-8 hover:bg-gray-50/60 transition-colors disabled:cursor-not-allowed" style={{ background: scanning ? "rgba(39,78,19,0.04)" : undefined }}>
+        <div style={scanning ? { background: "rgba(39,78,19,0.04)" } : undefined}>
+          <button onClick={handleScan} disabled={scanning} className="w-full flex flex-col items-center justify-center gap-3 py-8 hover:bg-gray-50/60 transition-colors disabled:cursor-not-allowed">
             <div className="relative flex items-center justify-center">
               {scanning && (<><span className="absolute w-16 h-16 rounded-full border-2 border-[#274e13]/30 animate-ping" /><span className="absolute w-12 h-12 rounded-full border-2 border-[#274e13]/40 animate-ping" style={{ animationDelay: "0.3s" }} /></>)}
               <div className={`w-14 h-14 rounded-2xl flex items-center justify-center relative z-10 transition-colors ${scanning ? "bg-[#274e13]/10" : "bg-gray-100"}`}>
@@ -214,7 +226,39 @@ function RFIDScanner({ value, onChange, studentName, editExisting = false, onCon
               <p className="text-xs text-gray-400 mt-1">{scanning ? "Hold your RFID card near the reader" : "Tap your RFID card on the reader after clicking"}</p>
             </div>
           </button>
-          <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between">
+          {scanning && (
+            <>
+              <input
+                ref={inputRef}
+                value={value}
+                onChange={e => onChange(e.target.value.replace(/\r|\n/g, "").toUpperCase())}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onConfirm?.();
+                  }
+                }}
+                aria-label="RFID scanner input"
+                className="absolute h-px w-px opacity-0 pointer-events-none"
+              />
+              {value && (
+                <div className="mx-5 mb-3 rounded-lg border border-[#274e13]/20 bg-transparent px-3 py-2 text-center">
+                  <p className="text-[11px] font-semibold text-[#274e13]">Card detected</p>
+                  <p className="mt-0.5 font-mono text-xs font-bold tracking-wider text-gray-800">{value}</p>
+                  {confirming && <p className="mt-1 text-[11px] font-semibold text-[#274e13]" role="status">Checking card availability...</p>}
+                  <button onClick={() => { onChange(""); inputRef.current?.focus(); }} className="mt-1.5 text-[11px] font-bold text-[#274e13] hover:underline">Scan another card</button>
+                </div>
+              )}
+              {confirmed && (
+                <div className="mx-5 mb-3 flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-center text-xs font-semibold text-emerald-700" role="status">
+                  <CheckCircle className="h-4 w-4 shrink-0" />
+                  RFID is available and ready to assign.
+                </div>
+              )}
+              {error && <p className="mx-5 mb-3 text-center text-xs font-semibold text-red-600">{error}</p>}
+            </>
+          )}
+          <div className="border-t border-gray-100 bg-white px-5 py-3 flex items-center justify-between">
             <p className="text-[11px] text-gray-400">You can also enter the UID manually.</p>
             <button onClick={() => setManual(true)} className="text-[11px] font-bold shrink-0 ml-3 text-[#274e13] hover:underline">Enter manually →</button>
           </div>
@@ -224,10 +268,129 @@ function RFIDScanner({ value, onChange, studentName, editExisting = false, onCon
   );
 }
 
+// ─── Attendance Notification Settings Modal ───────────────────────
+function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void }) {
+  const [settings, setSettings] = useState<AttendanceNotificationSettings | null>(null);
+  const [delivery, setDelivery] = useState<AttendanceNotificationDelivery>("sms");
+  const [threshold, setThreshold] = useState("50");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [checkingCredits, setCheckingCredits] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const applySettings = (next: AttendanceNotificationSettings) => {
+    setSettings(next);
+    setDelivery(next.delivery);
+    setThreshold(String(next.lowCreditThreshold));
+  };
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/ict/attendance-notification-settings", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not load attendance notification settings.");
+      applySettings(data.settings as AttendanceNotificationSettings);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load attendance notification settings.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadSettings(); }, [loadSettings]);
+
+  async function saveSettings() {
+    const lowCreditThreshold = Number(threshold);
+    if (!Number.isInteger(lowCreditThreshold) || lowCreditThreshold < 0 || lowCreditThreshold > 1_000_000) {
+      setError("Low-credit threshold must be a whole number from 0 to 1,000,000.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/ict/attendance-notification-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delivery, lowCreditThreshold }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not save attendance notification settings.");
+      applySettings(data.settings as AttendanceNotificationSettings);
+      setNotice("Attendance notification settings saved.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save attendance notification settings.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function checkCredits() {
+    setCheckingCredits(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/ict/attendance-notification-settings/credits", { method: "POST" });
+      const data = await res.json();
+      if (data.settings) applySettings(data.settings as AttendanceNotificationSettings);
+      if (!res.ok || !data.success) throw new Error(data.message || "Unable to check credits.");
+      setNotice(data.rateLimited ? "Using the most recently checked credit balance." : "SMS credit balance updated.");
+    } catch (creditError) {
+      setError(creditError instanceof Error ? creditError.message : "Unable to check credits.");
+    } finally {
+      setCheckingCredits(false);
+    }
+  }
+
+  const unableToCheckCredits = !settings || settings.smsCreditBalance === null || Boolean(settings.smsCreditsCheckError);
+  const parsedThreshold = Number(threshold);
+  const lowCredit = !unableToCheckCredits
+    && typeof settings?.smsCreditBalance === "number"
+    && Number.isFinite(parsedThreshold)
+    && settings.smsCreditBalance <= parsedThreshold;
+  const choices: Array<{ value: AttendanceNotificationDelivery; label: string; description: string }> = [
+    { value: "sms", label: "SMS only", description: "Send an SMS to the eligible parent or guardian." },
+    { value: "email", label: "Email only", description: "Send an attendance email to the eligible parent or guardian." },
+    { value: "both", label: "Both SMS and Email", description: "Send both channels for each RFID attendance event." },
+    { value: "none", label: "Neither", description: "Record attendance normally without sending parent notifications." },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="attendance-notification-settings-title">
+        <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#274e13]/10"><Bell className="h-5 w-5 text-[#274e13]" /></div><div><h2 id="attendance-notification-settings-title" className="text-base font-bold text-gray-900">Attendance Notifications</h2><p className="mt-0.5 text-xs text-gray-400">Choose the school-wide parent notification method for RFID attendance.</p></div></div>
+          <button onClick={onClose} aria-label="Close attendance notification settings" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
+          {loading ? <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-400"><span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading notification settings…</div> : <>
+            <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-700">These settings apply to every future RFID Time In and Time Out event. Attendance is always recorded even if a notification provider is unavailable.</div>
+            <fieldset className="space-y-2"><legend className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">Parent notification method</legend>{choices.map(choice => {
+              const selected = delivery === choice.value;
+              return <button key={choice.value} type="button" onClick={() => setDelivery(choice.value)} className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition ${selected ? "border-[#274e13] bg-[#274e13]/5" : "border-gray-200 hover:border-[#274e13]/40"}`} aria-pressed={selected}><span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${selected ? "border-[#274e13] bg-[#274e13]" : "border-gray-300 bg-white"}`}>{selected && <Check className="h-3.5 w-3.5 text-white" />}</span><span><span className="block text-sm font-bold text-gray-800">{choice.label}</span><span className="mt-0.5 block text-xs text-gray-500">{choice.description}</span></span></button>;
+            })}</fieldset>
+            <section className="rounded-xl border border-gray-200 bg-gray-50 p-4" aria-label="SMS credit monitoring">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-sm font-bold text-gray-800">Semaphore SMS credits</p>{unableToCheckCredits ? <p className="mt-1 text-sm font-semibold text-amber-700">Unable to check credits</p> : <p className="mt-1 text-2xl font-black text-[#274e13]">{settings?.smsCreditBalance?.toLocaleString()} <span className="text-sm font-semibold">credits</span></p>}<p className="mt-1 text-xs text-gray-500">{settings?.smsCreditsCheckedAt ? `Last checked ${new Date(settings.smsCreditsCheckedAt).toLocaleString()}` : "Not checked yet"}</p></div><button type="button" onClick={checkCredits} disabled={checkingCredits} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${checkingCredits ? "animate-spin" : ""}`} />{checkingCredits ? "Checking…" : "Check credits"}</button></div>
+              <div className="mt-4 max-w-xs"><label className="mb-1.5 block text-xs font-semibold text-gray-600">Low-credit warning threshold</label><div className="flex items-center gap-2"><input type="number" min="0" step="1" value={threshold} onChange={event => setThreshold(event.target.value)} className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" /><span className="text-xs text-gray-500">credits</span></div></div>
+              {lowCredit && <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />SMS credits are at or below the configured warning threshold.</div>}
+            </section>
+            {error && <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
+            {notice && <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-semibold text-emerald-700"><CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />{notice}</div>}
+          </>}
+        </div>
+        {!loading && <div className="flex flex-col-reverse gap-2 border-t border-gray-100 px-4 py-4 sm:flex-row sm:justify-end sm:px-6"><button onClick={onClose} className="min-h-10 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">Cancel</button><button onClick={saveSettings} disabled={saving} className="flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60"><Save className="h-4 w-4" />{saving ? "Saving…" : "Save settings"}</button></div>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Class Control Modal ─────────────────────────────────────────
 function ClassControlModal({ onClose }: { onClose: () => void }) {
-  const [morning, setMorning] = useState<ClassControl>({ session: "Morning", status: "Not Started", startTime: null, endTime: null, scheduledStart: "06:00", scheduledEnd: "12:00", lateAfter: "06:30", absentAfter: "12:00" });
-  const [afternoon, setAfternoon] = useState<ClassControl>({ session: "Afternoon", status: "Not Started", startTime: null, endTime: null, scheduledStart: "12:00", scheduledEnd: "18:00", lateAfter: "12:30", absentAfter: "18:00" });
+  const [morning, setMorning] = useState<ClassControl>({ session: "Morning", status: "Not Started", startTime: null, endTime: null, scheduledStart: "", scheduledEnd: "", lateAfter: "", absentAfter: "" });
+  const [afternoon, setAfternoon] = useState<ClassControl>({ session: "Afternoon", status: "Not Started", startTime: null, endTime: null, scheduledStart: "", scheduledEnd: "", lateAfter: "", absentAfter: "" });
   const [confirm, setConfirm] = useState<{ session: ClassSession; action: "start" | "end" } | null>(null);
   const [loading, setLoading] = useState(false);
   const [morningSaved, setMorningSaved] = useState(false);
@@ -253,10 +416,10 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
               endTime: s.actual_end
                 ? new Date(s.actual_end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
                 : null,
-              scheduledStart: (s.scheduled_start as string)?.slice(0, 5) ?? "06:00",
-              scheduledEnd: (s.scheduled_end as string)?.slice(0, 5) ?? "12:00",
-              lateAfter: (s.late_after as string)?.slice(0, 5) ?? "06:30",
-              absentAfter: (s.absent_after as string)?.slice(0, 5) ?? "12:00",
+              scheduledStart: (s.scheduled_start as string)?.slice(0, 5) ?? "",
+              scheduledEnd: (s.scheduled_end as string)?.slice(0, 5) ?? "",
+              lateAfter: (s.late_after as string)?.slice(0, 5) ?? "",
+              absentAfter: (s.absent_after as string)?.slice(0, 5) ?? "",
             };
             if (s.session_type === "Morning") setMorning(ctrl);
             else setAfternoon(ctrl);
@@ -339,6 +502,22 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
 
       if (!data.success) throw new Error(data.message ?? "Failed to update session");
 
+      if (confirm.action === "end") {
+        try {
+          const absenceRes = await fetch("/api/attendance/mark-absent", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_type: confirm.session }),
+          });
+          const absenceData = await absenceRes.json();
+          if (!absenceData.success) {
+            setApiError(`Class ended, but automatic absence marking failed: ${absenceData.message ?? "Unknown error"}`);
+          }
+        } catch {
+          setApiError("Class ended, but automatic absence marking could not be reached.");
+        }
+      }
+
       const time = nowTimeStr();
       const updater = (prev: ClassControl): ClassControl =>
         confirm.action === "start"
@@ -363,8 +542,8 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
     const isNotStarted = ctrl.status === "Not Started";
 
     return (
-      <div className={`rounded-2xl border-2 p-5 transition-all ${isActive ? "border-[#274e13] bg-[#274e13]/5" : isEnded ? "border-gray-200 bg-gray-50" : "border-gray-200 bg-white"}`}>
-        <div className="flex items-center justify-between mb-4">
+      <div className={`rounded-2xl border-2 p-4 transition-all sm:p-5 ${isActive ? "border-[#274e13] bg-[#274e13]/5" : isEnded ? "border-gray-200 bg-gray-50" : "border-gray-200 bg-white"}`}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${gradient}`}>
               <Icon className="w-5 h-5 text-white" />
@@ -386,7 +565,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Time pickers — only editable when Not Started */}
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Scheduled Start</label>
             <input
@@ -415,23 +594,11 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Late After</label><input type="time" value={ctrl.lateAfter} disabled={loading} onChange={e => ctrl.session === "Morning" ? setMorning(p => ({ ...p, lateAfter: e.target.value })) : setAfternoon(p => ({ ...p, lateAfter: e.target.value }))} className="w-full px-3 py-2 text-sm border border-amber-200 rounded-xl bg-amber-50 text-gray-800" /></div>
           <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Absent After</label><input type="time" value={ctrl.absentAfter} disabled={loading} onChange={e => ctrl.session === "Morning" ? setMorning(p => ({ ...p, absentAfter: e.target.value })) : setAfternoon(p => ({ ...p, absentAfter: e.target.value }))} className="w-full px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800" /></div>
         </div>
-        <p className="-mt-1 mb-3 text-[10px] text-gray-400">Scans after the Late After time are Late. Students without a time-in by Absent After are automatically marked Absent.</p>
-
-        {/* Actual recorded start/end times */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className={`rounded-xl px-3 py-2.5 border ${ctrl.startTime ? "bg-white border-gray-200" : "bg-gray-50 border-gray-100"}`}>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Start Time</p>
-            <p className={`text-sm font-bold ${ctrl.startTime ? "text-[#274e13]" : "text-gray-300"}`}>{ctrl.startTime ?? "—"}</p>
-          </div>
-          <div className={`rounded-xl px-3 py-2.5 border ${ctrl.endTime ? "bg-white border-gray-200" : "bg-gray-50 border-gray-100"}`}>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">End Time</p>
-            <p className={`text-sm font-bold ${ctrl.endTime ? "text-gray-700" : "text-gray-300"}`}>{ctrl.endTime ?? "—"}</p>
-          </div>
-        </div>
+        <p className="-mt-1 mb-3 text-[10px] text-gray-400">Scans after the Late After time are Late. When ICT ends the session, students without a Time In are automatically marked Absent.</p>
 
         <div className="flex gap-2">
           {(() => {
@@ -453,12 +620,12 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => !confirm && onClose()}>
-      <div className="w-full max-w-lg max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()} style={{ animation: "modal-in .2s ease" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-4" onClick={() => !confirm && onClose()}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()} style={{ animation: "modal-in .2s ease" }}>
         <style>{`@keyframes modal-in { from { opacity:0; transform:translateY(12px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }`}</style>
 
         {confirm ? (
-          <div className="p-6 text-center">
+          <div className="overflow-y-auto p-4 text-center sm:p-6">
             <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4 ${confirm.action === "start" ? "bg-[#274e13]/10" : "bg-red-100"}`}>
               {confirm.action === "start" ? <CheckCircle className="w-7 h-7 text-[#274e13]" /> : <X className="w-7 h-7 text-red-500" />}
             </div>
@@ -474,7 +641,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
                 <p className="text-xs text-amber-700">Students with no RFID scan for today will be automatically marked <strong>Absent</strong>.</p>
               </div>
             )}
-            <div className="flex gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row">
               <button onClick={() => setConfirm(null)} disabled={loading} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
               <button onClick={executeAction} disabled={loading}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition"
@@ -490,8 +657,8 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-3">
+            <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-[#274e13]/10 flex items-center justify-center">
                   <BookOpen className="w-5 h-5 text-[#274e13]" />
                 </div>
@@ -500,9 +667,9 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
                   <p className="text-xs text-gray-400 mt-0.5">Manage morning and afternoon attendance windows</p>
                 </div>
               </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-xl hover:bg-gray-100 flex items-center justify-center text-gray-400 transition"><X className="w-4 h-4" /></button>
+              <button onClick={onClose} aria-label="Close class session control" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
             </div>
-            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+            <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
                 <Info className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-700">Set the schedule once. RFID scanning opens automatically during the saved class time and closes after the scheduled end.</p>
@@ -546,11 +713,11 @@ function AuditTrailModal({ entries, onClose }: { entries: AuditEntry[]; onClose:
   }).sort((a, b) => b.timestampMs - a.timestampMs), [entries, searchQ, actionFilter]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: "90vh" }} onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-5 border-b border-gray-100 shrink-0">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="shrink-0 border-b border-gray-100 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-[#274e13]/10 flex items-center justify-center">
                 <ClipboardList className="w-5 h-5 text-[#274e13]" />
               </div>
@@ -559,7 +726,7 @@ function AuditTrailModal({ entries, onClose }: { entries: AuditEntry[]; onClose:
                 <p className="text-xs text-gray-400 mt-0.5">Complete log of all RFID card actions</p>
               </div>
             </div>
-            <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"><X className="w-4 h-4" /></button>
+            <button onClick={onClose} aria-label="Close RFID audit trail" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
           </div>
           <div className="flex gap-2 flex-wrap mb-3">
             {(["All", "registered", "assigned", "replaced", "revoked"] as const).map(a => {
@@ -588,7 +755,7 @@ function AuditTrailModal({ entries, onClose }: { entries: AuditEntry[]; onClose:
               <p className="text-sm text-gray-400">No audit entries match your filters.</p>
             </div>
           ) : (
-            <table className="w-full">
+            <div className="max-w-full overflow-x-auto"><table className="min-w-[760px] w-full">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-50/95 border-b border-gray-100">
                   {["Timestamp", "Action", "Student", "Grade & Section", "RFID Tag", "Performed By", ""].map(h => (
@@ -659,10 +826,10 @@ function AuditTrailModal({ entries, onClose }: { entries: AuditEntry[]; onClose:
                   );
                 })}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
-        <div className="px-6 py-3 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between shrink-0">
+        <div className="flex shrink-0 flex-col gap-1 border-t border-gray-100 bg-gray-50/60 px-4 py-3 text-center sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:text-left">
           <p className="text-xs text-gray-400">Showing {filtered.length} of {entries.length} entries</p>
           <span className="text-xs text-gray-400">Sorted by most recent</span>
         </div>
@@ -704,7 +871,7 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
         <div className="p-8 text-center">
           <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4"><Trash2 className="w-7 h-7 text-red-500" /></div>
           <h3 className="text-lg font-bold text-gray-800 mb-1">Student Deleted</h3>
-          <p className="text-sm text-gray-500 mb-5"><strong>{fullName}</strong> has been permanently removed.</p>
+          <p className="text-sm text-gray-500 mb-5"><strong>{fullName}</strong> has been archived. Their history remains available to authorized staff.</p>
           {student.parentEmail && (
             <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 mb-5">
               <Mail className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -718,9 +885,9 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-6" onClick={e => { if (e.target === e.currentTarget && !deleting) onClose(); }}>
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg flex flex-col" style={{ maxHeight: "92vh" }}>
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-gray-100 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-3 py-3 backdrop-blur-sm sm:p-6" onClick={e => { if (e.target === e.currentTarget && !deleting) onClose(); }}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col rounded-2xl border border-slate-100 bg-white shadow-2xl">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 pb-4 pt-4 sm:px-6 sm:pt-6">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0"><Trash2 className="w-5 h-5 text-red-500" /></div>
             <div>
@@ -730,10 +897,10 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
           </div>
           <button onClick={onClose} disabled={deleting} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-gray-100 text-gray-400 transition"><X className="w-4 h-4" /></button>
         </div>
-        <div className="overflow-y-auto flex-1 px-6 py-5 flex flex-col gap-5">
+        <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
             <TriangleAlert className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-xs text-red-600 leading-relaxed">Permanently deletes all attendance logs, RFID data, and linked parent accounts. <strong>Cannot be reversed.</strong></p>
+            <p className="text-xs text-red-600 leading-relaxed">Archives the selected student only. Attendance, RFID, linked-parent, report, and audit history are preserved. <strong>This can be restored by authorized ICT staff.</strong></p>
           </div>
           <div className="rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3.5 bg-white border-b border-gray-100">
@@ -741,7 +908,7 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
               <div className="flex-1"><p className="font-bold text-gray-800 text-sm">{fullName}</p><p className="text-[11px] text-gray-400">{student.gender} · {student.grade} · {student.section}</p></div>
               <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${student.status === "Active" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"}`}>{student.status}</span>
             </div>
-            <div className="bg-gray-50 px-4 py-3 grid grid-cols-2 gap-x-6">
+            <div className="grid grid-cols-1 gap-2 bg-gray-50 px-4 py-3 sm:grid-cols-2 sm:gap-x-6">
               {([["Student ID", student.studentId], ["Grade", student.grade], ["Section", student.section], ["RFID", student.rfid || "Not assigned"]] as [string, string][]).map(([l, v]) => (
                 <div key={l} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
                   <span className="text-xs text-gray-400">{l}</span><span className="text-xs font-semibold text-gray-800">{v}</span>
@@ -777,7 +944,7 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
             {agreedError && <p className="mt-2 text-xs text-red-500 font-medium flex items-center gap-1 pl-8"><TriangleAlert className="w-3 h-3 shrink-0" />{agreedError}</p>}
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 shrink-0 flex gap-3 bg-gray-50 rounded-b-2xl">
+        <div className="flex shrink-0 flex-col gap-3 rounded-b-2xl border-t border-gray-100 bg-gray-50 px-4 py-4 sm:flex-row sm:px-6">
           <button onClick={onClose} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 bg-white text-gray-600 font-bold text-sm rounded-xl transition disabled:opacity-50"><X className="w-4 h-4" />Cancel</button>
           <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold text-sm rounded-xl transition">
             {deleting ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Deleting…</> : <><Trash2 className="w-4 h-4" />Confirm Delete</>}
@@ -880,9 +1047,9 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "95vh" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
           {step === "confirm" && <button onClick={() => setStep("edit")} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><ArrowLeft className="w-4 h-4" /></button>}
           <div className="flex items-center gap-3 flex-1">
             <div className={`w-10 h-10 rounded-xl ${student.avatarColor} flex items-center justify-center text-white text-sm font-extrabold shrink-0`}>{student.initials}</div>
@@ -891,18 +1058,18 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
               <p className="text-xs text-gray-400 mt-0.5">{step === "edit" ? `${student.firstName} ${student.lastName} · ${student.grade} – ${student.section}` : `${changes.length} change${changes.length !== 1 ? "s" : ""}`}</p>
             </div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close student editor" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
         </div>
 
         {step === "edit" && (
           <div className="overflow-y-auto flex-1">
-            <div className="grid grid-cols-2 divide-x divide-gray-100">
-              <div className="p-6 space-y-4">
+            <div className="grid grid-cols-1 divide-y divide-gray-100 md:grid-cols-2 md:divide-x md:divide-y-0">
+              <div className="space-y-4 p-4 sm:p-6">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Info</p>
                 <FInput label="First Name" required placeholder="e.g. Maria" value={form.firstName} onChange={set("firstName")} />
                 <div><FInput label="Middle Name" required placeholder="e.g. Dela or N/A" value={form.middleName} onChange={set("middleName")} /><p className="mt-1 text-[10px] text-gray-400">Type N/A if no middle name</p></div>
                 <FInput label="Last Name" required placeholder="e.g. Santos" value={form.lastName} onChange={set("lastName")} />
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FInput label="Student ID" required value={form.studentId} onChange={set("studentId")} />
                   <FSelect label="Suffix" options={SUFFIXES} value={form.suffix} onChange={set("suffix")} placeholder="None" />
                 </div>
@@ -1015,7 +1182,8 @@ function EditRFIDModal({ student, onSave, onClose }: { student: Student; onSave:
     setConfirmingUid(true);
     setUidError("");
     try {
-      const res = await fetch(`/api/students/check-rfid?rfid=${encodeURIComponent(normalizedPendingTag)}`, { cache: "no-store" });
+      const params = new URLSearchParams({ rfid: normalizedPendingTag, excludeStudentDbId: String(student.id) });
+      const res = await fetch(`/api/students/check-rfid?${params.toString()}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || "Could not check this RFID UID.");
       if (data.taken) {
@@ -1046,16 +1214,16 @@ function EditRFIDModal({ student, onSave, onClose }: { student: Student; onSave:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="min-w-0">
             <h3 className="text-base font-bold text-gray-900">{editStep === "edit" ? "Edit RFID Card" : editStep === "confirm" ? "Confirm Changes" : "Changes Saved!"}</h3>
             <p className="text-xs text-gray-500 mt-0.5">{editStep === "edit" ? <span>Assign or replace RFID for <strong>{student.firstName} {student.lastName}</strong></span> : editStep === "confirm" ? "Review before saving" : "RFID updated & logged"}</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close RFID editor" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
         </div>
-        <div className="p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {editStep === "edit" && (
             <div className="space-y-5">
               <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
@@ -1068,11 +1236,11 @@ function EditRFIDModal({ student, onSave, onClose }: { student: Student; onSave:
                   <div className="bg-white border border-[#274e13]/20 rounded-xl px-4 py-3 flex items-center gap-3"><CreditCard className="w-5 h-5 text-[#274e13] shrink-0" /><span className="font-mono text-sm font-bold tracking-widest text-gray-800">{student.rfid}</span><CheckCircle className="w-4 h-4 text-emerald-500 ml-auto" /></div>
                 </div>
               ) : removingCard ? <div className="rounded-xl border border-red-200 bg-red-50 p-4"><p className="text-sm font-bold text-red-700">RFID card will be removed</p><p className="mt-1 text-xs text-red-600">This student will no longer have an assigned RFID card.</p></div> : <RFIDScanner value={tagId} onChange={changeTagId} studentName={`${student.firstName} ${student.lastName}`} editExisting={wasRegistered} onConfirm={confirmUid} confirmed={uidConfirmed} confirming={confirmingUid} error={uidError} />}
-              <div className="flex gap-3 pt-1">
+              <div className="flex flex-col gap-3 pt-1 sm:flex-row">
                 <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
                 {wasRegistered && editingCard && !removingCard && <button onClick={() => { setRemovingCard(true); setTagId(""); }} className="px-4 py-2.5 text-sm font-bold text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition">Remove</button>}
                 {wasRegistered && !editingCard ? (
-                  <button onClick={() => setEditingCard(true)} className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl transition bg-[#274e13] hover:bg-[#1e3d0f]">Edit</button>
+                  <button onClick={() => { changeTagId(""); setEditingCard(true); }} className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl transition bg-[#274e13] hover:bg-[#1e3d0f]">Edit</button>
                 ) : (
                   <button onClick={() => setEditStep("confirm")} disabled={!hasRfidChange || (!removingCard && (!normalizedPendingTag || !uidConfirmed))} className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-40 bg-[#274e13] hover:bg-[#1e3d0f]">Review</button>
                 )}
@@ -1091,7 +1259,7 @@ function EditRFIDModal({ student, onSave, onClose }: { student: Student; onSave:
                 ))}
               </div>
               {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-600">{error}</div>}
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <button onClick={() => setEditStep("edit")} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">← Edit</button>
                 <button onClick={handleConfirm} disabled={saving} className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-60 bg-[#274e13] hover:bg-[#1e3d0f]">
                   {saving ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Saving…</> : <><CheckCircle className="w-4 h-4" />Save Changes</>}
@@ -1114,13 +1282,24 @@ function EditRFIDModal({ student, onSave, onClose }: { student: Student; onSave:
 }
 
 // ─── Revoke RFID Modal ────────────────────────────────────────────
-function RevokeRFIDModal({ student, onConfirm, onClose }: { student: Student; onConfirm: () => void; onClose: () => void }) {
+function RevokeRFIDModal({ student, onConfirm, onClose }: { student: Student; onConfirm: () => Promise<void>; onClose: () => void }) {
   const [revoking, setRevoking] = useState(false);
-  const handleConfirm = () => { setRevoking(true); setTimeout(() => { setRevoking(false); onConfirm(); }, 800); };
+  const [error, setError] = useState("");
+  const handleConfirm = async () => {
+    setRevoking(true);
+    setError("");
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not revoke the RFID card.");
+    } finally {
+      setRevoking(false);
+    }
+  };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-sm overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="p-4 sm:p-6">
           <div className="w-14 h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4"><AlertTriangle className="w-7 h-7 text-red-500" /></div>
           <h3 className="text-base font-bold text-gray-900 text-center mb-1">Revoke RFID Card?</h3>
           <p className="text-sm text-gray-500 text-center mb-5">This will unregister <strong>{student.firstName} {student.lastName}</strong>'s card and be recorded in the audit trail.</p>
@@ -1128,7 +1307,8 @@ function RevokeRFIDModal({ student, onConfirm, onClose }: { student: Student; on
             <Wifi className="w-4 h-4 text-gray-400 shrink-0" />
             <div><p className="text-xs text-gray-400">RFID Tag</p><p className="text-sm font-bold text-gray-800 font-mono">{student.rfid}</p></div>
           </div>
-          <div className="flex gap-3">
+          {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-600">{error}</div>}
+          <div className="flex flex-col gap-3 sm:flex-row">
             <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
             <button onClick={handleConfirm} disabled={revoking} className="flex-1 py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl transition disabled:opacity-60">
               {revoking ? "Revoking…" : "Yes, Revoke"}
@@ -1150,6 +1330,10 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [tagId, setTagId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [uidConfirmed, setUidConfirmed] = useState(false);
+  const [confirmingUid, setConfirmingUid] = useState(false);
+  const [uidError, setUidError] = useState("");
 
   const [modalStudents, setModalStudents] = useState<Student[]>([]);
   const [modalSections, setModalSections] = useState<string[]>([]);
@@ -1165,7 +1349,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
   useEffect(() => {
     if (!selectedGrade || !selectedSection) { setModalStudents([]); return; }
     setLoadingStudents(true);
-    fetch(`/api/ict/students?grade=${encodeURIComponent(selectedGrade)}&section=${encodeURIComponent(selectedSection)}`)
+    fetch(`/api/ict/students?grade=${encodeURIComponent(selectedGrade)}&section=${encodeURIComponent(selectedSection)}`, { cache: "no-store" })
       .then(r => r.json())
       .then(d => {
         if (d.success) setModalStudents(d.data.map(mapStudent));
@@ -1175,32 +1359,81 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
 
 
   const canStep1 = !!selectedGrade && !!selectedSection && !!selectedStudent;
-  const canStep2 = tagId.trim().length > 0;
+  const normalizedTagId = tagId.trim().toUpperCase();
+  const canStep2 = !!normalizedTagId && uidConfirmed;
 
   const STEP_LABELS = ["Select Student", "Scan / Enter RFID", "Confirm", "Done"];
 
-  function handleConfirm() {
-    if (!selectedStudent || !tagId.trim()) return;
+  function changeTagId(nextTagId: string) {
+    setTagId(nextTagId);
+    setUidConfirmed(false);
+    setUidError("");
+  }
+
+  async function confirmUid() {
+    if (!normalizedTagId || confirmingUid) return;
+    setConfirmingUid(true);
+    setUidError("");
+    try {
+      const params = new URLSearchParams({ rfid: normalizedTagId, excludeStudentDbId: String(selectedStudent?.id ?? "") });
+      const res = await fetch(`/api/students/check-rfid?${params.toString()}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not check this RFID UID.");
+      if (data.taken) {
+        setUidConfirmed(false);
+        setUidError(`This RFID is already in use by ${data.owner.full_name} (${data.owner.grade} · ${data.owner.section}). Enter or scan a different card.`);
+        return;
+      }
+      setUidConfirmed(true);
+    } catch (err) {
+      setUidConfirmed(false);
+      setUidError(err instanceof Error ? err.message : "Could not check this RFID UID.");
+    } finally {
+      setConfirmingUid(false);
+    }
+  }
+
+  async function handleConfirm() {
+    if (!selectedStudent || !normalizedTagId || !uidConfirmed) return;
     setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
-      onAdd({ ...selectedStudent, rfid: tagId.trim(), rfidStatus: "Registered" });
+    setSaveError("");
+    try {
+      const res = await fetch("/api/ict/rfid", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentDbId: selectedStudent.id,
+          rfidCard: normalizedTagId,
+          action: "assign",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not register the RFID card.");
+
+      const persistedRfid = data.student?.rfid_card;
+      if (!persistedRfid) throw new Error("RFID assignment could not be verified.");
+      setTagId(persistedRfid);
+      onAdd({ ...selectedStudent, rfid: persistedRfid, rfidStatus: "Registered" });
       setStep(4);
-    }, 900);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not register the RFID card.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-100 shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <div>
+        <div className="shrink-0 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
               <h3 className="text-base font-bold text-gray-900">Register New Card</h3>
               <p className="text-xs text-gray-400 mt-0.5">Assign an RFID card to a student</p>
             </div>
-            <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"><X className="w-4 h-4" /></button>
+            <button onClick={onClose} aria-label="Close card registration" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
           </div>
 
           {/* Step bar */}
@@ -1216,7 +1449,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                       style={{ background: done || cur ? PRIMARY : "#e5e7eb", color: done || cur ? "white" : "#9ca3af" }}>
                       {done ? "✓" : n}
                     </div>
-                    <span className="text-[9px] font-semibold whitespace-nowrap"
+                    <span className="hidden text-[9px] font-semibold whitespace-nowrap min-[360px]:block"
                       style={{ color: cur || done ? PRIMARY : "#9ca3af" }}>{label}</span>
                   </div>
                   {i < STEP_LABELS.length - 1 && (
@@ -1230,7 +1463,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto flex-1">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
 
           {/* Step 1 — Select Student */}
           {step === 1 && (
@@ -1244,7 +1477,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                 <label className="block text-xs font-bold text-gray-600 mb-2">Grade Level</label>
                 <div className="relative">
                   <select value={selectedGrade}
-                    onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(""); setSelectedStudent(null); }}
+                    onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(""); setSelectedStudent(null); changeTagId(""); }}
                     className="w-full appearance-none border border-gray-200 rounded-xl py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white pr-8 transition">
                     <option value="">Select a grade</option>
                     {/* grades prop needed — see Issue 3b below */}
@@ -1259,7 +1492,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                 <label className="block text-xs font-bold text-gray-600 mb-2">Section</label>
                 <div className="relative">
                   <select value={selectedSection}
-                    onChange={e => { setSelectedSection(e.target.value); setSelectedStudent(null); }}
+                    onChange={e => { setSelectedSection(e.target.value); setSelectedStudent(null); changeTagId(""); }}
                     disabled={!selectedGrade}
                     className="w-full appearance-none border border-gray-200 rounded-xl py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white pr-8 transition disabled:opacity-50 disabled:cursor-not-allowed">
                     <option value="">{selectedGrade ? "Select a section" : "Select a grade first"}</option>
@@ -1285,7 +1518,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                   ) : (
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {modalStudents.map(s => (
-                        <button key={s.id} onClick={() => setSelectedStudent(s)}
+                        <button key={s.id} onClick={() => { setSelectedStudent(s); changeTagId(""); }}
                           className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition ${selectedStudent?.id === s.id ? "border-[#274e13] bg-[#274e13]/5" : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"}`}>
                           <div className={`w-8 h-8 rounded-full ${s.avatarColor} flex items-center justify-center text-white text-xs font-bold shrink-0`}>{s.initials}</div>
                           <div className="flex-1 min-w-0">
@@ -1317,7 +1550,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                   <span className="ml-auto text-[10px] text-amber-600 font-bold bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full shrink-0">⚠ Replacing existing RFID</span>
                 )}
               </div>
-              <RFIDScanner value={tagId} onChange={setTagId} studentName={`${selectedStudent.firstName} ${selectedStudent.lastName}`} />
+              <RFIDScanner value={tagId} onChange={changeTagId} studentName={`${selectedStudent.firstName} ${selectedStudent.lastName}`} onConfirm={confirmUid} confirmed={uidConfirmed} confirming={confirmingUid} error={uidError} />
             </div>
           )}
 
@@ -1343,6 +1576,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                   </div>
                 ))}
               </div>
+              {saveError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-600">{saveError}</div>}
             </div>
           )}
 
@@ -1370,21 +1604,21 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
 
         {/* Footer */}
         {step !== 4 ? (
-          <div className="px-6 py-4 border-t border-gray-100 flex gap-3 shrink-0">
+          <div className="flex shrink-0 flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:px-6">
             <button onClick={step === 1 ? onClose : () => setStep(p => (p - 1) as RegisterStep)}
-              className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+              className="min-h-11 flex-1 rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
               {step === 1 ? "Cancel" : "← Back"}
             </button>
             {step < 3 ? (
               <button onClick={() => setStep(p => (p + 1) as RegisterStep)}
                 disabled={step === 1 ? !canStep1 : !canStep2}
-                className="flex-1 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-40"
+                className="min-h-11 flex-1 rounded-xl py-2.5 text-sm font-bold text-white transition disabled:opacity-40"
                 style={{ background: PRIMARY }}>
                 Next →
               </button>
             ) : (
               <button onClick={handleConfirm} disabled={saving}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-60"
+                className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white transition disabled:opacity-60"
                 style={{ background: PRIMARY }}>
                 {saving
                   ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg> Registering…</>
@@ -1393,8 +1627,8 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
             )}
           </div>
         ) : (
-          <div className="px-6 py-4 border-t border-gray-100 shrink-0">
-            <button onClick={onClose} className="w-full py-2.5 text-sm font-bold text-white rounded-xl"
+          <div className="shrink-0 border-t border-gray-100 px-4 py-4 sm:px-6">
+            <button onClick={onClose} className="min-h-11 w-full rounded-xl py-2.5 text-sm font-bold text-white"
               style={{ background: PRIMARY }}>Done</button>
           </div>
         )}
@@ -1480,8 +1714,8 @@ function SchoolYearModal({ current, onClose, onSaved }: {
   }
 
   if (done) return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-8 text-center" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="max-h-[calc(100dvh-1.5rem)] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 text-center shadow-2xl sm:p-8" onClick={e => e.stopPropagation()}>
         <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center mx-auto mb-4">
           <CheckCircle className="w-8 h-8 text-emerald-600" />
         </div>
@@ -1494,10 +1728,10 @@ function SchoolYearModal({ current, onClose, onSaved }: {
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "#f0fdf4" }}>
               <Calendar className="w-5 h-5" style={{ color: PRIMARY }} />
             </div>
@@ -1510,12 +1744,12 @@ function SchoolYearModal({ current, onClose, onSaved }: {
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition">
+          <button onClick={onClose} aria-label="Close school year" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-6 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
           {!isEdit && (
             <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -1546,7 +1780,7 @@ function SchoolYearModal({ current, onClose, onSaved }: {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                 Start Date <span className="text-red-500">*</span>
@@ -1588,7 +1822,7 @@ function SchoolYearModal({ current, onClose, onSaved }: {
             </div>
           )}
 
-          <div className="flex gap-3 pt-1">
+          <div className="flex flex-col gap-3 pt-1 sm:flex-row">
             <button onClick={onClose}
               className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
               Cancel
@@ -1614,6 +1848,7 @@ export default function StudentManagementPage() {
   const [grades, setGrades] = useState<string[]>([]);
   const [sections, setSections] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [studentRefreshKey, setStudentRefreshKey] = useState(0);
   const [rfidSections, setRfidSections] = useState<string[]>([]);
 
   // Profile state
@@ -1633,10 +1868,10 @@ export default function StudentManagementPage() {
   const [rfidStatusFilter, setRfidStatusFilter] = useState<"All" | "Registered" | "Unregistered">("All");
   const [editRFID, setEditRFID] = useState<Student | null>(null);
   const [revokeRFID, setRevokeRFID] = useState<Student | null>(null);
-  const [showAudit, setShowAudit] = useState(false);
 
   // Class control
   const [showClassControl, setShowClassControl] = useState(false);
+  const [showAttendanceNotificationSettings, setShowAttendanceNotificationSettings] = useState(false);
   const [schoolYear, setSchoolYear] = useState<{
     id: number;
     school_year_label: string;
@@ -1701,13 +1936,13 @@ export default function StudentManagementPage() {
       if (sectionFilter) params.set("section", sectionFilter);
       if (query) params.set("search", query);
       if (rfidStatusFilter !== "All") params.set("rfidStatus", rfidStatusFilter);
-      const res = await fetch(`/api/ict/students?${params.toString()}`);
+      const res = await fetch(`/api/ict/students?${params.toString()}`, { cache: "no-store" });
       const data = await res.json();
       if (data.success) setStudents(data.data.map(mapStudent));
       setLoading(false);
     }
     fetchStudents();
-  }, [gradeFilter, sectionFilter, query, rfidStatusFilter]);
+  }, [gradeFilter, sectionFilter, query, rfidStatusFilter, studentRefreshKey]);
 
 
   const availSecs = sections;
@@ -1758,11 +1993,20 @@ export default function StudentManagementPage() {
     const data = await res.json();
     if (!res.ok || !data.success) throw new Error(data.message || "Could not save the RFID card.");
 
-    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, rfid: newTagId || null, rfidStatus: newTagId ? "Registered" : "Unregistered" } : s));
+    const persistedRfid = data.student?.rfid_card ?? null;
+    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, rfid: persistedRfid, rfidStatus: persistedRfid ? "Registered" : "Unregistered" } : s));
     addAuditEntry({ action, studentName: `${student.firstName} ${student.lastName}`, studentId: student.studentId, grade: student.grade, section: student.section, rfidTagId: newTagId, previousRfid: student.rfid, performedBy: "ICT Admin", performedByRole: "ICT" });
   }
 
-  function handleRevokeRFID(student: Student) {
+  async function handleRevokeRFID(student: Student) {
+    const res = await fetch("/api/ict/rfid", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studentDbId: student.id, action: "revoke" }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.message || "Could not revoke the RFID card.");
+
     setStudents(prev => prev.map(s => s.id === student.id ? { ...s, rfid: null, rfidStatus: "Unregistered" } : s));
     addAuditEntry({ action: "revoked", studentName: `${student.firstName} ${student.lastName}`, studentId: student.studentId, grade: student.grade, section: student.section, rfidTagId: student.rfid ?? "", previousRfid: student.rfid, performedBy: "ICT Admin", performedByRole: "ICT" });
   }
@@ -1770,17 +2014,17 @@ export default function StudentManagementPage() {
   const rfidRegisteredPct = stats.total > 0 ? Math.round((stats.rfidRegistered / stats.total) * 100) : 0;
 
   return (
-    <div className="p-6 min-h-screen bg-gray-100">
+    <div className="min-h-screen min-w-0 overflow-x-clip bg-gray-100 p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
-        <div>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900">Student Management</h1>
           <p className="text-sm text-gray-400 mt-0.5">Manage student profiles, RFID cards, and class sessions.</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap">
           <button
             onClick={() => setShowSchoolYearModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold border transition"
             style={{
               borderColor: schoolYear ? "#bbf7d0" : "#fde68a",
               background: schoolYear ? "#f0fdf4" : "#fffbeb",
@@ -1797,7 +2041,7 @@ export default function StudentManagementPage() {
               }
               setShowClassControl(true);
             }}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition hover:bg-[#274e13]/5"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold border transition hover:bg-[#274e13]/5"
             style={{
               borderColor: schoolYear ? PRIMARY : "#e5e7eb",
               color: schoolYear ? PRIMARY : "#9ca3af",
@@ -1808,12 +2052,13 @@ export default function StudentManagementPage() {
               <span className="ml-1 text-[10px] font-bold text-amber-500 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">Setup Required</span>
             )}
           </button>
-          <button onClick={() => { setShowAudit(true); }}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition">
-            <ClipboardList className="w-4 h-4" />Audit Trail
+          <button
+            onClick={() => setShowAttendanceNotificationSettings(true)}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-4 py-2.5 text-sm font-bold text-[#274e13] transition hover:bg-[#274e13]/5">
+            <Bell className="h-4 w-4" />Attendance Notifications
           </button>
           <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white shadow-lg hover:bg-[#1e3d0f] transition"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white shadow-lg transition hover:bg-[#1e3d0f]"
             style={{ background: PRIMARY }}>
             <CreditCard className="w-4 h-4" />Register New Card
           </button>
@@ -1821,14 +2066,14 @@ export default function StudentManagementPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-5">
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
           { label: "Total Students", value: stats.total, icon: "👨‍🎓", color: `text-[${PRIMARY}]`, bg: "bg-[#274e13]/8", colorStyle: { color: PRIMARY } },
           { label: "Linked to Parents", value: stats.linked, icon: "🔗", color: "text-blue-700", bg: "bg-blue-50", colorStyle: { color: "#1d4ed8" } },
           { label: "RFID Registered", value: stats.rfidRegistered, icon: "📡", color: "text-emerald-700", bg: "bg-emerald-50", colorStyle: { color: "#047857" } },
           { label: "Grade Sections", value: stats.sections, icon: "📚", color: "text-violet-700", bg: "bg-violet-50", colorStyle: { color: "#6d28d9" } },
         ].map(c => (
-          <div key={c.label} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm flex items-center gap-4">
+          <div key={c.label} className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
             <div className={`w-12 h-12 rounded-xl ${c.bg} flex items-center justify-center text-2xl shrink-0`}>{c.icon}</div>
             <div><p className="text-2xl font-black" style={c.colorStyle}>{c.value}</p><p className="text-xs font-semibold text-gray-400 mt-0.5">{c.label}</p></div>
           </div>
@@ -1836,7 +2081,8 @@ export default function StudentManagementPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 bg-white rounded-xl border border-gray-200 p-1.5 w-fit shadow-sm">
+      <div className="mb-4 max-w-full overflow-x-auto rounded-xl border border-gray-200 bg-white p-1.5 shadow-sm">
+        <div className="flex w-max gap-1">
         <button onClick={() => setActiveTab("profiles")} className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-bold transition"
           style={{ background: activeTab === "profiles" ? PRIMARY : "transparent", color: activeTab === "profiles" ? "white" : "#6b7280" }}>
           <Users className="w-4 h-4" />Student Profiles
@@ -1845,29 +2091,30 @@ export default function StudentManagementPage() {
           style={{ background: activeTab === "rfid" ? PRIMARY : "transparent", color: activeTab === "rfid" ? "white" : "#6b7280" }}>
           <CreditCard className="w-4 h-4" />RFID Management
         </button>
+        </div>
       </div>
 
       {/* ── Student Profiles Tab ── */}
       {activeTab === "profiles" && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 flex-wrap">
-            <div className="relative flex-1 min-w-52">
+          <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:px-5">
+            <div className="relative w-full min-w-0 flex-1 sm:min-w-52">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
               <input value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Search students…"
                 className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 bg-gray-50 transition text-gray-900" />
             </div>
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <select value={gradeFilter} onChange={e => { setGradeFilter(e.target.value); setSectionFilter(""); setPage(1); }}
-                className="appearance-none pl-3 pr-8 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 bg-white text-gray-700 min-w-[120px]">
+                className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 sm:min-w-[120px]">
                 <option value="">All Grades</option>
                 {grades.map(g => <option key={g}>{g}</option>)}
               </select>
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
             </div>
             {gradeFilter && (
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <select value={sectionFilter} onChange={e => { setSectionFilter(e.target.value); setPage(1); }}
-                  className="appearance-none pl-3 pr-8 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 bg-white text-gray-700 min-w-[130px]">
+                  className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 sm:min-w-[130px]">
                   <option value="">All Sections</option>
                   {availSecs.map(s => <option key={s}>{s}</option>)}
                 </select>
@@ -1876,12 +2123,13 @@ export default function StudentManagementPage() {
             )}
             {(gradeFilter || sectionFilter || query) && (
               <button onClick={() => { setQuery(""); setGradeFilter(""); setSectionFilter(""); setPage(1); }}
-                className="flex items-center gap-1.5 text-xs font-bold text-red-500 hover:text-red-700 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition">
+                className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-500 transition hover:bg-red-50 sm:w-auto">
                 <X className="w-3.5 h-3.5" />Clear
               </button>
             )}
           </div>
-          <table className="w-full">
+          <div className="max-w-full overflow-x-auto overscroll-x-contain">
+          <table className="min-w-[820px] w-full">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
                 {["Student Name", "Grade & Section", "Linked Parent", "Adviser", "RFID Status", "Actions"].map(h => (
@@ -1922,7 +2170,7 @@ export default function StudentManagementPage() {
                       : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"><CreditCard className="w-3 h-3" />Unregistered</span>}
                   </td>
                   <td className="px-4 py-3.5">
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                    <div className="flex items-center gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
                       <button onClick={() => setViewStudent(s)} title="View" className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-[#274e13] hover:bg-green-100 transition"><Eye className="w-3.5 h-3.5" /></button>
                       <button onClick={() => setEditStudent(s)} title="Edit" className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-[#274e13] hover:bg-green-100 transition"><Pencil className="w-3.5 h-3.5" /></button>
                       <button onClick={() => setDeleteStudent(s)} title="Delete" className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-100 transition"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -1935,9 +2183,10 @@ export default function StudentManagementPage() {
               )}
             </tbody>
           </table>
-          <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+          </div>
+          <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <p className="text-xs text-gray-400">{filteredProfiles.length === 0 ? "No results" : `Showing ${(page - 1) * PER_PAGE + 1}–${Math.min(page * PER_PAGE, filteredProfiles.length)} of ${filteredProfiles.length} students`}</p>
-            <div className="flex items-center gap-1">
+            <div className="flex max-w-full items-center gap-1 overflow-hidden self-end sm:self-auto">
               <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"><ChevronLeft className="w-4 h-4" /></button>
               {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
                 let n: number;
@@ -1957,7 +2206,7 @@ export default function StudentManagementPage() {
       {activeTab === "rfid" && (
         <div className="space-y-4">
           {/* RFID Stats */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
             {[
               { label: "Registered Cards", value: stats.rfidRegistered, icon: <CheckCircle2 className="w-5 h-5 text-emerald-600" />, bg: "bg-emerald-50", border: "border-emerald-200", valueColor: "text-emerald-700" },
               { label: "Unregistered", value: stats.total - stats.rfidRegistered, icon: <AlertTriangle className="w-5 h-5 text-amber-500" />, bg: "bg-amber-50", border: "border-amber-200", valueColor: "text-amber-700" },
@@ -1984,39 +2233,39 @@ export default function StudentManagementPage() {
 
           {/* RFID Table */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 flex-wrap">
-              <div className="relative flex-1 min-w-52">
+            <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:px-5">
+              <div className="relative w-full min-w-0 flex-1 sm:min-w-52">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                 <input value={rfidSearch} onChange={e => setRfidSearch(e.target.value)} placeholder="Search by name, ID, or RFID tag…"
                   className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 bg-gray-50 transition text-gray-900" />
               </div>
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <select value={rfidGradeFilter} onChange={e => { setRfidGradeFilter(e.target.value); setRfidSectionFilter(""); }}
-                  className="appearance-none pl-3 pr-8 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-white text-gray-700 min-w-[120px]">
+                  className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none sm:min-w-[120px]">
                   <option value="">All Grades</option>
                   {grades.map(g => <option key={g}>{g}</option>)}
                 </select>
                 <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               </div>
               {rfidGradeFilter && (
-                <div className="relative">
+                <div className="relative w-full sm:w-auto">
                   <select value={rfidSectionFilter} onChange={e => setRfidSectionFilter(e.target.value)}
-                    className="appearance-none pl-3 pr-8 py-2.5 text-sm border border-gray-200 rounded-xl outline-none bg-white text-gray-700 min-w-[130px]">
+                    className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none sm:min-w-[130px]">
                     <option value="">All Sections</option>
                     {rfidAvailSecs.map(s => <option key={s}>{s}</option>)}
                   </select>
                   <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
                 </div>
               )}
-              <div className="flex bg-gray-100 rounded-xl p-1 gap-0.5">
+              <div className="flex max-w-full overflow-x-auto rounded-xl bg-gray-100 p-1 gap-0.5">
                 {(["All", "Registered", "Unregistered"] as const).map(f => (
                   <button key={f} onClick={() => setRfidStatusFilter(f)} className="px-3 py-1.5 text-xs font-semibold rounded-lg transition"
                     style={{ background: rfidStatusFilter === f ? PRIMARY : "transparent", color: rfidStatusFilter === f ? "white" : "#6b7280" }}>{f}</button>
                 ))}
               </div>
             </div>
-            <div className="max-h-[55vh] overflow-auto">
-              <table className="w-full">
+            <div className="max-h-[55vh] max-w-full overflow-auto overscroll-contain">
+              <table className="min-w-[800px] w-full">
                 <thead className="sticky top-0 z-10">
                   <tr className="bg-gray-50/80 border-b border-gray-100">
                     {["Student", "Grade & Section", "RFID Tag ID", "Status", "Last Scanned", "Actions"].map(h => (
@@ -2076,13 +2325,13 @@ export default function StudentManagementPage() {
         />
       )}
       {showClassControl && <ClassControlModal onClose={() => setShowClassControl(false)} />}
-      {showAudit && <AuditTrailModal entries={auditLog} onClose={() => setShowAudit(false)} />}
-      {showAdd && <AddStudentModal grades={grades} onClose={() => setShowAdd(false)} onAdd={s => { setStudents(prev => [s, ...prev]); setShowAdd(false); }} />}
+      {showAttendanceNotificationSettings && <AttendanceNotificationSettingsModal onClose={() => setShowAttendanceNotificationSettings(false)} />}
+      {showAdd && <AddStudentModal grades={grades} onClose={() => setShowAdd(false)} onAdd={s => { setStudents(prev => prev.map(existing => existing.id === s.id ? s : existing)); setStudentRefreshKey(key => key + 1); setShowAdd(false); }} />}
       {viewStudent && <ViewStudentModal student={viewStudent} onClose={() => setViewStudent(null)} onEdit={s => { setViewStudent(null); setEditStudent(s); }} />}
       {editStudent && <EditStudentModal grades={grades} student={editStudent} onClose={() => setEditStudent(null)} onSave={updated => { setStudents(prev => prev.map(s => s.id === updated.id ? updated : s)); setEditStudent(null); }} />}
       {deleteStudent && <DeleteStudentModal student={deleteStudent} onClose={() => setDeleteStudent(null)} onDeleted={id => { setStudents(prev => prev.filter(s => s.id !== id)); setDeleteStudent(null); }} />}
       {editRFID && <EditRFIDModal student={editRFID} onClose={() => setEditRFID(null)} onSave={(tag, action) => handleSaveRFID(editRFID, tag, action)} />}
-      {revokeRFID && <RevokeRFIDModal student={revokeRFID} onClose={() => setRevokeRFID(null)} onConfirm={() => { handleRevokeRFID(revokeRFID); setRevokeRFID(null); }} />}
+      {revokeRFID && <RevokeRFIDModal student={revokeRFID} onClose={() => setRevokeRFID(null)} onConfirm={async () => { await handleRevokeRFID(revokeRFID); setRevokeRFID(null); }} />}
     </div>
   );
 }

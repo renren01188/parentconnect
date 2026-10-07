@@ -20,15 +20,21 @@ export default function PrincipalLayout({ children }: { children: React.ReactNod
         <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
 
           {/* Mobile top bar — only visible below md */}
-          <header className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 md:hidden shrink-0">
+          <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-[#6b2fa0]/50 bg-gradient-to-r from-[#3a1660] to-[#522081] px-4 shadow-sm md:hidden">
+            <div>
+              <p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p>
+              <p className="mt-0.5 text-[10px] text-white/75">Santiago Elementary · Principal</p>
+            </div>
             <button
+              type="button"
               onClick={() => setSidebarOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition"
+              className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/60"
               aria-label="Open navigation menu"
+              aria-controls="principal-dashboard-navigation"
+              aria-expanded={sidebarOpen}
             >
               <Menu className="h-5 w-5" />
             </button>
-            <span className="text-sm font-bold text-gray-800">ParentConnect</span>
           </header>
 
           {/* Scrollable page content */}

@@ -1,13 +1,11 @@
 "use client";
 
-// src/app/dashboard/parent/components/Sidebar.tsx
-
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, CalendarDays, FileText,
-  Bell, LogOut,
+  Bell, LogOut, Menu, UserRound, X,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 
@@ -28,46 +26,33 @@ type ParentSummary = {
 function Badge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
-    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold leading-none text-white shrink-0">
+    <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold leading-none text-white">
       {count > 99 ? "99+" : count}
     </span>
   );
 }
 
-function DotBadge({ count }: { count: number }) {
-  if (count <= 0) return null;
-  return (
-    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full border border-[#1a2035]" />
-  );
-}
-
 function getInitials(parent: ParentSummary | null) {
   if (!parent) return "P";
-
   const names = [parent.firstName, parent.lastName].filter(Boolean);
   const source = names.length > 0 ? names : parent.name.trim().split(/\s+/);
-
-  return source
-    .slice(0, 2)
-    .map((part) => part?.charAt(0).toUpperCase() ?? "")
-    .join("") || "P";
+  return source.slice(0, 2).map((part) => part?.charAt(0).toUpperCase() ?? "").join("") || "P";
 }
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { unreadCount, unreadReportsCount } = useNotifContext();
   const [parent, setParent] = useState<ParentSummary | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-
     async function loadParent() {
       try {
         const res = await fetch("/api/parents/me", { cache: "no-store" });
         const data = await res.json().catch(() => null);
-
         if (!isMounted || !res.ok || !data?.parent) return;
-
         setParent({
           name: data.parent.name || "Parent",
           firstName: data.parent.firstName,
@@ -78,125 +63,67 @@ export default function Sidebar() {
         if (isMounted) setParent(null);
       }
     }
-
     loadParent();
     window.addEventListener("parent-profile-updated", loadParent);
-
     return () => {
       isMounted = false;
       window.removeEventListener("parent-profile-updated", loadParent);
     };
   }, []);
 
+  useEffect(() => {
+    const handleGuideTarget = (event: Event) => {
+      const target = (event as CustomEvent<string | null>).detail;
+      setGuideTarget(target);
+      setMobileOpen(target === "parent-sidebar");
+    };
+    window.addEventListener("parent-dashboard-guide-target", handleGuideTarget);
+    return () => window.removeEventListener("parent-dashboard-guide-target", handleGuideTarget);
+  }, []);
+
   const parentName = parent?.name || "Parent";
   const parentInitials = useMemo(() => getInitials(parent), [parent]);
+  const closeMenu = () => setMobileOpen(false);
+  const signOut = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      closeMenu();
+      // Use a document navigation so the browser cannot retain the Parent
+      // route or its data in Next's in-memory client cache after logout.
+      window.location.replace("/login/guardian");
+    }
+  };
 
   return (
     <>
-      {/* ── Desktop Sidebar (md and above) ── */}
-      <aside
-        className="hidden md:flex w-52 flex-shrink-0 flex-col h-screen"
-        style={{ background: "linear-gradient(180deg, #1a2035 0%, #141928 100%)" }}
-      >
-        {/* Brand */}
-        <div className="px-4 py-5 border-b border-white/10">
-          <p className="text-white font-extrabold text-base leading-tight">ParentConnect</p>
-          <p className="text-slate-400 text-[11px] mt-0.5">Santiago Elementary</p>
-          <p className="text-slate-500 text-[10px]">Parent Portal</p>
+      <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-white/10 px-4 shadow-sm md:hidden" style={{ background: "linear-gradient(90deg, #1a2035 0%, #141928 100%)" }}>
+        <div><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-slate-400">Parent Portal</p></div>
+        <button type="button" aria-label="Open navigation menu" aria-controls="parent-dashboard-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20"><Menu className="h-5 w-5" /></button>
+      </header>
+
+      {mobileOpen && <div className="fixed inset-0 z-40 bg-black/45 md:hidden" onClick={closeMenu} aria-hidden="true" />}
+
+      <aside id="parent-dashboard-navigation" data-parent-guide="parent-sidebar" className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[88vw] shrink-0 flex-col transform transition-transform duration-200 md:inset-auto md:top-0 md:z-auto md:flex md:h-dvh md:w-56 md:self-start md:sticky md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "parent-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-[#f4f6fb] md:z-[85]" : ""}`} style={{ background: "linear-gradient(180deg, #1a2035 0%, #141928 100%)" }}>
+        <div className="flex items-center justify-between px-4 pt-4 md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
+
+        <div className="border-b border-white/10 px-5 py-5">
+          <div className="flex items-center gap-2.5"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10"><UserRound className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-slate-400">Parent</p></div></div>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-1">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
           {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
-            const active = href === "/dashboard/parent"
-              ? pathname === href
-              : pathname.startsWith(href);
-
-            const badgeCount =
-              badgeKey === "reports" ? unreadReportsCount :
-                badgeKey === "notifications" ? unreadCount : 0;
-
-            return (
-              <Link
-                key={label}
-                href={href}
-                className={`flex w-full min-h-[40px] items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${active
-                    ? "bg-white/15 text-white shadow-sm font-bold border border-white/20"
-                    : "text-slate-400 hover:bg-white/10 hover:text-white font-semibold"
-                  }`}
-              >
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                  <Icon className="h-[17px] w-[17px]" />
-                </span>
-                <span className="flex-1 text-sm leading-none whitespace-nowrap">{label}</span>
-                <Badge count={badgeCount} />
-              </Link>
-            );
+            const active = href === "/dashboard/parent" ? pathname === href : pathname.startsWith(href);
+            const badgeCount = badgeKey === "reports" ? unreadReportsCount : badgeKey === "notifications" ? unreadCount : 0;
+            return <Link key={label} href={href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
           })}
         </nav>
 
-        {/* Profile + Logout */}
-        <div className="px-3 pb-4 pt-3 border-t border-white/10 flex flex-col gap-2">
-          <Link
-            href="/dashboard/parent/profile"
-            className="flex w-full items-center gap-2.5 px-1 py-1 rounded-xl hover:bg-white/10 transition-colors"
-          >
-            <div className="w-9 h-9 overflow-hidden rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-xs shrink-0 ring-2 ring-white/20">
-              {parent?.profilePicture ? <img src={parent.profilePicture} alt="Profile" className="h-full w-full object-cover" /> : parentInitials}
-            </div>
-            <div>
-              <p className="text-white text-xs font-semibold leading-tight">{parentName}</p>
-              <p className="text-slate-400 text-[10px]">Parent</p>
-            </div>
-          </Link>
-
-          <button
-            onClick={async () => {
-              await fetch("/api/auth/logout", { method: "POST" });
-              window.location.href = "/login/guardian";
-            }}
-            className="flex items-center justify-center gap-2 w-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-colors border border-white/10"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Sign out
-          </button>
+        <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
+          <Link href="/dashboard/parent/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/parent/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-500 text-xs font-bold text-white ring-2 ring-white/20">{parentInitials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{parentName}</p><p className="text-[10px] text-slate-400">Parent</p></div></Link>
+          <button onClick={signOut} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2.5 text-xs font-bold text-slate-300 transition-colors hover:bg-white/20 hover:text-white"><LogOut className="h-3.5 w-3.5" /> Sign out</button>
         </div>
       </aside>
-
-      {/* ── Mobile Bottom Tab Bar (below md) ── */}
-      <nav
-        className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around px-1"
-        style={{
-          background: "linear-gradient(180deg, #1a2035 0%, #141928 100%)",
-          paddingTop: "0.5rem",
-          paddingBottom: "max(0.6rem, env(safe-area-inset-bottom))",
-          boxShadow: "0 -2px 20px 0 rgba(0,0,0,0.4)",
-        }}
-      >
-        {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
-          const active = href === "/dashboard/parent"
-            ? pathname === href
-            : pathname.startsWith(href);
-          const badgeCount =
-            badgeKey === "reports" ? unreadReportsCount :
-              badgeKey === "notifications" ? unreadCount : 0;
-          return (
-            <Link
-              key={label}
-              href={href}
-              className={`flex flex-col items-center gap-0.5 px-4 py-1 rounded-xl transition-all ${active ? "bg-white/15" : "hover:bg-white/10"
-                }`}
-            >
-              <div className="relative">
-                <Icon className={`w-5 h-5 ${active ? "text-white" : "text-slate-400"}`} />
-                <DotBadge count={badgeCount} />
-              </div>
-              <span className={`text-[10px] font-medium ${active ? "text-white" : "text-slate-400"}`}>
-                {label}
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
     </>
   );
 }

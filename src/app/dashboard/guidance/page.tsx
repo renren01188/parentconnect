@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -12,11 +12,13 @@ import {
   FileText,
   Users,
 } from "lucide-react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import GuidanceDashboardGuide from "./components/GuidanceDashboardGuide";
 
 
 
 function badgeClass(value: string) {
-  if (value === "High" || value === "Escalated") return "badge-red";
+  if (value === "Urgent" || value === "High" || value === "Escalated") return "badge-red";
   if (value === "Medium" || value === "In Progress") return "badge-amber";
   if (value === "Low") return "badge-blue";
   if (value === "Resolved") return "badge-green";
@@ -30,13 +32,14 @@ export default function GuidanceDashboard() {
   const [escalatedReports, setEscalatedReports] = useState<any[]>([]);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
   const todayLabel = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 
-  useEffect(() => {
-    fetch("/api/guidance/dashboard", { cache: "no-store" })
+  const loadDashboard = useCallback(() => {
+    return fetch("/api/guidance/dashboard", { cache: "no-store" })
       .then(r => r.json())
       .then(data => {
         if (data.success) {
@@ -49,6 +52,32 @@ export default function GuidanceDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    void loadDashboard();
+    const refreshInterval = window.setInterval(() => void loadDashboard(), 15_000);
+    const client = supabaseBrowser;
+    if (!client) return () => window.clearInterval(refreshInterval);
+
+    const channel = client
+      .channel("guidance-dashboard")
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => void loadDashboard())
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => void loadDashboard())
+      .subscribe();
+
+    return () => {
+      window.clearInterval(refreshInterval);
+      client.removeChannel(channel);
+    };
+  }, [loadDashboard]);
+
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-sky-400 ring-offset-4 ring-offset-slate-100"
+    : "";
+  const handleGuideStepChange = useCallback((target: string | null) => {
+    setGuideTarget(target);
+    window.dispatchEvent(new CustomEvent("guidance-dashboard-guide-target", { detail: target }));
+  }, []);
+
   return (
     <main className="guidance-dashboard page">
       <header className="page-header">
@@ -59,7 +88,7 @@ export default function GuidanceDashboard() {
         </div>
       </header>
 
-      <section className="hero-card guidance-summary">
+      <section data-parent-guide="guidance-dashboard-priority" className={`hero-card guidance-summary ${guideHighlight("guidance-dashboard-priority")}`}>
         <div>
           <p className="hero-kicker">Priority queue</p>
           <h2>{loading ? "—" : stats.escalated} escalated concern{stats.escalated !== 1 ? "s" : ""} need review today</h2>
@@ -73,7 +102,7 @@ export default function GuidanceDashboard() {
         </Link>
       </section>
 
-      <section className="stats-grid">
+      <section data-parent-guide="guidance-dashboard-summary" className={`stats-grid ${guideHighlight("guidance-dashboard-summary")}`}>
         {[
           { label: "Total Reports", value: stats.total, sub: "Escalated to guidance", icon: FileText, tone: "blue" },
           { label: "Escalated", value: stats.escalated, sub: "Needs guidance action", icon: AlertTriangle, tone: "red" },
@@ -96,7 +125,7 @@ export default function GuidanceDashboard() {
       </section>
 
       <section className="content-grid">
-        <div className="card reports-card">
+        <div data-parent-guide="guidance-dashboard-concerns" className={`card reports-card ${guideHighlight("guidance-dashboard-concerns")}`}>
           <div className="card-header">
             <div>
               <h2>Escalated Concerns</h2>
@@ -122,7 +151,7 @@ export default function GuidanceDashboard() {
               <tbody>
                 {escalatedReports.map((report) => (
                   <tr key={report.id}>
-                    <td>
+                    <td data-label="Student">
                       <div className="student-cell">
                         <div className="student-avatar">{report.student[0]}</div>
                         <div>
@@ -131,27 +160,30 @@ export default function GuidanceDashboard() {
                         </div>
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Concern">
                       <div className="concern-text">{report.concern}</div>
                       <div className="adviser-name">Adviser: {report.adviser}</div>
                     </td>
-                    <td><span className={`badge ${badgeClass(report.status)}`}>{report.status}</span></td>
-                    <td><span className={`badge ${badgeClass(report.status)}`}>{report.status}</span></td>
-                    <td className="date-cell">{report.date}</td>
-                    <td>
+                    <td data-label="Priority"><span className={`badge ${badgeClass(report.priority)}`}>{report.priority}</span></td>
+                    <td data-label="Status"><span className={`badge ${badgeClass(report.status)}`}>{report.status}</span></td>
+                    <td data-label="Date" className="date-cell">{report.date}</td>
+                    <td data-label="Open">
                       <Link href="/dashboard/guidance/reports" className="row-action-btn" aria-label="Open report">
                         <ArrowUpRight size={15} />
                       </Link>
                     </td>
                   </tr>
                 ))}
+                {!loading && escalatedReports.length === 0 && (
+                  <tr><td className="empty-concerns" colSpan={6}>No active escalated concerns right now.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
         </div>
 
         <aside className="side-stack">
-          <div className="card side-card">
+          <div data-parent-guide="guidance-dashboard-activity" className={`card side-card ${guideHighlight("guidance-dashboard-activity")}`}>
             <div className="card-header compact">
               <h2>Recent Activity</h2>
               <Bell size={16} />
@@ -180,6 +212,8 @@ export default function GuidanceDashboard() {
 
         </aside>
       </section>
+
+      <GuidanceDashboardGuide onStepChange={handleGuideStepChange} />
 
       <style jsx>{`
         .page {
@@ -562,15 +596,124 @@ export default function GuidanceDashboard() {
         }
 
         @media (max-width: 760px) {
+          .page {
+            gap: 16px;
+          }
+
           .page-header,
           .hero-card {
             align-items: stretch;
             flex-direction: column;
           }
 
+          .hero-card {
+            padding: 18px;
+            gap: 14px;
+          }
+
+          .hero-card h2 {
+            font-size: 19px;
+          }
+
+          .hero-action {
+            width: 100%;
+            justify-content: center;
+          }
+
           .stats-grid,
           .side-stack {
             grid-template-columns: 1fr;
+          }
+
+          .content-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .card-header {
+            align-items: flex-start;
+            padding: 16px;
+          }
+
+          .table-wrapper {
+            overflow: visible;
+          }
+
+          .reports-table,
+          .reports-table tbody,
+          .reports-table tr,
+          .reports-table td {
+            display: block;
+            width: 100%;
+          }
+
+          .reports-table thead {
+            display: none;
+          }
+
+          .reports-table tbody {
+            padding: 12px;
+          }
+
+          .reports-table tr {
+            margin-bottom: 12px;
+            padding: 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            background: #fff;
+          }
+
+          .reports-table tr:last-child {
+            margin-bottom: 0;
+          }
+
+          .reports-table td {
+            position: relative;
+            min-height: 30px;
+            padding: 7px 0 7px 92px;
+            border: 0;
+          }
+
+          .reports-table td[data-label]::before {
+            content: attr(data-label);
+            position: absolute;
+            left: 0;
+            top: 9px;
+            width: 78px;
+            color: #64748b;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+          }
+
+          .reports-table td:first-child {
+            padding-left: 0;
+          }
+
+          .reports-table td:first-child::before,
+          .reports-table .empty-concerns::before {
+            display: none;
+          }
+
+          .student-cell {
+            min-width: 0;
+          }
+
+          .concern-text {
+            max-width: none;
+            white-space: normal;
+            overflow-wrap: anywhere;
+          }
+
+          .reports-table td:last-child {
+            display: flex;
+            align-items: center;
+          }
+
+          .reports-table .empty-concerns {
+            padding: 24px 12px;
+            text-align: center;
+            color: #94a3b8;
           }
         }
 

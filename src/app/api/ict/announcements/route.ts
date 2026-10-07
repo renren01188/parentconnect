@@ -213,24 +213,6 @@ async function fanOutIctAnnouncement(ann: any, senderName: string) {
 
     // ── Principal ──────────────────────────────────────────────────────────────
     if (audience.includes("Principal")) {
-        const { data: principals } = await supabase
-            .from("principals")
-            .select("id");
-
-        if (principals?.length) {
-            const rows = principals.map((p: { id: number }) => ({
-                principal_id: p.id,
-                notif_key: `ict-announcement-${ann.id}`,
-            }));
-
-            const { error } = await supabase
-                .from("principal_notification_reads")
-                .upsert(rows, { onConflict: "principal_id,notif_key" })
-                .select(); // just to check
-
-            // Principal will see via ict_announcements query — no extra insert needed
-            if (error) console.error("ICT fan-out to principal error:", error.message);
-        }
         const { data: principalRows } = await supabase
             .from("principals")
             .select("email, first_name, last_name")

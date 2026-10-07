@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
+import { auditActionDatabaseValues, auditRoleDatabaseValues, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { parseAuditArchiveFilter } from "@/lib/auditArchive";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -19,6 +21,14 @@ type AuditLogRow = {
   module: string | null;
   ip_address: string | null;
   browser: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  previous_status: string | null;
+  new_status: string | null;
+  related_report_id: string | null;
+  related_ticket_id: string | null;
+  related_student_id: string | null;
+  related_user_id: string | null;
   created_at: string;
   changes: unknown;
 };
@@ -40,10 +50,6 @@ async function requireIct() {
 }
 
 // GET — fetch audit log entries with optional server-side filtering
-function isMissingTableError(error: { code?: string; message?: string } | null) {
-  return Boolean(error && (error.code === "PGRST205" || error.message?.toLowerCase().includes("could not find the table") || error.message?.toLowerCase().includes("schema cache")));
-}
-
 export async function GET(req: NextRequest) {
   try {
     const session = await requireIct();
@@ -56,6 +62,9 @@ export async function GET(req: NextRequest) {
     const action      = searchParams.get("action")     ?? "";
     const role        = searchParams.get("role")       ?? "";
     const user        = searchParams.get("user")       ?? "";
+    const moduleFilter = searchParams.get("module")    ?? "";
+    const status      = searchParams.get("status")     ?? "";
+    const archive     = parseAuditArchiveFilter(searchParams.get("archive"));
     const date        = searchParams.get("date")       ?? ""; // YYYY-MM-DD
     const page        = Math.max(1, Number(searchParams.get("page") ?? "1"));
     const perPage     = Math.min(100, Math.max(1, Number(searchParams.get("perPage") ?? "50")));
@@ -66,9 +75,18 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false });
 
     // Server-side filters
-    if (action)  query = query.ilike("action",       `%${action}%`);
-    if (role)    query = query.ilike("performed_by_role", `%${role}%`);
+    if (action)  query = query.in("action", [...auditActionDatabaseValues(action)]);
+    if (role)    query = query.in("performed_by_role", [...auditRoleDatabaseValues(role)]);
     if (user)    query = query.ilike("performed_by", `%${user}%`);
+    if (moduleFilter) query = query.ilike("module", `%${moduleFilter}%`);
+    if (status)  query = query.or(`previous_status.ilike.%${status}%,new_status.ilike.%${status}%`);
+    // Archive state is a read-time boundary: Recent contains the last seven
+    // days and Archived preserves every older audit row for viewing. This
+    // avoids making page loads depend on an optional archival RPC or view.
+    const archiveCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    query = archive === "archived"
+      ? query.lt("created_at", archiveCutoff)
+      : query.gte("created_at", archiveCutoff);
     if (search)  query = query.or(
       `performed_by.ilike.%${search}%,details.ilike.%${search}%,action.ilike.%${search}%`
     );
@@ -85,9 +103,6 @@ export async function GET(req: NextRequest) {
     query = query.range(from, to);
 
     const { data, error, count } = await query;
-    if (error && isMissingTableError(error)) {
-      return NextResponse.json({ success: true, auditLog: [], total: 0, page, perPage });
-    }
     if (error) throw error;
 
     const entries = ((data ?? []) as AuditLogRow[]).map((row) => ({
@@ -99,10 +114,20 @@ export async function GET(req: NextRequest) {
       targetRole:  row.target_role        ?? "",
       targetEmail: row.target_email       ?? "",
       performedBy: row.performed_by       ?? "",
-      performedByRole: row.performed_by_role ?? "",
+      performedByRole: normalizeAuditRole(row.performed_by_role),
       module:      row.module             ?? "",
       ipAddress:   row.ip_address         ?? "",
       browser:     row.browser            ?? "",
+      targetType:  row.target_type ?? "",
+      targetId:    row.target_id ?? "",
+      previousStatus: row.previous_status ?? "",
+      newStatus:   row.new_status ?? "",
+      relatedReportId: row.related_report_id ?? "",
+      relatedTicketId: row.related_ticket_id ?? "",
+      relatedStudentId: row.related_student_id ?? "",
+      relatedUserId: row.related_user_id ?? "",
+      archiveStatus: archive,
+      archivedAt:    null,
       timestamp: new Date(row.created_at).toLocaleDateString("en-US", {
         month: "short", day: "numeric",
       }) + " · " + new Date(row.created_at).toLocaleTimeString("en-US", {
@@ -157,7 +182,7 @@ export async function POST(req: NextRequest) {
       target_role:  targetRole  ?? null,
       target_email: targetEmail ?? null,
       performed_by: session.name,
-      performed_by_role: "ICT Admin",
+      performed_by_role: "ICT",
       details:      details     ?? null,
       changes:      changes     ?? null,
       module:       mod ?? "User Management",

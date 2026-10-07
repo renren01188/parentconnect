@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
+
+// Student/RFID values are shared with the adviser dashboard. Never serve a
+// previously fetched list after an assignment, replacement, or removal.
+export const dynamic = "force-dynamic";
+const noStoreHeaders = { "Cache-Control": "no-store, max-age=0" };
 
 async function getIctFromToken() {
   const cookieStore = await cookies();
@@ -34,7 +38,8 @@ export async function GET(req: NextRequest) {
     // ── 1. Fetch students ──────────────────────────────────────
     let query = supabase
       .from("students")
-      .select("*", { count: "exact" });
+      .select("*", { count: "exact" })
+      .eq("archive_status", "active");
 
     if (grade) query = query.eq("grade", grade);
     if (section) query = query.eq("section", section);
@@ -51,7 +56,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (!students || students.length === 0) {
-      return NextResponse.json({ success: true, data: [], total: 0 });
+      return NextResponse.json({ success: true, data: [], total: 0 }, { headers: noStoreHeaders });
     }
 
     // ── 2. Fetch parents via parent_student_links ──────────────
@@ -117,7 +122,7 @@ export async function GET(req: NextRequest) {
       adviser_name: adviserMap.get(`${s.grade}-${s.section}`) ?? "",
     }));
 
-    return NextResponse.json({ success: true, data: enriched, total: count ?? 0 });
+    return NextResponse.json({ success: true, data: enriched, total: count ?? 0 }, { headers: noStoreHeaders });
 
   } catch (error: unknown) {
     console.error("GET /api/ict/students error:", error);

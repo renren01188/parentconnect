@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { notificationRetentionStart } from "@/lib/notificationRetention";
+import { PRINCIPAL_PARENT_AUDIENCE_VALUES } from "@/lib/principalAnnouncementAudience";
+import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -18,6 +20,7 @@ type ParentNotificationRow = {
   read_at: string | null;
   created_at: string;
   source: string | null;
+  sender_name: string | null;
 };
 
 type AnnouncementRow = {
@@ -28,7 +31,6 @@ type AnnouncementRow = {
   message: string;
   created_at: string;
   source: "adviser" | "guidance" | "principal" | "ict";
-  profile_picture?: string | null;
 };
 
 type AnnouncementSource = "adviser" | "guidance" | "principal" | "ict";
@@ -44,27 +46,55 @@ type AttendanceRead = {
   attendance_log_id: number;
 };
 
-type ParentReportNotification = {
+type SubjectTeacherReportNotification = {
   id: number;
-  adviser_name: string;
   student_name: string;
   subject: string;
-};
-
-type ParentReportMessageNotification = {
-  id: number;
-  report_id: number;
-  body: string;
   created_at: string;
+  parent_seen_at: string | null;
 };
 
 function notificationSource(value: string | null): AnnouncementSource {
-  if (value === "guidance" || value === "principal" || value === "ict") return value;
+  const source = String(value ?? "").trim().toLowerCase();
+  if (source === "guidance" || source === "principal" || source === "ict") return source;
   return "adviser";
 }
 
 function announcementKey(source: AnnouncementSource, id: number) {
   return `${source}:${id}`;
+}
+
+/**
+ * One announcement can have one row per child linked to this account. Collapse
+ * those rows into one notification while retaining their IDs for one
+ * account-scoped mark-as-read update.
+ */
+function collapseAnnouncementNotifications(rows: ParentNotificationRow[]) {
+  const grouped = new Map<string, ParentNotificationRow & { notification_ids: number[] }>();
+
+  for (const row of rows) {
+    const source = notificationSource(row.source);
+    const key = announcementKey(source, row.announcement_id);
+    const current = grouped.get(key);
+
+    if (!current) {
+      grouped.set(key, {
+        ...row,
+        source,
+        notification_ids: [row.id],
+      });
+      continue;
+    }
+
+    if (!current.notification_ids.includes(row.id)) {
+      current.notification_ids.push(row.id);
+    }
+    if (!row.read_at) {
+      current.read_at = null;
+    }
+  }
+
+  return [...grouped.values()];
 }
 
 function timeLabel(value: string) {
@@ -96,24 +126,17 @@ async function getParentSession() {
   try {
     const verified = await jwtVerify(token, SECRET);
     const id = Number(verified.payload.id);
-    const email = typeof verified.payload.email === "string" ? verified.payload.email : "";
-    if (!id || !email) return null;
-    return { id, email };
+    if (!id || verified.payload.role !== "parent") return null;
+    const { data: parent, error } = await supabase
+      .from("parents")
+      .select("email, status, archive_status")
+      .eq("id", id)
+      .maybeSingle();
+    if (error || !parent || !parentAccountCanAccess(parent)) return null;
+    return { id, email: parent.email ?? "" };
   } catch {
     return null;
   }
-}
-
-async function getParentIds(email: string, fallbackId: number) {
-  const { data, error } = await supabase
-    .from("parents")
-    .select("id")
-    .eq("email", email);
-
-  if (error) throw error;
-
-  const ids = (data ?? []).map((row) => row.id as number);
-  return ids.length ? ids : [fallbackId];
 }
 
 export async function GET() {
@@ -126,6 +149,8 @@ export async function GET() {
       );
     }
 
+    const parentIds = [session.id];
+
     // Parent notification records reset after month-end. If month-end occurs
     // on a weekday, notificationRetentionStart defers cleanup to Saturday.
     const retentionStart = notificationRetentionStart();
@@ -134,16 +159,16 @@ export async function GET() {
       supabase
         .from("parent_announcement_notifications")
         .delete()
+        .in("parent_id", parentIds)
         .lt("created_at", retentionStart),
       supabase
         .from("parent_attendance_notification_reads")
         .delete()
+        .in("parent_id", parentIds)
         .lt("read_at", retentionStart),
     ]);
     if (announcementCleanup.error) throw announcementCleanup.error;
     if (attendanceReadCleanup.error) throw attendanceReadCleanup.error;
-
-    const parentIds = await getParentIds(session.email, session.id);
 
     const { data: linkedStudents, error: linkedStudentsError } = await supabase
       .from("parent_student_links")
@@ -169,14 +194,33 @@ export async function GET() {
 
     const { data: notificationRows, error: notificationError } = await supabase
       .from("parent_announcement_notifications")
-      .select("id, announcement_id, parent_id, student_id, grade, section, read_at, created_at, source")
+      .select("id, announcement_id, parent_id, student_id, grade, section, read_at, created_at, source, sender_name")
       .in("parent_id", parentIds)
       .order("created_at", { ascending: false })
       .limit(100);
 
     if (notificationError) throw notificationError;
 
-    const notifications = (notificationRows ?? []) as ParentNotificationRow[];
+    // Subject Teacher reports remain in the existing report workflow. Their
+    // notification is derived from that source row, so it cannot duplicate or
+    // drift from the report sidebar's read state.
+    const subjectTeacherReportsResult = studentNames.size > 0
+      ? await supabase
+        .from("parent_adviser_reports")
+        .select("id, student_name, subject, created_at, parent_seen_at")
+        .in("parent_id", parentIds)
+        .in("student_id", [...studentNames.keys()])
+        .contains("categories", ["Subject Teacher"])
+        .gte("created_at", retentionStart)
+        .order("created_at", { ascending: false })
+        .limit(100)
+      : { data: [] as SubjectTeacherReportNotification[], error: null };
+    const { data: subjectTeacherReportRows, error: subjectTeacherReportsError } = subjectTeacherReportsResult;
+    if (subjectTeacherReportsError) throw subjectTeacherReportsError;
+
+    const notifications = collapseAnnouncementNotifications(
+      (notificationRows ?? []) as ParentNotificationRow[],
+    );
     const adviserAnnouncementIds = [...new Set(notifications
       .filter((row) => notificationSource(row.source) === "adviser")
       .map((row) => row.announcement_id))];
@@ -213,7 +257,7 @@ export async function GET() {
             .from("principal_announcements")
             .select("id, sender_id, title, message, created_at")
             .in("id", principalAnnouncementIds)
-            .in("audience", ["Everyone", "Parents"])
+            .in("audience", [...PRINCIPAL_PARENT_AUDIENCE_VALUES])
             .eq("status", "Published")
           : Promise.resolve({ data: [], error: null }),
         ictAnnouncementIds.length > 0
@@ -256,12 +300,6 @@ export async function GET() {
       }
 
       for (const row of principalRes.data ?? []) {
-        const { data: principalProfile, error: principalProfileError } = await supabase
-          .from("principals")
-          .select("profile_picture")
-          .eq("id", row.sender_id)
-          .maybeSingle();
-        if (principalProfileError) throw principalProfileError;
         announcementsById.set(announcementKey("principal", row.id), {
           id: row.id,
           adviser_id: row.sender_id,
@@ -270,16 +308,9 @@ export async function GET() {
           message: row.message,
           created_at: row.created_at,
           source: "principal",
-          profile_picture: principalProfile?.profile_picture ?? null,
         });
       }
       for (const row of ictRes.data ?? []) {
-        const { data: ictProfile, error: ictProfileError } = await supabase
-          .from("ict_admins")
-          .select("profile_picture")
-          .eq("id", row.sender_id)
-          .maybeSingle();
-        if (ictProfileError) throw ictProfileError;
         announcementsById.set(announcementKey("ict", row.id), {
           id: row.id,
           adviser_id: row.sender_id,
@@ -288,7 +319,6 @@ export async function GET() {
           message: row.message,
           created_at: row.created_at,
           source: "ict",
-          profile_picture: ictProfile?.profile_picture ?? null,
         });
       }
     }
@@ -302,83 +332,42 @@ export async function GET() {
         const isGuidance = announcement.source === "guidance";
         const isPrincipal = announcement.source === "principal";
         const isIct = announcement.source === "ict";
+        const senderRole = isPrincipal
+          ? "Principal"
+          : isGuidance
+            ? "Guidance"
+            : isIct
+              ? "ICT"
+              : "Adviser";
+        const senderName = notification.sender_name?.trim() || announcement.adviser_name || senderRole;
         return {
           id: notification.id,
           type: "message",
-          title: isPrincipal
-            ? `[Principal] ${announcement.title}`
-            : isGuidance
-              ? `[Guidance] ${announcement.title}`
-              : isIct
-                ? `[ICT] ${announcement.title}`
-                : announcement.title,
+          title: "Announcement From " + senderRole,
           msg: announcement.message,
           time: timeLabel(notification.created_at),
+          // Keep the existing category/filter contract (adviser announcements
+          // are grouped under Teacher) while exposing the normalized sender
+          // role separately for the title and modal.
           category: isPrincipal ? "Principal" : isGuidance ? "Guidance" : isIct ? "ICT" : "Teacher",
-          profilePicture: (isIct || isPrincipal) ? announcement.profile_picture ?? null : null,
           unread: !notification.read_at,
           tab: [
             "All",
             ...(!notification.read_at ? ["Unread"] : []),
             isPrincipal ? "Principal" : isGuidance ? "Guidance" : isIct ? "ICT" : "Teacher",
           ],
-          teacherName: announcement.adviser_name,
+          teacherName: senderName,
           announcementId: announcement.id,
+          announcementTitle: announcement.title,
+          notificationIds: notification.notification_ids,
+          senderName,
+          senderRole,
           createdAt: notification.created_at,
           grade: notification.grade,
           section: notification.section,
         };
       })
       .filter(Boolean);
-
-    // A Student Report forwarded by an adviser creates an adviser message in
-    // the parent report thread. Surface that unread message here as a parent
-    // notification, scoped strictly to the signed-in parent's own account.
-    const { data: parentReports, error: parentReportsError } = await supabase
-      .from("parent_adviser_reports")
-      .select("id, adviser_name, student_name, subject")
-      .eq("parent_email", session.email)
-      .limit(100);
-    if (parentReportsError) throw parentReportsError;
-
-    const reports = (parentReports ?? []) as ParentReportNotification[];
-    const reportsById = new Map(reports.map((report) => [report.id, report]));
-    let reportMessageRows: ParentReportMessageNotification[] = [];
-    if (reports.length > 0) {
-      const { data, error } = await supabase
-        .from("parent_adviser_report_messages")
-        .select("id, report_id, body, created_at")
-        .in("report_id", reports.map((report) => report.id))
-        .in("sender_role", ["adviser", "guidance", "principal"])
-        .eq("read_by_parent", false)
-        .order("created_at", { ascending: false })
-        .limit(100);
-      if (error) throw error;
-      reportMessageRows = (data ?? []) as ParentReportMessageNotification[];
-    }
-
-    // One notification per report keeps repeated staff messages from flooding
-    // the notification page; the newest unread message is shown.
-    const seenReportIds = new Set<number>();
-    const reportRows = reportMessageRows.flatMap((message) => {
-      const report = reportsById.get(message.report_id);
-      if (!report || seenReportIds.has(report.id)) return [];
-      seenReportIds.add(report.id);
-      return [{
-        id: 1_000_000_000 + report.id,
-        type: "message" as const,
-        title: `Student Report: ${report.subject}`,
-        msg: `${report.student_name}: ${message.body}`,
-        time: timeLabel(message.created_at),
-        category: "Teacher",
-        unread: true,
-        tab: ["All", "Unread", "Teacher"],
-        teacherName: report.adviser_name,
-        studentName: report.student_name,
-        reportId: report.id,
-        createdAt: message.created_at,
-      }];
-    });
 
     const linkedStudentIds = [...studentNames.keys()];
     let attendanceRows: Array<Record<string, unknown>> = [];
@@ -429,7 +418,24 @@ export async function GET() {
       });
     }
 
-    const rows = [...announcementRows, ...reportRows, ...attendanceRows]
+    const rows = [...announcementRows, ...attendanceRows]
+      .concat(((subjectTeacherReportRows ?? []) as SubjectTeacherReportNotification[]).map((report) => {
+        const unread = !report.parent_seen_at;
+        return {
+          // Keep report notification IDs distinct from persisted announcement
+          // notification IDs; reportId is the authoritative target.
+          id: 1_000_000_000 + report.id,
+          reportId: report.id,
+          type: "message" as const,
+          title: "New Subject Teacher Report",
+          msg: `A Subject Teacher submitted a concern for ${report.student_name}: ${report.subject}.`,
+          time: timeLabel(report.created_at),
+          category: "Teacher",
+          unread,
+          tab: ["All", ...(unread ? ["Unread" as const] : []), "Teacher" as const],
+          createdAt: report.created_at,
+        };
+      }))
       .filter((row) => row !== null)
       .sort((left, right) => {
         const leftCreatedAt = (left as { createdAt?: string }).createdAt;
@@ -462,20 +468,21 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const parentIds = await getParentIds(session.email, session.id);
+    const parentIds = [session.id];
     const body = await req.json().catch(() => ({}));
     const notificationId = Number(body.notificationId);
     const attendanceLogId = Number(body.attendanceLogId);
-    const reportId = Number(body.reportId);
     const attendanceLogIds = Array.isArray(body.attendanceLogIds)
       ? body.attendanceLogIds.map(Number).filter(Number.isFinite)
-      : [];
-    const reportIds = Array.isArray(body.reportIds)
-      ? body.reportIds.map(Number).filter(Number.isFinite)
       : [];
     const notificationIds = Array.isArray(body.notificationIds)
       ? body.notificationIds.map(Number).filter(Number.isFinite)
       : [];
+    const reportId = Number(body.reportId);
+    const reportIds = [
+      ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
+      ...(Array.isArray(body.reportIds) ? body.reportIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0) : []),
+    ];
 
     if (notificationId || notificationIds.length > 0) {
       let query = supabase
@@ -489,52 +496,61 @@ export async function PATCH(req: NextRequest) {
       if (error) throw error;
     }
 
-    if (reportId) {
-      const { data: report, error: reportError } = await supabase
-        .from("parent_adviser_reports")
-        .select("id")
-        .eq("id", reportId)
-        .eq("parent_email", session.email)
-        .maybeSingle();
-      if (reportError) throw reportError;
-      if (!report) {
-        return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
-      }
-
-      const { error: messageError } = await supabase
-        .from("parent_adviser_report_messages")
-        .update({ read_by_parent: true })
-        .eq("report_id", reportId)
-        .in("sender_role", ["adviser", "guidance", "principal"])
-        .eq("read_by_parent", false);
-      if (messageError) throw messageError;
-    }
-
     if (reportIds.length > 0) {
       const { data: ownedReports, error: ownedReportsError } = await supabase
         .from("parent_adviser_reports")
         .select("id")
-        .eq("parent_email", session.email)
-        .in("id", reportIds);
+        .eq("parent_id", session.id)
+        .in("id", [...new Set(reportIds)]);
       if (ownedReportsError) throw ownedReportsError;
 
       const ownedReportIds = (ownedReports ?? []).map((report) => report.id as number);
       if (ownedReportIds.length > 0) {
-        const { error: messageError } = await supabase
-          .from("parent_adviser_report_messages")
-          .update({ read_by_parent: true })
-          .in("report_id", ownedReportIds)
-          .in("sender_role", ["adviser", "guidance", "principal"])
-          .eq("read_by_parent", false);
-        if (messageError) throw messageError;
+        const now = new Date().toISOString();
+        const [reportUpdate, messageUpdate] = await Promise.all([
+          supabase
+            .from("parent_adviser_reports")
+            .update({ parent_seen_at: now })
+            .in("id", ownedReportIds),
+          supabase
+            .from("parent_adviser_report_messages")
+            .update({ read_by_parent: true })
+            .in("report_id", ownedReportIds)
+            .in("sender_role", ["adviser", "principal", "guidance", "subject_teacher"]),
+        ]);
+        if (reportUpdate.error) throw reportUpdate.error;
+        if (messageUpdate.error) throw messageUpdate.error;
       }
     }
 
     const logsToMarkRead = attendanceLogId ? [attendanceLogId] : attendanceLogIds;
     if (logsToMarkRead.length > 0) {
-      const readRows = parentIds.flatMap((parentId) =>
-        logsToMarkRead.map((logId: number) => ({ parent_id: parentId, attendance_log_id: logId }))
-      );
+      const { data: linkedStudents, error: linkedStudentsError } = await supabase
+        .from("parent_student_links")
+        .select("student_id")
+        .eq("parent_id", session.id);
+      if (linkedStudentsError) throw linkedStudentsError;
+
+      const linkedStudentIds = (linkedStudents ?? []).map((link) => String(link.student_id));
+      if (!linkedStudentIds.length) {
+        return NextResponse.json({ success: true });
+      }
+
+      const { data: ownedLogs, error: ownedLogsError } = await supabase
+        .from("attendance_logs")
+        .select("id")
+        .in("id", [...new Set(logsToMarkRead)])
+        .in("student_id", linkedStudentIds);
+      if (ownedLogsError) throw ownedLogsError;
+
+      const readRows = (ownedLogs ?? []).map((log) => ({
+        parent_id: session.id,
+        attendance_log_id: Number(log.id),
+      }));
+      if (readRows.length === 0) {
+        return NextResponse.json({ success: true });
+      }
+
       const { error } = await supabase
         .from("parent_attendance_notification_reads")
         .upsert(readRows, { onConflict: "parent_id,attendance_log_id" });

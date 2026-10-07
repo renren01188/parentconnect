@@ -1,4 +1,4 @@
-import nodemailer, { type Transporter } from "nodemailer";
+import { sendWithBrevo } from "@/lib/brevoApi";
 
 type EmailMessage = {
   from?: string;
@@ -9,44 +9,80 @@ type EmailMessage = {
   replyTo?: string;
 };
 
-let smtpTransporter: Transporter | undefined;
-
-function getSmtpTransporter() {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
-    throw new Error("SMTP_HOST, SMTP_USER, and SMTP_PASS must be configured.");
-  }
-
-  if (!smtpTransporter) {
-    const port = Number(SMTP_PORT ?? 587);
-    smtpTransporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port,
-      secure: port === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
-      // Email delivery must not leave deletion workflows waiting indefinitely
-      // when an SMTP server is unavailable or slow to respond.
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 15_000,
-    });
-  }
-
-  return smtpTransporter;
+/** Sends all ParentConnect system mail through Brevo's HTTPS API. */
+export async function sendWithEmail(mail: EmailMessage) {
+  return sendWithBrevo(mail);
 }
 
-/** Sends system mail through the SMTP provider configured in .env.local. */
-export async function sendWithSmtp(mail: EmailMessage) {
-  const from = mail.from ?? process.env.SMTP_FROM;
-  if (!from) {
-    throw new Error("SMTP_FROM must be configured.");
-  }
+const transporter = { sendMail: sendWithEmail };
 
-  return getSmtpTransporter().sendMail({ ...mail, from });
+function escapeEmailHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-const transporter = { sendMail: sendWithSmtp };
+/** Sends one private notification to all active ICT recipients for a public contact message. */
+export async function sendContactUsNotification({
+  recipients,
+  name,
+  email,
+  phone,
+  subject,
+  message,
+}: {
+  recipients: string[];
+  name: string;
+  email: string;
+  phone: string;
+  subject: string;
+  message: string;
+}) {
+  const details = {
+    name: escapeEmailHtml(name),
+    email: escapeEmailHtml(email),
+    phone: escapeEmailHtml(phone || "Not provided"),
+    subject: escapeEmailHtml(subject),
+    message: escapeEmailHtml(message),
+  };
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: recipients,
+    subject: "New Contact Us Message",
+    replyTo: email,
+    text: [
+      "A new Contact Us message was submitted.",
+      `Name: ${name}`,
+      `Email: ${email}`,
+      `Phone: ${phone || "Not provided"}`,
+      `Subject: ${subject}`,
+      "",
+      "Message:",
+      message,
+    ].join("\n"),
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:16px;">
+        <div style="background:#0d2d5e;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+          <h1 style="color:white;margin:0;font-size:22px;">New Contact Us Message</h1>
+          <p style="color:#dbeafe;margin:6px 0 0;font-size:13px;">ParentConnect · Santiago Elementary School</p>
+        </div>
+        <div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">
+          <table style="width:100%;font-size:14px;border-collapse:collapse;">
+            <tr><td style="color:#64748b;padding:5px 12px 5px 0;width:100px;">Name</td><td style="color:#111827;font-weight:600;">${details.name}</td></tr>
+            <tr><td style="color:#64748b;padding:5px 12px 5px 0;">Email</td><td style="color:#111827;font-weight:600;">${details.email}</td></tr>
+            <tr><td style="color:#64748b;padding:5px 12px 5px 0;">Phone</td><td style="color:#111827;font-weight:600;">${details.phone}</td></tr>
+            <tr><td style="color:#64748b;padding:5px 12px 5px 0;">Subject</td><td style="color:#111827;font-weight:600;">${details.subject}</td></tr>
+          </table>
+          <p style="margin:20px 0 6px;font-size:12px;font-weight:700;color:#0d2d5e;text-transform:uppercase;">Message</p>
+          <p style="margin:0;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${details.message}</p>
+        </div>
+      </div>`,
+  });
+}
 
 export async function sendParentRegistrationConfirmation({ parentEmail, parentName }: { parentEmail: string; parentName: string }) {
   await transporter.sendMail({
@@ -58,6 +94,55 @@ export async function sendParentRegistrationConfirmation({ parentEmail, parentNa
 }
 
 // ── Parent: temp password email ───────────────────────────────────────────────
+/**
+ * Manual student registration has no parent account yet. This invitation is
+ * informational: the parent chooses their own account email, mobile number,
+ * and password after their name and one child LRN are verified.
+ */
+export async function sendParentSignupReadyEmail({
+  parentEmail,
+  studentName,
+  studentLrn,
+  signupUrl,
+}: {
+  parentEmail: string;
+  studentName: string;
+  studentLrn: string;
+  signupUrl: string;
+}) {
+  const safeStudentName = escapeEmailHtml(studentName || "your child");
+  const safeStudentLrn = escapeEmailHtml(studentLrn);
+  const safeSignupUrl = escapeEmailHtml(signupUrl);
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: parentEmail,
+    subject: "ParentConnect — Your Student Is Ready for Parent Sign Up",
+    text: [
+      "A student registration is ready for ParentConnect sign up.",
+      "Student: " + studentName,
+      "Student LRN: " + studentLrn,
+      "Use your full name exactly as recorded by the school, select your relationship, and enter this LRN.",
+      "You will provide your own email address and mobile number during sign up.",
+      signupUrl,
+    ].join("\n"),
+    html: [
+      '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:16px;">',
+      '<div style="background:#10b981;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">',
+      '<h1 style="color:white;margin:0;font-size:22px;">ParentConnect</h1>',
+      '<p style="color:#d1fae5;margin:6px 0 0;font-size:13px;">Santiago Elementary School</p></div>',
+      '<div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">',
+      '<h2 style="color:#0f766e;margin:0 0 14px;font-size:20px;">Your student is ready for Parent sign up</h2>',
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">A school registration was saved for <strong>' + safeStudentName + '</strong>.</p>',
+      '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px;margin:16px 0;">',
+      '<p style="margin:0;color:#1e3a8a;font-size:13px;"><strong>Student LRN:</strong> ' + safeStudentLrn + '</p></div>',
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">Use your full name exactly as it appears in the school registration, select whether you are the Father, Mother, or Guardian, and enter the LRN above. You will provide your own email address and mobile number during sign up.</p>',
+      '<p style="margin:22px 0 0;"><a href="' + safeSignupUrl + '" style="display:inline-block;background:#059669;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-size:14px;font-weight:700;">Create Parent Account</a></p>',
+      '</div><p style="color:#9ca3af;font-size:12px;text-align:center;margin:16px 0 0;">This is an automated ParentConnect message. Please do not reply.</p></div>',
+    ].join(""),
+  });
+}
+
 export async function sendTempPasswordEmail({
   parentEmail, parentName, studentName, tempPassword,
 }: {
@@ -88,7 +173,7 @@ export async function sendTempPasswordEmail({
             </table>
           </div>
           <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-top:12px;">
-            <p style="margin:0;font-size:12px;color:#92400e;">⚠️ <strong>Important:</strong> You will be asked to create a new password on your first login.</p>
+            <p style="margin:0;font-size:12px;color:#92400e;">⚠️ <strong>Important:</strong> This temporary password expires in 10 minutes. Enter it promptly, then create your own password.</p>
           </div>
         </div>
         <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">This is an automated message from ParentConnect. Please do not reply.</p>
@@ -181,14 +266,14 @@ export async function sendParentDeletionScheduledEmail({ parentEmail, parentName
     html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;background:#f8fafc;padding:28px;border-radius:16px">
       <div style="background:#b91c1c;color:white;padding:22px;border-radius:12px;text-align:center"><h1 style="margin:0;font-size:22px">ParentConnect</h1><p style="margin:6px 0 0;font-size:13px">Account deletion notice</p></div>
       <div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin-top:18px"><p>Hello, <strong>${parentName}</strong>,</p><p>Your ParentConnect account has been scheduled for deletion by the school.</p>
-      <p><strong>Scheduled permanent deletion date:</strong> ${deleteAfter}</p><div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:16px"><p style="margin:0 0 8px;font-weight:bold">Reason for deletion</p><p style="margin:0;white-space:pre-wrap">${reason}</p></div>
+      <p><strong>Scheduled archive date:</strong> ${deleteAfter}</p><div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:16px"><p style="margin:0 0 8px;font-weight:bold">Reason for archiving</p><p style="margin:0;white-space:pre-wrap">${reason}</p></div>
       <p style="line-height:1.6">Your account and related student information remain recoverable for 30 days. Please contact the school immediately if you believe this was scheduled in error.</p></div>
       <p style="color:#94a3b8;text-align:center;font-size:12px">This is an automated ParentConnect notification. Please do not reply.</p></div>`,
   });
 }
 
 export async function sendStudentDeletionScheduledEmail({ parentEmail, studentName, reason, deleteAfter }: { parentEmail: string; studentName: string; reason: string; deleteAfter: string }) {
-  await transporter.sendMail({ from: process.env.SMTP_FROM, to: parentEmail, subject: "Student deletion approved — ParentConnect", html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:28px;background:#f8fafc"><h1 style="color:#b91c1c">ParentConnect</h1><p>The deletion request for <strong>${studentName}</strong> has been approved by the ICT Office.</p><p>The student record and related data are scheduled for permanent deletion on <strong>${deleteAfter}</strong>. The deletion can be reverted by ICT until that date.</p><div style="padding:16px;border:1px solid #fed7aa;background:#fff7ed"><strong>Reason provided by the adviser</strong><p style="white-space:pre-wrap">${reason}</p></div></div>` });
+  await transporter.sendMail({ from: process.env.SMTP_FROM, to: parentEmail, subject: "Student archive approved — ParentConnect", html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:28px;background:#f8fafc"><h1 style="color:#b91c1c">ParentConnect</h1><p>The archive request for <strong>${studentName}</strong> has been approved by the ICT Office.</p><p>The student record and related history will be archived on <strong>${deleteAfter}</strong>. The archive can be reverted by ICT until that date.</p><div style="padding:16px;border:1px solid #fed7aa;background:#fff7ed"><strong>Reason provided by the adviser</strong><p style="white-space:pre-wrap">${reason}</p></div></div>` });
 }
 
 export async function sendStudentDeletionRevertedEmail({ parentEmail, studentName }: { parentEmail: string; studentName: string }) {
@@ -196,7 +281,7 @@ export async function sendStudentDeletionRevertedEmail({ parentEmail, studentNam
 }
 
 export async function sendAccountDeletionScheduledEmail({ recipientEmail, recipientName, accountType, reason, deleteAfter }: { recipientEmail: string; recipientName: string; accountType: string; reason: string; deleteAfter: string }) {
-  await transporter.sendMail({ from: process.env.SMTP_FROM, to: recipientEmail, subject: "Account deletion scheduled — ParentConnect", html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:28px;background:#f8fafc"><h1 style="color:#b91c1c">ParentConnect</h1><p>Hello, <strong>${recipientName}</strong>.</p><p>Your <strong>${accountType}</strong> account has been confirmed for deletion and is scheduled for permanent removal on <strong>${deleteAfter}</strong>.</p><div style="padding:16px;border:1px solid #fed7aa;background:#fff7ed"><strong>Reason for deletion</strong><p style="white-space:pre-wrap">${reason}</p></div><p>The deletion remains reversible by the ICT Office until the scheduled date.</p></div>` });
+  await transporter.sendMail({ from: process.env.SMTP_FROM, to: recipientEmail, subject: "Account archive scheduled — ParentConnect", html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:28px;background:#f8fafc"><h1 style="color:#b91c1c">ParentConnect</h1><p>Hello, <strong>${recipientName}</strong>.</p><p>Your <strong>${accountType}</strong> account has been scheduled for archiving on <strong>${deleteAfter}</strong>.</p><div style="padding:16px;border:1px solid #fed7aa;background:#fff7ed"><strong>Reason for archiving</strong><p style="white-space:pre-wrap">${reason}</p></div><p>The archive remains reversible by the ICT Office until the scheduled date.</p></div>` });
 }
 
 export async function sendAccountDeletionRevertedEmail({ recipientEmail, recipientName, accountType }: { recipientEmail: string; recipientName: string; accountType: string }) {
@@ -259,7 +344,7 @@ export async function sendAdviserTempPasswordEmail({
         <div style="background:white;border-radius:12px;padding:24px;margin-bottom:16px;border:1px solid #e2e8f0;">
           <p style="color:#374151;font-size:15px;margin:0 0 12px;">Hello, <strong>${adviserName}</strong>,</p>
           <p style="color:#6b7280;font-size:14px;margin:0 0 16px;line-height:1.6;">
-            Your adviser account has been created by the school principal.
+            Your adviser account has been created by an authorized school administrator.
             ${assignmentText}
           </p>
           <p style="color:#6b7280;font-size:14px;margin:0 0 16px;">
@@ -307,6 +392,40 @@ export async function sendAdviserTempPasswordEmail({
           This is an automated message from ParentConnect · Santiago Elementary School.<br/>Please do not reply.
         </p>
       </div>`,
+  });
+}
+
+// ── Adviser: students waiting for transfer acceptance ───────────────────────
+export async function sendAdviserTransferReadyEmail({
+  adviserEmail,
+  adviserName,
+  sourceGrade,
+  sourceSection,
+  targetGrade,
+  targetSection,
+}: {
+  adviserEmail: string;
+  adviserName: string;
+  sourceGrade: string;
+  sourceSection: string;
+  targetGrade: string;
+  targetSection: string;
+}) {
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: adviserEmail,
+    subject: "Students ready to receive — ParentConnect",
+    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:28px;background:#f8fafc">
+      <h1 style="color:#274e13;margin:0 0 18px">ParentConnect</h1>
+      <p>Hello, <strong>${adviserName}</strong>.</p>
+      <p>Students are ready to be received into your assigned class:</p>
+      <div style="padding:16px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">
+        <strong>${targetGrade} &middot; ${targetSection}</strong>
+      </div>
+      <p style="color:#64748b;font-size:13px">Transferred from ${sourceGrade} &middot; ${sourceSection}.</p>
+      <p style="margin-top:18px">Open <strong>Students</strong> and select <strong>Receive Transfer</strong> to review and accept them.</p>
+      <p style="color:#9ca3af;font-size:12px;text-align:center;margin-top:28px">This is an automated ParentConnect notification. Please do not reply.</p>
+    </div>`,
   });
 }
 
@@ -582,6 +701,85 @@ export async function sendParentReportAdviserEmail({
   });
 }
 
+export async function sendSubjectTeacherReportNotificationEmail({
+  recipientEmail,
+  recipientName,
+  recipientRole,
+  teacherName,
+  teacherEmail,
+  studentName,
+  grade,
+  section,
+  concern,
+}: {
+  recipientEmail: string;
+  recipientName: string;
+  recipientRole: "Parent / Guardian" | "Class Adviser";
+  teacherName: string;
+  teacherEmail: string;
+  studentName: string;
+  grade: string;
+  section: string;
+  concern: string;
+}) {
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: recipientEmail,
+    subject: `New Subject Teacher Report - ${studentName}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:16px;">
+      <div style="background:#7c3aed;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;"><h1 style="color:white;margin:0;font-size:22px;">ParentConnect</h1><p style="color:#ede9fe;margin:6px 0 0;font-size:13px;">Subject Teacher Report</p></div>
+      <div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">
+        <p>Hello, <strong>${recipientName}</strong>,</p>
+        <p><strong>${teacherName}</strong> (${teacherEmail}) submitted a report for <strong>${studentName}</strong> in ${grade} - ${section}.</p>
+        <p style="font-size:12px;color:#64748b;">This notification is for the ${recipientRole}. Please open ParentConnect to view the report and continue the Parent - Adviser conversation.</p>
+        <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:16px;margin-top:16px;"><p style="margin:0;color:#4c1d95;white-space:pre-wrap;">${concern}</p></div>
+      </div>
+    </div>`,
+  });
+}
+
+export async function sendNewGuidanceTicketEmail({
+  guidanceEmail,
+  guidanceName,
+  parentName,
+  studentName,
+  subject,
+  concern,
+  message,
+  hasAttachments,
+}: {
+  guidanceEmail: string;
+  guidanceName: string;
+  parentName: string;
+  studentName: string;
+  subject: string;
+  concern: string;
+  message: string;
+  hasAttachments: boolean;
+}) {
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: guidanceEmail,
+    subject: `New Guidance Ticket - ${studentName || "Parent report"}`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:16px;">
+        <div style="background:#0284c7;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+          <h1 style="color:white;margin:0;font-size:22px;">New Guidance Ticket</h1>
+          <p style="color:#e0f2fe;margin:6px 0 0;font-size:13px;">ParentConnect</p>
+        </div>
+        <div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">
+          <p>Hello, <strong>${guidanceName || "Guidance Counselor"}</strong>,</p>
+          <p><strong>${parentName || "A parent"}</strong> submitted a ticket for <strong>${studentName || "a student"}</strong>.</p>
+          <p><strong>Report subject:</strong> ${subject || "Not specified"}<br />
+          <strong>Concern:</strong> ${concern}</p>
+          ${message ? `<p><strong>Message:</strong><br />${message}</p>` : ""}
+          ${hasAttachments ? "<p>The parent included attachments. Please review them in ParentConnect.</p>" : ""}
+          <p>Please open <strong>Reports - Tickets</strong> in the Guidance dashboard to review this ticket.</p>
+        </div>
+      </div>`,
+  });
+}
+
 export async function sendStudentReportAdviserEmail({
   adviserEmail,
   adviserName,
@@ -589,7 +787,6 @@ export async function sendStudentReportAdviserEmail({
   grade,
   section,
   description,
-  contact,
 }: {
   adviserEmail: string;
   adviserName: string;
@@ -597,7 +794,6 @@ export async function sendStudentReportAdviserEmail({
   grade: string;
   section: string;
   description: string;
-  contact?: string | null;
 }) {
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
@@ -620,7 +816,6 @@ export async function sendStudentReportAdviserEmail({
             <table style="width:100%;font-size:14px;margin-bottom:12px;">
               <tr><td style="color:#6b7280;padding:4px 0;width:130px;">Student</td><td style="color:#111827;font-weight:600;">${studentName}</td></tr>
               <tr><td style="color:#6b7280;padding:4px 0;">Class</td><td style="color:#111827;font-weight:600;">${grade} - ${section}</td></tr>
-              ${contact ? `<tr><td style="color:#6b7280;padding:4px 0;">Contact</td><td style="color:#111827;font-weight:600;">${contact}</td></tr>` : ""}
             </table>
             <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#b45309;text-transform:uppercase;">Concern</p>
             <p style="margin:0;color:#334155;font-size:14px;line-height:1.6;white-space:pre-wrap;">${description}</p>
@@ -1144,6 +1339,9 @@ export async function sendPrincipalAnnouncementEmail({
   message: string;
   audience: string;
 }) {
+  // Announcements are intentionally dashboard-only. Other mail functions in
+  // this module remain active for reports, password flows, and attendance.
+  return;
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: recipientEmail,
@@ -1185,6 +1383,8 @@ export async function sendGuidanceAnnouncementEmail({
   message: string;
   audience: string;
 }) {
+  // Announcements are intentionally dashboard-only.
+  return;
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: recipientEmail,
@@ -1226,6 +1426,8 @@ export async function sendAdviserAnnouncementEmail({
   grade: string;
   sections: string[];
 }) {
+  // Announcements are intentionally dashboard-only.
+  return;
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: recipientEmail,
@@ -1266,6 +1468,8 @@ export async function sendIctAnnouncementEmail({
   message: string;
   audience: string[];
 }) {
+  // Announcements are intentionally dashboard-only.
+  return;
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: recipientEmail,

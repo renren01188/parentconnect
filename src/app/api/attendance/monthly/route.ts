@@ -12,6 +12,7 @@ type StudentRow = {
   gender?: string | null;
   grade: string;
   section: string;
+  created_at?: string | null;
 };
 
 type LogRow = {
@@ -41,6 +42,7 @@ type MonthlyAttendanceRow = {
   remark: string | null;
   is_absent: boolean;
   is_excused: boolean;
+  active_from: string;
 };
 
 function buildFullName(row: Pick<StudentRow, "first_name" | "middle_name" | "last_name" | "suffix">) {
@@ -67,9 +69,40 @@ function getDaysInMonth(year: number, month: number): string[] {
   return days;
 }
 
+function getToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function registrationDate(createdAt?: string | null) {
+  if (!createdAt) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(createdAt));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const { searchParams } = new URL(req.url);
 
     const year = parseInt(searchParams.get("year") || String(new Date().getFullYear()), 10);
@@ -89,17 +122,27 @@ export async function GET(req: NextRequest) {
     }
 
     // All school days (Mon–Fri) in the requested month
+    const { data: activeSY, error: schoolYearError } = await supabase
+      .from("school_year_config")
+      .select("start_date, end_date")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (schoolYearError) throw schoolYearError;
+
+    // Attendance days are weekdays inside the active School Year only.
     const schoolDays = getDaysInMonth(year, month);
 
 
 
     // Only consider days up to today (can't have records for the future)
-    const today = new Date().toISOString().slice(0, 10);
-    const validDays = schoolDays.filter(d => d <= today);
-
-    if (validDays.length === 0) {
-      return NextResponse.json({ success: true, rows: [], schoolDays });
-    }
+    const today = getToday();
+    const validDays = schoolDays.filter((date) =>
+      !!activeSY &&
+      date <= today &&
+      date >= activeSY.start_date &&
+      date <= activeSY.end_date
+    );
 
     const startDate = validDays[0];
     const endDate = validDays[validDays.length - 1];
@@ -107,7 +150,7 @@ export async function GET(req: NextRequest) {
     // Fetch all students in adviser's section
     let studentsQuery = supabase
       .from("students")
-      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section")
+      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at")
       .order("last_name", { ascending: true });
 
     if (activeSection) studentsQuery = studentsQuery.eq("section", activeSection);
@@ -117,12 +160,21 @@ export async function GET(req: NextRequest) {
     if (studentError) throw studentError;
 
     const students = (studentRows ?? []) as StudentRow[];
-    const studentDbIds = students.map((student) => student.id);
+    const eligibleStudents = students.flatMap((student) => {
+      const registeredOn = registrationDate(student.created_at);
+      const activeFrom = registeredOn && activeSY
+        ? (registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
+        : null;
+      return activeFrom && validDays.some((date) => date >= activeFrom)
+        ? [{ student, activeFrom }]
+        : [];
+    });
+    const studentDbIds = eligibleStudents.map(({ student }) => student.id);
 
     // Fetch logs only for students in the active section. This avoids a costly
     // attendance_logs -> students join over the whole monthly date range.
     let logs: LogRow[] = [];
-    if (studentDbIds.length > 0) {
+    if (studentDbIds.length > 0 && startDate && endDate) {
       const { data: logRows, error: logError } = await supabase
         .from("attendance_logs")
         .select("id, student_id, student_db_id, attendance_date, time_logged, type, status, via, remark")
@@ -166,17 +218,15 @@ export async function GET(req: NextRequest) {
     // Build one row per student per valid school day
     const rows: MonthlyAttendanceRow[] = [];
 
-    for (const student of students) {
+    for (const { student, activeFrom } of eligibleStudents) {
       const fullName = buildFullName(student);
-      for (const dateStr of validDays) {
+      for (const dateStr of validDays.filter((date) => date >= activeFrom)) {
         const dayLogs = logMap[student.id]?.[dateStr];
         const timeIn = dayLogs?.timeIn;
         const timeOut = dayLogs?.timeOut;
-        const isPast = dateStr < today;
-        const hasAnyRecord = timeIn || timeOut;
         const isExcused = !!dayLogs?.isExcused;
         // Excused is not absent and not a normal present — its own category
-        const isAbsent = !hasAnyRecord && isPast && !isExcused;
+        const isAbsent = !isExcused && timeIn?.status === "Absent";
 
         rows.push({
           student_id: student.student_id,
@@ -187,17 +237,23 @@ export async function GET(req: NextRequest) {
           date: dateStr,
           time_in: timeIn?.time_logged ?? null,
           time_out: timeOut?.time_logged ?? null,
-          time_in_status: timeIn?.status ?? (isAbsent ? "Absent" : null),
+          time_in_status: timeIn?.status ?? null,
           time_out_status: timeOut?.status ?? null,
-          via: timeIn?.via ?? (isAbsent ? "Auto" : null),
+          via: timeIn?.via ?? null,
           remark: timeIn?.remark ?? null,
           is_absent: isAbsent,
           is_excused: isExcused,
+          active_from: activeFrom,
         });
       }
     }
 
-    return NextResponse.json({ success: true, rows, schoolDays: validDays });
+    return NextResponse.json({
+      success: true,
+      rows,
+      schoolDays: validDays,
+      studentCount: eligibleStudents.length,
+    });
 
   } catch (error) {
     console.error("Monthly attendance route error:", error);

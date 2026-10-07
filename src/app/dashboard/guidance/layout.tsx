@@ -19,23 +19,16 @@ export default function GuidanceLayout({
   return (
     <NotificationProvider>
       <div
-        className="guidance-shell guidance-shell-uniform"
+        className="guidance-shell-uniform flex min-h-screen flex-col overflow-x-clip bg-slate-100 md:h-screen md:flex-row md:overflow-hidden"
         style={{
-          height: "100vh",
-          display: "flex",
-          overflow: "hidden",
           background: "#f1f5f9",
           color: "#1e293b",
         }}
       >
         <Sidebar ready={hydrated} />
         <main
-          className="guidance-main guidance-main-uniform"
+          className="guidance-main guidance-main-uniform min-w-0 flex-1 overflow-y-auto !p-4 sm:!p-6 md:!p-6"
           style={{
-            flex: 1,
-            minWidth: 0,
-            padding: 24,
-            overflowY: "auto",
             opacity: hydrated ? 1 : 0,
             transition: "opacity 120ms ease",
           }}
@@ -363,32 +356,9 @@ export default function GuidanceLayout({
           color: #0284c7;
         }
 
-        @media (max-width: 980px) {
-          .guidance-shell {
-            flex-direction: column;
-          }
-
+        @media (max-width: 767px) {
           .guidance-sidebar {
-            width: 100%;
-            min-width: 0;
-            height: auto;
-            position: static;
-            border-right: 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-          }
-
-          .sidebar-nav {
-            flex-direction: row;
-            overflow-x: auto;
-          }
-
-          .sidebar-panel,
-          .sidebar-footer {
-            display: none;
-          }
-
-          .guidance-main {
-            padding: 22px;
+            display: none !important;
           }
         }
         `}</style>

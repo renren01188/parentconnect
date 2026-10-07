@@ -7,6 +7,7 @@ import {
   statusFromAdviser,
   toAdviserReport,
 } from "../../_lib";
+import { logAudit } from "@/lib/audit";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -32,6 +33,12 @@ export async function PATCH(
     }
 
     const normalized = statusFromAdviser(status);
+    if (normalized === "resolved" && String(report.status ?? "").toLowerCase() === "resolved") {
+      return NextResponse.json({ success: false, message: "This report has already been resolved." }, { status: 409 });
+    }
+    if (normalized === "resolved" && report.escalated_to_guidance) {
+      return NextResponse.json({ success: false, message: "Guidance owns this escalated report and must resolve it." }, { status: 403 });
+    }
     const now = new Date().toISOString();
     const updatePayload: Record<string, string | boolean> = {
       status: normalized,
@@ -62,9 +69,11 @@ export async function PATCH(
       .from("parent_adviser_report_messages")
       .update({ read_by_adviser: true })
       .eq("report_id", reportId)
-      .eq("sender_role", "parent");
+      .in("sender_role", ["parent", "subject_teacher"]);
 
     if (readError) throw readError;
+
+    await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "escalated" ? "Escalated to Guidance" : "Report Status Updated", performedById: adviser.id, performedBy: [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser", performedByRole: "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, relatedStudentId: report.student_id, previousStatus: report.status, newStatus: normalized, module: "Reports", details: normalized === "escalated" ? `Escalated report #${reportId} from Adviser to Guidance.` : `Changed report #${reportId} from ${report.status} to ${normalized}.` });
 
     const updatedReport = await getReportForAdviser(reportId, adviser.id);
     const messages = await listMessages([reportId]);

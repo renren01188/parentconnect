@@ -1,12 +1,13 @@
 "use client";
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { Suspense, useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, X, Clock, Paperclip, Send, Upload, CheckCircle, AlertCircle, AlertTriangle, ChevronDown, LoaderCircle } from "lucide-react";
 import Sidebar from "../components/Sidebar";
+import ParentReportsGuide from "../components/ParentReportsGuide";
 import { useNotifContext } from "../context/NotificationContext";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { DEFAULT_CATEGORIES, CONCERN_PERCENTAGES, computeConcernLevel, type ChatMessage, type Report, type MessageAttachment, type MessageStatus, type ReportStatus } from "../data";
 import { UserAvatar } from "@/components/UserAvatar";
+import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 
 // Only class advisers — parents cannot send directly to the principal
 type AdviserRecipient = {
@@ -114,7 +115,7 @@ function PriorityBadge({ level }: { level: number }) {
 }
 
 // ── Report status badge ───────────────────────────────────────────────────────
-function ReportStatusBadge({ status }: { status: ReportStatus }) {
+function ReportStatusBadge({ status, label = status }: { status: ReportStatus; label?: string }) {
   const cfg: Record<ReportStatus, { bg: string; color: string; border: string; icon: React.ReactNode }> = {
     "Pending": { bg: "#fefce8", color: "#a16207", border: "#fef08a", icon: <Clock style={{ width: 11, height: 11 }} /> },
     "In Review": { bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe", icon: <AlertCircle style={{ width: 11, height: 11 }} /> },
@@ -124,7 +125,7 @@ function ReportStatusBadge({ status }: { status: ReportStatus }) {
   const s = cfg[status];
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: s.bg, color: s.color, border: `1px solid ${s.border}`, whiteSpace: "nowrap" }}>
-      {s.icon}{status}
+      {s.icon}{label}
     </span>
   );
 }
@@ -227,7 +228,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
-  const [allowHistoryAccess, setAllowHistoryAccess] = useState<boolean | null>(null);
+  const [allowHistoryAccess] = useState(true);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const adviserRef = useRef<HTMLDivElement>(null);
   const adviser = advisers[adviserIdx];
@@ -274,7 +275,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
         concernLevel: computeConcernLevel(finalEntries),
         message: message.trim(),
         attachments,
-        allowHistoryAccess: allowHistoryAccess === true,
+        allowHistoryAccess: true,
       });
       setSubmitted(true);
     } catch (error) {
@@ -286,8 +287,8 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
 
   if (!adviser) {
     return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "flex-end", padding: "20px 24px 20px 0" }} onClick={onClose}>
-        <div style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: 500, padding: 24 }} onClick={e => e.stopPropagation()}>
+      <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
+        <div style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: "min(500px, calc(100vw - 24px))", padding: 24 }} onClick={e => e.stopPropagation()}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>New Report</h2>
@@ -301,8 +302,8 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "flex-end", padding: "20px 24px 20px 0" }} onClick={onClose}>
-      <div style={{ position: "relative", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: 500, maxHeight: "calc(100vh - 40px)", overflowY: "auto", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
+      <div style={{ position: "relative", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: "min(500px, calc(100vw - 24px))", maxHeight: "calc(100dvh - 24px)", overflowY: "auto", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "22px 24px 16px", borderBottom: "1px solid #f1f5f9" }}>
           <div>
@@ -470,19 +471,14 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
                 <>
                   <h3 style={{ margin: "0 0 8px", fontSize: 17, fontWeight: 800, color: "#0f172a" }}>Confirm report submission</h3>
                   <p style={{ margin: "0 0 14px", fontSize: 12, lineHeight: 1.5, color: "#64748b" }}>Please choose whether higher authorities may read the conversation history if this report is escalated.</p>
-                  {[{ value: false, label: "No, I do not want higher authorities to read our conversation." }, { value: true, label: "Yes, I want higher authorities to read our conversation." }].map(option => (
-                    <label key={String(option.value)} style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "9px 0", fontSize: 12, color: "#334155", cursor: "pointer" }}>
-                      <input type="radio" name="history-consent" checked={allowHistoryAccess === option.value} onChange={() => setAllowHistoryAccess(option.value)} />
-                      <span>{option.label}</span>
-                    </label>
-                  ))}
+                  <p style={{ margin: "0 0 14px", fontSize: 12, lineHeight: 1.5, color: "#64748b" }}>Yes, I want higher authorities to read our conversation history if this report is escalated.</p>
                   <label style={{ display: "flex", gap: 9, alignItems: "flex-start", margin: "10px 0 18px", fontSize: 12, color: "#334155", cursor: "pointer" }}>
                     <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)} />
                     <span>I accept the <button type="button" onClick={() => setShowTerms(true)} style={{ border: 0, padding: 0, background: "transparent", color: "#2563eb", fontWeight: 700, textDecoration: "underline", cursor: "pointer" }}>Terms of Agreement</button>.</span>
                   </label>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                     <button type="button" onClick={() => setShowConsent(false)} style={{ padding: "8px 14px", borderRadius: 9, border: "1px solid #e2e8f0", background: "#fff", color: "#475569", fontWeight: 600 }}>Cancel</button>
-                    <button type="button" onClick={handleSubmit} disabled={allowHistoryAccess === null || !termsAccepted || isSubmitting} style={{ padding: "8px 14px", borderRadius: 9, border: "none", background: allowHistoryAccess !== null && termsAccepted ? "#2563eb" : "#93c5fd", color: "#fff", fontWeight: 700, cursor: allowHistoryAccess !== null && termsAccepted ? "pointer" : "not-allowed" }}>Confirm Submit</button>
+                    <button type="button" onClick={handleSubmit} disabled={!termsAccepted || isSubmitting} style={{ padding: "8px 14px", borderRadius: 9, border: "none", background: termsAccepted ? "#2563eb" : "#93c5fd", color: "#fff", fontWeight: 700, cursor: termsAccepted ? "pointer" : "not-allowed" }}>Yes, Submit Report</button>
                   </div>
                 </>
               )}
@@ -495,6 +491,34 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+function GuidanceTicketModal({ report, onClose, onSubmitted }: { report: Report; onClose: () => void; onSubmitted: () => Promise<void> }) {
+  const [concern] = useState(report.subject);
+  const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async () => {
+    if (!concern.trim() || (!message.trim() && !attachments.length) || saving) return;
+    setSaving(true); setError("");
+    try {
+      const res = await fetch(`/api/reports/parent-adviser/${report.id}/ticket`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concern, message, attachments }) });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to submit ticket.");
+      await onSubmitted(); onClose();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit ticket."); } finally { setSaving(false); }
+  };
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4" onClick={onClose}>
+    <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div className="mb-5 flex items-start justify-between"><div><h2 className="text-lg font-extrabold text-slate-900">Submit Ticket to Guidance</h2><p className="mt-1 text-sm text-slate-500">This reuses the current report.</p></div><button onClick={onClose}><X className="h-5 w-5 text-slate-400" /></button></div>
+      {error && <p className="mb-3 rounded-lg bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
+      <label className="mb-3 block text-sm font-bold text-slate-700">Concern<input value={concern} readOnly aria-readonly="true" className="mt-1.5 w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-normal text-slate-600" /></label>
+      <label className="mb-3 block text-sm font-bold text-slate-700">Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={4} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 font-normal" /></label>
+      <label className="mb-5 block cursor-pointer rounded-xl border border-dashed border-slate-300 p-3 text-center text-sm font-bold text-slate-600">Attachments<input type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" className="hidden" onChange={async (event) => { const files = Array.from(event.target.files ?? []).filter((file) => file.size <= MAX_ATTACHMENT_BYTES); const next = await filesToAttachments(files); setAttachments((current) => [...current, ...next].slice(0, 5)); event.target.value = ""; }} /><AttachmentChips attachments={attachments} onRemove={(index) => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))} /></label>
+      <div className="flex justify-end gap-2"><button onClick={onClose} className="rounded-xl border px-4 py-2 text-sm font-bold text-slate-600">Cancel</button><button onClick={submit} disabled={saving || !concern.trim() || (!message.trim() && !attachments.length)} className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:bg-sky-300">{saving ? "Submitting…" : "Submit Ticket"}</button></div>
+    </div>
+  </div>;
+}
+
 function StudentConcernConsent({ onConfirm }: { onConfirm: (allowHistoryAccess: boolean) => Promise<void> }) {
   const [choice, setChoice] = useState<boolean | null>(null);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -538,7 +562,7 @@ function StudentConcernConsent({ onConfirm }: { onConfirm: (allowHistoryAccess: 
   );
 }
 
-export default function ParentReportsPage() {
+function ParentReportsPageContent() {
   const searchParams = useSearchParams();
   const { setUnreadReportsCount } = useNotifContext();
 
@@ -550,9 +574,11 @@ export default function ParentReportsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [showTicketModal, setShowTicketModal] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<MessageAttachment[]>([]);
   const [sendingReply, setSendingReply] = useState(false);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const markingReadIds = useRef<Set<number>>(new Set());
   const pendingMessagesRef = useRef<Map<number, ChatMessage[]>>(new Map());
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -651,43 +677,9 @@ export default function ParentReportsPage() {
     };
   }, [loadReports, mergePendingMessages]);
 
-  const loadReportsRef = useRef(loadReports);
-  useEffect(() => { loadReportsRef.current = loadReports; }, [loadReports]);
-
-  useEffect(() => {
-    const client = supabaseBrowser;
-    if (!client) {
-      console.log("❌ Supabase client is NULL");
-      return;
-    }
-
-    let isMounted = true;
-    const uniqueChannel = `parent-reports-${Math.random().toString(36).slice(2)}`;
-    console.log("🔌 Subscribing to channel:", uniqueChannel);
-
-    const channel = client
-      .channel(uniqueChannel)
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, (payload) => {
-        console.log("📨 parent_adviser_reports event received:", payload);
-        if (isMounted) loadReportsRef.current().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, (payload) => {
-        console.log("📨 parent_adviser_report_messages event received:", payload);
-        if (isMounted) loadReportsRef.current().catch(() => null);
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "parents" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "advisers" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "guidance_counselors" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "principals" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-      .subscribe((status) => {
-        console.log("📡 Realtime subscription status:", status);
-      });
-
-    return () => {
-      isMounted = false;
-      client.removeChannel(channel);
-    };
-  }, []);
+  // Matches Contact ICT: refresh in place without replacing the active
+  // conversation or its draft with a page-level loading state.
+  const liveUpdateNotice = useReportMessagesRealtime("parent-reports-live-list", loadReports);
 
   // Sync sidebar Reports badge — only truly unread reports
   useEffect(() => {
@@ -725,9 +717,13 @@ export default function ParentReportsPage() {
   }
 
   useEffect(() => {
+    const reportIdParam = Number(searchParams.get("reportId"));
     const teacherParam = searchParams.get("teacher");
-    if (!teacherParam) return;
-    const match = reports.find(r => r.recipientName.toLowerCase() === teacherParam.toLowerCase());
+    const match = Number.isSafeInteger(reportIdParam) && reportIdParam > 0
+      ? reports.find(r => r.id === reportIdParam)
+      : teacherParam
+        ? reports.find(r => r.recipientName.toLowerCase() === teacherParam.toLowerCase())
+        : undefined;
     if (match) {
       setSelectedId(match.id);
       setReplyText("");
@@ -748,6 +744,37 @@ export default function ParentReportsPage() {
 
   useEffect(() => {
     if (!selectedReportId) return;
+    let cancelled = false;
+    let polling = false;
+
+    const refreshOpenConversation = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const response = await fetch(`/api/reports/parent-adviser?reportId=${selectedReportId}`, { cache: "no-store" });
+        const data = await response.json().catch(() => null);
+        const refreshed = data?.reports?.[0] as Report | undefined;
+        if (!cancelled && response.ok && refreshed) {
+          const merged = mergePendingMessages([refreshed])[0];
+          setReports((current) => current.map((report) => report.id === merged.id ? merged : report));
+        }
+      } catch {
+        // Keep the current conversation visible until the next poll succeeds.
+      } finally {
+        polling = false;
+      }
+    };
+
+    void refreshOpenConversation();
+    const timer = window.setInterval(() => { void refreshOpenConversation(); }, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedReportId, mergePendingMessages]);
+
+  useEffect(() => {
+    if (!selectedReportId) return;
     const timer = setTimeout(() => {
       const el = messagesRef.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -764,13 +791,24 @@ export default function ParentReportsPage() {
     return true;
   });
 
-  const counts: Record<FilterTab, number> = {
-    "All Messages": reports.length,
-    "Unread": reports.filter(r => r.unread).length,
-    "Principal": reports.filter(r => r.recipientRole === "Principal" || r.messages.some(message => message.threadType === "principal")).length,
-    "Adviser": reports.filter(r => r.recipientRole === "Class Adviser" || r.messages.some(message => message.threadType === "adviser")).length,
-    "Guidance": reports.filter(r => r.recipientRole === "Guidance" || r.messages.some(message => message.threadType === "guidance")).length,
+  // Count each active report once, under its current handler. Historic
+  // conversation threads never keep a count after an escalation.
+  const activeReports = reports.filter((report) => report.reportStatus !== "Resolved");
+  const currentHandler = (report: Report): "Adviser" | "Guidance" | "Principal" => {
+    if (report.escalatedToPrincipal) return "Principal";
+    if (report.escalatedToGuidance) return "Guidance";
+    return "Adviser";
   };
+  const counts: Record<FilterTab, number> = {
+    "All Messages": activeReports.length,
+    "Unread": activeReports.filter((report) => report.unread).length,
+    "Principal": activeReports.filter((report) => currentHandler(report) === "Principal").length,
+    "Adviser": activeReports.filter((report) => currentHandler(report) === "Adviser").length,
+    "Guidance": activeReports.filter((report) => currentHandler(report) === "Guidance").length,
+  };
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-slate-100"
+    : "";
 
 
   async function handleSendReply() {
@@ -808,6 +846,8 @@ export default function ParentReportsPage() {
             ...report,
             preview: sentText || report.preview,
             unread: false,
+            parentRepliedAfterPrincipalEscalation: report.escalatedToPrincipal || report.parentRepliedAfterPrincipalEscalation,
+            parentRepliedAfterAcceptedGuidanceTicket: report.ticketStatus === "accepted" || report.parentRepliedAfterAcceptedGuidanceTicket,
             messages: [...report.messages, optimisticMessage],
           }
           : report
@@ -817,7 +857,7 @@ export default function ParentReportsPage() {
 
       const res = await fetch(`/api/reports/parent-adviser/${reportId}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           body: sentText,
           role: "parent",
@@ -841,7 +881,9 @@ export default function ParentReportsPage() {
         setReplyAttachments(sentAttachments);
         return;
       }
-      // Realtime subscription handles the refresh automatically — no manual loadReports() needed here.
+      // Reload after the server write so persisted handoff acknowledgements and
+      // current-handler counts update even when realtime is briefly unavailable.
+      await loadReports();
     } finally {
       setSendingReply(false);
     }
@@ -892,17 +934,19 @@ export default function ParentReportsPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden font-sans bg-slate-100">
+    <div className="flex min-h-screen flex-col overflow-x-clip bg-slate-100 font-sans md:flex-row xl:h-screen xl:overflow-hidden">
       <Sidebar />
-      <div className="flex-1 overflow-hidden flex flex-col px-6 py-6 gap-5 min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-5 px-3 py-5 pb-8 sm:px-4 md:px-6 md:py-6 xl:overflow-hidden">
+        {liveUpdateNotice && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{liveUpdateNotice}</div>}
         {/* Header */}
-        <div className="flex items-start justify-between">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Reports &amp; Concerns</h1>
             <p className="text-slate-500 text-sm mt-0.5">Submit and monitor your concerns with your class adviser</p>
           </div>
           <button onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm"
+            data-parent-guide="new-report"
+            className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold shadow-sm transition-colors sm:w-auto ${guideHighlight("new-report")}`}
             style={{ background: "#2563eb", color: "#fff" }}
             onMouseEnter={e => (e.currentTarget.style.background = "#1d4ed8")}
             onMouseLeave={e => (e.currentTarget.style.background = "#2563eb")}>
@@ -910,17 +954,25 @@ export default function ParentReportsPage() {
           </button>
         </div>
 
-        <div className="flex gap-4 flex-1 overflow-hidden min-h-0">
+        <div className="flex min-w-0 flex-col gap-4 xl:min-h-0 xl:flex-1 xl:flex-row xl:overflow-hidden">
           {/* Left panel — report list */}
-          <div className="w-[420px] flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+          <div className="flex w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:w-[420px] xl:flex-shrink-0">
             {/* Row 1 — Message type tabs */}
-            <div className="flex items-center gap-1.5 px-4 pt-3 pb-2">
+            <div
+              data-parent-guide="message-filters"
+              aria-label="Report filters"
+              className={`flex items-center gap-1.5 overflow-x-auto overscroll-x-contain px-3 pb-2 pt-3 sm:px-4 ${guideHighlight("message-filters")}`}
+              style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
+            >
               {(["All Messages", "Unread", "Principal", "Adviser", "Guidance"] as FilterTab[]).map(tab => {
                 const isActive = activeFilter === tab;
                 return (
                   <button key={tab} onClick={() => setActiveFilter(tab)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all"
-                    style={{ background: isActive ? "#2563eb" : "transparent", color: isActive ? "#fff" : "#64748b" }}>
+                    className="flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
+                    style={{
+                      background: isActive ? "#2563eb" : "transparent",
+                      color: isActive ? "#fff" : "#64748b",
+                    }}>
                     {tab}
                     {counts[tab] > 0 && (
                       <span className="text-[10px] font-bold min-w-[16px] h-4 px-0.5 rounded-full flex items-center justify-center"
@@ -934,13 +986,13 @@ export default function ParentReportsPage() {
             </div>
 
             {/* Row 2 — Category filter dropdown */}
-            <div className="border-b border-slate-100 px-3 pb-3">
+            <div data-parent-guide="category-filter" className={`border-b border-slate-100 px-3 pb-3 ${guideHighlight("category-filter")}`}>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Filter by Category</label>
               <div className="relative">
                 <select
                   value={categoryFilter}
                   onChange={e => setCategoryFilter(e.target.value)}
-                  className="w-full appearance-none rounded-xl border text-sm font-semibold px-3.5 py-2.5 pr-8 outline-none transition-all cursor-pointer"
+                  className="min-h-11 w-full cursor-pointer appearance-none rounded-xl border px-3.5 py-2.5 pr-8 text-sm font-semibold outline-none transition-all"
                   style={{
                     border: categoryFilter !== "All" ? "1.5px solid #2563eb" : "1.5px solid #e2e8f0",
                     background: categoryFilter !== "All" ? "#eff6ff" : "#fff",
@@ -967,7 +1019,7 @@ export default function ParentReportsPage() {
             )}
 
             {/* Report list */}
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
+            <div className="divide-y divide-slate-50 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
               {loading ? (
                 <p className="py-12 text-center text-sm text-slate-400">Loading reports...</p>
               ) : filteredReports.length === 0 ? (
@@ -993,6 +1045,13 @@ export default function ParentReportsPage() {
                               ? "Escalated"
                               : r.reportStatus!
                           }
+                          label={
+                            r.escalatedToPrincipal && r.reportStatus !== "Resolved"
+                              ? "Escalated to Principal"
+                              : r.escalatedToGuidance && r.reportStatus !== "Resolved"
+                                ? "Escalated to Guidance"
+                                : r.reportStatus!
+                          }
                         />
                       )}
                     </div>
@@ -1003,25 +1062,37 @@ export default function ParentReportsPage() {
           </div>
 
           {/* Right panel — detail */}
-          <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-w-0">
+          <div data-parent-guide="conversation-detail" className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-h-[calc(100dvh-1.5rem)] xl:max-h-none ${guideHighlight("conversation-detail")}`}>
             {!selectedReport ? (
               <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">Select a conversation</div>
             ) : (
               <>
                 {/* Report header */}
-                <div className="px-6 py-4 border-b border-slate-100 flex flex-col gap-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
+                  <div className="flex flex-wrap items-center gap-3">
                     <span style={{ width: 46, height: 46, minWidth: 46, borderRadius: "50%", background: selectedReport.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15 }}>{selectedReport.recipientInitials}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-base font-extrabold text-slate-800">{selectedReport.recipientName}</p>
-                      <p className="text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
+                      <p className="break-words text-base font-extrabold text-slate-800">{selectedReport.recipientName}</p>
+                      <p className="break-words text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
                     </div>
+                    {!selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && (
+                      <button type="button" onClick={() => setShowTicketModal(true)} className="min-h-11 w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100 sm:ml-auto sm:w-auto">Submit Ticket to Guidance</button>
+                    )}
+                    {selectedReport.ticketStatus === "pending" && <span className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">Guidance ticket pending review.</span>}
                   </div>
 
-                  <p className="text-sm text-slate-700">
+                  <p className="break-words text-sm text-slate-700">
                     <span className="text-slate-400 font-medium">Subject: </span>
                     <span className="font-semibold">{selectedReport.subject}</span>
                   </p>
+
+                  {selectedReport.submittedByRole === "Subject Teacher" && (
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-700">
+                      <p><strong>Submitted by:</strong> {selectedReport.submittedByName} · Subject Teacher</p>
+                      <p className="mt-0.5"><strong>Student:</strong> {selectedReport.studentName} · {selectedReport.grade} - {selectedReport.section}</p>
+                      <p className="mt-0.5"><strong>Report date:</strong> {selectedReport.submittedAt}</p>
+                    </div>
+                  )}
 
                   {/* Category tags */}
                   <div className="flex flex-wrap gap-1.5">
@@ -1043,7 +1114,7 @@ export default function ParentReportsPage() {
                   })()}
 
                   {/* Guidance escalation banner */}
-                  {selectedReport.hasReportStatus !== false && selectedReport.escalatedToPrincipal && selectedReport.reportStatus !== "Resolved" && (
+                  {selectedReport.hasReportStatus !== false && selectedReport.escalatedToPrincipal && !selectedReport.parentRepliedAfterPrincipalEscalation && selectedReport.reportStatus !== "Resolved" && (
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "10px 14px" }}>
                       <AlertTriangle style={{ width: 15, height: 15, color: "#7c3aed", flexShrink: 0, marginTop: 1 }} />
                       <p style={{ fontSize: 12, color: "#5b21b6", fontWeight: 600, margin: 0 }}>
@@ -1060,20 +1131,26 @@ export default function ParentReportsPage() {
                       </p>
                     </div>
                   )}
+                  {selectedReport.ticketStatus && (selectedReport.ticketStatus !== "accepted" || !selectedReport.parentRepliedAfterAcceptedGuidanceTicket) && (
+                    <div className={`rounded-xl border px-3 py-2 text-xs font-semibold ${selectedReport.ticketStatus === "accepted" ? "border-sky-200 bg-sky-50 text-sky-700" : selectedReport.ticketStatus === "rejected" ? "border-red-200 bg-red-50 text-red-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                      Guidance ticket: <strong className="capitalize">{selectedReport.ticketStatus}</strong>
+                      {selectedReport.ticketStatus === "rejected" && selectedReport.ticketRejectionReason ? ` — ${selectedReport.ticketRejectionReason}` : ""}
+                    </div>
+                  )}
                 </div>
 
                 {/* Messages */}
-                <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
+                <div ref={messagesRef} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-6">
                   {[...selectedReport.messages]
                     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
                     .map(msg => {
                       const mine = msg.sender === "parent";
                       return (
                         <div key={msg.id} className={`flex items-start gap-3 ${mine ? "flex-row-reverse" : ""}`}>
-                          <UserAvatar name={mine ? "You" : msg.senderName} src={msg.profilePicture} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName={mine ? "bg-blue-600" : "bg-slate-500"} />
-                          <div className={`flex max-w-[82%] flex-col ${mine ? "items-end" : "items-start"}`}>
-                            <div className={`mb-2 flex items-center gap-2 ${mine ? "flex-row-reverse" : ""}`}>
-                              <span className="text-sm font-bold text-slate-700">{mine ? "You" : msg.senderName}</span>
+                          {!mine && <UserAvatar name={msg.senderName} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName="bg-slate-500" />}
+                          <div className={`flex max-w-[calc(100%-2.75rem)] flex-col sm:max-w-[82%] ${mine ? "items-end" : "items-start"}`}>
+                            <div className={`mb-2 flex flex-wrap items-center gap-2 ${mine ? "flex-row-reverse" : ""}`}>
+                              <span className="break-words text-sm font-bold text-slate-700">{mine ? "You" : msg.senderName}</span>
                               {msg.sender !== "parent" && (
                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${threadBadgeStyle(msg.threadType)}`}>
                                   {threadLabel(msg.threadType)}
@@ -1081,8 +1158,8 @@ export default function ParentReportsPage() {
                               )}
                               <span className="text-xs text-slate-400">{msg.timestamp}</span>
                             </div>
-                            <div className={`rounded-2xl px-5 py-4 shadow-sm ${mine ? "rounded-tr-sm bg-blue-600 text-white" : "rounded-tl-sm border border-slate-200 bg-white text-slate-700"}`}>
-                              {msg.text && <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
+                            <div className={`max-w-full rounded-2xl px-4 py-3 shadow-sm sm:px-5 sm:py-4 ${mine ? "rounded-tr-sm bg-blue-600 text-white" : "rounded-tl-sm border border-slate-200 bg-white text-slate-700"}`}>
+                              {msg.text && <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">{msg.text}</p>}
                               <div className={mine ? "[&_a]:border-blue-200 [&_a]:bg-white/95 [&_a]:text-slate-700" : ""}>
                                 <AttachmentChips attachments={msg.attachments} />
                               </div>
@@ -1094,7 +1171,7 @@ export default function ParentReportsPage() {
                 </div>
 
                 {/* Reply box */}
-                <div className="px-5 pb-4 pt-3 border-t border-slate-100">
+                <div className="shrink-0 border-t border-slate-100 px-4 pb-4 pt-3 sm:px-5">
                   {requiresStudentConcernConsent ? (
                     <StudentConcernConsent onConfirm={saveStudentConcernConsent} />
                   ) : selectedReport.reportStatus === "Resolved" ? (
@@ -1135,7 +1212,7 @@ export default function ParentReportsPage() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-end gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                     <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
                       <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
                         onKeyDown={e => {
@@ -1149,7 +1226,7 @@ export default function ParentReportsPage() {
                         className="w-full px-3.5 pt-2.5 pb-2 text-sm text-slate-700 outline-none resize-none placeholder:text-slate-400 bg-transparent" />
                     </div>
                     <button onClick={handleSendReply} disabled={sendingReply || (!replyText.trim() && replyAttachments.length === 0)}
-                      className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition-colors"
+                      className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition-colors sm:w-auto"
                       style={{ background: !sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "#2563eb" : "#93c5fd", color: "#fff", cursor: !sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "pointer" : "not-allowed" }}
                       onMouseEnter={e => { if (!sendingReply && (replyText.trim() || replyAttachments.length > 0)) e.currentTarget.style.background = "#1d4ed8"; }}
                       onMouseLeave={e => { if (!sendingReply && (replyText.trim() || replyAttachments.length > 0)) e.currentTarget.style.background = "#2563eb"; }}>
@@ -1166,6 +1243,12 @@ export default function ParentReportsPage() {
       </div>
 
       {showModal && <NewReportModal advisers={advisers} onClose={() => setShowModal(false)} onSubmit={handleNewReport} />}
+      {showTicketModal && selectedReport && <GuidanceTicketModal report={selectedReport} onClose={() => setShowTicketModal(false)} onSubmitted={loadReports} />}
+      <ParentReportsGuide onStepChange={setGuideTarget} />
     </div>
   );
+}
+
+export default function ParentReportsPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><ParentReportsPageContent /></Suspense>;
 }

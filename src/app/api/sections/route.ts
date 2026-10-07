@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getActiveAdviser, getActiveIct } from "@/lib/apiAuthorization";
 
 export async function GET(req: NextRequest) {
   try {
+    const [adviser, ict] = await Promise.all([getActiveAdviser(), getActiveIct()]);
+    if (!adviser && !ict) {
+      return NextResponse.json({ success: false, message: "Staff access is required." }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const grade = searchParams.get("grade") || "";
     const classSessionFilter = searchParams.get("classSession") || "";
@@ -84,6 +90,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await getActiveIct())) {
+      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
+    }
+
     const { name, grade, class_session } = await req.json();
     if (!name || !grade) {
       return NextResponse.json(
@@ -112,6 +122,10 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    if (!(await getActiveIct())) {
+      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
+    }
+
     const { name, grade } = await req.json();
     if (!name || !grade) {
       return NextResponse.json(

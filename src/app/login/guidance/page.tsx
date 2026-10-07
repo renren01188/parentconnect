@@ -11,8 +11,8 @@ import {
   EyeOff,
   HeartHandshake,
 } from "lucide-react";
-
-const GUIDANCE_PROFILE_STORAGE_KEY = "parentconnect.guidance.profile";
+import { LoginRecaptcha } from "@/components/LoginRecaptcha";
+import { useLoginProtection } from "@/hooks/useLoginProtection";
 
 export default function GuidanceLoginPage() {
   const router = useRouter();
@@ -22,28 +22,37 @@ export default function GuidanceLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const {
+    applyServerResult,
+    captchaRequired,
+    captchaResetSignal,
+    captchaToken,
+    isLocked,
+    lockoutMessage,
+    setCaptchaToken,
+  } = useLoginProtection("guidance");
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
+    if (isLocked) {
+      setErrorMsg(lockoutMessage || "Too many failed attempts. Please try again later.");
+      return;
+    }
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/guidance/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, password }),
+        body: JSON.stringify({ identifier, password, captchaToken }),
       });
       const data = await res.json();
 
       if (!data.success) {
         setErrorMsg(data.message || "Login failed. Please try again.");
+        applyServerResult(data);
         return;
-      }
-
-      if (data.guidance) {
-        window.localStorage.setItem(GUIDANCE_PROFILE_STORAGE_KEY, JSON.stringify(data.guidance));
-        window.dispatchEvent(new Event("guidance-profile-updated"));
       }
 
       if (!data.passwordSet) {
@@ -126,6 +135,11 @@ export default function GuidanceLoginPage() {
               {errorMsg}
             </div>
           )}
+          {lockoutMessage && (
+            <div role="status" aria-live="polite" className="bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium px-4 py-3 rounded-xl mb-4">
+              {lockoutMessage}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
@@ -138,6 +152,7 @@ export default function GuidanceLoginPage() {
                 onChange={e => { setIdentifier(e.target.value); setErrorMsg(""); }}
                 placeholder="guidance@santiagoes.edu.ph or EMP-2024-0001"
                 required
+                disabled={isLocked}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent transition placeholder-slate-400"
               />
             </div>
@@ -149,8 +164,9 @@ export default function GuidanceLoginPage() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => { setPassword(e.target.value); setErrorMsg(""); }}
-                  placeholder="Enter your password"
-                  required
+                placeholder="Enter your password"
+                required
+                disabled={isLocked}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent transition placeholder-slate-400 pr-11"
                 />
                 <button
@@ -163,9 +179,11 @@ export default function GuidanceLoginPage() {
               </div>
             </div>
 
+            <LoginRecaptcha required={captchaRequired} resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || isLocked || (captchaRequired && !captchaToken)}
               className="flex items-center justify-center gap-2 w-full bg-sky-600 hover:bg-sky-700 disabled:bg-sky-300 text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md shadow-sky-200 mt-1 text-sm"
             >
               {loading ? (

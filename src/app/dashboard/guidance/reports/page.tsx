@@ -1,13 +1,13 @@
 "use client";
 
 import ExcelJS from "exceljs";
-import { useState, useEffect, useRef } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     CheckCircle, Eye,
     ChevronRight, Paperclip, Send, MessageSquare,
     Search, TriangleAlert, Upload, FileDown,
-    User, X, Shield, TrendingUp, LoaderCircle,
+    User, X, Shield, TrendingUp, LoaderCircle, RefreshCw,
 } from "lucide-react";
 import {
     type Report, type ReportStatus,
@@ -15,8 +15,10 @@ import {
     type MessageAttachment,
 } from "../../adviser/data";
 import { useNotifContext } from "../context/NotificationContext";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { UserAvatar } from "@/components/UserAvatar";
+import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
+import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import GuidanceReportsGuide from "../components/GuidanceReportsGuide";
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -30,6 +32,13 @@ interface ParentGroup {
     unread: number;
     maxConcernLevel: number;
 }
+type GuidanceTicket = {
+    id: number; report_id: number; concern: string; message: string; status: "pending" | "accepted" | "rejected";
+    rejection_reason?: string | null; attachments?: MessageAttachment[]; created_at: string;
+    report?: { parent_name?: string; student_name?: string; adviser_name?: string; subject?: string } | null;
+};
+type TicketStatus = GuidanceTicket["status"];
+type TicketLoadOperation = "background" | "open" | "tab" | "refresh" | "update";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getInitials(name: string) {
@@ -58,25 +67,6 @@ function getAdminMsgStatusStyle(status: AdminMsgStatus) {
         case "Read": return "bg-slate-200 text-slate-600";
         case "Replied": return "bg-sky-100 text-sky-700";
     }
-}
-function PriorityBadge({ level, large = false }: { level: number; large?: boolean }) {
-    const px = large ? "px-3 py-1.5" : "px-2 py-0.5";
-    const fs = large ? "text-sm" : "text-[11px]";
-    if (level >= 100) return <span className={`${px} ${fs} font-extrabold rounded-lg bg-red-600 text-white flex items-center gap-1`}>🔴 Urgent / Serious</span>;
-    if (level >= 75) return <span className={`${px} ${fs} font-extrabold rounded-lg bg-orange-500 text-white flex items-center gap-1`}>🟠 High Priority</span>;
-    if (level >= 50) return <span className={`${px} ${fs} font-extrabold rounded-lg bg-yellow-400 text-white flex items-center gap-1`}>🟡 Medium Priority</span>;
-    return <span className={`${px} ${fs} font-extrabold rounded-lg bg-sky-500 text-white flex items-center gap-1`}>🟢 Low Priority</span>;
-}
-function ConcernBar({ level }: { level: number }) {
-    const color = level >= 100 ? "#dc2626" : level >= 75 ? "#f97316" : level >= 50 ? "#eab308" : "#10b981";
-    return (
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ flex: 1, height: 6, borderRadius: 3, background: "#e2e8f0", overflow: "hidden" }}>
-                <div style={{ width: `${level}%`, height: "100%", background: color, borderRadius: 3, transition: "width 0.3s" }} />
-            </div>
-            <span style={{ fontSize: 11, fontWeight: 700, color, minWidth: 34, textAlign: "right" }}>{level}%</span>
-        </div>
-    );
 }
 
 function groupByParent(reports: Report[]): ParentGroup[] {
@@ -622,8 +612,8 @@ function NewMessageModal({
     }
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/45 flex items-start justify-end p-5" onClick={onClose}>
-            <div className="bg-white rounded-2xl shadow-2xl w-[480px] max-h-[calc(100vh-40px)] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="guidance-new-message-overlay fixed inset-0 z-50 bg-black/45 flex items-start justify-end p-5" onClick={onClose}>
+            <div className="guidance-new-message-modal bg-white rounded-2xl shadow-2xl w-[480px] max-h-[calc(100vh-40px)] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
                     <div>
                         <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
@@ -886,7 +876,7 @@ function NewMessageModal({
 }
 
 // ── Main Page Component ───────────────────────────────────────────────────────
-export default function ReportsPage() {
+function ReportsPageContent() {
     const searchParams = useSearchParams();
     const { setUnreadCount, setEscalatedCount, setReportsUnreadCount } = useNotifContext();
 
@@ -900,9 +890,24 @@ export default function ReportsPage() {
     const [replyText, setReplyText] = useState("");
     const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
     const [showNewMessage, setShowNewMessage] = useState(false);
+    const [guideTarget, setGuideTarget] = useState<string | null>(null);
     const [escalateTarget, setEscalateTarget] = useState<Report | null>(null);
     const [escalateSuccess, setEscalateSuccess] = useState(false);
+    const [escalatingReportId, setEscalatingReportId] = useState<number | null>(null);
+    const [escalateError, setEscalateError] = useState("");
     const [showExportModal, setShowExportModal] = useState(false);
+    const [showTickets, setShowTickets] = useState(false);
+    const [tickets, setTickets] = useState<GuidanceTicket[]>([]);
+    const [ticketFilter, setTicketFilter] = useState<TicketStatus>("pending");
+    const [ticketError, setTicketError] = useState("");
+    const [ticketLoadingOperation, setTicketLoadingOperation] = useState<TicketLoadOperation | null>(null);
+    const [ticketTabLoading, setTicketTabLoading] = useState<TicketStatus | null>(null);
+    const [ticketActions, setTicketActions] = useState<Record<number, "accepted" | "rejected">>({});
+    const [hasLoadedTickets, setHasLoadedTickets] = useState(false);
+    const [resolveTargetId, setResolveTargetId] = useState<number | null>(null);
+    const [resolving, setResolving] = useState(false);
+    const [rejectingTicket, setRejectingTicket] = useState<number | null>(null);
+    const [rejectionReason, setRejectionReason] = useState("");
     // Panel navigation: "list" = Panel1 visible, "reports" = Panel2, "detail" = Panel3
     const [viewStep, setViewStep] = useState<"list" | "reports" | "detail">("list");
 
@@ -919,11 +924,14 @@ export default function ReportsPage() {
     const adminWasNearBottomRef = useRef(true);
     const forceParentScrollRef = useRef(false);
     const forceAdminScrollRef = useRef(false);
+    const escalationInFlightRef = useRef<Set<number>>(new Set());
+    const ticketLoadInFlightRef = useRef<Promise<GuidanceTicket[]> | null>(null);
+    const ticketDecisionInFlightRef = useRef<Set<number>>(new Set());
 
     // Guidance escalation local state (keyed by report id)
     const [guidanceEscalated, setGuidanceEscalated] = useState<Record<number, boolean>>({});
 
-    async function loadGuidanceReports() {
+    const loadGuidanceReports = useCallback(async () => {
         const res = await fetch("/api/reports/parent-adviser?role=guidance", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load guidance reports.");
@@ -947,6 +955,91 @@ export default function ReportsPage() {
             if (!current) return current;
             return groupByParent(nextReports).find((group) => group.parent_name === current.parent_name) ?? current;
         });
+    }, []);
+
+    async function refreshTickets(operation: TicketLoadOperation) {
+        if (ticketLoadInFlightRef.current) return ticketLoadInFlightRef.current;
+
+        setTicketLoadingOperation(operation);
+        setTicketError("");
+        const request = (async () => {
+            try {
+                const res = await fetch("/api/reports/guidance/tickets", { cache: "no-store" });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.message || "Unable to load tickets.");
+                const nextTickets = (data?.tickets ?? []) as GuidanceTicket[];
+                setTickets(nextTickets);
+                setHasLoadedTickets(true);
+                return nextTickets;
+            } catch (error) {
+                setTicketError(error instanceof Error ? error.message : "Unable to load tickets.");
+                throw error;
+            } finally {
+                ticketLoadInFlightRef.current = null;
+                setTicketLoadingOperation(null);
+            }
+        })();
+        ticketLoadInFlightRef.current = request;
+        return request;
+    }
+
+    const pendingTicketCount = tickets.filter((ticket) => ticket.status === "pending").length;
+
+    async function decideTicket(ticketId: number, status: "accepted" | "rejected") {
+        if (status === "rejected" && !rejectionReason.trim()) { setTicketError("A rejection reason is required."); return; }
+        if (ticketDecisionInFlightRef.current.has(ticketId)) return;
+
+        ticketDecisionInFlightRef.current.add(ticketId);
+        setTicketActions((current) => ({ ...current, [ticketId]: status }));
+        setTicketError("");
+        try {
+            const res = await fetch(`/api/reports/guidance/tickets/${ticketId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, rejectionReason }) });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to update ticket.");
+
+            // Reflect the successful update immediately. A refresh follows so
+            // timestamps, report data, and sidebar counts remain authoritative.
+            setTickets((current) => current.map((ticket) => ticket.id === ticketId
+                ? { ...ticket, status, rejection_reason: status === "rejected" ? rejectionReason.trim() : null }
+                : ticket));
+            setRejectingTicket(null);
+            setRejectionReason("");
+
+            const refreshResults = await Promise.allSettled([
+                refreshTickets("update"),
+                loadGuidanceReports(),
+            ]);
+            if (refreshResults.some((result) => result.status === "rejected")) {
+                setTicketError("Ticket updated, but the latest ticket data could not be fully refreshed. Please try Refresh.");
+            }
+        } catch (error) {
+            setTicketError(error instanceof Error ? error.message : "Unable to update ticket.");
+        } finally {
+            ticketDecisionInFlightRef.current.delete(ticketId);
+            setTicketActions((current) => {
+                const remainingActions = { ...current };
+                delete remainingActions[ticketId];
+                return remainingActions;
+            });
+        }
+    }
+
+    async function openTickets() {
+        setShowTickets(true);
+        setTicketError("");
+        await refreshTickets("open").catch(() => null);
+    }
+
+    async function changeTicketFilter(status: TicketStatus) {
+        if (ticketTabLoading === status) return;
+        setTicketFilter(status);
+        setTicketTabLoading(status);
+        await refreshTickets("tab").catch(() => null);
+        setTicketTabLoading((current) => current === status ? null : current);
+    }
+
+    async function manuallyRefreshTickets() {
+        await refreshTickets("refresh").catch(() => null);
     }
 
     async function loadGuidanceStaffMessages() {
@@ -985,29 +1078,14 @@ export default function ReportsPage() {
 
     useEffect(() => {
         loadGuidanceReports().catch((error) => console.error("Unable to load guidance reports:", error));
+        refreshTickets("background").catch((error) => console.warn("Unable to load guidance tickets:", error));
         loadGuidanceStaffMessages().catch((error) => console.warn("Unable to load guidance staff messages:", error));
-        const client = supabaseBrowser;
-        if (!client) return;
-        const channel = client
-            .channel("guidance-report-updates")
-            .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-                loadGuidanceReports().catch(() => null);
-            })
-            .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
-                loadGuidanceReports().catch(() => null);
-            })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "parents" }, () => { loadGuidanceReports().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "advisers" }, () => { loadGuidanceReports().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "guidance_counselors" }, () => { loadGuidanceReports().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "principals" }, () => { loadGuidanceReports().catch(() => null); })
-            .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-                loadGuidanceStaffMessages().catch(() => null);
-            })
-            .subscribe();
-        return () => {
-            client.removeChannel(channel);
-        };
     }, []);
+
+    // The same coalesced Supabase lifecycle used by Contact ICT. It keeps the
+    // selected report mounted while its messages, counts, previews and status
+    // update from a fresh persisted snapshot.
+    const liveUpdateNotice = useReportMessagesRealtime("guidance-reports-live-list", loadGuidanceReports);
 
     // All categories across escalated parent reports (for dropdown)
     const allReportCategories = Array.from(
@@ -1034,12 +1112,12 @@ export default function ReportsPage() {
     useEffect(() => {
         const newParent = reports.filter(r => r.hasUnreadForGuidance).length;
         const newPrincipal = adminMsgs.filter(m => m.status === "New").length;
-        setUnreadCount(newParent + newPrincipal);
-        setEscalatedCount(reports.filter(r => r.status === "Escalated" && !r.guidanceSeen).length);
+        setUnreadCount(newParent + newPrincipal + pendingTicketCount);
+        setEscalatedCount(reports.filter(r => (r.status === "Escalated" || r.ticketStatus === "accepted") && !r.guidanceSeen).length + pendingTicketCount);
         setReportsUnreadCount(
-            reports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen)).length + newPrincipal
+            reports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen) || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length + newPrincipal + pendingTicketCount
         );
-    }, [reports, adminMsgs, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
+    }, [reports, adminMsgs, pendingTicketCount, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
     const parentGroups = groupByParent(reports)
@@ -1053,6 +1131,33 @@ export default function ReportsPage() {
     const selectedAdminConversationId = selectedAdminMsg?.conversationId ?? String(selectedAdminMsg?.id ?? "");
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminLastReply = selectedAdminMsg?.replies?.at(-1);
+
+    useEffect(() => {
+        if (!selectedReportId) return;
+        let cancelled = false;
+        let polling = false;
+        const refreshOpenConversation = async () => {
+            if (polling) return;
+            polling = true;
+            try {
+                const response = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${selectedReportId}`, { cache: "no-store" });
+                const data = await response.json().catch(() => null);
+                const refreshed = data?.reports?.[0] as Report | undefined;
+                if (!cancelled && response.ok && refreshed) {
+                    setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
+                    setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
+                    setGuidanceReplies((current) => ({ ...current, [refreshed.id]: refreshed.replies ?? [] }));
+                }
+            } catch {
+                // Keep the current conversation visible until the next poll succeeds.
+            } finally {
+                polling = false;
+            }
+        };
+        void refreshOpenConversation();
+        const timer = window.setInterval(() => { void refreshOpenConversation(); }, 3_000);
+        return () => { cancelled = true; window.clearInterval(timer); };
+    }, [selectedReportId]);
 
     function isNearBottom(element: HTMLDivElement) {
         return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
@@ -1128,9 +1233,21 @@ export default function ReportsPage() {
                 throw new Error(data?.message || "Unable to update guidance report status.");
             }
             await loadGuidanceReports();
+            return true;
         } catch (error) {
             console.error("Unable to update guidance status:", error);
             await loadGuidanceReports().catch(() => null);
+            return false;
+        }
+    }
+
+    async function confirmResolve() {
+        if (resolveTargetId === null || resolving) return;
+        setResolving(true);
+        try {
+            if (await markReportStatus(resolveTargetId, "Resolved")) setResolveTargetId(null);
+        } finally {
+            setResolving(false);
         }
     }
 
@@ -1170,10 +1287,35 @@ export default function ReportsPage() {
         }
     }
 
-    function escalateToPrincipal(report: Report) {
-        if (report.status === "Resolved") return;
-        setPrincipalEscalated(prev => ({ ...prev, [report.id]: true }));
-        markReportStatus(report.id, "Escalated");
+    async function escalateToPrincipal(report: Report) {
+        if (report.status === "Resolved" || escalatingReportId === report.id || escalationInFlightRef.current.has(report.id)) return;
+        escalationInFlightRef.current.add(report.id);
+        setEscalatingReportId(report.id);
+        setEscalateError("");
+        try {
+            const res = await fetch(`/api/reports/guidance/${report.id}/status`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "escalated" }),
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data?.report?.escalatedToPrincipal) {
+                throw new Error(data?.message || "Unable to escalate this report to the Principal.");
+            }
+
+            const updated = data.report as Report;
+            setReports(prev => prev.map((item) => item.id === report.id ? updated : item));
+            setSelectedReport(prev => prev?.id === report.id ? updated : prev);
+            setPrincipalEscalated(prev => ({ ...prev, [report.id]: true }));
+            setEscalateSuccess(true);
+            await loadGuidanceReports();
+        } catch (error) {
+            console.error("Unable to escalate report to Principal:", error);
+            setEscalateError(error instanceof Error ? error.message : "Unable to escalate this report to the Principal.");
+        } finally {
+            escalationInFlightRef.current.delete(report.id);
+            setEscalatingReportId(null);
+        }
     }
 
     const [sendingReply, setSendingReply] = useState(false);
@@ -1211,7 +1353,7 @@ export default function ReportsPage() {
                     }
                     const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/messages`, {
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
+                        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
                         body: JSON.stringify({
                             body: textToSend,
                             role: "guidance",
@@ -1297,6 +1439,10 @@ export default function ReportsPage() {
             : "opacity-0 translate-y-2 scale-[0.99] pointer-events-none"
         }`;
 
+    const guideHighlight = (target: string) => guideTarget === target
+        ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-sky-400 ring-offset-4 ring-offset-slate-100"
+        : "";
+
     // ── Tab counts ────────────────────────────────────────────────────────
     const tabCounts = {
         Parent: reports.filter(r => r.hasUnreadForGuidance).length,
@@ -1305,23 +1451,32 @@ export default function ReportsPage() {
 
     // ── Render ────────────────────────────────────────────────────────────
     return (
-        <div className="flex flex-col h-full bg-slate-50">
+        <div className="guidance-reports-page flex flex-col h-full bg-slate-50">
+            {liveUpdateNotice && <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs font-semibold text-amber-800">{liveUpdateNotice}</div>}
             {/* ── Top bar ── */}
-            <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 shrink-0">
+            <div className="guidance-reports-topbar flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 shrink-0">
                 <div>
                     <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">Escalated Reports</h1>
                     <p className="text-xs text-slate-400 mt-0.5">Review reports escalated by advisers to the guidance office</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div data-parent-guide="guidance-report-tools" className={`guidance-reports-actions flex items-center gap-2 ${guideHighlight("guidance-report-tools")}`}>
+                    <button
+                        onClick={() => void openTickets()}
+                        disabled={ticketLoadingOperation !== null}
+                        className="guidance-reports-ticket-action flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-white border border-slate-200 text-slate-700 shadow-sm hover:bg-slate-50 transition disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {ticketLoadingOperation === "open" ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <Shield className="w-3.5 h-3.5" />} Tickets
+                        <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-700">{pendingTicketCount}</span>
+                    </button>
                     <button
                         onClick={() => setShowExportModal(true)}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-bold transition shadow-sm"
+                        className="guidance-reports-export-action flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-bold transition shadow-sm"
                     >
                         <FileDown className="w-3.5 h-3.5" /> Export
                     </button>
                     <button
                         onClick={() => { void openNewMessageModal(); }}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold transition shadow-sm"
+                        className="guidance-reports-new-action flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold transition shadow-sm"
                     >
                         <TrendingUp className="w-3.5 h-3.5" /> New Message
                     </button>
@@ -1329,12 +1484,12 @@ export default function ReportsPage() {
             </div>
 
             {/* ── Body ── */}
-            <div className="flex flex-1 overflow-hidden relative">
+            <div className="guidance-reports-body flex flex-1 overflow-hidden relative">
                 <div className="relative w-full h-full">
                     {/* ══ SLIDE 1 — Panel 1 (tab list + parent/admin list) ══ */}
-                    <div className={panelClass(viewStep === "list" || detailBesideMessages, "bg-white", "w-full max-w-[420px]")}>
+                    <div className={panelClass(viewStep === "list" || detailBesideMessages, "bg-white", `guidance-reports-list-panel w-full max-w-[420px] ${viewStep === "detail" ? "guidance-mobile-hide-on-detail" : ""}`)}>
                         {/* Tab nav */}
-                        <div className="px-3 pt-4 pb-2 flex flex-col gap-1">
+                        <div data-parent-guide="guidance-report-tabs" className={`guidance-reports-panel-tabs rounded-2xl px-3 pt-4 pb-2 flex flex-col gap-1 ${guideHighlight("guidance-report-tabs")}`}>
                             {(["Parent", "Principal"] as LeftTab[]).map(tab => {
                                 const icons: Record<LeftTab, React.ReactNode> = {
                                     Parent: <User className="w-4 h-4" />,
@@ -1357,7 +1512,7 @@ export default function ReportsPage() {
 
                         {/* Filter tabs (Parent only) */}
                         {leftTab === "Parent" && (
-                            <div className="px-3 pt-3 pb-1">
+                            <div data-parent-guide="guidance-report-filters" className={`rounded-2xl px-3 pt-3 pb-1 ${guideHighlight("guidance-report-filters")}`}>
                                 <div className="flex gap-1 flex-wrap mb-2">
                                     {(["All", "Escalated", "Resolved"] as FilterTab[]).map(f => (
                                         <button key={f} onClick={() => setFilterTab(f)}
@@ -1391,7 +1546,7 @@ export default function ReportsPage() {
 
                         {/* ── Parent group list ── */}
                         {leftTab === "Parent" && (
-                            <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
+                            <div data-parent-guide="guidance-report-list" className={`flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 ${guideHighlight("guidance-report-list")}`}>
                                 {filteredParentGroups.length === 0 && (
                                     <p className="text-xs text-slate-400 text-center mt-8">No escalated adviser reports found.</p>
                                 )}
@@ -1399,15 +1554,23 @@ export default function ReportsPage() {
                                     const isActive = selectedParent?.parent_name === g.parent_name;
                                     const allResolved = g.reports.every(r => r.status === "Resolved");
                                     const activeReports = g.reports.filter(r => r.status !== "Resolved");
-                                    const escalatedToPrincipal = activeReports.some(r => principalEscalated[r.id]);
+                                    const principalEscalatedCount = activeReports.filter(r => principalEscalated[r.id]).length;
+                                    const ongoingCount = activeReports.filter(r => {
+                                        if (principalEscalated[r.id] || r.status !== "Ongoing") return false;
+                                        const acceptedTicket = r.ticketStatus === "accepted";
+                                        const adviserEscalation = guidanceEscalated[r.id] && !acceptedTicket;
+                                        return acceptedTicket || adviserEscalation;
+                                    }).length;
+                                    const hasOngoing = ongoingCount > 0;
+                                    const escalatedToPrincipal = principalEscalatedCount > 0;
                                     const escalatedFromAdviser = activeReports.some(r => guidanceEscalated[r.id]);
                                     const hasEscalated = escalatedToPrincipal || escalatedFromAdviser;
                                     return (
                                         <button key={g.parent_name} onClick={() => { setSelectedParent(g); setSelectedReport(null); setViewStep("reports"); }}
-                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-sky-200 bg-sky-50 ring-2 ring-sky-200" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-sky-200 bg-sky-50 ring-2 ring-sky-200" : hasOngoing ? "border-violet-200 bg-violet-50 shadow-sm hover:bg-violet-100" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                                             <div className="flex items-center gap-2.5">
                                                 <div className={`w-9 h-9 rounded-full overflow-hidden ${getAvatarColor(g.parent_name)} flex items-center justify-center text-white text-xs font-extrabold shrink-0`}>
-                                                    {g.parent_profile_picture ? <img src={g.parent_profile_picture} alt="" className="w-full h-full object-cover" /> : <User className="w-5 h-5" aria-label="Parent profile" />}
+                                                    <User className="w-5 h-5" aria-label="Parent avatar" />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between gap-1">
@@ -1425,9 +1588,10 @@ export default function ReportsPage() {
                                                 <span className="text-[10px] text-slate-400">{g.reports.length} report{g.reports.length !== 1 ? "s" : ""}</span>
                                             </div>
                                             {!allResolved && hasEscalated && (
-                                                <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-red-600">
-                                                    <TriangleAlert className="w-3 h-3" />
-                                                    {escalatedToPrincipal ? "Escalated to Principal" : "Escalated from Adviser"}
+                                                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold">
+                                                    {principalEscalatedCount > 0 && <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-3 h-3" />{principalEscalatedCount} escalated to principal</span>}
+                                                    {hasOngoing && <span className="rounded-lg bg-violet-600 px-2 py-0.5 text-white">{ongoingCount} ongoing</span>}
+                                                    {!escalatedToPrincipal && ongoingCount === 0 && <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-3 h-3" />{g.reports.some((report) => report.ticketStatus === "accepted") ? "Accepted by the Ticket" : "Escalated from Adviser"}</span>}
                                                 </div>
                                             )}
                                         </button>
@@ -1464,7 +1628,7 @@ export default function ReportsPage() {
                     </div> {/* end SLIDE 1 */}
 
                     {/* ══ SLIDE 2 — Panel 2 (report list for selected parent) ══ */}
-                    <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[420px]")}>
+                    <div className={panelClass(showReportsPanel, "bg-white", `guidance-reports-sublist-panel w-full max-w-[420px] ${viewStep === "detail" ? "guidance-mobile-hide-on-detail" : ""}`)}>
                         {/* Back button */}
                         <div className="px-3 pt-3 pb-1 border-b border-slate-100 flex items-center gap-2">
                             <button onClick={() => { setSelectedParent(null); setSelectedReport(null); setViewStep("list"); }}
@@ -1482,7 +1646,7 @@ export default function ReportsPage() {
                                 <div className="px-4 py-3 border-b border-slate-100">
                                     <div className="flex items-center gap-3">
                                         <div className={`w-10 h-10 rounded-full overflow-hidden ${getAvatarColor(selectedParent.parent_name)} flex items-center justify-center text-white text-sm font-extrabold shrink-0`}>
-                                            {selectedParent.parent_profile_picture ? <img src={selectedParent.parent_profile_picture} alt="" className="w-full h-full object-cover" /> : <User className="w-5 h-5" aria-label="Parent profile" />}
+                                            <User className="w-5 h-5" aria-label="Parent avatar" />
                                         </div>
                                         <div className="min-w-0">
                                             <p className="text-sm font-extrabold text-slate-900 truncate">{selectedParent.parent_name}</p>
@@ -1498,15 +1662,16 @@ export default function ReportsPage() {
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
                                     {selectedParent.reports.map(r => {
                                         const isActive = selectedReport?.id === r.id;
-                                        const isEscalated = guidanceEscalated[r.id];
+                                        const isEscalatedToPrincipal = principalEscalated[r.id];
+                                        const isEscalated = guidanceEscalated[r.id] || isEscalatedToPrincipal;
                                         const isResolvedByPrincipal = principalEscalated[r.id] && r.status === "Resolved";
                                         return (
                                             <button key={r.id} onClick={() => { selectReport(r); setViewStep("detail"); }}
                                                 className={`w-full text-left rounded-xl px-3 py-3 transition border ${isActive ? "bg-sky-50 border-sky-200" : isEscalated ? "bg-red-50 border-red-100" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                                 <div className="flex items-start justify-between gap-2 mb-1.5">
                                                     <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : r.status)}`}>
-                                                        {isResolvedByPrincipal ? "Resolved by Principal" : r.status}
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : isEscalatedToPrincipal ? "Escalated" : r.status)}`}>
+                                                        {isResolvedByPrincipal ? "Resolved by Principal" : isEscalatedToPrincipal ? "Escalated to Principal" : r.escalatedToGuidance && r.status !== "Resolved" ? "Escalated to Guidance" : r.status}
                                                     </span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-1 mb-2">
@@ -1514,14 +1679,6 @@ export default function ReportsPage() {
                                                         <span key={cat} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-semibold">{cat}</span>
                                                     ))}
                                                 </div>
-                                                {r.status !== "Resolved" && (
-                                                    <>
-                                                        <ConcernBar level={r.concernLevel} />
-                                                        <div className="flex items-center justify-between mt-1.5">
-                                                            <PriorityBadge level={r.concernLevel} />
-                                                        </div>
-                                                    </>
-                                                )}
                                                 <p className="text-[10px] text-slate-400 mt-1.5">{r.submitted_at}</p>
                                             </button>
                                         );
@@ -1540,7 +1697,7 @@ export default function ReportsPage() {
                     </div> {/* end SLIDE 2 */}
 
                     {/* ══ SLIDE 3 — Panel 3 (detail view) ══ */}
-                    <div className={panelClass(viewStep === "detail", "bg-slate-50", detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]", detailPosition)}>
+                    <div className={panelClass(viewStep === "detail", "bg-slate-50", `guidance-reports-detail-panel ${detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]"}`, detailPosition)}>
                         {/* Back button */}
                         <div className="px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2 shrink-0">
                             <button onClick={() => {
@@ -1586,7 +1743,6 @@ export default function ReportsPage() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <PriorityBadge level={selectedReport.concernLevel} large />
                                                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(
                                                     isPrincipalEscalated && selectedReport.status === "Resolved" ? "ResolvedByPrincipal" : selectedReport.status
                                                 )}`}>
@@ -1594,12 +1750,6 @@ export default function ReportsPage() {
                                                 </span>
                                             </div>
                                         </div>
-                                        {selectedReport.status !== "Resolved" && (
-                                            <div className="mt-3 max-w-xs">
-                                                <p className="text-[11px] text-slate-400 mb-1 font-semibold">Concern Level</p>
-                                                <ConcernBar level={selectedReport.concernLevel} />
-                                            </div>
-                                        )}
                                     </div>
 
                                     {/* Blurred private conversation + unlock gate */}
@@ -1677,9 +1827,6 @@ export default function ReportsPage() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                {selectedReport.status !== "Resolved" && (
-                                                    <PriorityBadge level={selectedReport.concernLevel} large />
-                                                )}
                                                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(
                                                     isPrincipalEscalated && selectedReport.status === "Resolved" ? "ResolvedByPrincipal" : selectedReport.status
                                                 )}`}>
@@ -1687,12 +1834,6 @@ export default function ReportsPage() {
                                                 </span>
                                             </div>
                                         </div>
-                                        {selectedReport.status !== "Resolved" && (
-                                            <div className="mt-3 max-w-xs">
-                                                <p className="text-[11px] text-slate-400 mb-1 font-semibold">Concern Level</p>
-                                                <ConcernBar level={selectedReport.concernLevel} />
-                                            </div>
-                                        )}
                                     </div>
 
                                     {/* Guidance-only conversation body */}
@@ -1735,7 +1876,7 @@ export default function ReportsPage() {
                                             const mine = reply.sender === "Guidance";
                                             return (
                                                 <div key={i} className={`flex items-start gap-3 mb-4 ${mine ? "flex-row-reverse" : ""}`}>
-                                                    <UserAvatar name={mine ? "You" : selectedReport.parent_name} src={(reply as { profilePicture?: string | null }).profilePicture} className="w-9 h-9 rounded-full mt-0.5" fallbackClassName={mine ? "bg-sky-500" : getAvatarColor(selectedReport.parent_name)} />
+                                                    {!mine && <UserAvatar name={selectedReport.parent_name} className="w-9 h-9 rounded-full mt-0.5" fallbackClassName={getAvatarColor(selectedReport.parent_name)} />}
                                                     <div className={`flex-1 flex flex-col ${mine ? "items-end" : "items-start"}`}>
                                                         <div className="flex items-center gap-2 mb-1">
                                                             <span className="text-[10px] text-slate-400">{reply.sent_at}</span>
@@ -1781,16 +1922,16 @@ export default function ReportsPage() {
                                             </div>
                                         ) : (
                                             <>
-                                                <div className="mb-3 flex flex-wrap items-center gap-2">
+                                                <div className="guidance-reports-detail-actions mb-3 flex flex-wrap items-center gap-2">
                                                     {selectedReport.status !== "Resolved" && (
-                                                        <button onClick={() => markReportStatus(selectedReport.id, "Resolved")}
+                                                        <button onClick={() => setResolveTargetId(selectedReport.id)}
                                                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-bold border border-sky-200 hover:bg-sky-100 transition h-11">
                                                             <CheckCircle className="w-3.5 h-3.5" /> Resolve
                                                         </button>
                                                     )}
                                                     {isGuidanceEsc && selectedReport.status !== "Resolved" && (
                                                         <button
-                                                            onClick={() => setEscalateTarget(selectedReport)}
+                                        onClick={() => { setEscalateError(""); setEscalateTarget(selectedReport); }}
                                                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition h-11 bg-red-100 text-red-600 border-red-200 hover:bg-red-200"
                                                         >
                                                             <TriangleAlert className="w-3.5 h-3.5" />
@@ -1828,7 +1969,7 @@ export default function ReportsPage() {
                                                 </div>
 
                                                 {/* Reply box */}
-                                                <div className="flex items-end gap-3">
+                                                <div className="guidance-reports-composer flex items-end gap-3">
                                                     <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 transition overflow-hidden bg-white">
                                                         <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
                                                             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
@@ -1943,7 +2084,7 @@ export default function ReportsPage() {
                                             })}
                                         </div>
                                         <div className="px-6 py-4 bg-white border-t border-slate-100">
-                                            <div className="mb-3 flex flex-wrap items-center gap-2">
+                                            <div className="guidance-reports-detail-actions mb-3 flex flex-wrap items-center gap-2">
                                                 <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                                     <Paperclip className="w-4 h-4" />
                                                     <input
@@ -1974,7 +2115,7 @@ export default function ReportsPage() {
                                                 ))}
                                             </div>
 
-                                            <div className="flex items-end gap-3">
+                                            <div className="guidance-reports-composer flex items-end gap-3">
                                                 {/* Textarea with embedded attach button */}
                                                 <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 transition overflow-hidden bg-white">
                                                     <textarea
@@ -2022,6 +2163,55 @@ export default function ReportsPage() {
             </div>
 
             {/* New Message Modal */}
+            <ResolveConfirmationModal
+                open={resolveTargetId !== null}
+                saving={resolving}
+                onCancel={() => { if (!resolving) setResolveTargetId(null); }}
+                onConfirm={() => { void confirmResolve(); }}
+                confirmClassName="bg-sky-500 hover:bg-sky-600 disabled:bg-sky-300"
+            />
+            {showTickets && (() => {
+                const visibleTickets = tickets.filter((ticket) => ticket.status === ticketFilter);
+                const ticketModalBusy = ticketLoadingOperation !== null || Object.keys(ticketActions).length > 0;
+                return (
+                    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4" onClick={() => { if (!ticketModalBusy) setShowTickets(false); }}>
+                        <div className="guidance-tickets-modal flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                            <div className="mb-5 flex shrink-0 items-start justify-between gap-4">
+                                <div><h2 className="text-xl font-extrabold text-slate-900">Guidance Tickets</h2><p className="mt-1 text-sm text-slate-500">One ticket is linked to one existing parent report.</p></div>
+                                <button type="button" aria-label="Close Guidance Tickets" onClick={() => setShowTickets(false)} disabled={ticketModalBusy} className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"><X className="h-5 w-5" /></button>
+                            </div>
+                            <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
+                                <div className="guidance-ticket-tabs flex gap-2">{(["pending", "accepted", "rejected"] as const).map((status) => {
+                                    const isLoadingTab = ticketTabLoading === status;
+                                    return <button key={status} type="button" onClick={() => void changeTicketFilter(status)} disabled={isLoadingTab} aria-busy={isLoadingTab} className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-extrabold capitalize transition disabled:cursor-not-allowed ${ticketFilter === status ? "bg-sky-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{isLoadingTab && <LoaderCircle className="h-3 w-3 animate-spin" />}{status} ({tickets.filter((ticket) => ticket.status === status).length})</button>;
+                                })}</div>
+                                <button type="button" onClick={() => void manuallyRefreshTickets()} disabled={ticketLoadingOperation !== null} aria-busy={ticketLoadingOperation === "refresh"} className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                    {ticketLoadingOperation === "refresh" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
+                                </button>
+                            </div>
+                            {ticketError && <p role="alert" className="mb-3 shrink-0 rounded-lg bg-red-50 p-3 text-xs font-bold text-red-700">{ticketError}</p>}
+                            {ticketLoadingOperation !== null && tickets.length > 0 && <div role="status" className="mb-3 flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-500"><LoaderCircle className="h-3.5 w-3.5 animate-spin" />Refreshing ticket data…</div>}
+                            <div className="guidance-ticket-list max-h-[52vh] min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
+                                {ticketLoadingOperation !== null && !hasLoadedTickets ? <div role="status" className="flex min-h-36 items-center justify-center gap-2 text-sm font-semibold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin" />Loading tickets…</div>
+                                    : visibleTickets.length === 0 ? <p className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm font-semibold text-slate-500">No {ticketFilter} tickets.</p>
+                                        : visibleTickets.map((ticket) => {
+                                            const ticketActionStatus = ticketActions[ticket.id];
+                                            const isActioningTicket = Boolean(ticketActionStatus);
+                                            const isAccepting = ticketActionStatus === "accepted";
+                                            const isRejecting = ticketActionStatus === "rejected";
+                                            return <div key={ticket.id} className="rounded-xl border border-slate-200 p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div><p className="font-extrabold text-slate-900">{ticket.concern}</p><p className="mt-1 text-xs text-slate-500">{ticket.report?.parent_name ?? "Parent"} · {ticket.report?.student_name ?? "Student"} · Report #{ticket.report_id}</p><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{ticket.message}</p>{ticket.attachments?.length ? <div className="mt-2 flex flex-wrap gap-2">{ticket.attachments.map((attachment, index) => <a key={`${attachment.name}-${index}`} href={attachment.dataUrl} download={attachment.name} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-600">{attachment.name}</a>)}</div> : null}{ticket.status === "rejected" && <p className="mt-2 text-xs font-bold text-red-700">Reason: {ticket.rejection_reason}</p>}</div>
+                                                    {ticket.status === "pending" && <div className="flex shrink-0 gap-2"><button type="button" onClick={() => void decideTicket(ticket.id, "accepted")} disabled={isActioningTicket} aria-busy={isAccepting} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">{isAccepting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isAccepting ? "Accepting…" : "Accept"}</button><button type="button" onClick={() => { setTicketError(""); setRejectingTicket(ticket.id); setRejectionReason(""); }} disabled={isActioningTicket} aria-busy={isRejecting} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">{isRejecting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isRejecting ? "Rejecting…" : "Reject"}</button></div>}
+                                                </div>
+                                                {rejectingTicket === ticket.id && <div className="guidance-ticket-rejection mt-3 flex gap-2"><input autoFocus value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} disabled={isRejecting} placeholder="Rejection reason (required)" className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm disabled:bg-slate-50" /><button type="button" onClick={() => void decideTicket(ticket.id, "rejected")} disabled={isRejecting} aria-busy={isRejecting} className="flex items-center justify-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60">{isRejecting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isRejecting ? "Rejecting…" : "Confirm rejection"}</button></div>}
+                                            </div>;
+                                        })}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {showExportModal && <ExportReportsModal reports={reports} selectedReport={selectedReport} onClose={() => setShowExportModal(false)} />}
             {showNewMessage && (
                 <NewMessageModal
@@ -2062,20 +2252,20 @@ export default function ReportsPage() {
                                     </p>
                                 </div>
                                 <div className="flex items-center justify-end gap-3 px-6 py-4">
+                                    {escalateError && <p className="mr-auto max-w-[180px] text-xs font-semibold text-red-600">{escalateError}</p>}
                                     <button
-                                        onClick={() => setEscalateTarget(null)}
+                                        onClick={() => { setEscalateTarget(null); setEscalateError(""); }}
+                                        disabled={escalatingReportId === escalateTarget.id}
                                         className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition"
                                     >
                                         Cancel
                                     </button>
                                     <button
-                                        onClick={() => {
-                                            escalateToPrincipal(escalateTarget);
-                                            setEscalateSuccess(true);
-                                        }}
-                                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold transition"
+                                        onClick={() => void escalateToPrincipal(escalateTarget)}
+                                        disabled={escalatingReportId === escalateTarget.id}
+                                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60"
                                     >
-                                        <TriangleAlert className="w-3.5 h-3.5" /> Yes, Escalate
+                                        <TriangleAlert className="w-3.5 h-3.5" /> {escalatingReportId === escalateTarget.id ? "Escalating..." : "Yes, Escalate"}
                                     </button>
                                 </div>
                             </>
@@ -2084,7 +2274,147 @@ export default function ReportsPage() {
                 </div>
             )}
 
+            <GuidanceReportsGuide onStepChange={setGuideTarget} />
+
+            <style jsx global>{`
+                @media (max-width: 767px) {
+                    .guidance-reports-page {
+                        height: calc(100dvh - 64px);
+                        min-height: calc(100dvh - 64px);
+                    }
+
+                    .guidance-reports-topbar {
+                        align-items: stretch;
+                        flex-direction: column;
+                        gap: 12px;
+                        padding: 16px;
+                    }
+
+                    .guidance-reports-topbar h1 {
+                        font-size: 20px;
+                    }
+
+                    .guidance-reports-actions {
+                        display: grid;
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                        width: 100%;
+                        gap: 8px;
+                    }
+
+                    .guidance-reports-actions > button {
+                        min-width: 0;
+                        justify-content: center;
+                        padding: 10px 8px;
+                        font-size: 12px;
+                    }
+
+                    .guidance-reports-new-action {
+                        grid-column: 1 / -1;
+                    }
+
+                    .guidance-reports-body {
+                        min-height: 0;
+                    }
+
+                    .guidance-reports-list-panel,
+                    .guidance-reports-sublist-panel,
+                    .guidance-reports-detail-panel {
+                        inset: 0 !important;
+                        width: 100% !important;
+                        max-width: none !important;
+                        border-right: 0 !important;
+                        box-shadow: none !important;
+                    }
+
+                    .guidance-mobile-hide-on-detail {
+                        display: none !important;
+                    }
+
+                    .guidance-reports-panel-tabs {
+                        flex-direction: row;
+                    }
+
+                    .guidance-reports-panel-tabs > button {
+                        flex: 1 1 0;
+                        min-width: 0;
+                        justify-content: center;
+                    }
+
+                    .guidance-reports-detail-panel .px-6 {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                    }
+
+                    .guidance-reports-detail-panel .max-w-\[85\%\] {
+                        max-width: calc(100% - 4px);
+                        overflow-wrap: anywhere;
+                    }
+
+                    .guidance-reports-detail-panel textarea {
+                        min-width: 0;
+                    }
+
+                    .guidance-reports-detail-actions > button {
+                        min-height: 44px;
+                    }
+
+                    .guidance-reports-composer {
+                        align-items: stretch;
+                        flex-direction: column;
+                    }
+
+                    .guidance-reports-composer > div {
+                        min-width: 0;
+                    }
+
+                    .guidance-reports-composer > button {
+                        display: flex;
+                        min-height: 44px;
+                        width: 100%;
+                        align-items: center;
+                        justify-content: center;
+                    }
+
+                    .guidance-tickets-modal {
+                        max-height: calc(100dvh - 32px);
+                        padding: 16px;
+                    }
+
+                    .guidance-ticket-list {
+                        max-height: calc(100dvh - 225px);
+                    }
+
+                    .guidance-ticket-tabs {
+                        flex-wrap: wrap;
+                    }
+
+                    .guidance-ticket-rejection {
+                        flex-direction: column;
+                    }
+
+                    .guidance-ticket-rejection button {
+                        width: 100%;
+                    }
+
+                    .guidance-new-message-overlay {
+                        align-items: center;
+                        justify-content: center;
+                        padding: 16px;
+                    }
+
+                    .guidance-new-message-modal {
+                        width: 100%;
+                        max-width: 100%;
+                        max-height: calc(100dvh - 32px);
+                    }
+                }
+            `}</style>
+
         </div>
     );
+}
+
+export default function ReportsPage() {
+    return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><ReportsPageContent /></Suspense>;
 }
 

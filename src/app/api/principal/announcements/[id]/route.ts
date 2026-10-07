@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
+import { normalizePrincipalAnnouncementAudience } from "@/lib/principalAnnouncementAudience";
 
 export async function PATCH(
   req: NextRequest,
@@ -12,11 +13,18 @@ export async function PATCH(
     const principal = await getPrincipalFromToken();
     if (!principal) return NextResponse.json({ success: false }, { status: 401 });
 
-    const { title, message, audience, scheduled_at } = await req.json();
-    if (!title?.trim() || !message?.trim()) {
+    const body = await req.json();
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    const audience = normalizePrincipalAnnouncementAudience(body.audience);
+    const scheduled_at = body.scheduled_at;
+    if (!title || !message) {
       return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
     }
-    if (scheduled_at && Number.isNaN(Date.parse(scheduled_at))) {
+    if (!audience) {
+      return NextResponse.json({ success: false, message: "Invalid audience." }, { status: 400 });
+    }
+    if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
       return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
     }
     if (scheduled_at && scheduled_at.slice(0, 10) < new Date().toISOString().slice(0, 10)) {
@@ -36,8 +44,8 @@ export async function PATCH(
     const { data, error } = await supabase
       .from("principal_announcements")
       .update({
-        title:        title.trim(),
-        message:      message.trim(),
+        title,
+        message,
         audience,
         status,
         scheduled_at: scheduled_at ?? null,
@@ -49,9 +57,10 @@ export async function PATCH(
 
     if (error) throw error;
 
-    if (existing.status !== "Published" && status === "Published") {
+    // Re-delivery is an idempotent upsert. It covers an audience change on a
+    // published announcement without duplicating rows or resetting read_at.
+    if (status === "Published") {
       await deliverPrincipalAnnouncement(data, principal);
-      await supabase.from("principal_announcements").update({ emails_sent: true }).eq("id", data.id);
     }
 
     return NextResponse.json({

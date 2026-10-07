@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Users, ScanLine, FileText, Bell,
   CheckCircle, XCircle, Clock, ChevronRight,
   ScanLine as ScanIcon,
 } from "lucide-react";
 import Link from "next/link";
+import AdviserDashboardGuide from "./components/AdviserDashboardGuide";
 
 interface RfidLog {
   id: number;
@@ -83,8 +84,10 @@ export default function AdviserDashboardPage() {
   const [logs, setLogs] = useState<RfidLog[]>([]);
   const [reports, setReports] = useState<ParentReport[]>([]);
   const [absentStudents, setAbsent] = useState<AbsentStudent[]>([]);
+  const [attendanceDayStatus, setAttendanceDayStatus] = useState<"Scheduled" | "No Classes">("Scheduled");
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState("");
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
   const todayLabel = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -112,12 +115,14 @@ export default function AdviserDashboardPage() {
             }
           }
           const all = stuData.data as any[];
-          const present = all.filter(s => s.today_status === "On Time").length;
+          const noClassesToday = stuData.attendance_day_status === "No Classes";
+          const present = all.filter(s => s.today_status === "Present" || s.today_status === "On Time").length;
           const late = all.filter(s => s.today_status === "Late").length;
-          const absent = all.filter(s => s.today_status === "Absent").length;
+          const absent = noClassesToday ? 0 : all.filter(s => s.today_status === "Absent").length;
+          setAttendanceDayStatus(noClassesToday ? "No Classes" : "Scheduled");
           setStats({ total_students: stuData.pagination.total, present, late, absent, pending_reports: stuData.pendingReports ?? 0 });
           setAbsent(
-            all.filter(s => s.today_status === "Absent").slice(0, 5)
+            (noClassesToday ? [] : all.filter(s => s.today_status === "Absent")).slice(0, 5)
               .map(s => ({ id: s.id, student_id: s.student_id, full_name: s.full_name }))
           );
         }
@@ -156,9 +161,16 @@ export default function AdviserDashboardPage() {
     { label: "Late", value: stats.late, sub: "Late arrivals", icon: Clock, color: "text-amber-500", iconBg: "bg-amber-50" },
     { label: "Reports", value: stats.pending_reports, sub: "Pending review", icon: FileText, color: "text-blue-500", iconBg: "bg-blue-50" },
   ];
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100"
+    : "";
+  const handleGuideStepChange = useCallback((target: string | null) => {
+    setGuideTarget(target);
+    window.dispatchEvent(new CustomEvent("adviser-dashboard-guide-target", { detail: target }));
+  }, []);
 
   return (
-    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 min-h-screen font-sans">
+    <main className="min-h-full bg-slate-100 px-6 py-6 font-sans">
 
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
@@ -193,7 +205,7 @@ export default function AdviserDashboardPage() {
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+      <div data-parent-guide="adviser-dashboard-summary" className={`grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 ${guideHighlight("adviser-dashboard-summary")}`}>
         {statCards.map(({ label, value, sub, icon: Icon, color, iconBg }) => (
           <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">
@@ -203,7 +215,7 @@ export default function AdviserDashboardPage() {
               </div>
             </div>
             <p className={`text-3xl font-extrabold ${color}`}>{loading ? "—" : value}</p>
-            <p className="text-xs text-slate-400 mt-1">{sub}</p>
+            <p className="text-xs text-slate-400 mt-1">{label === "Absent" && attendanceDayStatus === "No Classes" ? "No Classes" : sub}</p>
           </div>
         ))}
       </div>
@@ -212,7 +224,7 @@ export default function AdviserDashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
 
         {/* Today's RFID Log */}
-        <div className="xl:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div data-parent-guide="adviser-dashboard-rfid-log" className={`xl:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("adviser-dashboard-rfid-log")}`}>
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
             <h2 className="text-base font-bold text-slate-800">Today&apos;s RFID Log</h2>
             <Link href="/dashboard/adviser/attendance"
@@ -267,7 +279,7 @@ export default function AdviserDashboardPage() {
         <div className="xl:col-span-5 flex flex-col gap-5">
 
           {/* Parent Reports */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div data-parent-guide="adviser-dashboard-reports" className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("adviser-dashboard-reports")}`}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <h2 className="text-base font-bold text-slate-800">Parent Reports</h2>
               <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2.5 py-1 rounded-full">
@@ -307,14 +319,16 @@ export default function AdviserDashboardPage() {
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <h2 className="text-base font-bold text-slate-800">Absent Today</h2>
               <span className="bg-red-100 text-red-600 text-xs font-bold px-2.5 py-1 rounded-full">
-                {loading ? "—" : `${stats.absent} Students`}
+                {loading ? "—" : attendanceDayStatus === "No Classes" ? "No Classes" : `${stats.absent} Students`}
               </span>
             </div>
             <div className="divide-y divide-slate-50">
               {loading ? (
                 <p className="py-8 text-center text-slate-400 text-sm">Loading…</p>
+              ) : attendanceDayStatus === "No Classes" ? (
+                <p className="py-8 text-center text-slate-400 text-sm">No Classes</p>
               ) : absentStudents.length === 0 ? (
-                <p className="py-8 text-center text-slate-400 text-sm">🎉 All students are present!</p>
+                <p className="py-8 text-center text-slate-400 text-sm">No absences recorded yet.</p>
               ) : (
                 absentStudents.map(s => (
                   <div key={s.id} className="flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors">
@@ -324,9 +338,6 @@ export default function AdviserDashboardPage() {
                       </div>
                       <span className="text-sm font-semibold text-slate-700">{s.full_name}</span>
                     </div>
-                    <button className="text-xs font-semibold text-slate-500 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-                      Notify
-                    </button>
                   </div>
                 ))
               )}
@@ -335,6 +346,7 @@ export default function AdviserDashboardPage() {
 
         </div>
       </div>
+      <AdviserDashboardGuide onStepChange={handleGuideStepChange} />
     </main>
   );
 }

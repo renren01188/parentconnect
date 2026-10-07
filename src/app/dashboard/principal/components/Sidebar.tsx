@@ -47,7 +47,7 @@ function getInitials(principal: PrincipalSummary | null) {
 export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { reportCount, adviserMessageCount, ictMessageCount, annUnreadCount, principalNotifCount } = useNotifContext();
+  const { reportCount, adviserMessageCount, ictMessageCount, principalNotifCount } = useNotifContext();
   const [principal, setPrincipal] = useState<PrincipalSummary | null>(null);
 
   useEffect(() => {
@@ -103,6 +103,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
       )}
 
       <aside
+        id="principal-dashboard-navigation"
         className={[
           "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[88vw] flex-shrink-0 flex-col h-screen",
           "transform transition-transform duration-200",
@@ -145,7 +146,6 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
             const badge =
               badgeKey === "reports" ? reportCount + adviserMessageCount :
                 badgeKey === "ict" ? ictMessageCount :
-                  badgeKey === "announcements" ? annUnreadCount :
                   badgeKey === "notifications" ? principalNotifCount :
                     0;
 
@@ -187,7 +187,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
             ].join(" ")}
           >
             <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center overflow-hidden text-white font-bold text-xs shrink-0">
-              {principal?.profilePicture ? <img src={principal.profilePicture} alt="Profile" className="h-full w-full object-cover" /> : principalInitials}
+              {principalInitials}
             </div>
             <div className="min-w-0">
               <p className="text-white text-xs font-semibold leading-tight truncate">{principalName}</p>

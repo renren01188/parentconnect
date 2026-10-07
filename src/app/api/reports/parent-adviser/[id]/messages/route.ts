@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidanceMessageEmail } from "@/lib/mailer";
+import { logAudit } from "@/lib/audit";
 import {
   getAdviserSession,
   getGuidanceSession,
@@ -14,12 +15,20 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
 }
 
+const IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 type MessageAttachment = {
   name: string;
   type: string;
   size: number;
   dataUrl: string;
 };
+
+// Some deployed databases predate the idempotency_key column. The marker is
+// stored alongside attachments only for that legacy shape; read paths already
+// discard items without a name and data URL, so it is never exposed as a file.
+type LegacyIdempotencyMarker = { _parentconnect_idempotency_key: string };
+type StoredAttachment = MessageAttachment | LegacyIdempotencyMarker;
 
 function cleanAttachments(value: unknown): MessageAttachment[] {
   if (!Array.isArray(value)) return [];
@@ -57,6 +66,21 @@ function normalizeThreadType(value: unknown, fallback: "adviser" | "guidance" | 
   return value === "adviser" || value === "guidance" || value === "principal" ? value : fallback;
 }
 
+async function legacyDuplicateMessage(reportId: number, idempotencyKey: string) {
+  const { data, error } = await supabase
+    .from("parent_adviser_report_messages")
+    .select("id, attachments")
+    .eq("report_id", reportId)
+    .order("id", { ascending: false });
+
+  if (error) throw error;
+  const duplicate = (data ?? []).find((row) => Array.isArray(row.attachments) && row.attachments.some((item) => {
+    if (!item || typeof item !== "object") return false;
+    return (item as Record<string, unknown>)._parentconnect_idempotency_key === idempotencyKey;
+  }));
+  return duplicate?.id ?? null;
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -64,12 +88,16 @@ export async function POST(
   try {
     const { id } = await params;
     const reportId = Number(id);
+    const idempotencyKey = req.headers.get("Idempotency-Key")?.trim() ?? "";
     const { body, role, attachments, threadType } = await req.json();
     const trimmedBody = String(body ?? "").trim();
     const cleanedAttachments = cleanAttachments(attachments);
 
     if (!reportId || (!trimmedBody && cleanedAttachments.length === 0)) {
       return NextResponse.json({ success: false, message: "Message or attachment is required." }, { status: 400 });
+    }
+    if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      return NextResponse.json({ success: false, message: "A valid idempotency key is required." }, { status: 400 });
     }
 
     const requestedRole = role === "adviser" ? "adviser" : role === "guidance" ? "guidance" : role === "principal" ? "principal" : "parent";
@@ -101,7 +129,7 @@ export async function POST(
       }
 
       const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
-      await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser");
+      await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser", idempotencyKey);
       return NextResponse.json({ success: true });
     }
 
@@ -140,7 +168,7 @@ export async function POST(
       }
 
       const isFirstGuidanceReply = !report.guidance_seen_at;
-      await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance");
+      await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
       if (isFirstGuidanceReply && report.parent_email) {
         try {
           await sendGuidanceMessageEmail({
@@ -185,7 +213,7 @@ export async function POST(
         );
       }
 
-      await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal");
+      await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal", idempotencyKey);
       // Email notifications are intentionally disabled for Principal <-> Parent conversations.
       return NextResponse.json({ success: true });
     }
@@ -195,7 +223,7 @@ export async function POST(
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    const report = await getReportForParent(reportId, parent.email);
+    const report = await getReportForParent(reportId, parent.id);
     if (!report) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
@@ -211,7 +239,7 @@ export async function POST(
       threadType,
       report.escalated_to_principal ? "principal" : report.escalated_to_guidance ? "guidance" : "adviser"
     );
-    await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType);
+    await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType, idempotencyKey);
     // Email notifications are intentionally disabled for Parent <-> Principal conversations.
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
@@ -227,8 +255,10 @@ async function insertMessage(
   body: string,
   currentStatus: string,
   attachments: MessageAttachment[],
-  threadType: "adviser" | "guidance" | "principal"
+  threadType: "adviser" | "guidance" | "principal",
+  idempotencyKey: string,
 ) {
+  let storedAttachments: StoredAttachment[] = attachments;
   let result = await supabase
     .from("parent_adviser_report_messages")
     .insert({
@@ -237,10 +267,48 @@ async function insertMessage(
       sender_name: senderName,
       body,
       thread_type: threadType,
-      attachments,
+      attachments: storedAttachments,
+      idempotency_key: idempotencyKey,
       read_by_parent: senderRole === "parent",
       read_by_adviser: senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal",
-    });
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (result.error?.code === "23505") {
+    const { data: existing, error: existingError } = await supabase
+      .from("parent_adviser_report_messages")
+      .select("id")
+      .eq("report_id", reportId)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (existingError || !existing) throw existingError ?? result.error;
+    return { id: existing.id, duplicate: true };
+  }
+
+  // Keep requests safe during a rolling migration. The durable UUID column is
+  // preferred, but older deployments can still deduplicate a retried request
+  // through an internal JSON marker until that column is available.
+  if (result.error && isMissingColumn(result.error, "idempotency_key")) {
+    const existingId = await legacyDuplicateMessage(reportId, idempotencyKey);
+    if (existingId) return { id: existingId, duplicate: true };
+
+    storedAttachments = [...attachments, { _parentconnect_idempotency_key: idempotencyKey }];
+    result = await supabase
+      .from("parent_adviser_report_messages")
+      .insert({
+        report_id: reportId,
+        sender_role: senderRole,
+        sender_name: senderName,
+        body,
+        thread_type: threadType,
+        attachments: storedAttachments,
+        read_by_parent: senderRole === "parent",
+        read_by_adviser: senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal",
+      })
+      .select("id")
+      .maybeSingle();
+  }
 
   if (result.error && isMissingColumn(result.error, "thread_type")) {
     result = await supabase
@@ -250,7 +318,7 @@ async function insertMessage(
         sender_role: senderRole,
         sender_name: senderName,
         body,
-        attachments,
+        attachments: storedAttachments,
         read_by_parent: senderRole === "parent",
         read_by_adviser: senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal",
       });
@@ -273,6 +341,8 @@ async function insertMessage(
   }
 
   if (result.error) throw result.error;
+  const insertedId = result.data?.id;
+  if (!insertedId) throw new Error("Message insert did not return an identifier.");
 
   if (senderRole === "parent") {
     const { error: readError } = await supabase
@@ -310,4 +380,6 @@ async function insertMessage(
   }
 
   if (updateError) throw updateError;
+  await logAudit({ action: "Message Sent", performedBy: senderName, performedByRole: senderRole === "parent" ? "Parent/Guardian" : senderRole === "guidance" ? "Guidance Counselor" : senderRole === "principal" ? "Principal" : "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report Message", targetId: reportId, relatedReportId: reportId, previousStatus: currentStatus, newStatus: nextStatus ?? currentStatus, module: "Reports", details: `${senderName} sent a ${senderRole} message on report #${reportId}.`, metadata: { attachmentCount: attachments.length, threadType } });
+  return { id: insertedId, duplicate: false };
 }

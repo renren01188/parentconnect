@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import Sidebar from "../components/Sidebar";
+import ParentAttendanceGuide from "../components/ParentAttendanceGuide";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -79,6 +80,17 @@ interface AttachmentPayload {
     file_data: string;
     file_type: string;
 }
+
+const MAX_ATTACHMENTS = 1;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_ATTACHMENT_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 
 
 
@@ -150,6 +162,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     const [fromDate, setFromDate] = useState("");
     const [toDate, setToDate] = useState("");
     const [attachments, setAttachments] = useState<File[]>([]);
+    const [attachmentError, setAttachmentError] = useState("");
     const [accepted, setAccepted] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [submitted, setSubmitted] = useState(false);
@@ -168,9 +181,9 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     })();
     const invalidDateRange = !!fromDate && !!toDate && totalDays === 0;
     const canSubmit = !!studentId && !!message.trim() && !!fromDate && !!toDate
-        && !invalidDateRange && attachments.length > 0 && accepted && !isSubmitting;
+        && !invalidDateRange && attachments.length > 0 && !attachmentError && accepted && !isSubmitting;
 
-    // Load existing excuse letters on mount
+    // Keep the tracker current without requiring Supabase Realtime.
     useEffect(() => {
         async function fetchLetters() {
             try {
@@ -210,6 +223,8 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
             }
         }
         fetchLetters();
+        const refreshTimer = window.setInterval(fetchLetters, 15_000);
+        return () => window.clearInterval(refreshTimer);
     }, [students]);
 
     async function handleSubmitRequest() {
@@ -258,6 +273,31 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
         }
     }
 
+    function addAttachments(files: File[]) {
+        const acceptedFiles: File[] = [];
+        for (const file of files) {
+            if (attachments.length + acceptedFiles.length >= MAX_ATTACHMENTS) {
+                setAttachmentError("Each excuse letter allows exactly one attachment.");
+                break;
+            }
+            if (!ACCEPTED_ATTACHMENT_TYPES.has(file.type)) {
+                setAttachmentError("Use JPG, PNG, WEBP, PDF, DOC, or DOCX files only.");
+                continue;
+            }
+            if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
+                setAttachmentError("Each attachment must be 5 MB or smaller.");
+                continue;
+            }
+            acceptedFiles.push(file);
+            break;
+        }
+
+        if (acceptedFiles.length > 0) {
+            setAttachments((current) => [...current, ...acceptedFiles]);
+            setAttachmentError("");
+        }
+    }
+
     function excuseStatusClass(status: ExcuseStatus) {
         if (status === "Approved") return "bg-emerald-100 text-emerald-700 border-emerald-200";
         if (status === "Declined") return "bg-red-100 text-red-600 border-red-200";
@@ -265,29 +305,29 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     }
 
     return (
-        <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-5">
-            <div className="w-full max-w-[620px] max-h-[calc(100vh-40px)] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-slate-100">
-                    <div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/45 p-3 backdrop-blur-sm sm:p-5">
+            <div className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-[620px] overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h2 className="text-lg font-extrabold text-slate-800">{submitted ? "Request Submitted" : "Excuse Letter Request"}</h2>
                         <p className="text-sm text-slate-400 mt-1">{submitted ? `Sent to ${selectedStudent.name}'s adviser for review.` : "Send an absence excuse to the adviser for approval."}</p>
                     </div>
-                    <button type="button" onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition">
+                    <button type="button" onClick={onClose} className="shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
                         <X className="w-4 h-4" />
                     </button>
                 </div>
 
                 {submitted ? (
-                    <div className="px-6 py-10 flex flex-col items-center text-center">
+                        <div className="flex flex-col items-center px-4 py-10 text-center sm:px-6">
                         <div className="w-16 h-16 rounded-2xl bg-emerald-100 flex items-center justify-center mb-4">
                             <CheckCircle className="w-8 h-8 text-emerald-600" />
                         </div>
-                        <p className="text-sm text-slate-500 max-w-sm">Your excuse letter has been submitted and the adviser has been notified by email.</p>
+                        <p className="text-sm text-slate-500 max-w-sm">Your excuse letter has been submitted for adviser review. You can check its status here at any time.</p>
                         <button type="button" onClick={onClose} className="mt-6 px-6 py-3 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold transition">Done</button>
                     </div>
                 ) : (
                     <>
-                        <div className="px-6 py-5 flex flex-col gap-5">
+                        <div className="flex flex-col gap-5 px-4 py-5 sm:px-6">
 
                             {/* Excuse Letter Status Tracker */}
                             <section className="rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden">
@@ -383,13 +423,12 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                     id="excuse-file-input"   // ← add this
                                     ref={fileInputRef}
                                     type="file"
-                                    multiple
-                                    accept="image/*,.pdf,.doc,.docx"
+                                    accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx"
                                     style={{ display: "none" }}   // ← change this
                                     onChange={(e) => {
                                         const files = Array.from(e.target.files ?? []);
                                         if (files.length > 0) {
-                                            setAttachments(prev => [...prev, ...files]);
+                                            addAttachments(files);
                                         }
                                         setTimeout(() => { e.target.value = ""; }, 0);  // ← defer the reset
                                     }}
@@ -400,8 +439,8 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                     onClick={(e) => e.stopPropagation()}
                                     className="w-full flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 transition cursor-pointer">
                                     <Paperclip className="w-6 h-6 text-slate-400" />
-                                    <span className="text-sm font-bold text-slate-600">Click here to attach files</span>
-                                    <span className="text-xs text-slate-400">Images, PDF, DOC, or DOCX</span>
+                                    <span className="text-sm font-bold text-slate-600">Click here to attach one file</span>
+                                    <span className="text-xs text-slate-400">Exactly one JPG, PNG, WEBP, PDF, DOC, or DOCX file · 5 MB maximum</span>
                                 </label>
 
                                 {attachments.length > 0 && (
@@ -414,13 +453,19 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                                 </div>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setAttachments(prev => prev.filter((_, i) => i !== index))}
+                                                    onClick={() => {
+                                                        setAttachments(prev => prev.filter((_, i) => i !== index));
+                                                        setAttachmentError("");
+                                                    }}
                                                     className="text-xs font-bold text-slate-400 hover:text-red-500">
                                                     Remove
                                                 </button>
                                             </div>
                                         ))}
                                     </div>
+                                )}
+                                {attachmentError && (
+                                    <p className="mt-2 text-xs font-semibold text-red-600">{attachmentError}</p>
                                 )}
                             </div>
 
@@ -445,11 +490,11 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                             )}
                         </div>
 
-                        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:gap-3 sm:px-6">
                             <button type="button" onClick={onClose}
-                                className="px-5 py-3 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-bold hover:bg-slate-50 transition">Cancel</button>
+                                className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-600 transition hover:bg-slate-50 sm:w-auto">Cancel</button>
                             <button type="button" onClick={handleSubmitRequest} disabled={!canSubmit}
-                                className={`flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-bold text-white transition ${canSubmit ? "bg-blue-500 hover:bg-blue-600" : "bg-blue-300 cursor-not-allowed"}`}>
+                                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white transition sm:w-auto ${canSubmit ? "bg-blue-500 hover:bg-blue-600" : "bg-blue-300 cursor-not-allowed"}`}>
                                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                 {isSubmitting ? "Submitting..." : "Send for Approval"}
                             </button>
@@ -474,6 +519,7 @@ export default function ParentAttendancePage() {
     const [showExcuseModal, setShowExcuseModal] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState("");
+    const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
     const studentDropRef = useRef<HTMLDivElement>(null);
     const monthDropRef = useRef<HTMLDivElement>(null);
@@ -568,6 +614,9 @@ export default function ParentAttendancePage() {
     const student = students.find(s => s.id === selectedId) ?? students[0];
     const safeMonthIdx = student ? Math.min(monthIdx, student.months.length - 1) : 0;
     const currentMonth = student?.months[safeMonthIdx];
+    const guideHighlight = (target: string) => guideTarget === target
+        ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-[#eef2f7]"
+        : "";
 
     function selectStudent(id: string) {
         setSelectedId(id);
@@ -578,7 +627,7 @@ export default function ParentAttendancePage() {
     // ── Loading state ──
     if (isLoading) {
         return (
-            <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
+            <div className="flex min-h-screen flex-col overflow-x-clip font-sans md:flex-row" style={{ background: "#eef2f7" }}>
                 <Sidebar />
                 <main className="flex-1 flex items-center justify-center">
                     <div className="flex flex-col items-center gap-3 text-slate-400">
@@ -592,7 +641,7 @@ export default function ParentAttendancePage() {
 
     if (error) {
         return (
-            <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
+            <div className="flex min-h-screen flex-col overflow-x-clip font-sans md:flex-row" style={{ background: "#eef2f7" }}>
                 <Sidebar />
                 <main className="flex-1 flex items-center justify-center">
                     <div className="flex flex-col items-center gap-3 text-red-500">
@@ -606,18 +655,19 @@ export default function ParentAttendancePage() {
     }
 
     return (
-        <div className="flex h-screen overflow-hidden font-sans" style={{ background: "#eef2f7" }}>
+        <div className="flex min-h-screen flex-col overflow-x-clip font-sans md:flex-row" style={{ background: "#eef2f7" }}>
             <Sidebar />
-            <main className="flex-1 overflow-y-auto p-8">
+            <main className="min-w-0 flex-1 px-3 py-5 pb-8 sm:px-4 md:px-8 md:py-8">
 
                 {/* Page header */}
-                <div className="mb-6 flex items-start justify-between gap-4">
-                    <div>
+                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                    <div className="min-w-0">
                         <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Attendance</h1>
                         <p className="text-slate-500 text-sm mt-0.5">View your child&apos;s attendance records and history</p>
                     </div>
                     <button type="button" onClick={() => setShowExcuseModal(true)}
-                        className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold shadow-sm shadow-blue-200 transition">
+                        data-parent-guide="excuse-letter"
+                        className={`inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-600 sm:w-auto ${guideHighlight("excuse-letter")}`}>
                         <Send className="w-4 h-4" />
                         Excuse Letter
                     </button>
@@ -625,22 +675,22 @@ export default function ParentAttendancePage() {
 
                 {/* Student selector */}
                 {students.length > 0 && (
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-5 p-5">
+                    <div data-parent-guide="student-selector" className={`mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${guideHighlight("student-selector")}`}>
                         <p className="text-sm font-bold text-slate-700 mb-3">Select Student</p>
                         <div className="relative" ref={studentDropRef}>
                             <button onClick={() => setStudentDrop(p => !p)}
-                                className="w-full flex items-center gap-4 px-4 py-3.5 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors text-left">
+                                className="flex min-h-16 w-full items-center gap-3 rounded-xl border-2 border-blue-200 bg-blue-50 px-3 py-3 text-left transition-colors hover:bg-blue-100 sm:gap-4 sm:px-4 sm:py-3.5">
                                 <span style={{ width: 44, height: 44, minWidth: 44, borderRadius: "50%", background: student.avatarBg, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 14 }}>
                                     {student.initials}
                                 </span>
                                 <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-bold text-slate-800">{student.name}</p>
-                                    <p className="text-xs text-slate-500 mt-0.5">{student.grade} - {student.section}&nbsp;&bull;&nbsp;Student ID: {student.studentId}</p>
+                                    <p className="truncate text-sm font-bold text-slate-800">{student.name}</p>
+                                    <p className="mt-0.5 truncate text-xs text-slate-500">{student.grade} - {student.section}&nbsp;&bull;&nbsp;Student ID: {student.studentId}</p>
                                 </div>
                                 <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform shrink-0 ${studentDrop ? "rotate-180" : ""}`} />
                             </button>
                             {studentDrop && (
-                                <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl border border-slate-200 shadow-xl z-30 overflow-hidden">
+                                    <div className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
                                     {students.map(s => (
                                         <button key={s.id} type="button"
                                             onMouseDown={(e) => { e.preventDefault(); selectStudent(s.id); }}
@@ -649,8 +699,8 @@ export default function ParentAttendancePage() {
                                                 {s.initials}
                                             </span>
                                             <div className="flex-1 min-w-0">
-                                                <p className={`text-sm font-semibold ${s.id === selectedId ? "text-blue-700" : "text-slate-800"}`}>{s.name}</p>
-                                                <p className="text-xs text-slate-400">{s.grade} - {s.section}&nbsp;&bull;&nbsp;{s.studentId}</p>
+                                                <p className={`truncate text-sm font-semibold ${s.id === selectedId ? "text-blue-700" : "text-slate-800"}`}>{s.name}</p>
+                                                <p className="truncate text-xs text-slate-400">{s.grade} - {s.section}&nbsp;&bull;&nbsp;{s.studentId}</p>
                                             </div>
                                             {s.id === selectedId && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />}
                                         </button>
@@ -663,8 +713,8 @@ export default function ParentAttendancePage() {
 
                 {/* Stat cards */}
                 {student && (
-                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <div data-parent-guide="attendance-summary" className={`mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 ${guideHighlight("attendance-summary")}`}>
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <p className="text-xs font-semibold text-slate-500 mb-2">Total Present Days</p>
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.totalPresent}</p>
                             <div className="flex items-center gap-1.5">
@@ -672,7 +722,7 @@ export default function ParentAttendancePage() {
                                 <span className="text-xs text-blue-400 font-medium">This school year</span>
                             </div>
                         </div>
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <p className="text-xs font-semibold text-slate-500 mb-2">Absent Days</p>
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.absentDays}</p>
                             <div className="flex items-center gap-1.5">
@@ -680,7 +730,7 @@ export default function ParentAttendancePage() {
                                 <span className="text-xs text-blue-400 font-medium">This school year</span>
                             </div>
                         </div>
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <p className="text-xs font-semibold text-slate-500 mb-2">Late Days</p>
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.lateDays}</p>
                             <div className="flex items-center gap-1.5">
@@ -688,7 +738,7 @@ export default function ParentAttendancePage() {
                                 <span className="text-xs text-blue-400 font-medium">This school year</span>
                             </div>
                         </div>
-                        <div className="bg-white rounded-2xl border border-blue-200 shadow-sm p-5">
+                        <div className="rounded-2xl border border-blue-200 bg-white p-4 shadow-sm sm:p-5">
                             <p className="text-xs font-semibold text-slate-500 mb-2">Attendance Rate</p>
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.attendanceRate}%</p>
                             <p className="text-xs font-semibold text-blue-500">{student.rateLabel}</p>
@@ -698,17 +748,17 @@ export default function ParentAttendancePage() {
 
                 {/* Monthly Attendance Record */}
                 {student && currentMonth && (
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                    <div data-parent-guide="monthly-record" className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${guideHighlight("monthly-record")}`}>
+                        <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                             <p className="text-base font-bold text-slate-800">Monthly Attendance Record</p>
                             <div className="relative" ref={monthDropRef}>
                                 <button onClick={() => setMonthDrop(p => !p)}
-                                    className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-                                    {currentMonth.label}
+                                    className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto sm:justify-start">
+                                    <span className="truncate">{currentMonth.label}</span>
                                     <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${monthDrop ? "rotate-180" : ""}`} />
                                 </button>
                                 {monthDrop && (
-                                    <div className="absolute top-full right-0 mt-1.5 bg-white rounded-xl border border-slate-200 shadow-xl z-30 min-w-[170px] overflow-hidden">
+                                    <div className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl sm:left-auto sm:min-w-[170px]">
                                         {student.months.map((m, idx) => (
                                             <button key={m.label} type="button"
                                                 onMouseDown={(e) => { e.preventDefault(); setMonthIdx(idx); setMonthDrop(false); }}
@@ -721,7 +771,7 @@ export default function ParentAttendancePage() {
                             </div>
                         </div>
 
-                        <div className="overflow-x-auto">
+                        <div className="hidden overflow-x-auto md:block">
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="border-b border-slate-100">
@@ -760,6 +810,24 @@ export default function ParentAttendancePage() {
                                 </tbody>
                             </table>
                         </div>
+
+                        <div className="space-y-3 p-4 md:hidden">
+                            {currentMonth.records.length === 0 ? (
+                                <p className="py-8 text-center text-sm text-slate-400">No records for this month.</p>
+                            ) : currentMonth.records.map((rec, i) => (
+                                <article key={i} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                    <div className="mb-3 flex items-start justify-between gap-3">
+                                        <div className="min-w-0"><p className="font-semibold text-slate-800">{rec.date}</p><p className="mt-0.5 text-xs text-slate-500">{rec.day}</p></div>
+                                        <span className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-semibold ${statusBadgeClass(rec.status)}`}>{rec.status}</span>
+                                    </div>
+                                    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                                        <div><dt className="text-xs font-medium text-slate-400">Time In</dt><dd className="mt-0.5 font-medium text-slate-700">{rec.timeIn}</dd></div>
+                                        <div><dt className="text-xs font-medium text-slate-400">Time Out</dt><dd className="mt-0.5 font-medium text-slate-700">{rec.timeOut}</dd></div>
+                                        <div className="col-span-2"><dt className="text-xs font-medium text-slate-400">RFID Scan</dt><dd className="mt-1">{rec.rfidScan !== "None" ? <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${rfidBadgeClass(rec.rfidScan)}`}>{rec.rfidScan}</span> : <span className="text-sm text-slate-400">—</span>}</dd></div>
+                                    </dl>
+                                </article>
+                            ))}
+                        </div>
                     </div>
                 )}
             </main>
@@ -771,6 +839,7 @@ export default function ParentAttendancePage() {
                     onClose={() => setShowExcuseModal(false)}
                 />
             )}
+            <ParentAttendanceGuide onStepChange={setGuideTarget} />
         </div>
     );
 }

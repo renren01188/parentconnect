@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     AlertTriangle, Clock, CheckCircle, Eye,
@@ -10,8 +10,10 @@ import {
     LoaderCircle, HeartHandshake, Search,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { UserAvatar } from "@/components/UserAvatar";
+import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
+import AdviserReportsGuide from "../components/AdviserReportsGuide";
 import {
     getPriorityLabel,
     type Report, type ReportStatus, type ReportCategory,
@@ -48,12 +50,10 @@ function getStudentInitials(name: string) {
     return name.trim().split(" ").slice(0, 2).map(p => p[0]?.toUpperCase()).join("");
 }
 function ParentAvatar({ name, profilePicture, initials, className }: { name: string; profilePicture?: string | null; initials: string; className: string }) {
-    const [imageFailed, setImageFailed] = useState(false);
+    void profilePicture;
     return (
         <div className={`${className} ${getAvatarColor(name)} overflow-hidden flex items-center justify-center text-white font-extrabold shrink-0`}>
-            {profilePicture && !imageFailed ? (
-                <img src={profilePicture} alt={`${name}'s profile`} className="h-full w-full object-cover" onError={() => setImageFailed(true)} />
-            ) : initials}
+            {initials}
         </div>
     );
 }
@@ -420,9 +420,9 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
     }
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/45 flex items-start justify-end p-5" onClick={onClose}>
-            <div className="bg-white rounded-2xl shadow-2xl w-[480px] max-h-[calc(100vh-40px)] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
-                <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
+            <div className="my-auto flex w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "calc(100dvh - 24px)" }} onClick={e => e.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-5 sm:px-6">
                     <div>
                         <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
                         <p className="text-sm text-slate-400 mt-1">Send a message to a parent or admin</p>
@@ -803,7 +803,7 @@ function NotifyParentModal({
 }
 
 // ── Main Page Component ───────────────────────────────────────────────────────
-export default function ReportsPage() {
+function ReportsPageContent() {
     const searchParams = useSearchParams();
     const { setUnreadCount } = useNotifContext();
 
@@ -820,6 +820,7 @@ export default function ReportsPage() {
     const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
     const [sendingReply, setSendingReply] = useState(false);
     const [showNewMessage, setShowNewMessage] = useState(false);
+    const [guideTarget, setGuideTarget] = useState<string | null>(null);
     const [escalateTarget, setEscalateTarget] = useState<number | null>(null);
     const [escalateSuccess, setEscalateSuccess] = useState(false);
     const [escalating, setEscalating] = useState(false);
@@ -833,6 +834,10 @@ export default function ReportsPage() {
     // All categories across all parent reports (for dropdown)
     const [reportsLoading, setReportsLoading] = useState(true);
     const [actionError, setActionError] = useState("");
+    const [resolveTargetId, setResolveTargetId] = useState<number | null>(null);
+    const [resolving, setResolving] = useState(false);
+    const [studentResolveTargetId, setStudentResolveTargetId] = useState<number | null>(null);
+    const [resolvingStudent, setResolvingStudent] = useState(false);
 
     // Local mutable copies of data
     const [reports, setReports] = useState<Report[]>([]);
@@ -927,52 +932,39 @@ export default function ReportsPage() {
         };
     }, [loadReports, loadStudentReports, loadAdminMessages]);
 
-    const loadReportsRef = useRef(loadReports);
-    const loadStudentReportsRef = useRef(loadStudentReports);
-    const loadAdminMessagesRef = useRef(loadAdminMessages);
-
-    useEffect(() => { loadReportsRef.current = loadReports; }, [loadReports]);
-    useEffect(() => { loadStudentReportsRef.current = loadStudentReports; }, [loadStudentReports]);
-    useEffect(() => { loadAdminMessagesRef.current = loadAdminMessages; }, [loadAdminMessages]);
+    // Subscribing outside the selected-report effect also covers the first
+    // parent report for an adviser with an otherwise empty inbox.
+    const liveUpdateNotice = useReportMessagesRealtime("adviser-reports-live-list", loadReports);
 
     useEffect(() => {
-        const client = supabaseBrowser;
-        if (!client) return;
-
-        let isMounted = true;
-        const uniqueChannel = `adviser-reports-${Math.random().toString(36).slice(2)}`;
-
-        const channel = client
-            .channel(uniqueChannel)
-            .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-                if (isMounted) loadReportsRef.current().catch(() => null);
-            })
-            .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
-                if (isMounted) loadReportsRef.current().catch(() => null);
-            })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "parents" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "advisers" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "guidance_counselors" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-            .on("postgres_changes", { event: "UPDATE", schema: "public", table: "principals" }, () => { if (isMounted) loadReportsRef.current().catch(() => null); })
-            .on("postgres_changes", { event: "*", schema: "public", table: "student_reports" }, () => {
-                if (isMounted) loadStudentReportsRef.current().catch(() => null);
-            })
-            .on("postgres_changes", { event: "*", schema: "public", table: "principal_staff_messages" }, () => {
-                if (isMounted) loadAdminMessagesRef.current().catch(() => null);
-            })
-            .on("postgres_changes", { event: "*", schema: "public", table: "adviser_principal_messages" }, () => {
-                if (isMounted) loadAdminMessagesRef.current().catch(() => null);
-            })
-            .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-                if (isMounted) loadAdminMessagesRef.current().catch(() => null);
-            })
-            .subscribe();
-
-        return () => {
-            isMounted = false;
-            client.removeChannel(channel);
+        const reportId = selectedReport?.id;
+        if (!reportId) return;
+        let cancelled = false;
+        let polling = false;
+        const refreshOpenConversation = async () => {
+            if (polling) return;
+            polling = true;
+            try {
+                const response = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${reportId}`, { cache: "no-store" });
+                const data = await response.json().catch(() => null);
+                const refreshed = data?.reports?.[0] as Report | undefined;
+                if (!cancelled && response.ok && refreshed) {
+                    setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
+                    setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
+                }
+            } catch {
+                // The next targeted poll will retry without interrupting the draft.
+            } finally {
+                polling = false;
+            }
         };
-    }, []);
+        void refreshOpenConversation();
+        const timer = window.setInterval(() => { void refreshOpenConversation(); }, 30_000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+        };
+    }, [selectedReport?.id]);
 
     // ── Handle deep-link from notification ───────────────────────────────
     useEffect(() => {
@@ -1083,6 +1075,49 @@ export default function ReportsPage() {
         return true;
     }
 
+    async function confirmResolve() {
+        if (resolveTargetId === null || resolving) return;
+        setResolving(true);
+        try {
+            if (await markReportStatus(resolveTargetId, "Resolved")) setResolveTargetId(null);
+        } finally {
+            setResolving(false);
+        }
+    }
+
+    async function confirmStudentResolve() {
+        if (studentResolveTargetId === null || resolvingStudent) return;
+        setResolvingStudent(true);
+        try {
+            const res = await fetch(`/api/student-reports/${studentResolveTargetId}/status`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "Resolved" }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                setActionError(data?.message || "Unable to resolve student report.");
+                return;
+            }
+            const target = studentReps.find((report) => report.id === studentResolveTargetId);
+            setStudentReps((prev) => prev.map((report) => report.id === studentResolveTargetId ? { ...report, status: "Resolved" } : report));
+            setSelectedStudRep((prev) => prev?.id === studentResolveTargetId ? { ...prev, status: "Resolved" } : prev);
+            if (target) {
+                setReports((prev) => prev.map((report) =>
+                    report.subject === `[Student Concern] ${target.title}` && report.parent_name === target.parent_name
+                        ? { ...report, status: "Resolved" }
+                        : report
+                ));
+            }
+            setStudentResolveTargetId(null);
+            await loadStudentReports();
+        } catch (error) {
+            setActionError(error instanceof Error ? error.message : "Unable to resolve student report.");
+        } finally {
+            setResolvingStudent(false);
+        }
+    }
+
     async function escalateToGuidance(id: number) {
         const escalated = await markReportStatus(id, "Escalated");
         if (!escalated) return false;
@@ -1173,7 +1208,7 @@ export default function ReportsPage() {
             if (selectedReport) {
                 const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/messages`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
                     body: JSON.stringify({ body: replyText.trim(), role: "adviser", attachments: cleanedAttachments }),
                 });
                 const data = await res.json().catch(() => null);
@@ -1183,10 +1218,24 @@ export default function ReportsPage() {
                     setActionError(message);
                     return;
                 }
+                // The report subscription can fetch the persisted row before
+                // this POST resolves. Only add the local acknowledgement when
+                // that snapshot has not already supplied the same message.
+                const hasPersistedReply = (replies: typeof selectedReport.replies | undefined) =>
+                    (replies ?? []).some((reply) =>
+                        reply.sender === "Adviser" &&
+                        reply.message === newReply.message &&
+                        (reply.attachments?.length ?? 0) === newReply.attachments.length
+                    );
                 setReports(prev => prev.map(r =>
-                    r.id === selectedReport.id ? { ...r, replies: [...(r.replies ?? []), newReply] } : r
+                    r.id === selectedReport.id && !hasPersistedReply(r.replies)
+                        ? { ...r, replies: [...(r.replies ?? []), newReply] }
+                        : r
                 ));
-                setSelectedReport(prev => prev ? { ...prev, replies: [...(prev.replies ?? []), newReply] } : prev);
+                setSelectedReport(prev => prev && !hasPersistedReply(prev.replies)
+                    ? { ...prev, replies: [...(prev.replies ?? []), newReply] }
+                    : prev
+                );
             }
 
             if (selectedStudRep) {
@@ -1267,13 +1316,17 @@ export default function ReportsPage() {
     const parentSelectedWithoutConcern = viewStep === "reports" && hasSelectedParentOrStudent && !selectedReport && !selectedStudRep && !selectedAdminMsg;
     const showEmptyDetail = noParentReportSelected || parentSelectedWithoutConcern;
     const detailSideBySide = detailBesideReports || detailBesideMessages || showEmptyDetail;
-    const detailPosition = detailBesideReports || parentSelectedWithoutConcern ? "left-[420px]" : detailBesideMessages || noParentReportSelected ? "left-[420px]" : "left-0";
+    const detailPosition = detailBesideReports || parentSelectedWithoutConcern ? "left-0 md:left-[420px]" : detailBesideMessages || noParentReportSelected ? "left-0 md:left-[420px]" : "left-0";
 
     const panelClass = (visible: boolean, bg: string, width: string, position = "left-0") =>
         `absolute inset-y-0 ${position} ${width} h-full flex flex-col overflow-hidden border-r border-slate-100 shadow-sm transition-all duration-200 ease-out ${bg} ${visible
             ? "opacity-100 translate-y-0 scale-100 pointer-events-auto"
             : "opacity-0 translate-y-2 scale-[0.99] pointer-events-none"
         }`;
+
+    const guideHighlight = (target: string) => guideTarget === target
+        ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100"
+        : "";
 
     // ── Tab counts ────────────────────────────────────────────────────────
     const tabCounts = {
@@ -1284,16 +1337,18 @@ export default function ReportsPage() {
 
     // ── Render ────────────────────────────────────────────────────────────
     return (
-        <div className="flex flex-col h-full bg-slate-50">
+        <div className="flex h-[calc(100dvh-4rem)] min-h-0 flex-col bg-slate-50 md:h-full">
+            {liveUpdateNotice && <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 sm:px-6">{liveUpdateNotice}</div>}
             {/* ── Top bar ── */}
-            <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 shrink-0">
-                <div>
+            <div className="flex flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                <div className="min-w-0">
                     <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">Reports & Messages</h1>
                     <p className="text-xs text-slate-400 mt-0.5">Manage parent reports, student concerns, and admin messages</p>
                 </div>
                 <button
                     onClick={() => setShowNewMessage(true)}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition shadow-sm"
+                    data-parent-guide="new-message"
+                    className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-600 sm:w-auto ${guideHighlight("new-message")}`}
                 >
                     <TrendingUp className="w-3.5 h-3.5" /> New Message
                 </button>
@@ -1313,12 +1368,12 @@ export default function ReportsPage() {
             )}
 
             {/* ── Body ── */}
-            <div className="flex flex-1 overflow-hidden relative">
-                <div className="relative w-full h-full">
+            <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                <div className="relative h-full w-full">
                     {/* ══ SLIDE 1 — Panel 1 (tab list + parent/student/admin list) ══ */}
                     <div className={panelClass(viewStep === "list" || detailBesideMessages, "bg-white", "w-full max-w-[420px]")}>
                         {/* Tab nav */}
-                        <div className="px-3 pt-4 pb-2 flex flex-col gap-1">
+                        <div data-parent-guide="inbox-tabs" className={`flex gap-1 overflow-x-auto rounded-2xl px-3 pb-2 pt-4 md:flex-col md:overflow-visible ${guideHighlight("inbox-tabs")}`}>
                             {(["Parent", "Student", "Principal"] as LeftTab[]).map(tab => {
                                 const icons: Record<LeftTab, React.ReactNode> = {
                                     Parent: <User className="w-4 h-4" />,
@@ -1328,7 +1383,7 @@ export default function ReportsPage() {
                                 const active = leftTab === tab;
                                 return (
                                     <button key={tab} onClick={() => { setLeftTab(tab); setSelectedParent(null); setSelectedReport(null); setSelectedAdminMsg(null); setSelectedStudent(null); setSelectedStudRep(null); setViewStep("list"); }}
-                                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-semibold transition ${active ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"}`}>
+                                        className={`flex min-h-11 shrink-0 items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${active ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"}`}>
                                         <span className="flex items-center gap-2.5">{icons[tab]}{tab === "Principal" ? "Messages" : `${tab} Reports`}</span>
                                         {tabCounts[tab] > 0 && (
                                             <span className={`text-[11px] font-extrabold px-1.5 py-0.5 rounded-full ${active ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}>{tabCounts[tab]}</span>
@@ -1342,11 +1397,11 @@ export default function ReportsPage() {
 
                         {/* Filter tabs (Parent only) */}
                         {leftTab === "Parent" && (
-                            <div className="px-3 pt-3 pb-1">
-                                <div className="flex gap-1 flex-wrap mb-2">
+                            <div data-parent-guide="report-filters" className={`rounded-2xl px-3 pt-3 pb-1 ${guideHighlight("report-filters")}`}>
+                                <div className="mb-2 flex gap-1 overflow-x-auto">
                                     {(["All", "Pending", "Ongoing", "Escalated"] as FilterTab[]).map(f => (
                                         <button key={f} onClick={() => setFilterTab(f)}
-                                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${filterTab === f ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                                            className={`min-h-9 shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${filterTab === f ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
                                             {f}
                                         </button>
                                     ))}
@@ -1376,7 +1431,7 @@ export default function ReportsPage() {
 
                         {/* ── Parent group list ── */}
                         {leftTab === "Parent" && (
-                            <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
+                            <div data-parent-guide="conversation-list" className={`flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 ${guideHighlight("conversation-list")}`}>
                                 {reportsLoading && (
                                     <p className="text-xs text-slate-400 text-center mt-8">Loading reports...</p>
                                 )}
@@ -1386,10 +1441,12 @@ export default function ReportsPage() {
                                 {filteredParentGroups.map(g => {
                                     const isActive = selectedParent?.parent_name === g.parent_name;
                                     const allResolved = g.reports.every(r => r.status === "Resolved");
+                                    const ongoingCount = g.reports.filter(r => r.status === "Ongoing").length;
+                                    const hasOngoing = ongoingCount > 0;
                                     const hasEscalated = g.reports.some(r => guidanceEscalated[r.id] && r.status !== "Resolved");
                                     return (
                                         <button key={g.parent_name} onClick={() => { setSelectedParent(g); setSelectedReport(null); setViewStep("reports"); }}
-                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-emerald-200 bg-emerald-50 ring-2 ring-emerald-200" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-emerald-200 bg-emerald-50 ring-2 ring-emerald-200" : hasOngoing ? "border-emerald-200 bg-emerald-50 shadow-sm hover:bg-emerald-100" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                                             <div className="flex items-center gap-2.5">
                                                 <ParentAvatar name={g.parent_name} profilePicture={g.parent_profile_picture} initials={g.initials} className="w-9 h-9 rounded-full text-xs" />
                                                 <div className="flex-1 min-w-0">
@@ -1402,6 +1459,7 @@ export default function ReportsPage() {
                                             </div>
                                             <div className="mt-2 flex items-center justify-between">
                                                 {allResolved && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-100 text-emerald-700">All Resolved</span>}
+                                                {!allResolved && hasOngoing && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-600 text-white">{ongoingCount} ongoing</span>}
                                                 {!allResolved && <span />}
                                                 <span className="text-[10px] text-slate-400">{g.reports.length} report{g.reports.length !== 1 ? "s" : ""}</span>
                                             </div>
@@ -1513,7 +1571,7 @@ export default function ReportsPage() {
                                                 className={`w-full text-left rounded-xl px-3 py-3 transition border ${r.status === "Resolved" ? "bg-emerald-50 border-emerald-100 hover:bg-emerald-100" : "bg-red-50 border-red-100 hover:bg-red-100"} ${isActive ? "ring-2 ring-emerald-300" : ""}`}>
                                                 <div className="flex items-start justify-between gap-2 mb-1.5">
                                                     <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(r.status)}`}>{reportStatusLabel(r, false)}</span>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(r.status)}`}>{reportStatusLabel(r)}</span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-1 mb-2">
                                                     {r.categories.map(cat => (
@@ -1577,7 +1635,7 @@ export default function ReportsPage() {
                     </div> {/* end SLIDE 2 */}
 
                     {/* ══ SLIDE 3 — Panel 3 (detail view) ══ */}
-                    <div className={panelClass(viewStep === "detail" || showEmptyDetail, "bg-slate-50", detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]", detailPosition)}>
+                    <div className={`${panelClass(viewStep === "detail" || showEmptyDetail, "bg-slate-50", detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]", detailPosition)} ${showEmptyDetail ? "hidden md:flex" : ""}`}>
                         {/* Back button */}
                         <div className="px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2 shrink-0">
                             <button onClick={() => {
@@ -1608,7 +1666,9 @@ export default function ReportsPage() {
 
                         {/* ── Parent report detail ── */}
                         {leftTab === "Parent" && selectedReport && (() => {
-                            const isGuidanceEsc = selectedReport.escalatedToGuidance && selectedReport.status !== "Resolved";
+                            const isPrincipalEsc = selectedReport.escalatedToPrincipal && selectedReport.status !== "Resolved";
+                            const isGuidanceEsc = selectedReport.escalatedToGuidance && !isPrincipalEsc && selectedReport.status !== "Resolved";
+                            const isEscalatedAway = isGuidanceEsc || isPrincipalEsc;
                             const isResolved = selectedReport.status === "Resolved";
                             const isLocked = !unlockedReports.has(selectedReport.id) && selectedReport.status === "New";
 
@@ -1631,7 +1691,7 @@ export default function ReportsPage() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                {selectedReport.status !== "Escalated" && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport, false)}</span>}
+                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport)}</span>
                                             </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (
@@ -1690,17 +1750,26 @@ export default function ReportsPage() {
                             return (
                                 <div className="flex-1 flex flex-col overflow-hidden">
                                     {/* Header */}
-                                    <div className={`px-6 py-5 bg-white border-b border-slate-100 ${isGuidanceEsc ? "border-l-4 border-l-red-500" : ""}`}>
+                                    <div className={`px-6 py-5 bg-white border-b border-slate-100 ${isEscalatedAway ? "border-l-4 border-l-red-500" : ""}`}>
                                         {isGuidanceEsc && (
                                             <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-red-50 rounded-xl border border-red-200">
                                                 <TriangleAlert className="w-4 h-4 text-red-600 shrink-0" />
                                                 <p className="text-xs font-bold text-red-700">This report has been escalated to the Guidance Counselor.</p>
                                             </div>
                                         )}
+                                        {isPrincipalEsc && (
+                                            <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-red-50 rounded-xl border border-red-200">
+                                                <TriangleAlert className="w-4 h-4 text-red-600 shrink-0" />
+                                                <p className="text-xs font-bold text-red-700">This report has been escalated to the Principal.</p>
+                                            </div>
+                                        )}
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="flex-1 min-w-0">
                                                 <h2 className="text-base font-extrabold text-slate-900 leading-snug">{selectedReport.subject}</h2>
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedReport.submitted_at}</p>
+                                                {selectedReport.submitted_by_role === "Subject Teacher" && (
+                                                    <p className="mt-2 text-xs font-semibold text-blue-700">Submitted by: {selectedReport.submitted_by_name} · Subject Teacher · {selectedReport.student_name} · {selectedReport.grade} - {selectedReport.section}</p>
+                                                )}
                                                 <div className="flex flex-wrap gap-1.5 mt-2">
                                                     {selectedReport.categories.map(cat => (
                                                         <span key={cat} className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 font-semibold border border-slate-200">{cat}</span>
@@ -1708,7 +1777,7 @@ export default function ReportsPage() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                {selectedReport.status !== "Escalated" && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport, false)}</span>}
+                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport)}</span>
                                             </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (
@@ -1721,13 +1790,13 @@ export default function ReportsPage() {
 
                                     {/* Message body */}
                                     <div ref={parentMessagesRef} className="flex-1 overflow-y-auto px-6 py-5">
-                                        {/* Parent's original message bubble — hidden for adviser-forwarded student concerns */}
+                                        {/* Opening report message — hidden for adviser-forwarded student concerns */}
                                         {selectedReport.message && !selectedReport.subject.startsWith("[Student Concern] ") && (
-                                            <div className="flex items-start gap-3 mb-5">
-                                                <ParentAvatar name={selectedReport.parent_name} profilePicture={selectedReport.parent_profile_picture} initials={getInitials(selectedReport.parent_name)} className="w-9 h-9 rounded-full text-xs mt-0.5" />
+                                          <div className="flex items-start gap-3 mb-5">
+                                                <ParentAvatar name={selectedReport.submitted_by_name ?? selectedReport.parent_name} profilePicture={selectedReport.parent_profile_picture} initials={getInitials(selectedReport.submitted_by_name ?? selectedReport.parent_name)} className="w-9 h-9 rounded-full text-xs mt-0.5" />
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-2 mb-1">
-                                                        <p className="text-xs font-bold text-slate-800">{selectedReport.parent_name}</p>
+                                                        <p className="text-xs font-bold text-slate-800">{selectedReport.submitted_by_name ?? selectedReport.parent_name}{selectedReport.submitted_by_role ? ` (${selectedReport.submitted_by_role})` : ""}</p>
                                                         <span className="text-[10px] text-slate-400">{selectedReport.submitted_at}</span>
                                                     </div>
                                                     <div className="bg-white rounded-2xl rounded-tl-none px-4 py-3 shadow-sm border border-slate-100 text-sm text-slate-700 leading-relaxed">
@@ -1751,7 +1820,7 @@ export default function ReportsPage() {
                                                 const isAdviserReply = reply.sender === "Adviser";
                                                 return (
                                                     <div key={i} className={`flex items-start gap-3 mb-4 ${isAdviserReply ? "flex-row-reverse" : ""}`}>
-                                                    <UserAvatar name={isAdviserReply ? "You" : reply.sender} src={reply.profilePicture} className="w-9 h-9 rounded-full mt-0.5" fallbackClassName={isAdviserReply ? "bg-emerald-500" : getAvatarColor(reply.sender)} />
+                                                    <UserAvatar name={isAdviserReply ? "You" : reply.sender} className="w-9 h-9 rounded-full mt-0.5" fallbackClassName={isAdviserReply ? "bg-emerald-500" : getAvatarColor(reply.sender)} />
                                                         <div className={`flex-1 flex flex-col ${isAdviserReply ? "items-end" : "items-start"}`}>
                                                             <div className="flex items-center gap-2 mb-1">
                                                                 <span className="text-[10px] text-slate-400">{reply.sent_at}</span>
@@ -1768,22 +1837,22 @@ export default function ReportsPage() {
                                     </div>
 
                                     {/* Actions + Reply */}
-                                    <div className="px-6 py-4 bg-white border-t border-slate-100">
-                                        {isResolved || isGuidanceEsc ? (
+                                    <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
+                                        {isResolved || isEscalatedAway ? (
                                             /* ── Adviser locked out after Guidance escalation ── */
                                             <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200">
                                                 <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
                                                     <TriangleAlert className="w-4 h-4 text-slate-400" />
                                                 </div>
                                                 <div>
-                                                    <p className="text-xs font-bold text-slate-600">{isResolved ? "Conversation resolved" : "Conversation handed over to Guidance"}</p>
-                                                    <p className="text-[11px] text-slate-400 mt-0.5">{isResolved ? "This concern has been resolved. No further messages can be sent." : "This report has been escalated. Only the Guidance Counselor and Parent can continue this conversation."}</p>
+                                                    <p className="text-xs font-bold text-slate-600">{isResolved ? "Conversation resolved" : isPrincipalEsc ? "Conversation handed over to Principal" : "Conversation handed over to Guidance"}</p>
+                                                    <p className="text-[11px] text-slate-400 mt-0.5">{isResolved ? "This concern has been resolved. No further messages can be sent." : isPrincipalEsc ? "This report has been escalated. Only the Principal and Parent can continue this conversation." : "This report has been escalated. Only the Guidance Counselor and Parent can continue this conversation."}</p>
                                                 </div>
                                             </div>
                                         ) : (
                                             <>
                                                 <div className="mb-3 flex flex-wrap items-center gap-2">
-                                                    <label className="relative flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
+                                                    <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                                         <Paperclip className="w-3.5 h-3.5" />
                                                         <input
                                                             type="file"
@@ -1799,14 +1868,14 @@ export default function ReportsPage() {
                                                         />
                                                     </label>
                                                     {selectedReport.status !== "Resolved" && (
-                                                        <button onClick={() => markReportStatus(selectedReport.id, "Resolved")}
-                                                            className="flex h-9 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100">
+                                                        <button onClick={() => setResolveTargetId(selectedReport.id)}
+                                                            className="flex min-h-11 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100">
                                                             <CheckCircle className="w-3.5 h-3.5" /> Resolve
                                                         </button>
                                                     )}
                                                     {selectedReport.status !== "Resolved" && (
                                                         <button onClick={() => setEscalateTarget(selectedReport.id)}
-                                                            className="flex h-9 items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-2.5 text-[11px] font-bold text-orange-600 transition hover:bg-orange-100">
+                                                            className="flex min-h-11 items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-2.5 text-[11px] font-bold text-orange-600 transition hover:bg-orange-100">
                                                             <TriangleAlert className="w-3.5 h-3.5" /> Escalate to Guidance
                                                         </button>
                                                     )}
@@ -1826,7 +1895,7 @@ export default function ReportsPage() {
                                                 </div>
 
                                                 {/* Reply box */}
-                                                <div className="flex items-end gap-3">
+                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                                                     <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 transition overflow-hidden bg-slate-50">
                                                         <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
                                                             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
@@ -1835,7 +1904,7 @@ export default function ReportsPage() {
                                                             className="w-full px-3.5 pt-2.5 pb-2 text-sm text-slate-700 resize-none outline-none bg-transparent" />
                                                     </div>
                                                     <button onClick={sendReply} disabled={sendingReply || (!replyText.trim() && replyAttachments.length === 0)}
-                                                        className={`p-2.5 rounded-xl transition ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
+                                                        className={`flex min-h-11 w-full items-center justify-center rounded-xl p-2.5 transition sm:w-auto ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
                                                         {sendingReply ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                                     </button>
                                                 </div>
@@ -1964,21 +2033,7 @@ export default function ReportsPage() {
                                         <div className="flex flex-wrap gap-2 mb-4">
 
                                             {selectedStudRep.status !== "Resolved" && (
-                                                <button onClick={async () => {
-                                                    await fetch(`/api/student-reports/${selectedStudRep.id}/status`, {
-                                                        method: "PATCH",
-                                                        headers: { "Content-Type": "application/json" },
-                                                        body: JSON.stringify({ status: "Resolved" }),
-                                                    });
-                                                    setStudentReps(prev => prev.map(r => r.id === selectedStudRep.id ? { ...r, status: "Resolved" } : r));
-                                                    setSelectedStudRep(p => p ? { ...p, status: "Resolved" } : p);
-                                                    // ✅ Also resolve any matching parent report created from this concern
-                                                    setReports(prev => prev.map(r =>
-                                                        r.subject === `[Student Concern] ${selectedStudRep.title}` && r.parent_name === selectedStudRep.parent_name
-                                                            ? { ...r, status: "Resolved" }
-                                                            : r
-                                                    ));
-                                                }}
+                                                <button onClick={() => setStudentResolveTargetId(selectedStudRep.id)}
                                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200 hover:bg-emerald-100 transition">
                                                     <CheckCircle className="w-3.5 h-3.5" /> Resolve
                                                 </button>
@@ -2152,6 +2207,18 @@ export default function ReportsPage() {
             </div>
 
             {/* New Message Modal */}
+            <ResolveConfirmationModal
+                open={resolveTargetId !== null}
+                saving={resolving}
+                onCancel={() => { if (!resolving) setResolveTargetId(null); }}
+                onConfirm={() => { void confirmResolve(); }}
+            />
+            <ResolveConfirmationModal
+                open={studentResolveTargetId !== null}
+                saving={resolvingStudent}
+                onCancel={() => { if (!resolvingStudent) setStudentResolveTargetId(null); }}
+                onConfirm={() => { void confirmStudentResolve(); }}
+            />
             {showNewMessage && (
                 <NewMessageModal
                     mode={leftTab === "Principal" ? "message" : "concern"}
@@ -2247,6 +2314,11 @@ export default function ReportsPage() {
                     </div>
                 </div>
             )}
+            <AdviserReportsGuide onStepChange={setGuideTarget} />
         </div>
     );
+}
+
+export default function ReportsPage() {
+    return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><ReportsPageContent /></Suspense>;
 }

@@ -1,516 +1,138 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  Users, GraduationCap, Monitor, ShieldAlert,
-  TrendingUp, ArrowRight, UserPlus, ClipboardList,
-  ShieldCheck, Download, Bell, Activity,
-  AlertTriangle, Megaphone, Calendar, RefreshCw,
-} from "lucide-react";
+import { useCallback, useEffect, useState, type ElementType } from "react";
+import { Activity, AlertTriangle, ArrowRight, Bell, ClipboardList, Download, GraduationCap, Megaphone, Monitor, RefreshCw, ShieldAlert, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import IctDashboardGuide from "./components/IctDashboardGuide";
 
-// ─── Types ────────────────────────────────────────────────────
-interface IctProfile {
-  name: string;
-  employeeId: string;
-  email: string;
-  initials: string;
+type IctProfile = { name: string; employeeId: string; email: string };
+type DashboardStats = { totalUsers: number; securityAlerts: number; advisers: number; parents: number; ictAdmins: number };
+type RecentEvent = { id: string; performedBy: string; action: string; description: string; timestamp: string };
+type PrincipalAnnouncement = { id: string; title: string; body: string; author: string; created_at: string; audience: string[] };
+type DashboardResponse = { success: boolean; message?: string; profile?: IctProfile; stats?: DashboardStats; recentEvents?: RecentEvent[]; announcements?: PrincipalAnnouncement[] };
+type DashboardData = { profile: IctProfile; stats: DashboardStats; recentEvents: RecentEvent[]; announcements: PrincipalAnnouncement[] };
+
+const AVATAR_COLORS = ["bg-teal-600", "bg-blue-600", "bg-green-700", "bg-violet-600", "bg-amber-600", "bg-orange-500", "bg-cyan-600", "bg-rose-600", "bg-indigo-600"];
+const EMPTY_STATS: DashboardStats = { totalUsers: 0, securityAlerts: 0, advisers: 0, parents: 0, ictAdmins: 0 };
+
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return parts.length === 0 ? "?" : `${parts[0][0] ?? ""}${parts.at(-1)?.[0] ?? ""}`.toUpperCase();
 }
-
-interface DashboardStats {
-  totalUsers: number;
-  totalStudents: number;
-  securityAlerts: number;
-  advisers: number;
-  parents: number;
-  ictAdmins: number;
-}
-
-interface RecentEvent {
-  id: string;
-  performedBy: string;
-  action: string;
-  description: string;
-  timestamp: string;
-}
-
-interface PrincipalAnnouncement {
-  id: string;
-  title: string;
-  body: string;
-  author: string;
-  created_at: string;
-  audience: string[];
-}
-
-// ─── Helpers ─────────────────────────────────────────────────
-function getInitials(name: string): string {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "?";
-  return ((parts[0][0] ?? "") + (parts[parts.length - 1][0] ?? "")).toUpperCase();
-}
-
-const AVATAR_COLORS = [
-  "bg-teal-600", "bg-blue-600", "bg-green-700",
-  "bg-violet-600", "bg-amber-600", "bg-orange-500",
-  "bg-cyan-600", "bg-rose-600", "bg-indigo-600",
-];
-function avatarColor(name: string): string {
+function avatarColor(name: string) {
   let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  for (let index = 0; index < name.length; index += 1) hash = name.charCodeAt(index) + ((hash << 5) - hash);
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function timeAgo(dateStr: string): string {
-  if (!dateStr) return "";
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins  = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days  = Math.floor(diff / 86400000);
-  if (mins  < 1)   return "Just now";
-  if (mins  < 60)  return `${mins}m ago`;
-  if (hours < 24)  return `${hours}h ago`;
-  if (days  < 7)   return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+function timeAgo(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "\u2014";
+  const minutes = Math.floor((Date.now() - date.getTime()) / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return days < 7 ? `${days}d ago` : date.toLocaleDateString("en-PH", { month: "short", day: "numeric" });
 }
 
-function actionBadgeColor(action: string): string {
-  const a = action.toLowerCase();
-  if (a.includes("login"))    return "bg-blue-50 text-blue-600";
-  if (a.includes("create"))   return "bg-green-50 text-green-600";
-  if (a.includes("security") || a.includes("alert")) return "bg-red-50 text-red-600";
-  if (a.includes("system") || a.includes("backup"))  return "bg-purple-50 text-purple-600";
-  if (a.includes("report") || a.includes("submit"))  return "bg-amber-50 text-amber-600";
-  if (a.includes("update") || a.includes("edit"))    return "bg-yellow-50 text-yellow-700";
-  if (a.includes("delete") || a.includes("remove"))  return "bg-red-50 text-red-600";
-  if (a.includes("message"))  return "bg-indigo-50 text-indigo-600";
-  return "bg-gray-100 text-gray-500";
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "\u2014" : date.toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function actionLabel(action: string): string {
-  if (!action) return "Event";
-  const first = action.split(/[_\s]/)[0];
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+function actionBadgeColor(action: string) {
+  const value = action.toLowerCase();
+  if (value.includes("login")) return "bg-blue-50 text-blue-700";
+  if (value.includes("create")) return "bg-green-50 text-green-700";
+  if (value.includes("security") || value.includes("alert") || value.includes("delete") || value.includes("remove")) return "bg-red-50 text-red-700";
+  if (value.includes("update") || value.includes("edit")) return "bg-amber-50 text-amber-700";
+  return "bg-gray-100 text-gray-600";
 }
 
-// ─── Sub-components ───────────────────────────────────────────
-function StatCard({
-  icon: Icon, iconColor, iconBg, label, sublabel, value, badge, badgeColor, barColor, barWidth, loading,
-}: {
-  icon: React.ElementType; iconColor: string; iconBg: string;
-  label: string; sublabel: string; value: string;
-  badge: string; badgeColor: string; barColor: string; barWidth: string;
-  loading?: boolean;
+function actionLabel(action: string) {
+  const first = action.trim().split(/[_\s]/)[0] || "Activity";
+  return `${first[0]?.toUpperCase() ?? ""}${first.slice(1).toLowerCase()}`;
+}
+
+function StatCard({ icon: Icon, iconColor, iconBg, label, sublabel, value, badge, badgeColor, barColor, barWidth, loading }: {
+  icon: ElementType; iconColor: string; iconBg: string; label: string; sublabel: string; value: number; badge: string; badgeColor: string; barColor: string; barWidth: string; loading: boolean;
 }) {
-  return (
-    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 flex flex-col gap-3">
-      <div className="flex items-start justify-between">
-        <div className={`w-10 h-10 rounded-lg ${iconBg} flex items-center justify-center`}>
-          <Icon className={`w-5 h-5 ${iconColor}`} />
-        </div>
-        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${badgeColor}`}>{badge}</span>
-      </div>
-      <div>
-        {loading
-          ? <div className="h-7 w-16 bg-gray-100 rounded animate-pulse mb-1" />
-          : <p className="text-2xl font-bold text-gray-900">{value}</p>
-        }
-        <p className="text-sm font-medium text-gray-700 mt-0.5">{label}</p>
-        <p className="text-xs text-gray-400 mt-0.5">{sublabel}</p>
-      </div>
-      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full ${barColor} rounded-full`} style={{ width: barWidth }} />
-      </div>
-    </div>
-  );
+  return <section className="flex min-w-0 flex-col gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
+    <div className="flex items-start justify-between gap-3"><div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${iconBg}`}><Icon className={`h-5 w-5 ${iconColor}`} aria-hidden="true" /></div><span className={`max-w-[58%] truncate rounded-full px-2 py-1 text-xs font-semibold ${badgeColor}`}>{loading ? "Loading" : badge}</span></div>
+    <div>{loading ? <div className="mb-1 h-7 w-16 animate-pulse rounded bg-gray-100" /> : <p className="text-2xl font-bold text-gray-900">{value.toLocaleString()}</p>}<p className="mt-0.5 text-sm font-medium text-gray-700">{label}</p><p className="mt-0.5 text-xs text-gray-400">{sublabel}</p></div>
+    <div className="h-1.5 overflow-hidden rounded-full bg-gray-100" aria-hidden="true"><div className={`h-full rounded-full ${barColor}`} style={{ width: barWidth }} /></div>
+  </section>;
 }
 
-function RoleDot({ color, label, count, pct, loading }: {
-  color: string; label: string; count: number; pct: string; loading?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <div className={`w-2.5 h-2.5 rounded-full ${color}`} />
-        <span className="text-sm text-gray-600">{label}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        {loading
-          ? <div className="h-4 w-8 bg-gray-100 rounded animate-pulse" />
-          : <span className="text-sm font-semibold text-gray-900">{count}</span>
-        }
-        <span className="text-xs text-gray-400 w-8 text-right">{pct}</span>
-      </div>
-    </div>
-  );
+function RoleDot({ color, label, count, percentage }: { color: string; label: string; count: number; percentage: string }) {
+  return <div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} /><span className="truncate text-sm text-gray-600">{label}</span></div><span className="shrink-0 text-sm font-semibold text-gray-900">{count} <span className="ml-1 text-xs font-normal text-gray-400">{percentage}</span></span></div>;
 }
 
-function QuickAction({ icon: Icon, label, href }: {
-  icon: React.ElementType; label: string; href: string;
-}) {
-  return (
-    <a
-      href={href}
-      className="flex items-center justify-between px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 hover:bg-[#274e13] hover:border-[#274e13] group transition-all"
-    >
-      <div className="flex items-center gap-3">
-        <Icon className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-        <span className="text-sm font-medium text-gray-700 group-hover:text-white transition-colors">{label}</span>
-      </div>
-      <ArrowRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition-colors" />
-    </a>
-  );
+function QuickAction({ icon: Icon, label, href }: { icon: ElementType; label: string; href: string }) {
+  return <a href={href} className="group flex min-w-0 items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 transition-colors hover:border-[#274e13] hover:bg-[#274e13]"><span className="flex min-w-0 items-center gap-3"><Icon className="h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-white" aria-hidden="true" /><span className="truncate text-sm font-medium text-gray-700 transition-colors group-hover:text-white">{label}</span></span><ArrowRight className="h-3.5 w-3.5 shrink-0 text-gray-400 transition-colors group-hover:text-white" aria-hidden="true" /></a>;
 }
 
-// ─── Main Dashboard ───────────────────────────────────────────
 export default function DashboardPage() {
-  const [profile,       setProfile]       = useState<IctProfile | null>(null);
-  const [stats,         setStats]         = useState<DashboardStats | null>(null);
-  const [recentEvents,  setRecentEvents]  = useState<RecentEvent[]>([]);
-  const [announcements, setAnnouncements] = useState<PrincipalAnnouncement[]>([]);
-  const [loadingProfile,setLoadingProfile]= useState(true);
-  const [loadingStats,  setLoadingStats]  = useState(true);
-  const [loadingEvents, setLoadingEvents] = useState(true);
-  const [loadingAnn,    setLoadingAnn]    = useState(true);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
-  // ── Fetch profile ──
-  useEffect(() => {
-    fetch("/api/ict/me")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success && data.ict) {
-          const full = data.ict.name || `${data.ict.firstName} ${data.ict.lastName}`.trim();
-          setProfile({
-            name:       full,
-            employeeId: data.ict.employeeId ?? "",
-            email:      data.ict.email      ?? "",
-            initials:   getInitials(full),
-          });
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoadingProfile(false));
+  const loadDashboard = useCallback(async (background = false) => {
+    if (background) setRefreshing(true);
+    else { setLoading(true); setError(null); }
+    try {
+      const { response, data } = await fetchJsonWithRetry<DashboardResponse>("/api/ict/dashboard", { cache: "no-store" });
+      if (!response.ok || !data?.success || !data.profile || !data.stats || !Array.isArray(data.recentEvents) || !Array.isArray(data.announcements)) throw new Error(data?.message || "Unable to load dashboard data.");
+      setDashboard({ profile: data.profile, stats: data.stats, recentEvents: data.recentEvents, announcements: data.announcements });
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to load dashboard data.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  // ── Fetch user counts ──
   useEffect(() => {
-    fetch("/api/ict/user-management")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success && Array.isArray(data.users)) {
-          const users: any[] = data.users;
-          const advisers  = users.filter(u => u.role === "Adviser").length;
-          const parents   = users.filter(u => u.role === "Parent").length;
-          const ictAdmins = users.filter(u => u.role === "ICT").length;
-          setStats({
-            totalUsers:     users.length,
-            totalStudents:  0, // fetched separately below
-            securityAlerts: 0,
-            advisers,
-            parents,
-            ictAdmins,
-          });
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoadingStats(false));
+    const initialLoad = window.setTimeout(() => { void loadDashboard(); }, 0);
+    return () => window.clearTimeout(initialLoad);
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const refresh = () => { void loadDashboard(true); };
+    const client = supabaseBrowser;
+    const channel = client?.channel("ict-dashboard-principal-announcements").on("postgres_changes", { event: "*", schema: "public", table: "principal_announcements" }, refresh).subscribe();
+    const fallbackRefresh = window.setInterval(refresh, 30_000);
+    window.addEventListener("ict-profile-updated", refresh);
+    return () => { window.clearInterval(fallbackRefresh); window.removeEventListener("ict-profile-updated", refresh); if (channel && client) void client.removeChannel(channel); };
+  }, [loadDashboard]);
+
+  const stats = dashboard?.stats ?? EMPTY_STATS;
+  const total = stats.totalUsers;
+  const percent = (count: number) => total > 0 ? `${Math.round((count / total) * 100)}%` : "\u2014";
+  const roleBar = (count: number) => total > 0 ? `${Math.round((count / total) * 100)}%` : "0%";
+  const securityBar = `${Math.min(100, (stats.securityAlerts / 5) * 100)}%`;
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100"
+    : "";
+  const handleGuideStepChange = useCallback((target: string | null) => {
+    setGuideTarget(target);
+    window.dispatchEvent(new CustomEvent("ict-dashboard-guide-target", { detail: target }));
   }, []);
 
-  // ── Fetch recent audit events ──
-  useEffect(() => {
-    fetch("/api/ict/audit-log?page=1&perPage=5")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          const securityCount = (data.auditLog ?? []).filter(
-            (e: any) => (e.action ?? "").toLowerCase().includes("security")
-          ).length;
-          setStats(prev => prev ? { ...prev, securityAlerts: securityCount } : prev);
-          setRecentEvents(
-            (data.auditLog ?? []).map((e: any) => ({
-              id:          e.id,
-              performedBy: e.performedBy  ?? "Unknown",
-              action:      e.action       ?? "",
-              description: e.description ?? e.action ?? "",
-              timestamp:   e.timestamp   ?? "",
-            }))
-          );
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoadingEvents(false));
-  }, []);
-
-  // ── Fetch principal announcements ──
-  useEffect(() => {
-    fetch("/api/ict/principal-announcements")
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          setAnnouncements(
-            (data.announcements ?? []).slice(0, 4).map((a: any) => ({
-              id:         String(a.id),
-              title:      a.title   ?? "",
-              body:       a.body    ?? a.message ?? "",
-              author:     a.author  ?? "Principal",
-              created_at: a.created_at ?? "",
-              audience:   Array.isArray(a.audience) ? a.audience : [],
-            }))
-          );
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoadingAnn(false));
-  }, []);
-
-  const total    = stats?.totalUsers ?? 0;
-  const advisers = stats?.advisers   ?? 0;
-  const parents  = stats?.parents    ?? 0;
-  const ict      = stats?.ictAdmins  ?? 0;
-  const pctOf    = (n: number) => total > 0 ? `${Math.round((n / total) * 100)}%` : "—";
-
-  return (
-    <div className="p-6 space-y-5 min-h-screen bg-gray-50">
-
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <a
-          href="/dashboard/ict/audit-trail"
-          className="flex items-center gap-1.5 text-xs font-semibold text-[#274e13] border border-[#274e13]/30 px-3 py-1.5 rounded-lg hover:bg-green-50 transition"
-        >
-          <Activity className="w-3.5 h-3.5" /> Audit Trail
-        </a>
-      </div>
-
-      {/* ROW 1 — 4 Stat Cards */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard
-          icon={Users} iconColor="text-blue-600" iconBg="bg-blue-50"
-          label="Total Users" sublabel="Across all roles"
-          value={total.toLocaleString()}
-          badge={loadingStats ? "—" : `${total} accounts`}
-          badgeColor="bg-blue-50 text-blue-600"
-          barColor="bg-blue-500" barWidth={total > 0 ? "75%" : "0%"}
-          loading={loadingStats}
-        />
-        <StatCard
-          icon={GraduationCap} iconColor="text-[#274e13]" iconBg="bg-green-50"
-          label="Active Advisers" sublabel="Class advisers registered"
-          value={advisers.toLocaleString()}
-          badge={loadingStats ? "—" : `${advisers} advisers`}
-          badgeColor="bg-green-50 text-green-600"
-          barColor="bg-[#274e13]" barWidth={advisers > 0 ? "70%" : "0%"}
-          loading={loadingStats}
-        />
-        <StatCard
-          icon={Monitor} iconColor="text-amber-600" iconBg="bg-amber-50"
-          label="Registered Parents" sublabel="Active parent accounts"
-          value={parents.toLocaleString()}
-          badge={loadingStats ? "—" : `${parents} parents`}
-          badgeColor="bg-amber-50 text-amber-600"
-          barColor="bg-amber-500" barWidth={parents > 0 ? "80%" : "0%"}
-          loading={loadingStats}
-        />
-        <StatCard
-          icon={ShieldAlert} iconColor="text-red-600" iconBg="bg-red-50"
-          label="Security Alerts" sublabel="From recent audit log"
-          value={(stats?.securityAlerts ?? 0).toLocaleString()}
-          badge={loadingEvents ? "—" : `Last 5 entries`}
-          badgeColor="bg-red-50 text-red-600"
-          barColor="bg-red-500" barWidth={(stats?.securityAlerts ?? 0) > 0 ? "40%" : "5%"}
-          loading={loadingEvents}
-        />
-      </div>
-
-      {/* ROW 2 — Personal Profile + Role Breakdown */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-
-        {/* Recent Activities — left 2/3 */}
-        <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-gray-500" />
-              <h2 className="text-sm font-semibold text-gray-900">Recent Activities</h2>
-              <span className="flex items-center gap-1 text-[10px] font-semibold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
-                <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
-                Live
-              </span>
-            </div>
-            <a href="/dashboard/ict/audit-trail" className="text-xs font-medium text-[#274e13] hover:underline flex items-center gap-1">
-              View All <ArrowRight className="w-3 h-3" />
-            </a>
-          </div>
-
-          <div className="space-y-0">
-            {loadingEvents ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0 animate-pulse">
-                  <div className="w-8 h-8 rounded-full bg-gray-100 shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3 bg-gray-100 rounded w-32" />
-                    <div className="h-3 bg-gray-100 rounded w-56" />
-                  </div>
-                </div>
-              ))
-            ) : recentEvents.length === 0 ? (
-              <p className="text-sm text-gray-400 py-8 text-center">No recent activity found.</p>
-            ) : (
-              recentEvents.map(event => (
-                <div key={event.id} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0">
-                  <div className={`w-8 h-8 rounded-full ${avatarColor(event.performedBy)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>
-                    {getInitials(event.performedBy)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-800">{event.performedBy}</p>
-                    <p className="text-xs text-gray-500 truncate">{event.description}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5 shrink-0">
-                    <span className="text-[10px] text-gray-400">{event.timestamp}</span>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${actionBadgeColor(event.action)}`}>
-                      {actionLabel(event.action)}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Personal Profile — right 1/3 */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex flex-col gap-4">
-          <h2 className="text-sm font-semibold text-gray-900">Personal Profile</h2>
-
-          {/* Avatar */}
-          <div className="flex flex-col items-center gap-2 py-2">
-            {loadingProfile ? (
-              <div className="w-16 h-16 rounded-full bg-gray-100 animate-pulse border-4 border-green-100" />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-[#274e13] flex items-center justify-center text-white text-xl font-bold border-4 border-green-100">
-                {profile?.initials ?? "?"}
-              </div>
-            )}
-            <div className="text-center">
-              {loadingProfile
-                ? <div className="h-4 w-32 bg-gray-100 rounded animate-pulse mx-auto mb-1" />
-                : <p className="text-sm font-semibold text-gray-900">{profile?.name ?? "—"}</p>
-              }
-              <p className="text-xs text-gray-400">ICT Administrator</p>
-            </div>
-          </div>
-
-          {/* Info rows */}
-          <div className="space-y-2">
-            {[
-              { label: "Employee ID", value: loadingProfile ? null : (profile?.employeeId ?? "—") },
-              { label: "Email",       value: loadingProfile ? null : (profile?.email      ?? "—") },
-              { label: "Department",  value: "ICT Division" },
-            ].map((row) => (
-              <div key={row.label} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
-                <span className="text-xs text-gray-400">{row.label}</span>
-                {row.value === null
-                  ? <div className="h-3 w-24 bg-gray-100 rounded animate-pulse" />
-                  : <span className="text-xs font-semibold text-gray-700 truncate max-w-36 text-right">{row.value}</span>
-                }
-              </div>
-            ))}
-          </div>
-
-          {/* Role Breakdown */}
-          <div className="pt-2 border-t border-gray-100">
-            <p className="text-xs font-semibold text-gray-500 mb-2">Role Breakdown</p>
-            <div className="space-y-2">
-              <RoleDot color="bg-blue-500"    label="Parents"    count={parents}  pct={pctOf(parents)}  loading={loadingStats} />
-              <RoleDot color="bg-[#274e13]"   label="Advisers"   count={advisers} pct={pctOf(advisers)} loading={loadingStats} />
-              <RoleDot color="bg-purple-500"  label="ICT Admins" count={ict}      pct={pctOf(ict)}      loading={loadingStats} />
-            </div>
-            <div className="mt-3 pt-2 border-t border-gray-100 flex justify-between">
-              <span className="text-xs text-gray-400">Total Accounts</span>
-              {loadingStats
-                ? <div className="h-3 w-10 bg-gray-100 rounded animate-pulse" />
-                : <span className="text-xs font-bold text-gray-900">{total}</span>
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ROW 3 — Principal Announcements + Quick Actions */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-
-        {/* Principal Announcements — left 2/3 */}
-        <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Bell className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-900">Principal Announcements</h2>
-              {!loadingAnn && announcements.length > 0 && (
-                <span className="text-xs font-semibold bg-green-50 text-[#274e13] px-2 py-0.5 rounded-full">
-                  {announcements.length} new
-                </span>
-              )}
-            </div>
-            <a href="/dashboard/ict/Announcements" className="text-xs font-medium text-[#274e13] hover:underline flex items-center gap-1">
-              View All <ArrowRight className="w-3 h-3" />
-            </a>
-          </div>
-
-          <div className="space-y-0">
-            {loadingAnn ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0 animate-pulse">
-                  <div className="w-8 h-8 rounded-full bg-gray-100 shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3 bg-gray-100 rounded w-40" />
-                    <div className="h-3 bg-gray-100 rounded w-64" />
-                  </div>
-                </div>
-              ))
-            ) : announcements.length === 0 ? (
-              <div className="flex flex-col items-center py-8 gap-2">
-                <Megaphone className="w-8 h-8 text-gray-200" />
-                <p className="text-sm text-gray-400">No announcements from the Principal yet.</p>
-              </div>
-            ) : (
-              announcements.map(ann => (
-                <div key={ann.id} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0">
-                  <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center shrink-0">
-                    <Megaphone className="w-4 h-4 text-[#274e13]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-800 leading-snug">{ann.title}</p>
-                    <p className="text-xs text-gray-500 mt-0.5 leading-snug truncate">{ann.body}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className="text-[10px] text-gray-400 whitespace-nowrap">{timeAgo(ann.created_at)}</span>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-[#274e13]">
-                      {ann.author}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Quick Actions — right 1/3 */}
-        <div className="flex flex-col gap-4">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex-1">
-            <div className="flex items-center gap-2 mb-4">
-              <ShieldCheck className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-900">Quick Actions</h2>
-            </div>
-            <div className="flex flex-col gap-2">
-              <QuickAction icon={UserPlus}     label="Add New User"          href="/dashboard/ict/user-management" />
-              <QuickAction icon={ClipboardList} label="View Audit Trail"      href="/dashboard/ict/audit-trail"     />
-              <QuickAction icon={Megaphone}    label="Announcements"          href="/dashboard/ict/Announcements"   />
-              <QuickAction icon={Users}        label="Manage Users"           href="/dashboard/ict/user-management" />
-              <QuickAction icon={AlertTriangle} label="Security Alerts"       href="/dashboard/ict/audit-trail"     />
-              <QuickAction icon={Download}     label="Student Profiles"       href="/dashboard/ict/StudentProfiles" />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  return <div className="min-h-full min-w-0 overflow-x-clip bg-gray-50 px-3 py-4 sm:px-5 sm:py-6 lg:px-6"><div className="mx-auto w-full max-w-[1500px] space-y-4 sm:space-y-5">
+    <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><h1 className="text-2xl font-bold text-gray-900">Dashboard</h1><div data-parent-guide="ict-dashboard-actions" className={`grid grid-cols-2 gap-2 rounded-2xl sm:flex sm:flex-wrap ${guideHighlight("ict-dashboard-actions")}`}><button type="button" onClick={() => void loadDashboard(true)} disabled={loading || refreshing} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0 sm:py-1.5"><RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />{refreshing ? "Refreshing" : "Refresh"}</button><a href="/dashboard/ict/audit-trail" className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-[#274e13]/30 px-3 py-2 text-xs font-semibold text-[#274e13] transition hover:bg-green-50 sm:min-h-0 sm:py-1.5"><Activity className="h-3.5 w-3.5" aria-hidden="true" />Audit Trail</a></div></header>
+    {error && <div role="alert" className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between"><span>{dashboard ? `Could not refresh the dashboard. Showing the last confirmed data. ${error}` : error}</span><button type="button" onClick={() => void loadDashboard()} className="w-full shrink-0 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 sm:w-auto">Try again</button></div>}
+    {loading && !dashboard ? <div className="rounded-xl border border-gray-100 bg-white p-8 text-center text-sm font-medium text-gray-400">Loading dashboard...</div> : !dashboard ? null : <>
+      <div data-parent-guide="ict-dashboard-summary" className={`grid grid-cols-2 gap-3 rounded-2xl lg:gap-4 xl:grid-cols-4 ${guideHighlight("ict-dashboard-summary")}`}><StatCard icon={Users} iconColor="text-blue-600" iconBg="bg-blue-50" label="Total Users" sublabel="Active accounts across roles" value={total} badge={`${total} accounts`} badgeColor="bg-blue-50 text-blue-700" barColor="bg-blue-500" barWidth={total > 0 ? "100%" : "0%"} loading={loading} /><StatCard icon={GraduationCap} iconColor="text-[#274e13]" iconBg="bg-green-50" label="Active Advisers" sublabel="Class advisers with active accounts" value={stats.advisers} badge={`${stats.advisers} advisers`} badgeColor="bg-green-50 text-green-700" barColor="bg-[#274e13]" barWidth={roleBar(stats.advisers)} loading={loading} /><StatCard icon={Monitor} iconColor="text-amber-600" iconBg="bg-amber-50" label="Active Parents" sublabel="Parents with active accounts" value={stats.parents} badge={`${stats.parents} parents`} badgeColor="bg-amber-50 text-amber-700" barColor="bg-amber-500" barWidth={roleBar(stats.parents)} loading={loading} /><StatCard icon={ShieldAlert} iconColor="text-red-600" iconBg="bg-red-50" label="Security Alerts" sublabel="Within the latest 5 audit events" value={stats.securityAlerts} badge="Latest audit events" badgeColor="bg-red-50 text-red-700" barColor="bg-red-500" barWidth={securityBar} loading={loading} /></div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3"><section data-parent-guide="ict-recent-activity" className={`min-w-0 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5 xl:col-span-2 ${guideHighlight("ict-recent-activity")}`}><div className="mb-4 flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><Activity className="h-4 w-4 shrink-0 text-gray-500" /><h2 className="truncate text-sm font-semibold text-gray-900">Recent Activities</h2></div><a href="/dashboard/ict/audit-trail" className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-[#274e13] hover:underline">View all <ArrowRight className="h-3 w-3" /></a></div>{dashboard.recentEvents.length === 0 ? <p className="py-8 text-center text-sm text-gray-400">No recent activity found.</p> : <div>{dashboard.recentEvents.map((event) => <a key={event.id} href="/dashboard/ict/audit-trail" className="flex flex-col gap-2 border-b border-gray-50 py-3 transition hover:bg-gray-50 sm:flex-row sm:items-start sm:gap-3"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${avatarColor(event.performedBy)}`}>{getInitials(event.performedBy)}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-gray-800">{event.performedBy}</span><span className="block break-words text-xs text-gray-500">{event.description}</span></span><span className="flex items-center justify-between gap-2 sm:flex-col sm:items-end"><span className="text-[10px] text-gray-400">{formatTimestamp(event.timestamp)}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${actionBadgeColor(event.action)}`}>{actionLabel(event.action)}</span></span></a>)}</div>}</section>
+      <section className="min-w-0 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5"><div className="mb-4 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold text-gray-900">Personal Profile</h2><a href="/dashboard/ict/profile" className="text-xs font-medium text-[#274e13] hover:underline">View profile</a></div><div className="flex flex-col items-center gap-2 py-2 text-center"><span className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-green-100 bg-[#274e13] text-xl font-bold text-white">{getInitials(dashboard.profile.name)}</span><div className="min-w-0"><p className="break-words text-sm font-semibold text-gray-900">{dashboard.profile.name}</p><p className="text-xs text-gray-400">ICT Administrator</p></div></div><dl className="mt-3 space-y-2"><div className="flex items-start justify-between gap-3 border-b border-gray-50 py-2"><dt className="shrink-0 text-xs text-gray-400">Employee ID</dt><dd className="break-all text-right text-xs font-semibold text-gray-700">{dashboard.profile.employeeId || "\u2014"}</dd></div><div className="flex items-start justify-between gap-3 border-b border-gray-50 py-2"><dt className="shrink-0 text-xs text-gray-400">Email</dt><dd className="break-all text-right text-xs font-semibold text-gray-700">{dashboard.profile.email || "\u2014"}</dd></div><div className="flex items-start justify-between gap-3 py-2"><dt className="text-xs text-gray-400">Department</dt><dd className="text-right text-xs font-semibold text-gray-700">ICT Division</dd></div></dl><div className="mt-2 border-t border-gray-100 pt-3"><p className="mb-2 text-xs font-semibold text-gray-500">Role Breakdown</p><div className="space-y-2"><RoleDot color="bg-blue-500" label="Parents" count={stats.parents} percentage={percent(stats.parents)} /><RoleDot color="bg-[#274e13]" label="Advisers" count={stats.advisers} percentage={percent(stats.advisers)} /><RoleDot color="bg-purple-500" label="ICT Admins" count={stats.ictAdmins} percentage={percent(stats.ictAdmins)} /></div><div className="mt-3 flex justify-between border-t border-gray-100 pt-2 text-xs"><span className="text-gray-400">Total active accounts</span><span className="font-bold text-gray-900">{total}</span></div></div></section></div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3"><section className="min-w-0 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5 xl:col-span-2"><div className="mb-4 flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><Bell className="h-4 w-4 shrink-0 text-gray-400" /><h2 className="truncate text-sm font-semibold text-gray-900">Principal Announcements</h2>{dashboard.announcements.length > 0 && <span className="shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-xs font-semibold text-[#274e13]">{dashboard.announcements.length} latest</span>}</div><a href="/dashboard/ict/Announcements" className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-[#274e13] hover:underline">View all <ArrowRight className="h-3 w-3" /></a></div>{dashboard.announcements.length === 0 ? <div className="flex flex-col items-center gap-2 py-8 text-center"><Megaphone className="h-8 w-8 text-gray-200" /><p className="text-sm text-gray-400">No announcements from the Principal yet.</p></div> : <div>{dashboard.announcements.map((announcement) => <a key={announcement.id} href="/dashboard/ict/Announcements" className="flex flex-col gap-2 border-b border-gray-50 py-3 transition hover:bg-gray-50 sm:flex-row sm:items-start sm:gap-3"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100"><Megaphone className="h-4 w-4 text-[#274e13]" /></span><span className="min-w-0 flex-1"><span className="block break-words text-sm font-semibold leading-snug text-gray-800">{announcement.title}</span><span className="mt-0.5 block break-words text-xs leading-snug text-gray-500">{announcement.body || "No message content."}</span></span><span className="flex items-center justify-between gap-2 sm:flex-col sm:items-end"><span className="whitespace-nowrap text-[10px] text-gray-400">{timeAgo(announcement.created_at)}</span><span className="rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-[#274e13]">{announcement.author}</span></span></a>)}</div>}</section><section data-parent-guide="ict-quick-actions" className={`min-w-0 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5 ${guideHighlight("ict-quick-actions")}`}><div className="mb-4 flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-gray-400" /><h2 className="text-sm font-semibold text-gray-900">Quick Actions</h2></div><div className="flex flex-col gap-2"><QuickAction icon={UserPlus} label="Add New User" href="/dashboard/ict/user-management/create-user" /><QuickAction icon={ClipboardList} label="View Audit Trail" href="/dashboard/ict/audit-trail" /><QuickAction icon={Megaphone} label="Announcements" href="/dashboard/ict/Announcements" /><QuickAction icon={Users} label="Manage Users" href="/dashboard/ict/user-management" /><QuickAction icon={AlertTriangle} label="Security Alerts" href="/dashboard/ict/audit-trail" /><QuickAction icon={Download} label="Student Profiles" href="/dashboard/ict/StudentProfiles" /></div></section></div>
+    </>}
+  </div>{dashboard && <IctDashboardGuide onStepChange={handleGuideStepChange} />}</div>;
 }

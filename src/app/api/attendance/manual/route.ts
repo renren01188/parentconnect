@@ -11,11 +11,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { logAudit } from "@/lib/audit";
 
 type ManualBody = {
   student_id: string;
   type: "Time In" | "Time Out";
-  status: "On Time" | "Late" | "Absent";
+  // Kept optional for backwards compatibility. On Time/Late is always
+  // calculated on the server from ICT's saved Late After value.
+  status?: "On Time" | "Late" | "Absent" | "Present";
   remark?: string;
 };
 
@@ -40,6 +43,11 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+function isWeekend(date: string) {
+  const day = new Date(`${date}T00:00:00+08:00`).getDay();
+  return day === 0 || day === 6;
+}
+
 function getNowTime() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",
@@ -55,6 +63,16 @@ function getNowTime() {
   return `${hour}:${minute}:${second}`;
 }
 
+function getCurrentMinutes() {
+  const [hour, minute] = getNowTime().split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function timeToMinutes(value: string) {
+  const [hour, minute] = value.slice(0, 5).split(":").map(Number);
+  return hour * 60 + minute;
+}
+
 function buildFullName(student: StudentNameFields) {
   return [student.first_name, student.middle_name, student.last_name, student.suffix]
     .filter(Boolean)
@@ -64,11 +82,14 @@ function buildFullName(student: StudentNameFields) {
 export async function POST(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const body = (await req.json()) as ManualBody;
 
-    if (!body.student_id || !body.type || !body.status) {
+    if (!body.student_id || !body.type) {
       return NextResponse.json(
-        { success: false, message: "student_id, type, and status are required" },
+        { success: false, message: "student_id and type are required" },
         { status: 400 }
       );
     }
@@ -85,6 +106,7 @@ export async function POST(req: NextRequest) {
     let query = supabase
       .from("students")
       .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section, class_session")
+      .eq("archive_status", "active")
       .eq("student_id", body.student_id);
 
     // ── CHANGE: OR filter across all sections instead of single .eq() ──
@@ -121,6 +143,39 @@ export async function POST(req: NextRequest) {
     const student        = students[0];
     const attendanceDate = getToday();
     const timeLogged     = getNowTime();
+    if (isWeekend(attendanceDate)) {
+      return NextResponse.json(
+        { success: false, message: "Manual attendance is unavailable on weekends." },
+        { status: 403 }
+      );
+    }
+    const { data: activeSY, error: schoolYearError } = await supabase
+      .from("school_year_config")
+      .select("id, start_date, end_date")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (schoolYearError) throw schoolYearError;
+    if (!activeSY || attendanceDate < activeSY.start_date || attendanceDate > activeSY.end_date) {
+      return NextResponse.json(
+        { success: false, message: "Manual attendance is only available during the active school year." },
+        { status: 403 }
+      );
+    }
+    const { data: holidays, error: holidayError } = await supabase
+      .from("school_holidays")
+      .select("id")
+      .eq("school_year_config_id", activeSY.id)
+      .eq("holiday_date", attendanceDate)
+      .limit(1);
+    // school_holidays is optional until its migration has been applied.
+    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+    if ((holidays?.length ?? 0) > 0) {
+      return NextResponse.json(
+        { success: false, message: "Manual attendance is unavailable on a school holiday." },
+        { status: 403 }
+      );
+    }
     const { data: sectionAssignment, error: sectionAssignmentError } = await supabase
       .from("sections")
       .select("class_session")
@@ -130,12 +185,45 @@ export async function POST(req: NextRequest) {
     if (sectionAssignmentError) throw sectionAssignmentError;
     const sessionType = (sectionAssignment?.class_session || student.class_session || "Morning") as "Morning" | "Afternoon";
 
-    const { data: existing } = await supabase
+    const { data: session, error: sessionError } = await supabase
+      .from("class_sessions")
+      .select("scheduled_start, scheduled_end, late_after, absent_after")
+      .eq("session_date", attendanceDate)
+      .eq("session_type", sessionType)
+      .maybeSingle();
+    if (sessionError) throw sessionError;
+    if (!session) {
+      return NextResponse.json(
+        { success: false, message: "ICT has not saved a class schedule for this session." },
+        { status: 409 }
+      );
+    }
+
+    const now = getCurrentMinutes();
+    const start = timeToMinutes(session.scheduled_start);
+    const end = timeToMinutes(session.scheduled_end);
+    if (now < start || now >= end) {
+      return NextResponse.json(
+        { success: false, message: now < start
+          ? "Manual attendance is not started yet. It opens at the ICT-configured scheduled start."
+          : "Manual attendance is unavailable because the ICT-configured class session has ended." },
+        { status: 409 }
+      );
+    }
+
+    // An adviser can explicitly record a known absence. Otherwise, the
+    // server calculates On Time/Late so the UI cannot override ICT's rule.
+    const computedStatus: "On Time" | "Late" | "Absent" = body.status === "Absent"
+      ? "Absent"
+      : now <= timeToMinutes(session.late_after ?? session.scheduled_start) ? "On Time" : "Late";
+
+    const { data: existing, error: existingError } = await supabase
       .from("attendance_logs")
-      .select("id, type, status")
+      .select("id, type, status, remark")
       .eq("student_db_id", student.id)
       .eq("attendance_date", attendanceDate)
       .eq("session_type", sessionType);
+    if (existingError) throw existingError;
 
     const hasExcusedLog = (existing ?? []).some((log) => log.status === "Excused");
     if (hasExcusedLog) {
@@ -147,6 +235,50 @@ export async function POST(req: NextRequest) {
 
     const existingSameType = (existing ?? []).find((log) => log.type === body.type);
 
+    // "Present" is a correction request, not a new attendance status. Keep
+    // the established On Time value so existing history, reports, and parent
+    // views continue to treat it as Present. Only a recorded Late event of
+    // the same type can be corrected, and its original event fields remain.
+    if (body.status === "Present" && existingSameType?.status === "Late") {
+      const { data: log, error: correctionError } = await supabase
+        .from("attendance_logs")
+        .update({
+          status: "On Time",
+          remark: body.remark?.trim() || existingSameType.remark || "Corrected from Late to Present by adviser",
+        })
+        .eq("id", existingSameType.id)
+        .select()
+        .single();
+      if (correctionError) throw correctionError;
+
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Late", newStatus: "On Time", details: `Corrected Late ${body.type} to Present for ${buildFullName(student)} (${student.student_id}) without changing the attendance event.` });
+
+      return NextResponse.json({
+        success: true,
+        message: "Late attendance corrected to Present",
+        log: {
+          id: log.id,
+          student_id: student.student_id,
+          full_name: buildFullName(student),
+          grade: student.grade,
+          section: student.section,
+          attendance_date: log.attendance_date,
+          time_logged: log.time_logged,
+          type: log.type,
+          session_type: log.session_type,
+          status: log.status,
+          via: log.via,
+        },
+      });
+    }
+
+    if (body.status === "Present") {
+      return NextResponse.json(
+        { success: false, message: "Present can only be used to correct an existing Late record of the same type." },
+        { status: 409 },
+      );
+    }
+
     // An automatic Absent entry means no RFID Time In was received. It is a
     // reversible placeholder, not proof that the student was absent. An
     // Adviser can correct it after the session by replacing it with the
@@ -156,7 +288,7 @@ export async function POST(req: NextRequest) {
         .from("attendance_logs")
         .update({
           time_logged: timeLogged,
-          status: body.status,
+          status: computedStatus,
           via: "Manual",
           remark: body.remark || "Corrected from automatic absence by adviser",
         })
@@ -166,6 +298,7 @@ export async function POST(req: NextRequest) {
 
       if (correctionError) throw correctionError;
 
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: computedStatus, details: `Corrected automatic absence to manual ${body.type} for ${buildFullName(student)} (${student.student_id}).` });
       return NextResponse.json({
         success: true,
         message: "Automatic absence corrected with a manual Time In",
@@ -179,7 +312,7 @@ export async function POST(req: NextRequest) {
           time_logged: timeLogged,
           type: body.type,
           session_type: sessionType,
-          status: body.status,
+          status: computedStatus,
           via: "Manual",
         },
       });
@@ -201,7 +334,7 @@ export async function POST(req: NextRequest) {
         time_logged:     timeLogged,
         type:            body.type,
         session_type:    sessionType,
-        status:          body.status,
+        status:          computedStatus,
         via:             "Manual",
         remark:          body.remark || null,
       })
@@ -210,6 +343,7 @@ export async function POST(req: NextRequest) {
 
     if (insertError) throw insertError;
 
+    await logAudit({ action: "Attendance Recorded", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, newStatus: computedStatus, details: `Recorded manual ${body.type} for ${buildFullName(student)} (${student.student_id}).` });
     return NextResponse.json({
       success: true,
       message: "Manual attendance saved",
@@ -223,7 +357,7 @@ export async function POST(req: NextRequest) {
         time_logged:     timeLogged,
         type:            body.type,
         session_type:    sessionType,
-        status:          body.status,
+        status:          computedStatus,
         via:             "Manual",
       },
     });

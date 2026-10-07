@@ -13,13 +13,13 @@ export async function GET() {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    const { data: parentRows, error: parentError } = await supabase
-      .from("parents")
+    const { data: parentLinks, error: parentError } = await supabase
+      .from("parent_student_links")
       .select(`
         student_id,
         students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
       `)
-      .eq("email", parent.email);
+      .eq("parent_id", parent.id);
 
     if (parentError) throw parentError;
 
@@ -31,8 +31,8 @@ export async function GET() {
     if (adviserError) throw adviserError;
 
     const recipients = [];
-    for (const parentRow of parentRows ?? []) {
-      const student = parentRow.students as unknown as {
+    for (const parentLink of parentLinks ?? []) {
+      const student = parentLink.students as unknown as {
         student_id: string;
         first_name: string;
         middle_name?: string | null;

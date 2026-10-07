@@ -14,7 +14,7 @@ type GuidanceNotifContextType = {
   setNotifUnreadCount: (count: number) => void;
   principalAnnouncementUnreadCount: number;
   refreshPrincipalAnnouncementCount: () => Promise<void>;
-  markPrincipalAnnouncementRead: (id: number) => void;
+  markAnnouncementRead: (notifKey: string) => void;
   ictUnreadCount: number;
   setIctUnreadCount: (count: number) => void;
 };
@@ -30,7 +30,7 @@ const GuidanceNotifContext = createContext<GuidanceNotifContextType>({
   setNotifUnreadCount: () => {},
   principalAnnouncementUnreadCount: 0,
   refreshPrincipalAnnouncementCount: async () => {},
-  markPrincipalAnnouncementRead: () => {},
+  markAnnouncementRead: () => {},
   ictUnreadCount: 0,
   setIctUnreadCount: () => {},
 });
@@ -45,35 +45,40 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const refreshGuidanceCounts = useCallback(async () => {
     try {
-      const [reportsRes, staffRes] = await Promise.all([
+      const [reportsRes, staffRes, ticketsRes] = await Promise.all([
         fetch("/api/reports/parent-adviser?role=guidance", { cache: "no-store" }),
         fetch("/api/reports/staff-messages?role=guidance", { cache: "no-store" }),
+        fetch("/api/reports/guidance/tickets", { cache: "no-store" }),
       ]);
-      const [reportsData, staffData] = await Promise.all([
+      const [reportsData, staffData, ticketsData] = await Promise.all([
         reportsRes.json().catch(() => null),
         staffRes.json().catch(() => null),
+        ticketsRes.json().catch(() => null),
       ]);
 
-      const allReports = (reportsData?.reports ?? []) as Array<{ hasUnreadForGuidance?: boolean; status?: string; guidanceSeen?: boolean }>;
+      const allReports = (reportsData?.reports ?? []) as Array<{ hasUnreadForGuidance?: boolean; status?: string; guidanceSeen?: boolean; ticketStatus?: string | null }>;
+      const pendingTicketCount = ticketsRes.ok
+        ? ((ticketsData?.tickets ?? []) as Array<{ status?: string }>).filter((ticket) => ticket.status === "pending").length
+        : 0;
       const reportCount = reportsRes.ok
         ? allReports.filter(r => r.hasUnreadForGuidance).length
         : 0;
       const staffCount = staffRes.ok
         ? ((staffData?.messages ?? []) as Array<{ status?: string }>).filter(m => m.status === "New").length
         : 0;
-      const nextCount = reportCount + staffCount;
+      const nextCount = reportCount + staffCount + pendingTicketCount;
       setUnreadCount(nextCount);
       setReportsUnreadCount(
         (reportsRes.ok
-          ? allReports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen)).length
-          : 0) + staffCount
+          ? allReports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen) || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length
+          : 0) + staffCount + pendingTicketCount
       );
       // notifUnreadCount is intentionally NOT set here — the Notifications
       // nav item tracks its own separate source, not parent-adviser replies.
       // Track escalated reports separately for the sidebar panel
       const nextEscalatedCount = reportsRes.ok
-        ? allReports.filter(r => r.status === "Escalated").length
-        : 0;
+        ? allReports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length + pendingTicketCount
+        : pendingTicketCount;
       setEscalatedCount(nextEscalatedCount);
     } catch {
       setUnreadCount(0);
@@ -93,25 +98,38 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshNotificationCounts = useCallback(async () => {
-    try {
-      const res = await fetch("/api/guidance/notifications", { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      setNotifUnreadCount(res.ok ? Number(data?.unreadCount ?? 0) : 0);
-      setPrincipalAnnouncementUnreadCount(res.ok ? Number(data?.announcementUnreadCount ?? 0) : 0);
-    } catch {
-      setNotifUnreadCount(0);
-      setPrincipalAnnouncementUnreadCount(0);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const [res, announcementsRes] = await Promise.all([
+          fetch("/api/guidance/notifications", { cache: "no-store" }),
+          fetch("/api/guidance/principal-announcements", { cache: "no-store" }),
+        ]);
+        const [data, announcementsData] = await Promise.all([
+          res.json().catch(() => null),
+          announcementsRes.json().catch(() => null),
+        ]);
+        if (res.ok && data?.success) {
+          setNotifUnreadCount(Number(data.unreadCount ?? 0));
+          if (announcementsRes.ok && announcementsData?.success) {
+            setPrincipalAnnouncementUnreadCount(Number(announcementsData.unreadCount ?? 0));
+          }
+          return;
+        }
+        if (res.status < 500 || attempt === 1) return;
+      } catch {
+        if (attempt === 1) return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }, []);
 
   const refreshPrincipalAnnouncementCount = refreshNotificationCounts;
 
-  const markPrincipalAnnouncementRead = useCallback((id: number) => {
-    const key = `principal-${id}`;
+  const markAnnouncementRead = useCallback((notifKey: string) => {
     fetch("/api/guidance/notifications/read", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notif_key: key }),
+      body: JSON.stringify({ notif_key: notifKey }),
     }).then(async () => {
       await new Promise(resolve => setTimeout(resolve, 300));
       await refreshNotificationCounts();
@@ -124,9 +142,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       loadIctCount();
       refreshNotificationCounts();
     });
+    // Ticket RLS deliberately blocks browser-table reads. Realtime can be
+    // unavailable for those custom-cookie sessions, so poll the server-owned
+    // counts as a fallback and keep the sidebar authoritative.
+    const refreshInterval = window.setInterval(() => {
+      refreshGuidanceCounts();
+      refreshNotificationCounts();
+    }, 15_000);
 
     const client = supabaseBrowser;
-    if (!client) return () => cancelAnimationFrame(frame);
+    if (!client) {
+      return () => {
+        cancelAnimationFrame(frame);
+        window.clearInterval(refreshInterval);
+      };
+    }
 
     const channel = client
       .channel("guidance-sidebar-counts")
@@ -137,10 +167,17 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
         refreshGuidanceCounts();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_report_guidance_tickets" }, () => {
+        refreshGuidanceCounts();
+        refreshNotificationCounts();
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
         refreshGuidanceCounts();
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "principal_announcements" }, () => {
+        refreshNotificationCounts();
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ict_announcements" }, () => {
         refreshNotificationCounts();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "guidance_notification_reads" }, () => {
@@ -150,6 +187,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelAnimationFrame(frame);
+      window.clearInterval(refreshInterval);
       client.removeChannel(channel);
     };
   }, [refreshGuidanceCounts, loadIctCount, refreshNotificationCounts]);
@@ -166,7 +204,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setNotifUnreadCount,
       principalAnnouncementUnreadCount,
       refreshPrincipalAnnouncementCount,
-      markPrincipalAnnouncementRead,
+      markAnnouncementRead,
       ictUnreadCount,
       setIctUnreadCount,
     }}>

@@ -12,6 +12,44 @@ function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "Server error.";
 }
 
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
+type AttachmentPayload = {
+    file_name?: unknown;
+    file_type?: unknown;
+    file_data?: unknown;
+};
+
+function validateSingleAttachment(value: unknown) {
+    if (!Array.isArray(value) || value.length !== 1) {
+        throw new Error("Exactly one attachment is required for each excuse letter.");
+    }
+    const attachment = value[0] as AttachmentPayload;
+    const fileName = typeof attachment?.file_name === "string" ? attachment.file_name.trim() : "";
+    const fileType = typeof attachment?.file_type === "string" ? attachment.file_type.trim().toLowerCase() : "";
+    const fileData = typeof attachment?.file_data === "string" ? attachment.file_data : "";
+
+    if (!fileName || fileName.length > 180 || !ALLOWED_ATTACHMENT_TYPES.has(fileType)) {
+        throw new Error("The attachment must be a JPG, PNG, WEBP, PDF, DOC, or DOCX file.");
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(fileData) || fileData.length % 4 !== 0) {
+        throw new Error("The attachment is not valid base64 data.");
+    }
+    const byteLength = Buffer.byteLength(fileData, "base64");
+    if (byteLength === 0 || byteLength > MAX_ATTACHMENT_BYTES) {
+        throw new Error("The attachment must be 5 MB or smaller.");
+    }
+    return { file_name: fileName, file_type: fileType, file_data: fileData };
+}
+
 // ── GET: fetch all excuse letters for the logged-in parent ────────────────────
 export async function GET() {
     try {
@@ -21,15 +59,7 @@ export async function GET() {
 
         const verified = await jwtVerify(token, SECRET);
         const parentId = Number(verified.payload.id);
-        const parentEmail = typeof verified.payload.email === "string" ? verified.payload.email : "";
-
-        const { data: parentRows, error: parentError } = await supabase
-            .from("parents")
-            .select("id")
-            .eq("email", parentEmail);
-
-        if (parentError) throw parentError;
-        const parentIds = (parentRows ?? []).map((parent) => parent.id as number);
+        if (!parentId || verified.payload.role !== "parent") return NextResponse.json({ success: false, message: "Invalid session." }, { status: 401 });
 
         const { data, error } = await supabase
             .from("excuse_letters")
@@ -38,7 +68,7 @@ export async function GET() {
                 status, decline_reason, submitted_at,
                 file_name, file_type
             `)
-            .in("parent_id", parentIds.length ? parentIds : [parentId])
+            .eq("parent_id", parentId)
             .order("submitted_at", { ascending: false });
 
         if (error) throw error;
@@ -59,9 +89,8 @@ export async function POST(req: NextRequest) {
 
         const verified = await jwtVerify(token, SECRET);
         const parentId = Number(verified.payload.id);
-        const parentEmail = typeof verified.payload.email === "string" ? verified.payload.email : "";
 
-        if (!parentId || !parentEmail) {
+        if (!parentId || verified.payload.role !== "parent") {
             return NextResponse.json({ success: false, message: "Invalid session." }, { status: 401 });
         }
 
@@ -71,6 +100,13 @@ export async function POST(req: NextRequest) {
 
         if (!student_id || !date_from || !date_to || !message?.trim()) {
             return NextResponse.json({ success: false, message: "All fields are required." }, { status: 400 });
+        }
+
+        let attachment: { file_name: string; file_type: string; file_data: string };
+        try {
+            attachment = validateSingleAttachment(attachments);
+        } catch (attachmentError) {
+            return NextResponse.json({ success: false, message: errorMessage(attachmentError) }, { status: 400 });
         }
 
         if (new Date(date_to) < new Date(date_from)) {
@@ -97,8 +133,8 @@ export async function POST(req: NextRequest) {
 
         const { data: linkedParentRows, error: linkError } = await supabase
             .from("parent_student_links")
-            .select("parent_id, parents!inner(email)")
-            .eq("parents.email", parentEmail)
+            .select("parent_id")
+            .eq("parent_id", parentId)
             .eq("student_id", student_id)
             .limit(1);
 
@@ -106,7 +142,7 @@ export async function POST(req: NextRequest) {
         if (!linkedParentRows || linkedParentRows.length === 0) {
             return NextResponse.json({ success: false, message: "Student is not linked to your parent account." }, { status: 403 });
         }
-        const linkedParentId = linkedParentRows[0].parent_id as number;
+        const linkedParentId = parentId;
 
         // Get student info + adviser email
         const { data: studentRow, error: studentError } = await supabase
@@ -148,9 +184,6 @@ export async function POST(req: NextRequest) {
         const parentName = `${parentRow.parent_first_name} ${parentRow.parent_last_name}`;
         const adviserName = `${adviserRow.first_name} ${adviserRow.last_name}`;
 
-        // Insert excuse letter
-        const firstAttachment = attachments?.[0];
-
         const { data: letter, error: insertError } = await supabase
             .from("excuse_letters")
             .insert({
@@ -160,14 +193,20 @@ export async function POST(req: NextRequest) {
                 date_to,
                 message: message.trim(),
                 status: "Pending",
-                file_name: firstAttachment?.file_name ?? null,
-                file_data: firstAttachment?.file_data ?? null,
-                file_type: firstAttachment?.file_type ?? null,
+                file_name: attachment.file_name,
+                file_data: attachment.file_data,
+                file_type: attachment.file_type,
+                attachment_uploaded_at: new Date().toISOString(),
             })
             .select("id")
             .single();
 
-        if (insertError || !letter) throw insertError;
+        if (insertError || !letter) {
+            if (insertError?.code === "23505") {
+                return NextResponse.json({ success: false, message: "You already have a pending excuse letter for these dates." }, { status: 409 });
+            }
+            throw insertError;
+        }
 
         // Send email to adviser (non-blocking)
         sendExcuseLetterToAdviserEmail({

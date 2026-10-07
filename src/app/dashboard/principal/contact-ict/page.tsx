@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Search, Send, Upload, X } from "lucide-react";
+import { ArrowLeft, CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Search, Send, Upload, X } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 
 type Recipient = {
     id: string;
     role: "ICT";
     name: string;
-    email: string;
 };
 
 type MessageAttachment = {
@@ -23,7 +24,6 @@ type ThreadMessage = {
     id: number;
     senderRole: "Adviser" | "ICT";
     senderName: string;
-    senderEmail: string;
     isCurrentUser: boolean;
     body: string;
     attachments?: MessageAttachment[];
@@ -37,7 +37,6 @@ type Conversation = {
     recipientId: string;
     otherRole: "Adviser" | "ICT";
     otherName: string;
-    otherEmail: string;
     otherProfilePicture?: string | null;
     subject: string;
     body: string;
@@ -46,6 +45,14 @@ type Conversation = {
     status: "New" | "Read" | "Replied";
     isUnread: boolean;
     thread: ThreadMessage[];
+};
+
+type PrincipalIctMessagesResponse = {
+    success: boolean;
+    message?: string;
+    conversations?: Conversation[];
+    recipients?: Recipient[];
+    unreadCount?: number;
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -70,8 +77,8 @@ async function filesToAttachments(fileList: FileList | File[]) {
 }
 
 function statusClass(status: Conversation["status"]) {
-    if (status === "New") return "bg-sky-500 text-white";
-    if (status === "Replied") return "bg-sky-100 text-sky-700";
+    if (status === "New") return "bg-violet-600 text-white";
+    if (status === "Replied") return "bg-violet-100 text-violet-700";
     return "bg-slate-200 text-slate-600";
 }
 
@@ -131,15 +138,19 @@ function ComposeModal({
     const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
     const [sending, setSending] = useState(false);
     const [sent, setSent] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
     const selected = recipients.find((recipient) => recipient.id === recipientId);
     const canSend = Boolean(recipientId && subject.trim() && (message.trim() || attachments.length > 0) && !sending);
 
     async function handleSend() {
         if (!canSend) return;
         setSending(true);
+        setSendError(null);
         try {
             await onSent({ recipientId, subject: subject.trim(), message: message.trim(), attachments });
             setSent(true);
+        } catch (error) {
+            setSendError(error instanceof Error ? error.message : "Unable to send message.");
         } finally {
             setSending(false);
         }
@@ -154,9 +165,9 @@ function ComposeModal({
     }, [onClose]);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/45 p-5" onClick={onClose}>
-            <div className="flex max-h-[calc(100vh-40px)] w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-                <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:items-start sm:justify-end sm:p-5" onClick={onClose}>
+            <div className="flex max-h-[calc(100vh-24px)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
                     <div>
                         <h2 className="text-xl font-extrabold text-slate-900">New Message</h2>
                         <p className="mt-1 text-sm text-slate-400">Send a message to ICT personnel</p>
@@ -168,30 +179,31 @@ function ComposeModal({
 
                 {sent ? (
                     <div className="flex flex-col items-center gap-3 px-6 py-10">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-sky-100">
-                            <CheckCircle className="h-7 w-7 text-sky-500" />
+                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-violet-100">
+                            <CheckCircle className="h-7 w-7 text-violet-600" />
                         </div>
                         <p className="text-base font-bold text-slate-900">Message Sent</p>
                         <p className="text-center text-sm text-slate-400">Your message has been sent to {selected?.name ?? "ICT"}.</p>
-                        <button onClick={onClose} className="mt-2 rounded-xl bg-sky-500 px-7 py-2.5 text-sm font-bold text-white transition hover:bg-sky-600">
+                        <button onClick={onClose} className="mt-2 rounded-xl bg-violet-600 px-7 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700">
                             Done
                         </button>
                     </div>
                 ) : (
-                    <div className="flex flex-col gap-5 px-6 py-5">
+                    <div className="flex flex-col gap-5 px-4 py-4 sm:px-6 sm:py-5">
                         <div>
                             <label className="mb-1.5 block text-xs font-bold text-slate-700">Recipient</label>
                             <select
                                 value={recipientId}
                                 onChange={(event) => setRecipientId(event.target.value)}
-                                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                             >
                                 {recipients.map((recipient) => (
                                     <option key={recipient.id} value={recipient.id}>
-                                        {recipient.name} {recipient.email ? `- ${recipient.email}` : ""}
+                                        {recipient.name}
                                     </option>
                                 ))}
                             </select>
+                            {sendError && <p role="alert" className="mt-2 text-xs font-semibold text-red-600">{sendError}</p>}
                         </div>
 
                         <div>
@@ -200,7 +212,7 @@ function ComposeModal({
                                 value={subject}
                                 onChange={(event) => setSubject(event.target.value)}
                                 placeholder="Enter subject..."
-                                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                             />
                         </div>
 
@@ -211,13 +223,13 @@ function ComposeModal({
                                 onChange={(event) => setMessage(event.target.value)}
                                 placeholder="Type your message..."
                                 rows={6}
-                                className="w-full resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                className="w-full resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                             />
                         </div>
 
                         <div>
                             <label className="mb-1.5 block text-xs font-bold text-slate-700">Attachments</label>
-                            <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-200 p-4 transition hover:border-sky-300 hover:bg-sky-50/40">
+                            <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-200 p-4 transition hover:border-violet-300 hover:bg-violet-50/40">
                                 <Upload className="h-5 w-5 text-slate-300" />
                                 <p className="text-sm font-medium text-slate-500">Click to upload files</p>
                                 <p className="text-xs text-slate-400">Max 10MB per file</p>
@@ -250,14 +262,14 @@ function ComposeModal({
                             )}
                         </div>
 
-                        <div className="flex items-center justify-between border-t border-slate-100 pt-2">
-                            <button onClick={onClose} className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                            <button onClick={onClose} className="min-h-11 rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">
                                 Cancel
                             </button>
                             <button
                                 onClick={handleSend}
                                 disabled={!canSend}
-                                className="flex items-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:bg-sky-300"
+                                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
                             >
                                 {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                                 Send Message
@@ -275,6 +287,7 @@ export default function ContactICTPage() {
     const [recipients, setRecipients] = useState<Recipient[]>([]);
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
     const [search, setSearch] = useState("");
     const [reply, setReply] = useState("");
     const [replyAttachments, setReplyAttachments] = useState<MessageAttachment[]>([]);
@@ -289,38 +302,44 @@ export default function ContactICTPage() {
         const query = search.trim().toLowerCase();
         if (!query) return conversations;
         return conversations.filter((conversation) =>
-            [conversation.otherName, conversation.otherEmail, conversation.subject, conversation.body]
+            [conversation.otherName, conversation.subject, conversation.body]
                 .join(" ")
                 .toLowerCase()
                 .includes(query)
         );
     }, [conversations, search]);
 
-    const loadMessages = useCallback(async () => {
-        setLoading(true);
-        setError(null);
+    const loadMessages = useCallback(async (background = false): Promise<boolean> => {
+        if (!background) setLoading(true);
+        if (!background) setError(null);
         try {
-            const res = await fetch("/api/principal-ict/messages", { cache: "no-store" });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || "Unable to load ICT messages.");
+            const { response: res, data } = await fetchJsonWithRetry<PrincipalIctMessagesResponse>("/api/principal-ict/messages", { cache: "no-store" });
+            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load ICT messages.");
 
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
             setConversations(nextConversations);
             setIctUnreadCount(Number(data.unreadCount ?? 0));
             setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
+            setError(null);
+            return true;
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Unable to load ICT messages.");
-            setConversations([]);
-            setIctUnreadCount(0);
+            if (!background) {
+                setError(err instanceof Error ? err.message : "Unable to load ICT messages.");
+                setConversations([]);
+                setIctUnreadCount(0);
+            }
+            return false;
         } finally {
-            setLoading(false);
+            if (!background) setLoading(false);
         }
     }, [setIctUnreadCount]);
 
     useEffect(() => {
-        loadMessages();
+        void loadMessages();
     }, [loadMessages]);
+
+    const liveUpdateNotice = useStaffMessagesRealtime("principal-ict-messages", loadMessages);
 
     useEffect(() => {
         threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -328,6 +347,7 @@ export default function ContactICTPage() {
 
     async function openConversation(conversation: Conversation) {
         setSelectedId(conversation.conversationId);
+        setMobileConversationOpen(true);
         if (!conversation.isUnread) return;
 
         setConversations((prev) =>
@@ -340,7 +360,7 @@ export default function ContactICTPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
         }).catch(() => null);
-        loadMessages();
+        void loadMessages(true);
     }
 
     async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -351,7 +371,10 @@ export default function ContactICTPage() {
         });
         const data = await res.json().catch(() => null);
         if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
-        await loadMessages();
+        // Keep Panel 1 and the selected thread in place after a successful
+        // send. The background refresh reconciles the new database row without
+        // showing the initial "Loading messages..." state again.
+        void loadMessages(true);
     }
 
     async function sendReply() {
@@ -372,7 +395,7 @@ export default function ContactICTPage() {
             if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
             setReply("");
             setReplyAttachments([]);
-            await loadMessages();
+            void loadMessages(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to send reply.");
         } finally {
@@ -381,10 +404,10 @@ export default function ContactICTPage() {
     }
 
     return (
-        <div className="flex h-full flex-col bg-slate-50">
-            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
+        <div className="flex h-full min-h-0 flex-col overflow-x-hidden bg-slate-50">
+            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
                 <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500 shadow-sm">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 shadow-sm">
                         <Monitor className="h-5 w-5 text-white" />
                     </div>
                     <div>
@@ -394,14 +417,19 @@ export default function ContactICTPage() {
                 </div>
                 <button
                     onClick={() => setShowCompose(true)}
-                    className="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-sky-600"
+                    className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700"
                 >
                     <Send className="h-3.5 w-3.5" /> New Message
                 </button>
             </div>
+            {liveUpdateNotice && (
+                <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 sm:px-6">
+                    {liveUpdateNotice}
+                </div>
+            )}
 
-            <div className="flex flex-1 overflow-hidden">
-                <div className="flex w-full max-w-[400px] shrink-0 flex-col border-r border-slate-100 bg-white">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+                <div className={`${mobileConversationOpen ? "hidden" : "flex"} w-full min-w-0 flex-col bg-white md:flex md:max-w-[400px] md:shrink-0 md:border-r md:border-slate-100`}>
                     <div className="border-b border-slate-100 px-3 py-3">
                         <div className="relative">
                             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -409,7 +437,7 @@ export default function ContactICTPage() {
                                 value={search}
                                 onChange={(event) => setSearch(event.target.value)}
                                 placeholder="Search ICT messages..."
-                                className="w-full rounded-xl border border-slate-200 py-2 pl-9 pr-3 text-sm text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                className="w-full rounded-xl border border-slate-200 py-2 pl-9 pr-3 text-sm text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                             />
                         </div>
                     </div>
@@ -427,15 +455,15 @@ export default function ContactICTPage() {
                                 <button
                                     key={conversation.conversationId}
                                     onClick={() => openConversation(conversation)}
-                                    className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${selectedId === conversation.conversationId ? "border-sky-200 bg-sky-50" : "border-slate-100 bg-white hover:bg-slate-50"
+                                    className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${selectedId === conversation.conversationId ? "border-violet-200 bg-violet-50" : "border-slate-100 bg-white hover:bg-slate-50"
                                         }`}
                                 >
                                     <div className="mb-1 flex items-center gap-2">
-                                        <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-sky-500">
-                                            {conversation.otherProfilePicture ? <img src={conversation.otherProfilePicture} alt="ICT profile" className="h-full w-full object-cover" /> : <Monitor className="h-3.5 w-3.5 text-white" />}
+                                        <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-violet-600">
+                                            <Monitor className="h-3.5 w-3.5 text-white" />
                                         </div>
                                         <p className="flex-1 truncate text-[11px] font-bold text-slate-700">{conversation.subject}</p>
-                                        {conversation.isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" />}
+                                        {conversation.isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-violet-600" />}
                                     </div>
                                     <div className="flex items-center justify-between pl-9">
                                         <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${statusClass(conversation.status)}`}>
@@ -449,7 +477,7 @@ export default function ContactICTPage() {
                     </div>
                 </div>
 
-                <div className="flex flex-1 flex-col overflow-hidden">
+                <div className={`${mobileConversationOpen ? "flex" : "hidden"} min-w-0 flex-1 flex-col overflow-hidden md:flex`}>
                     {!selected ? (
                         <div className="flex flex-1 flex-col items-center justify-center text-slate-400">
                             <Monitor className="mb-3 h-10 w-10 opacity-30" />
@@ -457,31 +485,40 @@ export default function ContactICTPage() {
                         </div>
                     ) : (
                         <>
-                            <div className="shrink-0 border-b border-l-4 border-l-sky-500 border-slate-100 bg-white px-6 py-5">
+                            <div className="shrink-0 border-b border-l-4 border-l-violet-600 border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-sky-500 text-xs font-bold text-white">
-                                            {selected.otherProfilePicture ? <img src={selected.otherProfilePicture} alt={`${selected.otherName} profile`} className="h-full w-full object-cover" /> : initials(selected.otherName)}
+                                        <button
+                                            type="button"
+                                            onClick={() => setMobileConversationOpen(false)}
+                                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-700 md:hidden"
+                                            aria-label="Back to conversation list"
+                                        >
+                                            <ArrowLeft className="h-4 w-4" />
+                                        </button>
+                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-violet-600 text-xs font-bold text-white">
+                                            {initials(selected.otherName)}
                                         </div>
                                         <div>
                                             <p className="text-sm font-extrabold text-slate-900">{selected.otherName}</p>
-                                            <p className="text-xs text-slate-400">{selected.otherEmail}</p>
                                         </div>
                                     </div>
-                                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>
+                                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>
                                 </div>
                                 <h2 className="mt-3 text-base font-extrabold text-slate-900">{selected.subject}</h2>
                                 <p className="mt-0.5 text-xs text-slate-400">{formatDate(selected.sentAt)}</p>
                             </div>
 
-                            <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
+                            <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
                                 {selected.thread.map((message) => (
                                     <div key={message.id} className={`flex items-start gap-2.5 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
-                                        <UserAvatar name={message.isCurrentUser ? "You" : message.senderName} src={message.isCurrentUser ? null : selected.otherProfilePicture} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName={message.isCurrentUser ? "bg-violet-600" : "bg-slate-500"} />
+                                        {!message.isCurrentUser && (
+                                            <UserAvatar name={message.senderName} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName="bg-slate-500" />
+                                        )}
                                         <div className={`flex flex-1 flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
                                         {message.body && (
-                                            <div className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.isCurrentUser
-                                                ? "rounded-br-sm bg-sky-500 text-white"
+                                            <div className={`max-w-[88%] break-words whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed sm:max-w-[75%] ${message.isCurrentUser
+                                                ? "rounded-br-sm bg-violet-600 text-white"
                                                 : "rounded-bl-sm border border-slate-100 bg-white text-slate-700 shadow-sm"
                                                 }`}>
                                                 {message.body}
@@ -497,7 +534,7 @@ export default function ContactICTPage() {
                                 <div ref={threadEndRef} />
                             </div>
 
-                            <div className="shrink-0 border-t border-slate-100 bg-white px-6 py-4">
+                            <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
                                 {replyAttachments.length > 0 && (
                                     <div className="mb-2 flex flex-wrap gap-2">
                                         {replyAttachments.map((attachment, index) => (
@@ -512,7 +549,7 @@ export default function ContactICTPage() {
                                         ))}
                                     </div>
                                 )}
-                                <div className="flex items-end gap-3">
+                                <div className="flex items-end gap-2 sm:gap-3">
                                     <textarea
                                         value={reply}
                                         onChange={(event) => setReply(event.target.value)}
@@ -524,7 +561,7 @@ export default function ContactICTPage() {
                                         }}
                                         placeholder={`Reply to ${selected.otherName}...`}
                                         rows={2}
-                                        className="flex-1 resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                        className="min-w-0 flex-1 resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                                     />
                                     <label className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition hover:bg-slate-50">
                                         <Paperclip className="h-4 w-4" />
@@ -544,7 +581,7 @@ export default function ContactICTPage() {
                                     <button
                                         onClick={sendReply}
                                         disabled={(!reply.trim() && replyAttachments.length === 0) || sendingReply}
-                                        className="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:bg-sky-300"
+                                        className="flex min-h-10 items-center gap-1.5 rounded-xl bg-violet-600 px-3 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300 sm:gap-2 sm:px-4"
                                     >
                                         {sendingReply ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                                         Reply

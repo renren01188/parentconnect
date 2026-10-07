@@ -1,25 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   Users, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle,
   CheckCircle, FileText, X,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { LoginRecaptcha } from "@/components/LoginRecaptcha";
+import { ContactRecaptcha } from "@/components/ContactRecaptcha";
+import { useLoginProtection } from "@/hooks/useLoginProtection";
+import {
+  GUARDIAN_RELATIONSHIP_OPTIONS,
+  isMissingOtherGuardianRelationship,
+} from "@/lib/guardianRelationship";
 
 type Mode = "login" | "signup";
 
 const inputClass = "w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition placeholder-slate-400";
+const TEMPORARY_PASSWORD_EXPIRED_MESSAGE = "Your temporary password has expired. Please start Parent signup again.";
 
 function formatName(value: string) {
   return value.toUpperCase();
 }
 
-export default function GuardianLoginPage() {
+function GuardianLoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(() => searchParams.get("signup") === "1" ? "signup" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -27,8 +36,17 @@ export default function GuardianLoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showTerms, setShowTerms] = useState(false);
-  const [lrnChecking, setLrnChecking] = useState(false);
-  const [lrnWarning, setLrnWarning] = useState("");
+  const {
+    applyServerResult,
+    captchaRequired,
+    captchaResetSignal,
+    captchaToken,
+    isLocked,
+    lockoutMessage,
+    setCaptchaToken,
+  } = useLoginProtection("parent");
+  const [signupCaptchaToken, setSignupCaptchaToken] = useState("");
+  const [signupCaptchaResetSignal, setSignupCaptchaResetSignal] = useState(0);
 
   const [signup, setSignup] = useState({
     firstName: "",
@@ -39,10 +57,34 @@ export default function GuardianLoginPage() {
     email: "",
     studentLrn: "",
     relationship: "Father",
+    guardianRelationship: "Guardian",
+    guardianRelationshipOther: "",
     termsAccepted: false,
   });
 
+  useEffect(() => {
+    if (searchParams.get("signup") !== "1") return;
+
+    setMode("signup");
+    try {
+      const savedSignup = window.sessionStorage.getItem("guardian-signup");
+      if (savedSignup) setSignup((previous) => ({ ...previous, ...JSON.parse(savedSignup) }));
+    } catch {
+      // The form remains usable if browser storage is unavailable.
+    }
+    if (searchParams.get("tempPasswordExpired") === "1") {
+      setError(TEMPORARY_PASSWORD_EXPIRED_MESSAGE);
+    }
+  }, [searchParams]);
+
   function switchMode(next: Mode) {
+    // Widgets are intentionally independent. A reCAPTCHA token belongs to
+    // the widget that issued it, so never carry a solved token into a newly
+    // mounted widget after switching tabs.
+    if (next !== mode) {
+      if (mode === "login") setCaptchaToken("");
+      if (mode === "signup") setSignupCaptchaToken("");
+    }
     setMode(next);
     setError("");
     setSuccess("");
@@ -53,55 +95,49 @@ export default function GuardianLoginPage() {
     setSignup((prev) => ({ ...prev, [field]: shouldUppercase ? formatName(value) : value }));
   }
 
-  async function checkLrn(lrn: string) {
-    const trimmed = lrn.trim();
-    if (!trimmed) {
-      setLrnWarning("");
-      return;
-    }
-
-    setLrnChecking(true);
-    setLrnWarning("");
-    try {
-      const res = await fetch(`/api/students/check-id?id=${encodeURIComponent(trimmed)}`);
-      const data = await res.json();
-      if (data.success && !data.taken) {
-        setLrnWarning("This Student LRN does not exist.");
-      }
-    } catch {
-      setLrnWarning("Could not verify this LRN. Please try again.");
-    } finally {
-      setLrnChecking(false);
-    }
-  }
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    if (isLocked) {
+      setError(lockoutMessage || "Too many failed attempts. Please try again later.");
+      return;
+    }
+    if (captchaRequired && !captchaToken) {
+      setError("Complete the CAPTCHA verification before trying to log in.");
+      return;
+    }
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, captchaToken }),
       });
       const data = await res.json();
 
       if (!data.success) {
+        if (data.temporaryPasswordExpired && data.redirectTo) {
+          router.push(data.redirectTo);
+          return;
+        }
         setError(data.message || "Login failed. Please try again.");
-        setLoading(false);
+        applyServerResult(data);
         return;
       }
 
       if (!data.passwordSet) {
-        router.push("/login/guardian/set-password");
+        const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt : "";
+        router.push(expiresAt
+          ? `/login/guardian/verify-temp-password?expiresAt=${encodeURIComponent(expiresAt)}`
+          : "/login/guardian/verify-temp-password");
       } else {
         router.push("/dashboard/parent");
       }
     } catch {
       setError("Cannot connect to server. Please check your connection.");
+    } finally {
       setLoading(false);
     }
   };
@@ -115,30 +151,65 @@ export default function GuardianLoginPage() {
       setError("Please accept the Terms and Agreement before signing up.");
       return;
     }
-
-    if (lrnWarning) {
-      setError(lrnWarning);
+    if (!/^\d{12}$/.test(signup.studentLrn)) {
+      setError("Enter the student’s 12-digit LRN.");
+      return;
+    }
+    if (signup.relationship === "Guardian" && isMissingOtherGuardianRelationship(
+      signup.guardianRelationship,
+      signup.guardianRelationshipOther,
+    )) {
+      setError("Specify the guardian's relationship when Others is selected.");
+      return;
+    }
+    if (!signupCaptchaToken) {
+      setError("Please complete the CAPTCHA verification before signing up.");
       return;
     }
 
     setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
     try {
+      // Retain this draft for warnings, a page refresh, or the temporary
+      // password expiry return path. It is removed only after completion.
+      try {
+        window.sessionStorage.setItem("guardian-signup", JSON.stringify(signup));
+      } catch {
+        // The in-memory form state remains intact if storage is unavailable.
+      }
       const res = await fetch("/api/parents/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(signup),
+        body: JSON.stringify({ ...signup, recaptchaToken: signupCaptchaToken }),
+        signal: controller.signal,
       });
       const data = await res.json();
 
       if (!data.success) {
         setError(data.message || "Sign up failed. Please try again.");
-        setLoading(false);
+        setSignupCaptchaResetSignal((value) => value + 1);
         return;
       }
 
-      router.push(data.redirectTo || "/login/guardian/set-password");
-    } catch {
-      setError("Cannot connect to server. Please check your connection.");
+      try {
+        window.sessionStorage.setItem("guardian-signup", JSON.stringify(signup));
+      } catch {
+        // The parent can still use Back and enter the form again manually.
+      }
+      const redirectTo = data.redirectTo || "/login/guardian/verify-temp-password";
+      const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt : "";
+      router.push(expiresAt
+        ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}expiresAt=${encodeURIComponent(expiresAt)}`
+        : redirectTo);
+    } catch (error) {
+      setError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "Sign up is taking too long. Please try again."
+          : "Cannot connect to server. Please check your connection.",
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -220,6 +291,12 @@ export default function GuardianLoginPage() {
               <p className="text-sm text-red-600">{error}</p>
             </div>
           )}
+          {mode === "login" && lockoutMessage && (
+            <div role="status" aria-live="polite" className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
+              <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <p className="text-sm text-amber-800">{lockoutMessage}</p>
+            </div>
+          )}
 
           {success && (
             <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4">
@@ -238,6 +315,7 @@ export default function GuardianLoginPage() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  disabled={isLocked}
                   className={inputClass}
                 />
               </div>
@@ -256,6 +334,7 @@ export default function GuardianLoginPage() {
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    disabled={isLocked}
                     className={`${inputClass} pr-11`}
                   />
                   <button type="button" onClick={() => setShowPassword(!showPassword)}
@@ -265,7 +344,9 @@ export default function GuardianLoginPage() {
                 </div>
               </div>
 
-              <button type="submit" disabled={loading}
+              <LoginRecaptcha required={captchaRequired} resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+
+              <button type="submit" disabled={loading || isLocked || (captchaRequired && !captchaToken)}
                 className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 mt-1 text-sm disabled:opacity-60"
                 style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
                 {loading ? "Logging in..." : <>Login as Guardian / Parent <ArrowRight className="w-4 h-4" /></>}
@@ -300,13 +381,35 @@ export default function GuardianLoginPage() {
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">I am the student&apos;s</label>
-                <select className={inputClass} value={signup.relationship} onChange={(e) => setSignupText("relationship", e.target.value)}>
+                <select className={inputClass} value={signup.relationship} onChange={(e) => setSignup((previous) => ({
+                  ...previous,
+                  relationship: e.target.value,
+                  guardianRelationship: e.target.value === "Guardian" ? previous.guardianRelationship || "Guardian" : "Guardian",
+                  guardianRelationshipOther: e.target.value === "Guardian" ? previous.guardianRelationshipOther : "",
+                }))}>
                   <option value="Father">Father</option><option value="Mother">Mother</option><option value="Guardian">Guardian</option>
                 </select>
               </div>
 
+              {signup.relationship === "Guardian" && (
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 space-y-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Guardian&apos;s relationship to the student</label>
+                    <select className={inputClass} value={signup.guardianRelationship} onChange={(e) => setSignup((previous) => ({ ...previous, guardianRelationship: e.target.value }))}>
+                      {GUARDIAN_RELATIONSHIP_OPTIONS.map(option => <option key={option} value={option}>{option === "Other" ? "Others" : option}</option>)}
+                    </select>
+                  </div>
+                  {signup.guardianRelationship === "Other" && (
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Specify the guardian&apos;s relationship</label>
+                      <textarea required rows={2} className={inputClass} placeholder="e.g. Aunt, Uncle, Foster parent" value={signup.guardianRelationshipOther} onChange={(e) => setSignupText("guardianRelationshipOther", e.target.value)} />
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Active Contact Number</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your Contact Number</label>
                 <input
                   required
                   inputMode="numeric"
@@ -319,7 +422,7 @@ export default function GuardianLoginPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Active Email Address</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your Email Address</label>
                 <input
                   required
                   type="email"
@@ -335,27 +438,19 @@ export default function GuardianLoginPage() {
                   <input
                     required
                     inputMode="numeric"
-                    className={`${inputClass} ${lrnWarning ? "border-red-300 bg-red-50" : ""}`}
+                    maxLength={12}
+                    className={inputClass}
                     value={signup.studentLrn}
                     onChange={(e) => {
                       const v = e.target.value.replace(/\D/g, "");
                       setSignup((prev) => ({ ...prev, studentLrn: v }));
-                      setLrnWarning("");
                     }}
-                    onBlur={() => checkLrn(signup.studentLrn)}
                   />
-                  {lrnChecking && (
-                    <svg className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                    </svg>
-                  )}
                 </div>
-                {lrnWarning && <p className="text-xs text-red-500 font-medium mt-1">{lrnWarning}</p>}
               </div>
 
               <p className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-[11px] leading-relaxed text-blue-700">
-                Your active email address and Student LRN must match the school&apos;s registration record. After verification, you will create your own password.
+                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional and will be saved only when provided. Your email address and mobile number will be saved for your new account. After verification, you will create your own password.
               </p>
 
               <label className="flex items-start gap-2 text-xs text-slate-600 leading-relaxed">
@@ -374,7 +469,9 @@ export default function GuardianLoginPage() {
                 </span>
               </label>
 
-              <button type="submit" disabled={loading || !signup.termsAccepted || !!lrnWarning}
+              <ContactRecaptcha resetSignal={signupCaptchaResetSignal} onTokenChange={setSignupCaptchaToken} />
+
+              <button type="submit" disabled={loading || !signup.termsAccepted || !signupCaptchaToken}
                 className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 mt-1 text-sm disabled:opacity-50"
                 style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
                 {loading ? "Signing up..." : <>Create Parent Account <ArrowRight className="w-4 h-4" /></>}
@@ -429,4 +526,8 @@ export default function GuardianLoginPage() {
       </footer>
     </div>
   );
+}
+
+export default function GuardianLoginPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><GuardianLoginPageContent /></Suspense>;
 }

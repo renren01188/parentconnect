@@ -5,14 +5,14 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
+import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 export async function POST(req: NextRequest) {
   try {
-    const { identifier, password } = await req.json();
+    const { identifier, password, captchaToken } = await req.json();
 
     if (!identifier || !password) {
       return NextResponse.json(
@@ -21,42 +21,57 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const cleanedIdentifier = identifier.trim();
     const { data: advisers, error } = await supabase
       .from("advisers")
       .select(
-        "id, employee_id, first_name, last_name, email, password_hash, grade, section, sections, phone, status, password_set"
+        "id, employee_id, first_name, last_name, email, password_hash, grade, section, sections, phone, status, archive_status, password_set"
       )
-      .or(`email.eq.${identifier.trim()},employee_id.eq.${identifier.trim()}`)
+      .or(`email.eq.${cleanedIdentifier.toLowerCase()},employee_id.eq.${cleanedIdentifier}`)
       .limit(1);
 
     if (error) throw error;
 
-    if (!advisers || advisers.length === 0) {
-      await logSecurityAlert({ request: req, identifier: identifier.trim(), role: "Adviser", reason: "account not found" });
+    const adviser = advisers?.[0];
+    const guardSubject = adviser ? `account:${adviser.id}` : `identifier:${cleanedIdentifier}`;
+    await rememberLoginGuard("adviser", guardSubject);
+    const protection = await checkLoginProtection("adviser", guardSubject, req, captchaToken);
+    if (!protection.allowed) {
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: protection.message, captchaRequired: protection.captchaRequired, lockedUntil: protection.lockedUntil },
+        { status: protection.status },
       );
     }
 
-    const adviser = advisers[0];
-
-    if (adviser.status !== "active") {
-      await logSecurityAlert({ request: req, identifier: identifier.trim(), role: "Adviser", reason: "inactive account" });
+    if (!adviser) {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Adviser", reason: "account not found" });
+      const failed = await failedLoginResult("adviser", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "Your account has been deactivated. Contact the administrator." },
-        { status: 403 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
+      );
+    }
+
+    if (adviser.archive_status === "archived" || adviser.status !== "active") {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Adviser", reason: "inactive account" });
+      const failed = await failedLoginResult("adviser", guardSubject, req);
+      return NextResponse.json(
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
 
     const passwordMatch = await bcrypt.compare(password, adviser.password_hash);
     if (!passwordMatch) {
-      await logSecurityAlert({ request: req, identifier: identifier.trim(), role: "Adviser", reason: "invalid password" });
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Adviser", reason: "invalid password" });
+      const failed = await failedLoginResult("adviser", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
+
+    await clearLoginFailures("adviser", guardSubject, req);
 
     const sectionsArray: string[] =
       Array.isArray(adviser.sections) && adviser.sections.length > 0

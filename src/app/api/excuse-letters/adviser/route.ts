@@ -21,12 +21,7 @@ type EnrichedExcuseLetter = ExcuseLetterRow & {
     studentName: string;
     parentName: string;
     relationship: string;
-    excuse_letter_attachments: {
-        id: number;
-        file_name: string;
-        file_type: string;
-        file_data: string;
-    }[];
+    attachment: { file_name: string; file_type: string; file_data: string } | null;
 };
 
 function errorMessage(error: unknown) {
@@ -109,14 +104,13 @@ export async function GET(req: NextRequest) {
                         ? `${parent.parent_first_name} ${parent.parent_last_name}`
                         : "Unknown",
                     relationship: parent?.relationship || "Guardian",
-                    excuse_letter_attachments: letter.file_name
-                        ? [{
-                            id: letter.id,
+                    attachment: letter.file_name
+                        ? {
                             file_name: letter.file_name,
                             file_type: letter.file_type ?? "",
                             file_data: letter.file_data ?? "",
-                        }]
-                        : [],
+                        }
+                        : null,
                 };
             })
         );

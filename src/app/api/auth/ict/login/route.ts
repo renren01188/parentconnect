@@ -4,14 +4,14 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
+import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 export async function POST(req: NextRequest) {
   try {
-    const { identifier, password } = await req.json();
+    const { identifier, password, captchaToken } = await req.json();
 
     if (!identifier || !password) {
       return NextResponse.json(
@@ -23,36 +23,49 @@ export async function POST(req: NextRequest) {
     const cleanedIdentifier = identifier.trim();
     const { data: rows, error } = await supabase
       .from("ict_admins")
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, password_hash, status, password_set")
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, password_hash, status, archive_status, password_set")
       .or(`email.eq.${cleanedIdentifier.toLowerCase()},employee_id.eq.${cleanedIdentifier}`)
       .limit(1);
 
     if (error) throw error;
-    if (!rows || rows.length === 0) {
-      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "account not found" });
+    const ict = rows?.[0];
+    const guardSubject = ict ? `account:${ict.id}` : `identifier:${cleanedIdentifier}`;
+    await rememberLoginGuard("ict", guardSubject);
+    const protection = await checkLoginProtection("ict", guardSubject, req, captchaToken);
+    if (!protection.allowed) {
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: protection.message, captchaRequired: protection.captchaRequired, lockedUntil: protection.lockedUntil },
+        { status: protection.status },
       );
     }
-
-    const ict = rows[0];
-    if (ict.status !== "active") {
-      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "inactive account" });
+    if (!ict) {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "account not found" });
+      const failed = await failedLoginResult("ict", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "Your account has been deactivated. Contact the administrator." },
-        { status: 403 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
+      );
+    }
+    if (ict.archive_status === "archived" || ict.status !== "active") {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "inactive account" });
+      const failed = await failedLoginResult("ict", guardSubject, req);
+      return NextResponse.json(
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
 
     const passwordMatch = await bcrypt.compare(password, ict.password_hash);
     if (!passwordMatch) {
       await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "invalid password" });
+      const failed = await failedLoginResult("ict", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
+
+    await clearLoginFailures("ict", guardSubject, req);
 
     const passwordSet = ict.password_set == null
       ? true

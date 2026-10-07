@@ -4,10 +4,22 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
+import {
+  checkLoginProtection,
+  clearLoginFailures,
+  failedLoginResult,
+  PARENT_LOGIN_GUARD_SCOPE,
+  rememberLoginGuard,
+} from "@/lib/loginProtection";
+import { parentAccountAccessIssue } from "@/lib/parentAccountAccess";
+import { getJwtSecret } from "@/lib/authSecret";
+import {
+  isTemporaryPasswordExpired,
+  TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
+  temporaryPasswordExpiryEpochSeconds,
+} from "@/lib/parentTemporaryPassword";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -15,7 +27,7 @@ function errorMessage(error: unknown) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password } = await req.json();
+    const { email, password, captchaToken } = await req.json();
 
     if (!email || !password) {
       return NextResponse.json(
@@ -27,7 +39,7 @@ export async function POST(req: NextRequest) {
     const { data: parents, error } = await supabase
       .from("parents")
       .select(`
-        id, email, password, temp_password, password_set, status, student_id, contact_number,
+        id, email, password, temp_password, password_set, status, archive_status, student_id, contact_number,
         parent_first_name, parent_last_name,
         students!inner ( first_name, last_name, grade, section )
       `)
@@ -36,23 +48,26 @@ export async function POST(req: NextRequest) {
 
     if (error) throw error;
 
-    if (!parents || parents.length === 0) {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "account not found" });
-      return NextResponse.json(
-        { success: false, message: "This Account is not registered yet!" },
-        { status: 401 }
-      );
-    }
-
-    const parent = parents.find((row) =>
+    const parent = parents?.find((row) =>
       !(row.parent_first_name === "Parent" && row.parent_last_name === "Guardian" && !row.contact_number)
     );
 
+    const guardSubject = parent ? `account:${parent.id}` : `identifier:${String(email).trim()}`;
+    await rememberLoginGuard("parent", guardSubject);
+    const protection = await checkLoginProtection("parent", guardSubject, req, captchaToken, PARENT_LOGIN_GUARD_SCOPE);
+    if (!protection.allowed) {
+      return NextResponse.json(
+        { success: false, message: protection.message, captchaRequired: protection.captchaRequired, lockedUntil: protection.lockedUntil },
+        { status: protection.status },
+      );
+    }
+
     if (!parent) {
       await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "account not found" });
+      const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
-        { success: false, message: "This Account is not registered yet!" },
-        { status: 401 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
 
@@ -63,21 +78,58 @@ export async function POST(req: NextRequest) {
       section: string;
     };
 
-    if (parent.status !== "approved") {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "account is not approved" });
+    const accessIssue = parentAccountAccessIssue(parent);
+    if (accessIssue === "archived") {
+      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "archived account" });
+      const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
-        { success: false, message: "Your account is pending approval. Please contact the school adviser." },
-        { status: 403 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status },
+      );
+    }
+    if (accessIssue) {
+      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: `account is temporarily unavailable: ${accessIssue}` });
+      const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
+      return NextResponse.json(
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
 
     const passwordMatch = await bcrypt.compare(password, parent.password);
     if (!passwordMatch) {
       await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "invalid password" });
+      const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
-        { success: false, message: "Incorrect password. Please try again." },
-        { status: 401 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
+    }
+
+    const passwordSet = parent.password_set === true || parent.password_set === 1;
+    const temporaryPasswordExpirySeconds = passwordSet
+      ? null
+      : temporaryPasswordExpiryEpochSeconds(password);
+    if (!passwordSet && (!temporaryPasswordExpirySeconds || isTemporaryPasswordExpired(password))) {
+      return NextResponse.json({
+        success: false,
+        temporaryPasswordExpired: true,
+        redirectTo: "/login/guardian?signup=1&tempPasswordExpired=1",
+        message: TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
+      }, { status: 401 });
+    }
+
+    await clearLoginFailures("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
+
+    // A successful password check proves control of this pre-verified parent
+    // record. Promote only this account from a legacy approval label to the
+    // normal active state; protected states were rejected above.
+    if (String(parent.status ?? "").trim().toLowerCase() !== "active") {
+      const { error: activationError } = await supabase
+        .from("parents")
+        .update({ status: "active" })
+        .eq("id", parent.id);
+      if (activationError) throw activationError;
     }
 
     const parentName = `${parent.parent_first_name} ${parent.parent_last_name}`;
@@ -90,12 +142,17 @@ export async function POST(req: NextRequest) {
       studentName: `${student.first_name} ${student.last_name}`,
       grade:       student.grade,
       section:     student.section,
-      passwordSet: parent.password_set === 1,
+      role:        "parent",
+      passwordSet,
+      temporaryPasswordVerified: passwordSet,
+      ...(temporaryPasswordExpirySeconds ? {
+        temporaryPasswordExpiresAt: new Date(temporaryPasswordExpirySeconds * 1_000).toISOString(),
+      } : {}),
     };
 
     const token = await new SignJWT(payload)
       .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("24h")
+      .setExpirationTime(temporaryPasswordExpirySeconds ?? "24h")
       .sign(SECRET);
 
     const cookieStore = await cookies();
@@ -103,7 +160,9 @@ export async function POST(req: NextRequest) {
       httpOnly: true,
       secure:   process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge:   60 * 60 * 24,
+      maxAge: temporaryPasswordExpirySeconds
+        ? Math.max(1, temporaryPasswordExpirySeconds - Math.floor(Date.now() / 1_000))
+        : 60 * 60 * 24,
       path:     "/",
     });
 
@@ -119,8 +178,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success:     true,
-      passwordSet: parent.password_set === 1,
-      message:     parent.password_set === 1
+      passwordSet,
+      expiresAt: temporaryPasswordExpirySeconds
+        ? new Date(temporaryPasswordExpirySeconds * 1_000).toISOString()
+        : undefined,
+      message: passwordSet
         ? "Login successful."
         : "Login successful. Please set your new password.",
     });

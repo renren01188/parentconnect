@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 
+const isValidPrincipalNotificationKey = (key: unknown): key is string =>
+    typeof key === "string" && [
+        "parent-report-submitted-",
+        "guidance-ticket-accepted-",
+        "guidance-escalated-",
+    ].some((prefix) => key.startsWith(prefix));
+
 export async function PATCH(req: NextRequest) {
     try {
         const principal = await getPrincipalFromToken();
@@ -12,7 +19,11 @@ export async function PATCH(req: NextRequest) {
         const body = await req.json();
 
         if (body.mark_all && Array.isArray(body.notif_keys)) {
-            const rows = body.notif_keys.map((key: string) => ({
+            const notifKeys = [...new Set(body.notif_keys.filter(isValidPrincipalNotificationKey))];
+            if (!notifKeys.length) {
+                return NextResponse.json({ success: false, message: "No valid notification keys supplied." }, { status: 400 });
+            }
+            const rows = notifKeys.map((key) => ({
                 principal_id: principal.id,
                 notif_key: key,
             }));
@@ -28,7 +39,7 @@ export async function PATCH(req: NextRequest) {
             return NextResponse.json({ success: true });
         }
 
-        if (typeof body.notif_key === "string") {
+        if (isValidPrincipalNotificationKey(body.notif_key)) {
             const { error } = await supabase
                 .from("principal_notification_reads")
                 .upsert(

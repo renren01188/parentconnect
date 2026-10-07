@@ -19,7 +19,6 @@ import {
 import {
   getGuidanceFullName,
   getGuidanceInitials,
-  readStoredGuidanceProfile,
   type GuidanceProfile,
 } from "../profileData";
 
@@ -33,6 +32,19 @@ const emptyPasswordForm: PasswordForm = {
   current: "",
   newPass: "",
   confirm: "",
+};
+
+const emptyGuidanceProfile: GuidanceProfile = {
+  firstName: "",
+  middleName: "",
+  lastName: "",
+  suffix: "",
+  email: "",
+  contactNumber: "",
+  employeeId: "",
+  school: "",
+  role: "",
+  status: "",
 };
 
 function Field({
@@ -58,8 +70,10 @@ function Field({
 }
 
 export default function ProfilePage() {
-  const [profile, setProfile] = useState<GuidanceProfile>(() => readStoredGuidanceProfile());
-  const [requestForm, setRequestForm] = useState<GuidanceProfile>(() => readStoredGuidanceProfile());
+  const [profile, setProfile] = useState<GuidanceProfile>(emptyGuidanceProfile);
+  const [requestForm, setRequestForm] = useState<GuidanceProfile>(emptyGuidanceProfile);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [profileError, setProfileError] = useState("");
   const [passwords, setPasswords] = useState<PasswordForm>(emptyPasswordForm);
   const [showPass, setShowPass] = useState({ current: false, newPass: false, confirm: false });
   const [approvalPassword, setApprovalPassword] = useState("");
@@ -70,6 +84,8 @@ export default function ProfilePage() {
   const [photoMessage, setPhotoMessage] = useState("");
   const [approvalSent, setApprovalSent] = useState(false);
   const [passwordSaved, setPasswordSaved] = useState(false);
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
 
   const fullName = getGuidanceFullName(profile);
   const initials = getGuidanceInitials(profile);
@@ -101,14 +117,27 @@ export default function ProfilePage() {
   };
 
   useEffect(() => {
-    fetch("/api/guidance/me")
-      .then((res) => res.json())
+    let isMounted = true;
+
+    fetch("/api/guidance/me", { cache: "no-store" })
+      .then(async (res) => ({ response: res, data: await res.json().catch(() => null) }))
       .then((data) => {
-        if (!data.success || !data.guidance) return;
-        setProfile(data.guidance);
-        setRequestForm(data.guidance);
+        if (!isMounted) return;
+        if (!data.response.ok || !data.data?.success || !data.data.guidance) {
+          setProfileError(data.data?.message || "Unable to load your profile.");
+          return;
+        }
+        setProfile(data.data.guidance);
+        setRequestForm(data.data.guidance);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (isMounted) setProfileError("Unable to load your profile.");
+      })
+      .finally(() => {
+        if (isMounted) setLoadingProfile(false);
+      });
+
+    return () => { isMounted = false; };
   }, []);
 
   const sendApprovalRequest = async () => {
@@ -121,12 +150,35 @@ export default function ProfilePage() {
     if (data.success) setApprovalSent(true);
   };
 
-  const updatePassword = () => {
-    if (!canUpdatePassword) return;
+  const updatePassword = async () => {
+    if (!canUpdatePassword || passwordSaving) return;
 
-    setPasswordSaved(true);
-    setPasswords(emptyPasswordForm);
-    setTimeout(() => setPasswordSaved(false), 2500);
+    setPasswordError("");
+    setPasswordSaved(false);
+    setPasswordSaving(true);
+    try {
+      const response = await fetch("/api/guidance/me/password", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: passwords.current,
+          newPassword: passwords.newPass,
+          confirmPassword: passwords.confirm,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.message || "Unable to update your password.");
+      }
+
+      setPasswordSaved(true);
+      setPasswords(emptyPasswordForm);
+      setTimeout(() => setPasswordSaved(false), 2500);
+    } catch (error: unknown) {
+      setPasswordError(error instanceof Error ? error.message : "Unable to update your password.");
+    } finally {
+      setPasswordSaving(false);
+    }
   };
 
   const unlockProfileApproval = () => {
@@ -140,9 +192,20 @@ export default function ProfilePage() {
     setSettingsOpen(true);
     setApprovalSent(false);
     setPasswordSaved(false);
+    setPasswordSaving(false);
+    setPasswordError("");
+    setPasswords(emptyPasswordForm);
     setApprovalPassword("");
     setApprovalUnlocked(false);
   };
+
+  if (loadingProfile) {
+    return <div className="profile-page" role="status">Loading your profile...</div>;
+  }
+
+  if (profileError) {
+    return <div className="profile-page" role="alert">{profileError}</div>;
+  }
 
   return (
     <div className="profile-page">
@@ -160,7 +223,7 @@ export default function ProfilePage() {
       <div className="profile-grid">
         <section className="profile-summary">
           <div className="card profile-hero">
-            <div className="avatar-large overflow-hidden">{profile.profilePicture ? <img src={profile.profilePicture} alt="Profile" className="h-full w-full object-cover" /> : initials}</div>
+            <div className="avatar-large overflow-hidden">{initials}</div>
             <div className="profile-info">
               <div className="profile-name">{fullName}</div>
               <div className="profile-role">{profile.role} · {profile.school}</div>
@@ -240,9 +303,6 @@ export default function ProfilePage() {
                 <Lock size={15} />
                 Change Password
               </button>
-              <button className={activePanel === "photo" ? "tab-active" : ""} onClick={() => setActivePanel("photo")}>
-                <Camera size={15} /> Profile Photo
-              </button>
             </div>
 
             {activePanel === "profile" ? (
@@ -319,7 +379,11 @@ export default function ProfilePage() {
                     value={passwords[key as keyof PasswordForm]}
                     visible={showPass[key as keyof typeof showPass]}
                     disabled={key !== "current" && !passwords.current.trim()}
-                    onChange={(value) => setPasswords((prev) => ({ ...prev, [key]: value }))}
+                    onChange={(value) => {
+                      setPasswordError("");
+                      setPasswordSaved(false);
+                      setPasswords((prev) => ({ ...prev, [key]: value }));
+                    }}
                     onToggle={() => setShowPass((prev) => ({ ...prev, [key]: !prev[key as keyof typeof prev] }))}
                   />
                 ))}
@@ -327,6 +391,8 @@ export default function ProfilePage() {
                 {passwords.newPass && passwords.confirm && passwords.newPass !== passwords.confirm ? (
                   <div className="error-note">Passwords do not match.</div>
                 ) : null}
+
+                {passwordError ? <div className="error-note" role="alert">{passwordError}</div> : null}
 
                 <div className="requirements">
                   {passwordChecks.map((check) => (
@@ -346,9 +412,9 @@ export default function ProfilePage() {
 
                 <div className="modal-actions">
                   <button className="btn-secondary" onClick={() => setSettingsOpen(false)}>Cancel</button>
-                  <button className="btn-primary" onClick={updatePassword} disabled={!canUpdatePassword}>
+                  <button className="btn-primary" onClick={updatePassword} disabled={!canUpdatePassword || passwordSaving}>
                     <Lock size={15} />
-                    Update Password
+                    {passwordSaving ? "Updating..." : "Update Password"}
                   </button>
                 </div>
               </div>
@@ -704,6 +770,190 @@ export default function ProfilePage() {
           .profile-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
         }
         @media (max-width: 620px) { .profile-summary { display: flex; } }
+
+        /* Keep the profile hierarchy and its dialogs within narrow phone viewports. */
+        @media (max-width: 620px) {
+          .profile-page {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: auto;
+            gap: 16px;
+            overflow-x: clip;
+          }
+          .profile-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            width: 100%;
+            max-width: 100%;
+            gap: 16px;
+          }
+          .profile-summary,
+          .profile-main {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            gap: 16px;
+          }
+          .profile-summary > .card,
+          .profile-main > .card {
+            box-sizing: border-box;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            margin: 0;
+          }
+          .profile-header {
+            gap: 12px;
+          }
+          .profile-header .btn-primary,
+          .security-card .btn-secondary {
+            width: 100%;
+            min-height: 44px;
+            justify-content: center;
+          }
+          .profile-hero {
+            padding: 0 16px 20px;
+          }
+          .profile-hero::before {
+            margin-right: -16px;
+            margin-left: -16px;
+          }
+          .profile-info {
+            width: 100%;
+          }
+          .profile-name,
+          .profile-role {
+            overflow-wrap: anywhere;
+          }
+          .profile-name {
+            font-size: 19px;
+            line-height: 1.2;
+          }
+          .avatar-large {
+            width: 70px;
+            height: 70px;
+            font-size: 21px;
+          }
+          .profile-summary-card,
+          .details-card,
+          .security-card {
+            padding: 16px;
+          }
+          .summary-row {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 4px;
+          }
+          .summary-row strong {
+            max-width: 100%;
+            text-align: left;
+          }
+          .details-grid {
+            grid-template-columns: minmax(0, 1fr);
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            gap: 10px;
+            margin-top: 14px;
+          }
+          .detail-item {
+            align-items: flex-start;
+            min-width: 0;
+            padding: 12px;
+          }
+          .detail-item > div:last-child {
+            min-width: 0;
+          }
+          .detail-item strong {
+            display: block;
+            overflow-wrap: anywhere;
+          }
+          .security-card {
+            gap: 14px;
+          }
+          .modal-backdrop {
+            align-items: flex-end;
+            padding: 8px;
+          }
+          .settings-modal {
+            width: 100%;
+            max-height: calc(100dvh - 16px);
+            border-radius: 14px;
+          }
+          .modal-header {
+            gap: 10px;
+            padding: 16px;
+          }
+          .modal-header h2 {
+            font-size: 18px;
+          }
+          .modal-header p,
+          .approval-note span,
+          .success-note,
+          .error-note {
+            overflow-wrap: anywhere;
+          }
+          .icon-btn {
+            width: 42px;
+            height: 42px;
+            flex: 0 0 42px;
+          }
+          .modal-tabs {
+            gap: 8px;
+            padding: 12px 16px;
+          }
+          .modal-tabs button {
+            min-height: 44px;
+            padding: 8px 10px;
+            white-space: normal;
+          }
+          .modal-body {
+            gap: 12px;
+            padding: 16px;
+          }
+          .approval-note,
+          .success-note,
+          .error-note {
+            align-items: flex-start;
+          }
+          .approval-note svg,
+          .success-note svg {
+            flex: 0 0 auto;
+            margin-top: 1px;
+          }
+          .auth-row {
+            gap: 10px;
+          }
+          .unlock-btn,
+          .modal-actions button,
+          .modal-body > label.btn-secondary {
+            width: 100%;
+            min-height: 44px;
+            justify-content: center;
+          }
+          .input-wrap {
+            min-height: 44px;
+            min-width: 0;
+          }
+          .form-input {
+            min-width: 0;
+          }
+          .eye-btn {
+            min-width: 36px;
+            min-height: 36px;
+          }
+          .modal-actions {
+            gap: 8px;
+            padding-top: 2px;
+          }
+          .modal-actions button {
+            display: inline-flex;
+            align-items: center;
+          }
+        }
       `}</style>
     </div>
   );

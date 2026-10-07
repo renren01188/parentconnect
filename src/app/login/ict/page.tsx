@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Monitor, ArrowLeft, ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { LoginRecaptcha } from "@/components/LoginRecaptcha";
+import { useLoginProtection } from "@/hooks/useLoginProtection";
 
 export default function ICTLoginPage() {
   const router = useRouter();
@@ -12,24 +14,37 @@ export default function ICTLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const {
+    applyServerResult,
+    captchaRequired,
+    captchaResetSignal,
+    captchaToken,
+    isLocked,
+    lockoutMessage,
+    setCaptchaToken,
+  } = useLoginProtection("ict");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (isLocked) {
+      setError(lockoutMessage || "Too many failed attempts. Please try again later.");
+      return;
+    }
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/ict/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, password }),
+        body: JSON.stringify({ identifier, password, captchaToken }),
       });
 
       const data = await res.json();
 
       if (!res.ok || !data.success) {
         setError(data.message || "Invalid credentials.");
-        setLoading(false);
+        applyServerResult(data);
         return;
       }
 
@@ -80,6 +95,11 @@ export default function ICTLoginPage() {
             {error}
           </div>
         )}
+        {lockoutMessage && (
+          <div role="status" aria-live="polite" className="mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+            {lockoutMessage}
+          </div>
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -93,6 +113,7 @@ export default function ICTLoginPage() {
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
               required
+              disabled={isLocked}
               className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#274e13]/30 focus:border-[#274e13] transition"
             />
           </div>
@@ -108,6 +129,7 @@ export default function ICTLoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                disabled={isLocked}
                 className="w-full border border-gray-300 rounded-xl px-4 py-2.5 pr-10 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#274e13]/30 focus:border-[#274e13] transition"
               />
               <button
@@ -121,9 +143,11 @@ export default function ICTLoginPage() {
             </div>
           </div>
 
+          <LoginRecaptcha required={captchaRequired} resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || isLocked || (captchaRequired && !captchaToken)}
             className="w-full flex items-center justify-center gap-2 bg-[#274e13] hover:bg-[#1e3d0f] text-white font-semibold text-sm rounded-xl py-3 transition-colors disabled:opacity-60 disabled:cursor-not-allowed mt-2"
           >
             {loading ? (

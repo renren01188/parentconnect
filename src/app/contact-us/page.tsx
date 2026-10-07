@@ -1,32 +1,79 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { GraduationCap, ArrowLeft, Send, CheckCircle, Phone, Mail, MapPin } from "lucide-react";
 import Link from "next/link";
+import { ContactRecaptcha } from "@/components/ContactRecaptcha";
+
+const emptyForm = {
+  name: "",
+  email: "",
+  phone: "",
+  subject: "",
+  message: "",
+};
 
 export default function ContactUsPage() {
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    subject: "",
-    message: "",
-  });
+  const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaResetSignal, setCaptchaResetSignal] = useState(0);
+  const submissionIdRef = useRef<string | null>(null);
+  const isFormComplete = [form.name, form.email, form.phone, form.subject, form.message]
+    .every((value) => value.trim().length > 0);
+  const canSubmit = isFormComplete && Boolean(captchaToken) && !loading;
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  ) => {
+    setError("");
+    // Editing after a delivery failure starts a distinct message. Keeping the
+    // key otherwise makes network retries safe and prevents duplicate emails.
+    submissionIdRef.current = null;
+    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
+    if (!isFormComplete) {
+      setError("Please complete all contact fields before sending your message.");
+      return;
+    }
+    if (!captchaToken) {
+      setError("Please complete the CAPTCHA verification before sending your message.");
+      return;
+    }
+
     setLoading(true);
-    // Simulate sending — replace with real API call if needed
-    setTimeout(() => {
-      setLoading(false);
+    submissionIdRef.current ??= crypto.randomUUID();
+    // The server verifies CAPTCHA and delivers the ICT notification.
+    try {
+      const response = await fetch("/api/contact-us", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": submissionIdRef.current,
+        },
+        body: JSON.stringify({ ...form, recaptchaToken: captchaToken }),
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; message?: string } | null;
+
+      if (!response.ok || !result?.success) {
+        setError(result?.message || "We could not send your message right now. Please try again later.");
+        return;
+      }
+
       setSubmitted(true);
-    }, 1800);
+    } catch {
+      setError("We could not send your message right now. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
+      setCaptchaToken("");
+      setCaptchaResetSignal((value) => value + 1);
+    }
   };
 
   return (
@@ -159,23 +206,6 @@ export default function ContactUsPage() {
 
             {/* ── Contact Form ── */}
             <div className="lg:col-span-2">
-              {submitted ? (
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-10 flex flex-col items-center text-center">
-                  <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center mb-5">
-                    <CheckCircle className="w-10 h-10 text-emerald-500" />
-                  </div>
-                  <h3 className="text-2xl font-extrabold text-slate-800 mb-2">Message Sent!</h3>
-                  <p className="text-slate-500 text-sm max-w-xs mb-6">
-                    Thank you for reaching out. We&apos;ll get back to you as soon as possible.
-                  </p>
-                  <button
-                    onClick={() => { setSubmitted(false); setForm({ name: "", email: "", phone: "", subject: "", message: "" }); }}
-                    className="text-sm font-semibold text-sky-600 hover:text-sky-700 transition-colors"
-                  >
-                    Send another message
-                  </button>
-                </div>
-              ) : (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8">
                   <p className="text-slate-500 text-sm mb-6">
                     To contact us, enter your name, email address, and message, then press Send.
@@ -225,6 +255,7 @@ export default function ContactUsPage() {
                         value={form.phone}
                         onChange={handleChange}
                         placeholder="e.g. 09XX-XXX-XXXX"
+                        required
                         className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent transition placeholder-slate-400"
                       />
                     </div>
@@ -261,12 +292,23 @@ export default function ContactUsPage() {
                       />
                     </div>
 
+                    <ContactRecaptcha
+                      resetSignal={captchaResetSignal}
+                      onTokenChange={setCaptchaToken}
+                    />
+
+                    {error && (
+                      <p role="alert" className="-mt-2 text-sm font-medium text-red-600">
+                        {error}
+                      </p>
+                    )}
+
                     {/* Send */}
                     <div className="flex justify-end">
                       <button
                         type="submit"
-                        disabled={loading}
-                        className="flex items-center gap-2 bg-[#0d2d5e] hover:bg-[#163a75] disabled:bg-slate-400 text-white font-bold py-3 px-8 rounded-full transition-all duration-200 active:scale-95 shadow-md text-sm"
+                        disabled={!canSubmit}
+                        className="flex items-center gap-2 bg-[#0d2d5e] hover:bg-[#163a75] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none text-white font-bold py-3 px-8 rounded-full transition-all duration-200 active:scale-95 shadow-md text-sm"
                       >
                         {loading ? (
                           <span className="flex items-center gap-2">
@@ -284,6 +326,39 @@ export default function ContactUsPage() {
                       </button>
                     </div>
                   </form>
+                </div>
+
+              {submitted && (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="contact-success-title"
+                >
+                  <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-2xl">
+                    <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
+                      <CheckCircle className="h-10 w-10 text-emerald-500" aria-hidden="true" />
+                    </div>
+                    <h3 id="contact-success-title" className="text-2xl font-extrabold text-slate-800">
+                      Message Sent!
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Thank you for reaching out. We&apos;ll get back to you as soon as possible.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSubmitted(false);
+                        setForm(emptyForm);
+                        setError("");
+                        submissionIdRef.current = null;
+                        setCaptchaResetSignal((value) => value + 1);
+                      }}
+                      className="mt-6 rounded-full bg-[#0d2d5e] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#163a75]"
+                    >
+                      Send another message
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

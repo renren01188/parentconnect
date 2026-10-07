@@ -1,0 +1,36 @@
+{
+  "hotspots": [
+    {
+      "label": "ContactUsPage()",
+      "risk": 0.517,
+      "type": "FUNCTION"
+    },
+    {
+      "label": "exportMonthlySF2()",
+      "risk": 0.502,
+      "type": "FUNCTION"
+    },
+    {
+      "label": "PATCH()",
+      "risk": 0.47,
+      "type": "FUNCTION"
+    },
+    {
+      "label": "GuardianLoginPageContent()",
+      "risk": 0.394,
+      "type": "FUNCTION"
+    },
+    {
+      "label": "ParentDashboard()",
+      "risk": 0.387,
+      "type": "FUNCTION"
+    }
+  ],
+  "blast_radius": {
+    "POST()": 189,
+    "GET()": 149,
+    "PATCH()": 100,
+    "json": 99,
+    "map": 95
+  }
+}

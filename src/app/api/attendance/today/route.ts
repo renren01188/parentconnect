@@ -42,9 +42,55 @@ function buildFullName(row: StudentJoin) {
     .join(" ");
 }
 
+const RETRYABLE_NETWORK_ERRORS = /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_/i;
+const MAX_QUERY_ATTEMPTS = 3;
+
+function isRetryableNetworkError(error: unknown) {
+  const message = error instanceof Error ? `${error.message}\n${error.cause ?? ""}` : String(error);
+  return RETRYABLE_NETWORK_ERRORS.test(message);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getTodayLogs(today: string, activeSection: string, grade: string | null) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_QUERY_ATTEMPTS; attempt++) {
+    let query = supabase
+      .from("attendance_logs")
+      .select(`
+        id, student_id, time_logged, type, session_type, status, via,
+        students!inner ( first_name, middle_name, last_name, suffix, grade, section )
+      `)
+      .eq("attendance_date", today)
+      .order("time_logged", { ascending: false });
+
+    if (activeSection) query = query.eq("students.section", activeSection);
+    if (grade) query = query.eq("students.grade", grade);
+
+    const { data, error } = await query;
+    if (!error) return (data ?? []) as AttendanceLogRow[];
+
+    lastError = error;
+    if (!isRetryableNetworkError(error) || attempt === MAX_QUERY_ATTEMPTS) break;
+
+    // Supabase/PostgREST can occasionally reset an idle TLS connection. Retry a
+    // fresh query with a short backoff rather than failing the dashboard at once.
+    console.warn(`Today logs query failed (attempt ${attempt}/${MAX_QUERY_ATTEMPTS}); retrying.`, error);
+    await wait(150 * attempt);
+  }
+
+  throw lastError;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const today   = getToday();
 
     // Multi-section: resolve active section from ?section= param
@@ -57,20 +103,7 @@ export async function GET(req: NextRequest) {
       ? requested
       : adviserSections[0] ?? adviser?.section ?? "";
 
-    let query = supabase
-      .from("attendance_logs")
-      .select(`
-        id, student_id, time_logged, type, session_type, status, via,
-        students!inner ( first_name, middle_name, last_name, suffix, grade, section )
-      `)
-      .eq("attendance_date", today)
-      .order("time_logged", { ascending: false });
-
-    if (activeSection)    query = query.eq("students.section", activeSection);
-    if (adviser?.grade)   query = query.eq("students.grade",   adviser.grade);
-
-    const { data: rows, error } = await query;
-    if (error) throw error;
+    const rows = await getTodayLogs(today, activeSection, adviser.grade);
 
     const logs = ((rows ?? []) as AttendanceLogRow[]).map((row) => ({
       id:          row.id,
@@ -89,9 +122,15 @@ export async function GET(req: NextRequest) {
 
   } catch (error) {
     console.error("Today logs error:", error);
+    const status = isRetryableNetworkError(error) ? 503 : 500;
     return NextResponse.json(
-      { success: false, message: "Failed to fetch today's logs" },
-      { status: 500 }
+      {
+        success: false,
+        message: status === 503
+          ? "Attendance service is temporarily unavailable. Please try again."
+          : "Failed to fetch today's logs",
+      },
+      { status }
     );
   }
 }

@@ -5,14 +5,16 @@ import { logAudit } from "@/lib/audit";
 import {
   getAdviserSession,
   getGuidanceSession,
+  getLinkedStudentIds,
   getParentSession,
   getPrincipalSession,
+  listGuidanceTickets,
   listMessages,
   toAdviserReport,
   toGuidanceReport,
   toParentReport,
   toPrincipalReport,
-  type MessageRow, type ReportRow,
+  type ReportRow,
 } from "./_lib";
 
 const MAX_REPORTS = 100;
@@ -21,7 +23,6 @@ const REPORT_SELECT = [
   "parent_id",
   "parent_email",
   "parent_name",
-  "parent_profile_picture",
   "adviser_id",
   "adviser_name",
   "student_id",
@@ -114,7 +115,6 @@ type ParentIdentity = {
   parent_middle_name: string | null;
   parent_last_name: string | null;
   parent_suffix: string | null;
-  profile_picture: string | null;
 };
 
 function parentDisplayName(parent: ParentIdentity) {
@@ -132,7 +132,7 @@ async function resolveParentIdentities(rows: ReportRow[]): Promise<ReportRow[]> 
   const parentIds = [...new Set(rows.flatMap((row) => row.parent_id ? [row.parent_id] : []))];
   const parentEmails = [...new Set(rows.flatMap((row) => row.parent_email ? [row.parent_email] : []))];
   const studentIds = [...new Set(rows.flatMap((row) => row.student_id ? [row.student_id] : []))];
-  const select = "id, email, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, profile_picture";
+  const select = "id, email, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix";
 
   const [byIdResult, byEmailResult, byStudentResult] = await Promise.all([
     parentIds.length ? supabase.from("parents").select(select).in("id", parentIds) : Promise.resolve({ data: [], error: null }),
@@ -155,51 +155,17 @@ async function resolveParentIdentities(rows: ReportRow[]): Promise<ReportRow[]> 
       ?? parentsByStudent.get(row.student_id);
     const name = parent ? parentDisplayName(parent) : "";
 
-    return parent && name
-      ? { ...row, parent_name: name, parent_profile_picture: parent.profile_picture ?? row.parent_profile_picture ?? null }
-      : row;
+    return parent && name ? { ...row, parent_name: name } : row;
   });
-}
-
-function staffDisplayName(row: Record<string, unknown>) {
-  return [row.first_name, row.middle_name, row.last_name, row.suffix]
-    .filter((value): value is string => typeof value === "string" && Boolean(value))
-    .join(" ").trim();
-}
-
-/** Message rows store a sender name, but profile images belong to the live user
- * account. Hydrating them at read time makes a changed picture visible in every
- * existing report thread without rewriting historic messages. */
-async function hydrateMessageProfilePictures(messages: Map<number, MessageRow[]>) {
-  const [advisersResult, guidanceResult, principalsResult] = await Promise.all([
-    supabase.from("advisers").select("first_name, middle_name, last_name, suffix, profile_picture"),
-    supabase.from("guidance_counselors").select("first_name, middle_name, last_name, suffix, profile_picture"),
-    supabase.from("principals").select("first_name, middle_name, last_name, suffix, profile_picture"),
-  ]);
-  if (advisersResult.error) throw advisersResult.error;
-  if (guidanceResult.error) throw guidanceResult.error;
-  if (principalsResult.error) throw principalsResult.error;
-
-  const pictures = new Map<string, string | null>();
-  const addProfiles = (role: string, rows: Array<Record<string, unknown>>) => rows.forEach((row) => {
-    const name = staffDisplayName(row);
-    if (name) pictures.set(`${role}:${name.toLowerCase()}`, typeof row.profile_picture === "string" ? row.profile_picture : null);
-  });
-  addProfiles("adviser", (advisersResult.data ?? []) as Array<Record<string, unknown>>);
-  addProfiles("guidance", (guidanceResult.data ?? []) as Array<Record<string, unknown>>);
-  addProfiles("principal", (principalsResult.data ?? []) as Array<Record<string, unknown>>);
-
-  for (const rows of messages.values()) {
-    for (const message of rows) {
-      if (message.sender_role === "parent") continue;
-      message.sender_profile_picture = pictures.get(`${message.sender_role}:${message.sender_name.toLowerCase()}`) ?? null;
-    }
-  }
 }
 
 export async function GET(req: NextRequest) {
   try {
     const role = req.nextUrl.searchParams.get("role");
+    const requestedReportId = Number(req.nextUrl.searchParams.get("reportId"));
+    const reportId = Number.isSafeInteger(requestedReportId) && requestedReportId > 0
+      ? requestedReportId
+      : null;
 
     if (role === "adviser") {
       const adviser = await getAdviserSession();
@@ -207,21 +173,21 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("parent_adviser_reports")
         .select(REPORT_SELECT)
         .eq("adviser_id", adviser.id)
-        .order("last_message_at", { ascending: false })
-        .limit(MAX_REPORTS);
+        .order("last_message_at", { ascending: false });
+      if (reportId) query = query.eq("id", reportId);
+      const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);
 
       if (error) throw error;
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const messages = await listMessages(rows.map((row) => row.id));
-      await hydrateMessageProfilePictures(messages);
+      const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toAdviserReport(row, messages.get(row.id) ?? [])),
+        reports: rows.map((row) => toAdviserReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
       });
     }
 
@@ -231,21 +197,34 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("parent_adviser_reports")
         .select(REPORT_SELECT)
-        .eq("escalated_to_principal", true)
-        .order("last_message_at", { ascending: false })
-        .limit(MAX_REPORTS);
+        .order("last_message_at", { ascending: false });
+      if (reportId) query = query.eq("id", reportId);
+      // Principal monitoring must be a complete superset of Parent Reports.
+      // Do not apply the regular inbox cap here, otherwise a new report can
+      // appear in Principal Notifications while being absent from Reports.
+      const { data, error } = await (reportId ? query.limit(1) : query);
 
       if (error) throw error;
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const messages = await listMessages(rows.map((row) => row.id));
-      await hydrateMessageProfilePictures(messages);
+      const [messages, tickets, principalReadsResult] = await Promise.all([
+        listMessages(rows.map((row) => row.id)),
+        listGuidanceTickets(rows.map((row) => row.id)),
+        supabase.from("principal_notification_reads").select("notif_key").eq("principal_id", principal.id),
+      ]);
+      if (principalReadsResult.error) throw principalReadsResult.error;
+      const principalReadKeys = new Set((principalReadsResult.data ?? []).map((read) => read.notif_key));
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toPrincipalReport(row, messages.get(row.id) ?? [])),
+        reports: rows.map((row) => toPrincipalReport(
+          row,
+          messages.get(row.id) ?? [],
+          tickets.get(row.id),
+          principalReadKeys.has(`principal-report-read-${row.id}`),
+        )),
       });
     }
 
@@ -255,21 +234,21 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("parent_adviser_reports")
         .select(REPORT_SELECT)
         .eq("escalated_to_guidance", true)
-        .order("last_message_at", { ascending: false })
-        .limit(MAX_REPORTS);
+        .order("last_message_at", { ascending: false });
+      if (reportId) query = query.eq("id", reportId);
+      const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);
 
       if (error) throw error;
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const messages = await listMessages(rows.map((row) => row.id));
-      await hydrateMessageProfilePictures(messages);
+      const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toGuidanceReport(row, messages.get(row.id) ?? [])),
+        reports: rows.map((row) => toGuidanceReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
       });
     }
 
@@ -278,21 +257,27 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    const { data, error } = await supabase
+    const linkedStudentIds = await getLinkedStudentIds(parent.id);
+    if (linkedStudentIds.length === 0) {
+      return NextResponse.json({ success: true, reports: [] });
+    }
+
+    let query = supabase
       .from("parent_adviser_reports")
       .select(REPORT_SELECT)
-      .eq("parent_email", parent.email)
-      .order("last_message_at", { ascending: false })
-      .limit(MAX_REPORTS);
+      .eq("parent_id", parent.id)
+      .in("student_id", linkedStudentIds)
+      .order("last_message_at", { ascending: false });
+    if (reportId) query = query.eq("id", reportId);
+    const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);
 
     if (error) throw error;
 
     const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-    const messages = await listMessages(rows.map((row) => row.id));
-    await hydrateMessageProfilePictures(messages);
+    const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
     return NextResponse.json({
       success: true,
-      reports: rows.map((row) => toParentReport(row, messages.get(row.id) ?? [])),
+      reports: rows.map((row) => toParentReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
     });
   } catch (error: unknown) {
     console.error("GET /api/reports/parent-adviser error:", error);
@@ -328,23 +313,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Adviser not found." }, { status: 404 });
     }
 
-    const { data: parentRows, error: parentError } = await supabase
+    const { data: parentRow, error: parentError } = await supabase
       .from("parents")
-      .select(`
-        id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, profile_picture, student_id,
-        students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
-      `)
-      .eq("email", parent.email)
-      .eq("student_id", studentId)
-      .limit(1);
+      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix")
+      .eq("id", parent.id)
+      .maybeSingle();
 
     if (parentError) throw parentError;
-    const parentRow = parentRows?.[0];
     if (!parentRow) {
       return NextResponse.json({ success: false, message: "Student is not linked to your parent account." }, { status: 403 });
     }
 
-    const student = studentFromRelation(parentRow.students) as {
+    const { data: linkedStudent, error: linkedStudentError } = await supabase
+      .from("parent_student_links")
+      .select(`
+        student_id,
+        students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+      `)
+      .eq("parent_id", parent.id)
+      .eq("student_id", studentId)
+      .maybeSingle();
+    if (linkedStudentError) throw linkedStudentError;
+    if (!linkedStudent) {
+      return NextResponse.json({ success: false, message: "Student is not linked to your parent account." }, { status: 403 });
+    }
+
+    const student = studentFromRelation(linkedStudent.students) as {
       student_id: string;
       first_name: string;
       middle_name?: string | null;
@@ -384,7 +378,7 @@ export async function POST(req: NextRequest) {
     const { data: duplicateRows, error: duplicateError } = await supabase
       .from("parent_adviser_reports")
       .select("*")
-      .eq("parent_email", parent.email)
+      .eq("parent_id", parent.id)
       .eq("adviser_id", adviser.id)
       .eq("student_id", student.student_id)
       .eq("subject", trimmedSubject)
@@ -408,10 +402,9 @@ export async function POST(req: NextRequest) {
     }
 
     const reportPayload: Record<string, string | number | boolean | string[] | null> = {
-      parent_id: parentRow.id,
-      parent_email: parent.email,
+      parent_id: parent.id,
+      parent_email: parentRow.email ?? parent.email,
       parent_name: parentName || parent.name,
-      parent_profile_picture: parentRow.profile_picture ?? null,
       adviser_id: adviser.id,
       adviser_name: adviserName,
       student_id: student.student_id,

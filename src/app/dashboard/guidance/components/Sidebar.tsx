@@ -4,20 +4,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Bell,
-  ChevronRight,
-  FileText,
-  HeartHandshake,
-  LayoutDashboard,
-  LogOut,
-  Megaphone,
-  Monitor,
+  Bell, FileText, HeartHandshake, LayoutDashboard, LogOut, Menu, Megaphone, Monitor, X,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import {
   getGuidanceFullName,
   getGuidanceInitials,
-  readStoredGuidanceProfile,
   type GuidanceProfile,
 } from "../profileData";
 
@@ -29,257 +21,93 @@ const navItems = [
   { label: "Notifications", href: "/dashboard/guidance/notifications", icon: Bell, badgeKey: "notifications" },
 ];
 
+function Badge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold leading-none text-white">{count > 99 ? "99+" : count}</span>;
+}
+
 export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const { reportsUnreadCount, escalatedCount, notifUnreadCount, principalAnnouncementUnreadCount, ictUnreadCount } = useNotifContext();
   const [profile, setProfile] = useState<GuidanceProfile | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    const syncProfile = () => setProfile(readStoredGuidanceProfile());
+    let isMounted = true;
 
-    syncProfile();
-    window.addEventListener("storage", syncProfile);
+    const loadProfile = async () => {
+      try {
+        const response = await fetch("/api/guidance/me", { cache: "no-store" });
+        const data = await response.json().catch(() => null);
+        if (!isMounted) return;
+        setProfile(response.ok && data?.success && data?.guidance ? data.guidance : null);
+      } catch {
+        if (isMounted) setProfile(null);
+      }
+    };
+    const syncProfile = () => { void loadProfile(); };
+
+    void loadProfile();
     window.addEventListener("guidance-profile-updated", syncProfile);
-
     return () => {
-      window.removeEventListener("storage", syncProfile);
       window.removeEventListener("guidance-profile-updated", syncProfile);
+      isMounted = false;
     };
   }, []);
 
-  const profileName = profile ? getGuidanceFullName(profile) : "";
-  const profileInitials = profile ? getGuidanceInitials(profile) : "";
+  useEffect(() => {
+    const handleGuideTarget = (event: Event) => {
+      const target = (event as CustomEvent<string | null>).detail;
+      setGuideTarget(target);
+      setMobileOpen(target === "guidance-sidebar");
+    };
+    window.addEventListener("guidance-dashboard-guide-target", handleGuideTarget);
+    return () => window.removeEventListener("guidance-dashboard-guide-target", handleGuideTarget);
+  }, []);
+
+  const profileName = profile ? getGuidanceFullName(profile) : "Guidance Counselor";
+  const profileInitials = profile ? getGuidanceInitials(profile) : "GC";
+  const isActive = (href: string) => href === "/dashboard/guidance" ? pathname === href : pathname.startsWith(href);
+  const badgeFor = (badgeKey?: string) => badgeKey === "reports" ? reportsUnreadCount : badgeKey === "announcements" ? principalAnnouncementUnreadCount : badgeKey === "ict" ? ictUnreadCount : badgeKey === "notifications" ? notifUnreadCount : 0;
+  const closeMenu = () => setMobileOpen(false);
+  const logOut = async () => {
+    closeMenu();
+    await fetch("/api/auth/guidance/logout", { method: "POST" }).catch(() => null);
+    router.push("/");
+    router.refresh();
+  };
 
   return (
-    <aside
-      className="guidance-sidebar"
-      style={{
-        width: 192,
-        minWidth: 192,
-        height: "100vh",
-        position: "sticky",
-        top: 0,
-        display: "flex",
-        flexDirection: "column",
-        padding: 0,
-        background: "linear-gradient(180deg, #0284c7 0%, #0369a1 100%)",
-        color: "white",
-        borderRight: "0",
-        opacity: ready ? 1 : 0,
-        transition: "opacity 120ms ease",
-      }}
-    >
-      <div
-        className="sidebar-brand"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 9,
-          padding: "18px 16px",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
-        }}
-      >
-        <div
-          className="brand-logo"
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 10,
-            display: "grid",
-            placeItems: "center",
-            background: "linear-gradient(135deg, #0ea5e9, #14b8a6)",
-            boxShadow: "none",
-          }}
-        >
-          <HeartHandshake size={22} />
-        </div>
-        <div className="brand-copy">
-          <div className="brand-name" style={{ fontSize: 15, lineHeight: 1.1, fontWeight: 800 }}>ParentConnect</div>
-          <div className="brand-sub" style={{ marginTop: 3, color: "#dbeafe", fontSize: 11, fontWeight: 600 }}>Santiago Elementary · Guidance</div>
-        </div>
-      </div>
+    <>
+      <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-sky-500/40 bg-gradient-to-r from-sky-600 to-sky-700 px-4 shadow-sm md:hidden">
+        <div><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-sky-100">Santiago Elementary · Guidance</p></div>
+        <button type="button" aria-label="Open navigation menu" aria-controls="guidance-dashboard-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Menu className="h-5 w-5" /></button>
+      </header>
 
-      <nav className="sidebar-nav" aria-label="Guidance navigation" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "16px 12px" }}>
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const badge =
-            item.badgeKey === "reports"
-              ? reportsUnreadCount
-              : item.badgeKey === "announcements"
-                ? principalAnnouncementUnreadCount
-                : item.badgeKey === "ict"
-                  ? ictUnreadCount
-                  : item.badgeKey === "notifications"
-                    ? notifUnreadCount
-                    : 0;
-          const isActive =
-            item.href === "/dashboard/guidance"
-              ? pathname === item.href
-              : pathname.startsWith(item.href);
+      {mobileOpen && <div className="fixed inset-0 z-40 bg-black/45 md:hidden" onClick={closeMenu} aria-hidden="true" />}
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`nav-item ${isActive ? "nav-item-active" : ""}`}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                minHeight: 40,
-                padding: "0 8px",
-                borderRadius: 10,
-                color: isActive ? "#0369a1" : "#dbeafe",
-                background: isActive ? "white" : "transparent",
-                boxShadow: isActive ? "0 1px 2px rgba(15, 23, 42, 0.10)" : "none",
-                textDecoration: "none",
-                fontSize: 13,
-                fontWeight: 700,
-              }}
-            >
-              <span
-                className="nav-icon"
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: 0,
-                  display: "grid",
-                  placeItems: "center",
-                  color: "inherit",
-                  background: "transparent",
-                }}
-              >
-                <Icon size={18} />
-              </span>
-              <span className="nav-label" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
-              {badge > 0 ? (
-                <span
-                  className="nav-badge"
-                  style={{
-                    minWidth: 22,
-                    height: 22,
-                    padding: "0 7px",
-                    borderRadius: 999,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: "#ef4444",
-                    color: "white",
-                    fontSize: 11,
-                    fontWeight: 800,
-                    flexShrink: 0,
-                  }}
-                >
-                  {badge}
-                </span>
-              ) : null}
-              {isActive && badge === 0 ? <ChevronRight size={14} className="nav-chevron shrink-0" /> : null}
-            </Link>
-          );
-        })}
-      </nav>
+      <aside id="guidance-dashboard-navigation" data-parent-guide="guidance-sidebar" className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[88vw] shrink-0 flex-col overflow-hidden bg-gradient-to-b from-sky-600 to-sky-700 text-white transition-transform duration-200 md:static md:z-auto md:flex md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "guidance-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-sky-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`} style={{ opacity: ready ? 1 : 0, transition: "opacity 120ms ease, transform 200ms ease" }}>
+        <div className="flex items-center justify-between px-4 pt-4 md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
 
-      <div
-        className="sidebar-panel"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginTop: "auto",
-          padding: "12px 14px",
-          border: "0",
-          borderRadius: 0,
-          background: "rgba(2, 132, 199, 0.32)",
-        }}
-      >
-        <div
-          className="panel-icon"
-          style={{
-            width: 30,
-            height: 30,
-            borderRadius: 9,
-            display: "grid",
-            placeItems: "center",
-            color: "#dbeafe",
-            background: "rgba(255, 255, 255, 0.12)",
-          }}
-        >
-          <Bell size={16} />
+        <div className="border-b border-white/10 px-5 py-5"><div className="flex items-center gap-2.5"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15"><HeartHandshake className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-sky-100">Guidance</p></div></div></div>
+
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4" aria-label="Guidance navigation">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.href);
+            return <Link key={item.href} href={item.href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-sky-100 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{item.label}</span><Badge count={badgeFor(item.badgeKey)} /></Link>;
+          })}
+        </nav>
+
+        <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl bg-white/10 p-3"><Bell className="h-4 w-4 shrink-0 text-sky-100" /><p className="text-xs font-bold text-white">{escalatedCount} concern{escalatedCount === 1 ? "" : "s"} need review</p></div>
+
+        <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
+          <Link href="/dashboard/guidance/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/guidance/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-white ring-2 ring-white/20">{profileInitials}</span><span className="min-w-0"><span className="block truncate text-xs font-semibold leading-tight text-white">{profileName}</span><span className="block text-[10px] text-sky-100">{profile?.school || "Guidance Office"}</span></span></Link>
+          <button type="button" onClick={logOut} className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-red-600"><LogOut className="h-3.5 w-3.5" /> Logout</button>
         </div>
-        <div>
-          <div className="panel-title" style={{ fontSize: 12, fontWeight: 800 }}>{escalatedCount} escalated report{escalatedCount === 1 ? "" : "s"}</div>
-          <div className="panel-copy" style={{ marginTop: 2, color: "#dbeafe", fontSize: 10.5, fontWeight: 600 }}>Needs guidance review</div>
-        </div>
-      </div>
-
-      <div className="sidebar-footer" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px", borderTop: "1px solid rgba(255,255,255,.18)" }}>
-        <Link
-          href="/dashboard/guidance/profile"
-          className={`user-info profile-link ${pathname.startsWith("/dashboard/guidance/profile") ? "profile-link-active" : ""
-            }`}
-          style={{
-            visibility: profile ? "visible" : "hidden",
-            minHeight: 42,
-            padding: 6,
-            margin: 0,
-            borderRadius: 10,
-            color: "inherit",
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <div
-            className="user-avatar"
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: "50%",
-              display: "grid",
-              placeItems: "center",
-              background: "#38bdf8",
-              color: "white",
-              fontSize: 11,
-              fontWeight: 800,
-            }}
-          >
-            {profileInitials}
-          </div>
-          <div className="user-meta" style={{ flex: 1, minWidth: 0 }}>
-            <div className="user-name" style={{ fontSize: 12, lineHeight: 1.2, fontWeight: 800 }}>{profileName}</div>
-            <div className="user-role" style={{ marginTop: 2, color: "#dbeafe", fontSize: 10.5, fontWeight: 600 }}>{profile?.school ?? ""}</div>
-          </div>
-          <ChevronRight size={15} className="profile-chevron" />
-        </Link>
-        <button
-          className="logout-btn"
-          style={{
-            height: 40,
-            border: 0,
-            borderRadius: 10,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            background: "#ef4444",
-            color: "white",
-            font: "inherit",
-            fontSize: 13,
-            fontWeight: 800,
-            cursor: "pointer",
-          }}
-          onClick={async () => {
-            await fetch("/api/auth/guidance/logout", { method: "POST" }).catch(() => null);
-            router.push("/");
-            router.refresh();
-          }}
-        >
-          <LogOut size={16} />
-          Logout
-        </button>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

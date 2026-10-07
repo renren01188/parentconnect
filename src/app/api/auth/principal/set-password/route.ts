@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     const passwordHash = await bcrypt.hash(newPassword, 10);
     const authVersion = crypto.randomUUID();
 
-    const { error } = await supabase
+    const { data: updatedPrincipal, error } = await supabase
       .from("principals")
       .update({
         password_hash: passwordHash,
@@ -72,9 +72,18 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq("id", payload.id)
-      .eq("is_active", true);
+      .eq("is_active", true)
+      .eq("auth_version", typeof payload.authVersion === "string" ? payload.authVersion : "")
+      .select("id")
+      .maybeSingle();
 
     if (error) throw error;
+    if (!updatedPrincipal) {
+      return NextResponse.json(
+        { success: false, message: "This Principal session is no longer active. Please log in again." },
+        { status: 401 },
+      );
+    }
 
     const newToken = await new SignJWT({ ...payload, passwordSet: true, authVersion })
       .setProtectedHeader({ alg: "HS256" })

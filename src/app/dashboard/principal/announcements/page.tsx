@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, Users } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
-import { useNotifContext } from "../context/NotificationContext";
 
 type Tab = "all-staffs" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled" | "Draft" | "Resolved";
@@ -45,6 +44,23 @@ function formatDisplay(value?: string) {
   });
 }
 
+function formatAnnouncementDateTime(value?: string) {
+  if (!value) return { date: "—", time: "—" };
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return { date: "—", time: "—" };
+  return {
+    date: parsed.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
+    time: parsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
+function staffRole(source?: StaffAnnouncement["source"]) {
+  if (source === "adviser") return "Class Adviser";
+  if (source === "guidance") return "Guidance";
+  if (source === "ict") return "ICT";
+  return "Staff";
+}
+
 function toDateInputValue(isoString?: string) {
   if (!isoString) return "";
   const d = new Date(isoString);
@@ -52,9 +68,8 @@ function toDateInputValue(isoString?: string) {
   return d.toISOString().slice(0, 10);
 }
 
-export default function PrincipalAnnouncementsPage() {
+function PrincipalAnnouncementsPageContent() {
   const [activeTab, setActiveTab] = useState<Tab>("all-staffs");
-  const { refreshCounts } = useNotifContext();
   const [showCompose, setShowCompose] = useState(false);
   const searchParams = useSearchParams();
 
@@ -71,7 +86,6 @@ export default function PrincipalAnnouncementsPage() {
   const [staffAnnouncements, setStaffAnnouncements] = useState<StaffAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [readKeys, setReadKeys] = useState<Set<string>>(new Set());
 
   const isFormReady = form.title.trim() && form.body.trim();
 
@@ -84,21 +98,8 @@ export default function PrincipalAnnouncementsPage() {
   useEffect(() => {
     const loadAnnouncements = async () => {
       try {
-        const [annRes, notifRes] = await Promise.all([
-          fetch("/api/principal/announcements"),
-          fetch("/api/principal/notifications"),
-        ]);
-        const [data, notifData] = await Promise.all([
-          annRes.json(),
-          notifRes.json(),
-        ]);
-
-        if (notifData?.success) {
-          const alreadyRead = new Set<string>(
-            (notifData.notifications ?? []).filter((n: any) => n.read).map((n: any) => n.id)
-          );
-          setReadKeys(alreadyRead);
-        }
+        const annRes = await fetch("/api/principal/announcements");
+        const data = await annRes.json();
 
         if (data.success) {
           const normalized: Announcement[] = (data.announcements ?? []).map((a: any) => ({
@@ -121,8 +122,6 @@ export default function PrincipalAnnouncementsPage() {
                 source: (a as any).source as "guidance" | "adviser" | "ict",
               }))
           );
-          console.log("readKeys:", [...readKeys]);
-          console.log("staff ids:", normalized.filter((a: any) => a.source === "guidance").map((a: any) => `guidance-announcement-${a.id}`));
         }
       } finally {
         setLoading(false);
@@ -236,34 +235,14 @@ export default function PrincipalAnnouncementsPage() {
 
   const handleViewStaffAnnouncement = (ann: StaffAnnouncement) => {
     setViewAnn(ann);
-    const rawId = ann.id.replace(/^(adviser|guidance|ict)-/, "");
-    const key = ann.source === "ict"
-      ? `ict-announcement-${rawId}`
-      : ann.source === "guidance"
-        ? `guidance-${rawId}`
-        : `adviser-${rawId}`;
-    if (!readKeys.has(key)) {
-      setReadKeys(prev => new Set(prev).add(key));
-      fetch("/api/principal/notifications/read", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notif_key: key }),
-      }).then(async (res) => {
-        const data = await res.json();
-        if (data.success) {
-          await new Promise(resolve => setTimeout(resolve, 600)); // give DB time to commit
-          await refreshCounts();
-        }
-      });
-    }
   };
 
   return (
-    <div className="p-6 min-h-screen" style={{ maxWidth: 1040, margin: "0 auto" }}>
+    <div className="min-h-screen min-w-0 overflow-x-clip p-4 sm:p-6" style={{ maxWidth: 1040, margin: "0 auto" }}>
 
       {/* ── Header ── */}
-      <div className="mb-5 flex items-center justify-between">
-        <div>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900">Announcements</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             Create announcements for staff and view messages from all staff members.
@@ -271,7 +250,7 @@ export default function PrincipalAnnouncementsPage() {
         </div>
         <button
           onClick={openNewAnnouncement}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white rounded-xl shadow-sm transition hover:opacity-90"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto"
           style={{ background: "#522081" }}
         >
           <Plus size={15} />
@@ -281,12 +260,12 @@ export default function PrincipalAnnouncementsPage() {
 
       {/* ── Tabs ── */}
       <div
-        className="inline-flex overflow-hidden bg-white border border-gray-200 rounded-xl shadow-sm mb-5"
+        className="mb-5 flex w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm sm:inline-flex sm:w-auto"
         role="tablist"
         aria-label="Announcement source"
       >
         <button
-          className={`px-5 py-2.5 text-sm font-semibold transition ${
+          className={`min-h-11 flex-1 px-3 py-2.5 text-sm font-semibold transition sm:flex-none sm:px-5 ${
             activeTab === "all-staffs" ? "text-white" : "text-gray-500 hover:text-gray-700"
           }`}
           style={activeTab === "all-staffs" ? { background: "#522081" } : {}}
@@ -297,7 +276,7 @@ export default function PrincipalAnnouncementsPage() {
           From All Staffs
         </button>
         <button
-          className={`px-5 py-2.5 text-sm font-semibold transition ${
+          className={`min-h-11 flex-1 px-3 py-2.5 text-sm font-semibold transition sm:flex-none sm:px-5 ${
             activeTab === "mine" ? "text-white" : "text-gray-500 hover:text-gray-700"
           }`}
           style={activeTab === "mine" ? { background: "#522081" } : {}}
@@ -326,33 +305,20 @@ export default function PrincipalAnnouncementsPage() {
           </div>
         ) : (
           activeAnnouncements.map((ann) => (
-            <article key={ann.id} className="bg-white border border-gray-100 rounded-xl shadow-sm p-5 flex flex-col gap-3">
+            <article key={ann.id} className="flex min-w-0 flex-col gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
               {/* top row */}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 {activeTab === "all-staffs" ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     {(ann as StaffAnnouncement).source === "ict" && (
                       <div className="h-7 w-7 overflow-hidden rounded-full bg-[#274e13] text-center text-[10px] font-bold leading-7 text-white">
-                        {(ann as StaffAnnouncement).profilePicture ? <img src={(ann as StaffAnnouncement).profilePicture!} alt="ICT profile" className="h-full w-full object-cover" /> : "ICT"}
+                        {"ICT"}
                       </div>
                     )}
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color: "#7c3aed" }}>
                       <Users size={13} />
                       {(ann as StaffAnnouncement).sender_name ?? (ann as StaffAnnouncement).senderName ?? "Staff"}
                     </span>
-                    {(() => {
-                      const rawId = ann.id.replace(/^(adviser|guidance|ict)-/, "");
-                      const key = (ann as StaffAnnouncement).source === "ict"
-                        ? `ict-announcement-${rawId}`
-                        : (ann as StaffAnnouncement).source === "guidance"
-                          ? `guidance-${rawId}`
-                          : `adviser-${rawId}`;
-                      return !readKeys.has(key);
-                    })() && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
-                        New
-                      </span>
-                    )}
                   </div>
                 ) : (
                   <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${
@@ -367,7 +333,7 @@ export default function PrincipalAnnouncementsPage() {
                   </span>
                 )}
 
-                <div className="flex items-center gap-2 flex-wrap justify-end ml-auto">
+                <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
                     {ann.audience}
                   </span>
@@ -389,7 +355,7 @@ export default function PrincipalAnnouncementsPage() {
               {/* actions */}
               {activeTab === "all-staffs" ? (
                 <button
-                  className="self-start flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition hover:opacity-80"
+                  className="flex min-h-11 w-full self-start items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition hover:bg-purple-50 sm:min-h-0 sm:w-auto"
                   style={{ color: "#522081", borderColor: "rgba(82,32,129,0.3)" }}
                   onClick={() => handleViewStaffAnnouncement(ann as StaffAnnouncement)}
                 >
@@ -425,28 +391,29 @@ export default function PrincipalAnnouncementsPage() {
       {/* ── Compose / Edit Modal ── */}
       {showCompose && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 p-3 backdrop-blur-sm sm:p-4"
           onClick={closeCompose}
         >
           <div
-            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-4 py-4 sm:px-6">
               <h2 className="text-sm font-bold text-gray-900">
                 {editingAnnouncement ? "Edit Announcement" : "New Announcement"}
               </h2>
               <button
                 onClick={closeCompose}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+                aria-label="Close announcement editor"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"
               >
                 <X size={16} />
               </button>
             </div>
 
             {/* body */}
-            <div className="p-6 flex flex-col gap-4">
+            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
               <div className="flex flex-col gap-1.5">
                 <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Title</label>
                 <input
@@ -473,7 +440,7 @@ export default function PrincipalAnnouncementsPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Audience</label>
                   <select
@@ -505,17 +472,17 @@ export default function PrincipalAnnouncementsPage() {
             </div>
 
             {/* footer */}
-            <div className="flex gap-2 justify-end px-6 py-4 border-t border-gray-100">
+            <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-100 px-4 py-4 sm:flex-row sm:justify-end sm:px-6">
               <button
                 onClick={closeCompose}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+                className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveAnnouncement}
                 disabled={!isFormReady || saving}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white rounded-xl shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition hover:opacity-90"
+                className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                 style={{ background: "#522081" }}
               >
                 {form.scheduleDate ? <Clock size={13} /> : <Plus size={13} />}
@@ -529,16 +496,16 @@ export default function PrincipalAnnouncementsPage() {
       {/* ── View Staff Announcement Modal ── */}
       {viewAnn && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 p-3 backdrop-blur-sm sm:p-4"
           onClick={() => setViewAnn(null)}
         >
           <div
-            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+            className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* header */}
-            <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100">
-              <div>
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+              <div className="min-w-0">
                 <h2 className="text-sm font-bold text-gray-900">{viewAnn.title}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {viewAnn.sender_name ?? viewAnn.senderName ?? "Staff"} — {formatDisplay(viewAnn.created_at)}
@@ -546,25 +513,32 @@ export default function PrincipalAnnouncementsPage() {
               </div>
               <button
                 onClick={() => setViewAnn(null)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
+                aria-label="Close announcement"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"
               >
                 <X size={16} />
               </button>
             </div>
 
             {/* body */}
-            <div className="p-6 flex flex-col gap-4">
-              <p className="text-sm text-gray-700 leading-relaxed">{viewAnn.message}</p>
-              <span className="self-start text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
-                {viewAnn.audience}
-              </span>
+            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-700">{viewAnn.message}</p>
+              <dl className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-4 text-sm sm:grid-cols-2">
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Sender</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{viewAnn.sender_name ?? viewAnn.senderName ?? "Staff"}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Role</dt><dd className="mt-0.5 font-semibold text-gray-700">{staffRole(viewAnn.source)}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Date</dt><dd className="mt-0.5 font-semibold text-gray-700">{formatAnnouncementDateTime(viewAnn.created_at).date}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Time</dt><dd className="mt-0.5 font-semibold text-gray-700">{formatAnnouncementDateTime(viewAnn.created_at).time}</dd></div>
+              </dl>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-purple-100 bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-[#522081]">{viewAnn.audience}</span>
+              </div>
             </div>
 
             {/* footer */}
-            <div className="flex justify-end px-6 py-4 border-t border-gray-100">
+            <div className="flex shrink-0 justify-end border-t border-gray-100 px-4 py-4 sm:px-6">
               <button
                 onClick={() => setViewAnn(null)}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+                className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto"
               >
                 Close
               </button>
@@ -574,4 +548,8 @@ export default function PrincipalAnnouncementsPage() {
       )}
     </div>
   );
+}
+
+export default function PrincipalAnnouncementsPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><PrincipalAnnouncementsPageContent /></Suspense>;
 }

@@ -262,6 +262,7 @@ export async function GET(req: NextRequest) {
         status: unread ? "New" as const : thread.length > 1 && !latestIncoming ? "Replied" as const : "Read" as const,
         priority: "Normal" as const,
         replies: replies.map((reply) => ({
+          id: Number(reply.id),
           sender: reply.sender_type === current.type && Number(reply.sender_id) === current.id ? roleLabel(current.type) : roleLabel(String(reply.sender_type)),
           sender_name: String(reply.sender_name ?? ""),
           sender_email: String(reply.sender_email ?? ""),
@@ -317,7 +318,7 @@ export async function POST(req: NextRequest) {
       ? Number(String(conversationId).replace("staff-message:", ""))
       : null;
 
-    const { error } = await supabase.from("staff_messages").insert({
+    const { data: createdMessage, error } = await supabase.from("staff_messages").insert({
       sender_type: current.type,
       sender_id: current.id,
       sender_name: current.name,
@@ -332,22 +333,28 @@ export async function POST(req: NextRequest) {
       attachments: cleanedAttachments,
       source_message_id: sourceMessageId || null,
       status: "unread",
-    });
+    }).select("*").single();
     if (error) throw error;
 
     if (recipient.email) {
-      await sendStaffMessageEmail({
-        recipientEmail: recipient.email,
-        recipientName: recipient.name,
-        senderName: current.name,
-        senderRole: roleLabel(current.type),
-        subject: trimmedSubject,
-        message: trimmedMessage,
-        hasAttachments: cleanedAttachments.length > 0,
-      });
+      try {
+        await sendStaffMessageEmail({
+          recipientEmail: recipient.email,
+          recipientName: recipient.name,
+          senderName: current.name,
+          senderRole: roleLabel(current.type),
+          subject: trimmedSubject,
+          message: trimmedMessage,
+          hasAttachments: cleanedAttachments.length > 0,
+        });
+      } catch (emailError) {
+        // The message is already stored; a mail delivery problem must not make
+        // the client retry and create a duplicate conversation.
+        console.error("Staff message email notification failed:", emailError);
+      }
     }
 
-    return NextResponse.json({ success: true }, { status: 201 });
+    return NextResponse.json({ success: true, message: createdMessage }, { status: 201 });
   } catch (error: unknown) {
     console.error("POST /api/reports/staff-messages error:", error);
     return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
@@ -399,7 +406,7 @@ export async function PATCH(req: NextRequest) {
         ? String(root.recipient_email ?? "")
         : String(root.sender_email ?? "");
 
-      const { error } = await supabase.from("staff_messages").insert({
+      const { data: createdMessage, error } = await supabase.from("staff_messages").insert({
         sender_type: current.type,
         sender_id: current.id,
         sender_name: current.name,
@@ -414,10 +421,11 @@ export async function PATCH(req: NextRequest) {
         attachments: cleanedAttachments,
         source_message_id: rootId,
         status: "unread",
-      });
+      }).select("*").single();
       if (error) throw error;
       // Email notifications are intentionally disabled for replies.
       // Only new conversations (POST) trigger an email notification.
+      return NextResponse.json({ success: true, message: createdMessage });
     } else {
       const now = new Date().toISOString();
       const { error: rootReadError } = await supabase

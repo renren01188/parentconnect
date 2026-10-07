@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
-import { sendAdviserAnnouncementEmail } from "@/lib/mailer";
 
 type ParentRecipientRow = {
   parent_id: number;
@@ -123,28 +122,8 @@ export async function POST(req: NextRequest) {
       if (notificationError) throw notificationError;
     }
 
-    // Send email to each parent
-    if (recipients.length > 0) {
-      const parentIds = recipients.map(r => r.parent_id);
-      const { data: parentDetails } = await supabase
-        .from("parents")
-        .select("id, email, parent_first_name, parent_last_name")
-        .in("id", parentIds)
-        .not("email", "is", null);
-
-      for (const parent of parentDetails ?? []) {
-        const parentName = [parent.parent_first_name, parent.parent_last_name]
-          .filter(Boolean).join(" ") || "Parent";
-        sendAdviserAnnouncementEmail({
-          recipientEmail: parent.email,
-          recipientName: parentName,
-          adviserName: adviserFullName(adviser),
-          message,
-          grade: adviser.grade,
-          sections: adviserSections,
-        }).catch(err => console.error("Adviser email to parent failed:", err));
-      }
-    }
+    // Delivery is dashboard-only. The persisted announcement and the
+    // idempotent Parent notification fan-out above are the delivery record.
 
     return NextResponse.json({
       success: true,

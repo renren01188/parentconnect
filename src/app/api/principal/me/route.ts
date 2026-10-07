@@ -58,7 +58,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("principals")
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, status, is_active, effective_date, succession_reason, auth_version")
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status, is_active, effective_date, succession_reason, auth_version")
       .eq("id", session.principalId)
       .eq("is_active", true)
       .limit(1)
@@ -95,7 +95,6 @@ export async function GET() {
         suffix: data.suffix ?? "",
         email: data.email ?? "",
         phone: data.phone ?? "",
-        profilePicture: data.profile_picture ?? "",
         status: data.status ?? "active",
         effectiveDate: data.effective_date ?? "",
         successionReason: data.succession_reason ?? "",
@@ -131,26 +130,7 @@ export async function PATCH(req: NextRequest) {
       email,
       phone,
       currentPassword,
-      profilePicture,
-      photoOnly,
     } = await req.json();
-
-    if (profilePicture && (typeof profilePicture !== "string" || !/^data:image\/(png|jpe?g|webp);base64,/.test(profilePicture) || profilePicture.length > 14_000_000)) {
-      return NextResponse.json({ success: false, message: "Profile picture must be a PNG, JPEG, or WebP image smaller than 10 MB." }, { status: 400 });
-    }
-
-    if (photoOnly) {
-      const { data, error } = await supabase
-        .from("principals")
-        .update({ profile_picture: typeof profilePicture === "string" ? profilePicture : null, updated_at: new Date().toISOString() })
-        .eq("id", session.principalId)
-        .eq("is_active", true)
-        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, status")
-        .single();
-      if (error) throw error;
-      await logAudit({ action: "Update", performedBy: getFullName(data) || "Principal", performedByRole: "Principal", performedByEmail: data.email, targetUser: getFullName(data) || "Principal", targetRole: "Principal", targetEmail: data.email, module: "Profile", details: "Updated their profile picture." });
-      return NextResponse.json({ success: true, principal: { employeeId: data.employee_id, firstName: data.first_name ?? "", middleName: data.middle_name ?? "", lastName: data.last_name ?? "", suffix: data.suffix ?? "", email: data.email ?? "", phone: data.phone ?? "", profilePicture: data.profile_picture ?? "", status: data.status ?? "active", name: getFullName(data) }, message: "Profile picture updated successfully." });
-    }
 
     if (!employeeId || !firstName || !lastName || !email || !phone || !currentPassword) {
       return NextResponse.json(
@@ -235,7 +215,6 @@ export async function PATCH(req: NextRequest) {
       suffix: suffix ? String(suffix).trim() : null,
       email: normalizedEmail,
       phone: String(phone).trim(),
-      profile_picture: typeof profilePicture === "string" ? profilePicture : undefined,
       auth_version: authVersion,
       updated_at: new Date().toISOString(),
     };
@@ -245,7 +224,7 @@ export async function PATCH(req: NextRequest) {
       .update(updatePayload)
       .eq("id", session.principalId)
       .eq("is_active", true)
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, status, password_set")
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status, password_set")
       .single();
 
     if (error) throw error;
@@ -313,7 +292,6 @@ export async function PATCH(req: NextRequest) {
         suffix: data.suffix ?? "",
         email: data.email ?? "",
         phone: data.phone ?? "",
-        profilePicture: data.profile_picture ?? "",
         status: data.status ?? "active",
         name: getFullName(data),
       },

@@ -57,6 +57,7 @@ export async function GET(req: NextRequest) {
       .select("id", { count: "exact", head: true })
       .eq("grade", adviser.grade)
       .eq("section", activeSection)
+      .eq("archive_status", "active")
       // Only show students that are NOT already on standby
       .is("transfer_status", null);
 
@@ -78,9 +79,10 @@ export async function GET(req: NextRequest) {
       .select("id, student_id, first_name, last_name, gender, grade, section, rfid_card")
       .eq("grade", adviser.grade)
       .eq("section", activeSection)
+      .eq("archive_status", "active")
       .is("transfer_status", null)
-      .order("last_name",  { ascending: true })
       .order("first_name", { ascending: true })
+      .order("last_name",  { ascending: true })
       .range(offset, offset + limit - 1);
 
     if (search) {

@@ -49,7 +49,15 @@ type Recipient = {
 };
 
 function errorMessage(error: unknown) {
+    if (isTransientConnectionError(error)) {
+        return "ICT messages are temporarily unavailable. Please try again shortly.";
+    }
     return error instanceof Error ? error.message : "Server error.";
+}
+
+function isTransientConnectionError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|EHOSTUNREACH|ENETUNREACH|ECONNREFUSED/i.test(message);
 }
 
 function fullName(parts: Array<string | null | undefined>) {
@@ -138,7 +146,6 @@ function mapConversation(root: StaffMessageRow, replies: StaffMessageRow[], sess
     const otherType = otherIsRootSender ? root.sender_type : root.recipient_type;
     const otherId = otherIsRootSender ? root.sender_id : root.recipient_id;
     const otherName = otherIsRootSender ? root.sender_name : root.recipient_name;
-    const otherEmail = otherIsRootSender ? root.sender_email : root.recipient_email;
 
     return {
         id: root.id,
@@ -146,7 +153,6 @@ function mapConversation(root: StaffMessageRow, replies: StaffMessageRow[], sess
         recipientId: `${otherType}:${otherId}`,
         otherRole: roleLabel(otherType),
         otherName,
-        otherEmail: otherEmail ?? "",
         subject: root.subject,
         body: root.body,
         sentAt: root.created_at,
@@ -157,7 +163,6 @@ function mapConversation(root: StaffMessageRow, replies: StaffMessageRow[], sess
             id: row.id,
             senderRole: roleLabel(row.sender_type),
             senderName: row.sender_name,
-            senderEmail: row.sender_email ?? "",
             isCurrentUser: row.sender_type === session.type && Number(row.sender_id) === session.id,
             body: row.body,
             attachments: cleanAttachments(row.attachments),
@@ -171,7 +176,7 @@ async function recipientsFor(session: Session): Promise<Recipient[]> {
     if (session.type === "principal") {
         const { data, error } = await supabase
             .from("ict_admins")
-            .select("id, first_name, middle_name, last_name, suffix, email, profile_picture, status")
+            .select("id, first_name, middle_name, last_name, suffix, email, status")
             .eq("status", "active")
             .order("last_name", { ascending: true });
 
@@ -187,7 +192,6 @@ async function recipientsFor(session: Session): Promise<Recipient[]> {
                 row.suffix as string | null,
             ]) || "ICT Personnel",
                 email: String(row.email ?? ""),
-                profilePicture: typeof row.profile_picture === "string" ? row.profile_picture : null,
         }));
     }
 
@@ -257,8 +261,17 @@ export async function GET() {
 
         const conversations = roots
             .map((root) => mapConversation(root, repliesByRoot.get(root.id) ?? [], session))
-            .map((conversation) => ({ ...conversation, otherProfilePicture: recipients.find((recipient) => recipient.id === conversation.recipientId)?.profilePicture ?? null }))
+            .map((conversation) => ({ ...conversation, otherProfilePicture: null }))
             .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+
+        // Retain email addresses only for server-side message routing.
+        const publicRecipients = recipients.map((recipient) => ({
+            id: recipient.id,
+            role: recipient.role,
+            name: recipient.name,
+            meta: recipient.meta,
+            profilePicture: recipient.profilePicture,
+        }));
 
         return NextResponse.json({
             success: true,
@@ -266,15 +279,15 @@ export async function GET() {
                 role: roleLabel(session.type),
                 id: `${session.type}:${session.id}`,
                 name: session.name,
-                email: session.email,
             },
-            recipients,
+            recipients: publicRecipients,
             conversations,
             unreadCount: conversations.filter((conversation) => conversation.isUnread).length,
         });
     } catch (error) {
-        console.error("GET /api/principal-ict/messages error:", error);
-        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
+        const unavailable = isTransientConnectionError(error);
+        (unavailable ? console.warn : console.error)("GET /api/principal-ict/messages error:", error);
+        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: unavailable ? 503 : 500 });
     }
 }
 
@@ -373,8 +386,9 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({ success: true }, { status: 201 });
     } catch (error) {
-        console.error("POST /api/principal-ict/messages error:", error);
-        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
+        const unavailable = isTransientConnectionError(error);
+        (unavailable ? console.warn : console.error)("POST /api/principal-ict/messages error:", error);
+        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: unavailable ? 503 : 500 });
     }
 }
 
@@ -432,7 +446,8 @@ export async function PATCH(req: NextRequest) {
 
         return NextResponse.json({ success: true });
     } catch (error) {
-        console.error("PATCH /api/principal-ict/messages error:", error);
-        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
+        const unavailable = isTransientConnectionError(error);
+        (unavailable ? console.warn : console.error)("PATCH /api/principal-ict/messages error:", error);
+        return NextResponse.json({ success: false, message: errorMessage(error) }, { status: unavailable ? 503 : 500 });
     }
 }

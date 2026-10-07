@@ -80,6 +80,9 @@ function getToday() {
 export async function GET(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const { searchParams } = new URL(req.url);
     const date = searchParams.get("date") || getToday();
 

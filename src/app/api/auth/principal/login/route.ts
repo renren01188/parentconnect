@@ -4,14 +4,14 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
+import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 export async function POST(req: NextRequest) {
   try {
-    const { identifier, password } = await req.json();
+    const { identifier, password, captchaToken } = await req.json();
 
     if (!identifier || !password) {
       return NextResponse.json(
@@ -23,37 +23,49 @@ export async function POST(req: NextRequest) {
     const cleanedIdentifier = identifier.trim();
     const { data: rows, error } = await supabase
       .from("principals")
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, password_hash, password_set, status, is_active, auth_version")
-      .eq("is_active", true)
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, password_hash, password_set, status, archive_status, is_active, auth_version")
       .or(`email.eq.${cleanedIdentifier.toLowerCase()},employee_id.eq.${cleanedIdentifier}`)
       .limit(1);
 
     if (error) throw error;
-    if (!rows || rows.length === 0) {
-      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Principal", reason: "account not found" });
+    const principal = rows?.[0];
+    const guardSubject = principal ? `account:${principal.id}` : `identifier:${cleanedIdentifier}`;
+    await rememberLoginGuard("principal", guardSubject);
+    const protection = await checkLoginProtection("principal", guardSubject, req, captchaToken);
+    if (!protection.allowed) {
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: protection.message, captchaRequired: protection.captchaRequired, lockedUntil: protection.lockedUntil },
+        { status: protection.status },
       );
     }
-
-    const principal = rows[0];
-    if (principal.status !== "active") {
-      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Principal", reason: "inactive account" });
+    if (!principal) {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Principal", reason: "account not found" });
+      const failed = await failedLoginResult("principal", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "This principal account is inactive." },
-        { status: 403 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
+      );
+    }
+    if (principal.archive_status === "archived" || principal.status !== "active" || !principal.is_active) {
+      await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Principal", reason: "inactive account" });
+      const failed = await failedLoginResult("principal", guardSubject, req);
+      return NextResponse.json(
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
 
     const passwordMatch = await bcrypt.compare(password, principal.password_hash);
     if (!passwordMatch) {
       await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Principal", reason: "invalid password" });
+      const failed = await failedLoginResult("principal", guardSubject, req);
       return NextResponse.json(
-        { success: false, message: "Invalid credentials." },
-        { status: 401 }
+        { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
+        { status: failed.status }
       );
     }
+
+    await clearLoginFailures("principal", guardSubject, req);
 
     const passwordSet = principal.password_set == null
       ? true

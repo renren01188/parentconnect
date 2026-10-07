@@ -4,17 +4,53 @@ import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
+import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
+import { logAudit } from "@/lib/audit";
+import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import {
+  guardianRelationshipForStorage,
+  isMissingOtherGuardianRelationship,
+} from "@/lib/guardianRelationship";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
 
-type Role = "Adviser" | "Parent" | "ICT";
+type Role = "Adviser" | "Parent" | "ICT" | "Guidance";
 type Status = "Active" | "Inactive";
+
+type FamilyDetails = {
+  fatherFirstName?: string;
+  fatherMiddleName?: string;
+  fatherLastName?: string;
+  fatherSuffix?: string;
+  motherFirstName?: string;
+  motherMiddleName?: string;
+  motherLastName?: string;
+  guardianFirstName?: string;
+  guardianMiddleName?: string;
+  guardianLastName?: string;
+  guardianSuffix?: string;
+  guardianRelationship?: string;
+  guardianRelationshipOther?: string;
+};
+
+type GuidanceAccountRow = {
+  id: number;
+  employee_id?: string | null;
+  first_name?: string | null;
+  middle_name?: string | null;
+  last_name?: string | null;
+  suffix?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  status?: string | null;
+};
 
 type UserRow = {
   id: string;
   accountIds?: number[];
+  parentAccountPasswordSet?: boolean;
   initials: string;
   name: string;
   email: string;
@@ -37,7 +73,7 @@ type UserRow = {
     houseStreetSitioPurok?: string; barangay?: string; municipalityCity?: string; province?: string; learningModality?: string;
     fatherFirstName?: string; fatherMiddleName?: string; fatherLastName?: string; fatherSuffix?: string;
     motherFirstName?: string; motherMiddleName?: string; motherLastName?: string;
-    guardianFirstName?: string; guardianMiddleName?: string; guardianLastName?: string; guardianSuffix?: string; guardianRelationship?: string;
+    guardianFirstName?: string; guardianMiddleName?: string; guardianLastName?: string; guardianSuffix?: string; guardianRelationship?: string; guardianRelationshipOther?: string;
     contactNumber?: string;
   }[];
   firstName?: string;
@@ -48,6 +84,8 @@ type UserRow = {
   employeeId?: string;
   relationship?: string;
   address?: string;
+  familyDetails?: FamilyDetails;
+  sharedFamilyDetailsChanged?: boolean;
 };
 
 function normalizeStatus(status: unknown): Status {
@@ -61,6 +99,7 @@ function toDbStatus(status: unknown) {
 function isMissingColumnError(error: { code?: string; message?: string } | null) {
   return Boolean(error && (error.code === "42703" || error.message?.toLowerCase().includes("does not exist")));
 }
+
 
 function fullName(row: {
   first_name?: string | null;
@@ -82,6 +121,131 @@ function fullName(row: {
 
 function initials(firstName = "", lastName = "") {
   return `${firstName[0] ?? ""}${lastName[0] ?? ""}`.toUpperCase() || "?";
+}
+
+function matchesSearchQuery(query: string, values: Array<string | null | undefined>) {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+
+  return values.some((value) => {
+    const searchableValue = String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    return tokens.every((token) => searchableValue.includes(token));
+  });
+}
+
+function separateGivenNames(member: Record<string, unknown> | undefined) {
+  const first = String(member?.first_name ?? "").trim();
+  const middle = String(member?.middle_name ?? "").trim();
+  const words = first.split(/\s+/).filter(Boolean);
+  if (middle && words.length >= 2 && words.at(-1)?.toLowerCase() === middle.toLowerCase()) {
+    return { firstName: words.slice(0, -1).join(" "), middleName: middle };
+  }
+  if (!middle && words.length >= 3) {
+    return { firstName: words.slice(0, -1).join(" "), middleName: words.at(-1) ?? "" };
+  }
+  return { firstName: first, middleName: middle };
+}
+
+function familyDetailsFromMembers(family: Array<Record<string, unknown>>): FamilyDetails {
+  const father = family.find((member) => member.role === "Father");
+  const mother = family.find((member) => member.role === "Mother");
+  const guardian = family.find((member) => member.role === "Guardian");
+  const fatherNames = separateGivenNames(father);
+  const motherNames = separateGivenNames(mother);
+  const guardianNames = separateGivenNames(guardian);
+  return {
+    fatherFirstName: fatherNames.firstName,
+    fatherMiddleName: fatherNames.middleName,
+    fatherLastName: String(father?.last_name ?? ""),
+    fatherSuffix: String(father?.suffix ?? ""),
+    motherFirstName: motherNames.firstName,
+    motherMiddleName: motherNames.middleName,
+    motherLastName: String(mother?.last_name ?? ""),
+    guardianFirstName: guardianNames.firstName,
+    guardianMiddleName: guardianNames.middleName,
+    guardianLastName: String(guardian?.last_name ?? ""),
+    guardianSuffix: String(guardian?.suffix ?? ""),
+    guardianRelationship: String(guardian?.relationship ?? ""),
+  };
+}
+
+function familyDetailsForParent(
+  verificationFamily: Array<Record<string, unknown>>,
+  parent: Record<string, unknown>,
+) {
+  const details = familyDetailsFromMembers(verificationFamily);
+  // The parent account holds the name format entered during signup. Display
+  // that format for the account holder while the SF1 rows remain the single
+  // source of truth for all family records.
+  if (parent.relationship === "Father") {
+    details.fatherFirstName = String(parent.parent_first_name ?? "");
+    details.fatherMiddleName = String(parent.parent_middle_name ?? "");
+    details.fatherLastName = String(parent.parent_last_name ?? "");
+    details.fatherSuffix = String(parent.parent_suffix ?? "");
+  } else if (parent.relationship === "Mother") {
+    details.motherFirstName = String(parent.parent_first_name ?? "");
+    details.motherMiddleName = String(parent.parent_middle_name ?? "");
+    details.motherLastName = String(parent.parent_last_name ?? "");
+  } else if (parent.relationship === "Guardian") {
+    details.guardianFirstName = String(parent.parent_first_name ?? "");
+    details.guardianMiddleName = String(parent.parent_middle_name ?? "");
+    details.guardianLastName = String(parent.parent_last_name ?? "");
+    details.guardianSuffix = String(parent.parent_suffix ?? "");
+  }
+  return details;
+}
+
+function familyMembersFromDetails(details: FamilyDetails) {
+  return [
+    { role: "Father", first_name: details.fatherFirstName?.trim() || null, middle_name: details.fatherMiddleName?.trim() || null, last_name: details.fatherLastName?.trim() || null, suffix: details.fatherSuffix?.trim() || null, relationship: "Father" },
+    { role: "Mother", first_name: details.motherFirstName?.trim() || null, middle_name: details.motherMiddleName?.trim() || null, last_name: details.motherLastName?.trim() || null, suffix: null, relationship: "Mother" },
+    {
+      role: "Guardian",
+      first_name: details.guardianFirstName?.trim() || null,
+      middle_name: details.guardianMiddleName?.trim() || null,
+      last_name: details.guardianLastName?.trim() || null,
+      suffix: details.guardianSuffix?.trim() || null,
+      relationship: guardianRelationshipForStorage(details.guardianRelationship, details.guardianRelationshipOther),
+    },
+  ] as const;
+}
+
+function accountHolderFromFamily(details: FamilyDetails | undefined, relationship: unknown) {
+  if (!details || !isFamilyRole(relationship)) return null;
+  const member = familyMembersFromDetails(details).find((item) => item.role === relationship);
+  return member?.first_name && member.last_name ? member : null;
+}
+
+async function saveFamilyMembersForStudents(
+  studentDbIds: Iterable<number>,
+  members: ReadonlyArray<{
+    role: "Father" | "Mother" | "Guardian";
+    first_name: string | null;
+    middle_name: string | null;
+    last_name: string | null;
+    suffix: string | null;
+    relationship: string | null;
+  }>,
+  contactNumber: string | null,
+) {
+  for (const studentDbId of studentDbIds) {
+    for (const member of members) {
+      const hasName = member.first_name || member.middle_name || member.last_name;
+      if (hasName) {
+        const { error } = await supabase
+          .from("student_family_members")
+          .upsert({ ...member, student_db_id: studentDbId, contact_number: contactNumber }, { onConflict: "student_db_id,role" });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("student_family_members")
+          .delete()
+          .eq("student_db_id", studentDbId)
+          .eq("role", member.role);
+        if (error) throw error;
+      }
+    }
+  }
 }
 
 function splitClassGrade(classGrade: string) {
@@ -116,7 +280,7 @@ async function requireIct() {
   return { session };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const auth = await requireIct();
     if ("error" in auth) return auth.error;
@@ -124,6 +288,7 @@ export async function GET() {
     const [
       { data: advisers, error: adviserError },
       { data: ictAdmins, error: ictError },
+      { data: guidanceCounselors, error: guidanceError },
       { data: parents, error: parentError },
       { data: links, error: linksError },
     ] = await Promise.all([
@@ -136,8 +301,12 @@ export async function GET() {
         .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status")
         .order("last_name", { ascending: true }),
       supabase
+        .from("guidance_counselors")
+        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status")
+        .order("last_name", { ascending: true }),
+      supabase
         .from("parents")
-        .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status")
+        .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set")
         .order("parent_last_name", { ascending: true }),
       supabase
         .from("parent_student_links")
@@ -146,21 +315,27 @@ export async function GET() {
 
     if (adviserError) throw adviserError;
     if (ictError) throw ictError;
+    if (guidanceError) throw guidanceError;
     if (parentError) throw parentError;
     if (linksError) throw linksError;
 
-    // Include every student so SF1-imported registrations are visible before
-    // their parent or guardian has created an account.
-    const { data: students, error: studentError } = await supabase
-      .from("students")
-      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, birth_date, mother_tongue, ip_ethnic_group, religion, house_street_sitio_purok, barangay, municipality_city, province, learning_modality");
-
+    // These independent lookups used to run one after another. Fetch them in
+    // parallel so the user list waits only for the slower query, not both.
+    // Student detail and family data are still kept intact for the existing
+    // preview and edit flows.
+    const [studentResult, sectionResult] = await Promise.all([
+      supabase
+        .from("students")
+        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, birth_date, mother_tongue, ip_ethnic_group, religion, house_street_sitio_purok, barangay, municipality_city, province, learning_modality"),
+      supabase
+        .from("sections")
+        .select("grade, name")
+        .order("grade")
+        .order("name"),
+    ]);
+    const { data: students, error: studentError } = studentResult;
+    const { data: sectionCatalog, error: sectionCatalogError } = sectionResult;
     if (studentError) throw studentError;
-    const { data: sectionCatalog, error: sectionCatalogError } = await supabase
-      .from("sections")
-      .select("grade, name")
-      .order("grade")
-      .order("name");
     if (sectionCatalogError) throw sectionCatalogError;
 
     const studentDbIds = (students ?? []).map((student: any) => student.id).filter(Boolean);
@@ -235,8 +410,29 @@ export async function GET() {
       employeeId: ict.employee_id ?? "",
     }));
 
+    const guidanceRows: UserRow[] = (guidanceCounselors ?? []).map((guidance: GuidanceAccountRow) => ({
+      id: `guidance-${guidance.id}`,
+      accountIds: [guidance.id],
+      initials: initials(guidance.first_name ?? "", guidance.last_name ?? ""),
+      name: fullName(guidance),
+      email: guidance.email ?? "",
+      role: "Guidance",
+      classGrade: "Student Support Services",
+      status: normalizeStatus(guidance.status),
+      firstName: guidance.first_name ?? "",
+      middleName: guidance.middle_name ?? "",
+      lastName: guidance.last_name ?? "",
+      suffix: guidance.suffix ?? "None",
+      phone: guidance.phone ?? "",
+      employeeId: guidance.employee_id ?? "",
+    }));
+
     const parentRows: UserRow[] = (parents ?? []).map((parent: any) => {
       const linkedStudentIds = linksByParent.get(Number(parent.id)) ?? [];
+      const verificationFamily = linkedStudentIds
+        .map((studentId) => familyByStudent.get(Number(studentById.get(studentId)?.id)) ?? [])
+        .find((family) => family.length > 0) ?? [];
+      const familyDetails = familyDetailsForParent(verificationFamily, parent);
 
       const studentDetails = linkedStudentIds.map((sid) => {
         const student = studentById.get(sid) as any;
@@ -244,23 +440,6 @@ export async function GET() {
         const father = family.find((item: any) => item.role === "Father");
         const mother = family.find((item: any) => item.role === "Mother");
         const guardian = family.find((item: any) => item.role === "Guardian");
-        // Older SF1 imports can contain the middle name inside first_name.
-        // Split a three-or-more-word given name so the editor keeps first and
-        // middle names in their own fields without changing the saved record.
-        const separateGivenNames = (member: any) => {
-          const first = String(member?.first_name ?? "").trim();
-          const middle = String(member?.middle_name ?? "").trim();
-          const words = first.split(/\s+/).filter(Boolean);
-          // Some previous edits saved the middle name both inside first_name
-          // and in middle_name. Keep it only in the Middle Name field.
-          if (middle && words.length >= 2 && words.at(-1)?.toLowerCase() === middle.toLowerCase()) {
-            return { firstName: words.slice(0, -1).join(" "), middleName: middle };
-          }
-          if (!middle && words.length >= 3) {
-            return { firstName: words.slice(0, -1).join(" "), middleName: words.at(-1) ?? "" };
-          }
-          return { firstName: first, middleName: middle };
-        };
         const fatherNames = separateGivenNames(father);
         const motherNames = separateGivenNames(mother);
         const guardianNames = separateGivenNames(guardian);
@@ -288,6 +467,7 @@ export async function GET() {
       return {
         id: `parent-${parent.id}`,
         accountIds: [parent.id],
+        parentAccountPasswordSet: parent.password_set === true || parent.password_set === 1,
         initials: initials(parent.parent_first_name, parent.parent_last_name),
         name: fullName(parent),
         email: parent.email ?? "",
@@ -305,6 +485,7 @@ export async function GET() {
         phone: parent.contact_number ?? "",
         relationship: parent.relationship ?? "",
         address: parent.address ?? "",
+        familyDetails,
       };
     });
 
@@ -340,13 +521,57 @@ export async function GET() {
         return {
           id: `pending-parent-${student.id}`, accountIds: [], initials: initials(primary?.first_name ?? "P", primary?.last_name ?? "G"), name: parentName, email: "", role: "Parent" as Role,
           classGrade: student.grade ? `${student.grade}${student.section ? ` – ${student.section}` : ""}` : "", status: "Active" as Status, students: [studentName], studentDetails: [detail],
-          firstName: primary?.first_name ?? "", middleName: primary?.middle_name ?? "", lastName: primary?.last_name ?? "", suffix: primary?.suffix ?? "None", phone: family[0]?.contact_number ?? "", relationship: primary?.relationship ?? "", address: "",
+          firstName: primary?.first_name ?? "", middleName: primary?.middle_name ?? "", lastName: primary?.last_name ?? "", suffix: primary?.suffix ?? "None", phone: family[0]?.contact_number ?? "", relationship: primary?.relationship ?? "", address: "", familyDetails: familyDetailsFromMembers(family),
         };
       });
 
+    const requestedPage = Math.max(1, Number.parseInt(request.nextUrl.searchParams.get("page") ?? "1", 10) || 1);
+    const requestedPageSize = Math.min(25, Math.max(1, Number.parseInt(request.nextUrl.searchParams.get("pageSize") ?? "5", 10) || 5));
+    const requestedRole = request.nextUrl.searchParams.get("role") ?? "all";
+    const requestedQuery = (request.nextUrl.searchParams.get("query") ?? "").trim().toLowerCase();
+    const requestedEmails = new Set((request.nextUrl.searchParams.get("emails") ?? "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean));
+    const allUsers = [...ictRows, ...guidanceRows, ...adviserRows, ...parentRows, ...pendingRegistrationRows];
+    const matchingUsers = allUsers.filter((user) => {
+      const matchesRole = requestedRole === "all"
+        || (requestedRole === "adviser" && user.role === "Adviser")
+        || (requestedRole === "ict" && user.role === "ICT")
+        || (requestedRole === "guidance" && user.role === "Guidance")
+        || (requestedRole === "parent" && user.role === "Parent");
+      // Parent records are searched with every linked student's complete name.
+      // This happens before pagination, so the parent is found even when its
+      // normal list position is on a different page.
+      const linkedStudentNames = user.role === "Parent"
+        ? [
+          ...(user.students ?? []),
+          ...(user.studentDetails ?? []).map((student) => [student.firstName, student.middleName, student.lastName].filter(Boolean).join(" ")),
+        ]
+        : [];
+      const matchesQuery = matchesSearchQuery(requestedQuery, [
+        user.name,
+        user.email,
+        ...linkedStudentNames,
+      ]);
+      const matchesEmailSet = requestedEmails.size === 0 || requestedEmails.has(user.email.toLowerCase());
+      return matchesRole && matchesQuery && matchesEmailSet;
+    });
+    const totalPages = Math.max(1, Math.ceil(matchingUsers.length / requestedPageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const pageStart = (page - 1) * requestedPageSize;
+
     return NextResponse.json({
       success: true,
-      users: [...ictRows, ...adviserRows, ...parentRows, ...pendingRegistrationRows],
+      // Keep only the requested page in the response. This prevents the
+      // browser from rendering or transferring every fully-expanded parent
+      // profile simply to show five rows.
+      users: matchingUsers.slice(pageStart, pageStart + requestedPageSize),
+      pagination: { page, pageSize: requestedPageSize, total: matchingUsers.length, totalPages },
+      counts: {
+        total: allUsers.length,
+        advisers: adviserRows.length,
+        ict: ictRows.length,
+        guidance: guidanceRows.length,
+        parents: parentRows.length + pendingRegistrationRows.length,
+      },
       sections: sectionCatalog ?? [],
       approvals: [],
       auditLog: [],
@@ -377,11 +602,16 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const passwordPatch = newPassword
-      ? { password_hash: await bcrypt.hash(String(newPassword), 10), password_set: true }
-      : {};
+    const hasPasswordChange = newPassword !== undefined;
+    let passwordPatch: { password_hash: string; password_set: true } | Record<string, never> = {};
 
-    if (newPassword) {
+    if (hasPasswordChange) {
+      if (typeof newPassword !== "string" || newPassword.length < 8) {
+        return NextResponse.json(
+          { success: false, message: "New password must be at least 8 characters." },
+          { status: 400 }
+        );
+      }
       if (!currentPassword || typeof currentPassword !== "string") {
         return NextResponse.json(
           { success: false, message: "Current ICT password is required to change a password." },
@@ -403,6 +633,8 @@ export async function PATCH(req: NextRequest) {
           { status: 401 }
         );
       }
+
+      passwordPatch = { password_hash: await bcrypt.hash(newPassword, 10), password_set: true };
     }
 
     if (user.role === "ICT") {
@@ -422,46 +654,147 @@ export async function PATCH(req: NextRequest) {
           ...passwordPatch,
         })
         .eq("id", id)
-        .select("id")
+        .select("id, password_hash")
         .single();
 
       if (error) throw error;
-      return NextResponse.json({ success: true, id: data.id });
+      if (hasPasswordChange && !await bcrypt.compare(newPassword, data.password_hash)) {
+        throw new Error("The ICT password update could not be verified.");
+      }
+      return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
+    }
+
+    if (user.role === "Guidance") {
+      const id = Number(user.id.replace("guidance-", ""));
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return NextResponse.json({ success: false, message: "Invalid Guidance account." }, { status: 400 });
+      }
+      const { data, error } = await supabase
+        .from("guidance_counselors")
+        .update({
+          first_name: user.firstName?.trim() || "",
+          middle_name: user.middleName?.trim() || null,
+          last_name: user.lastName?.trim() || "",
+          suffix: user.suffix && user.suffix !== "None" ? user.suffix : null,
+          email: user.email.trim().toLowerCase(),
+          phone: user.phone?.trim() || "",
+          employee_id: user.employeeId?.trim() || "",
+          status: toDbStatus(user.status),
+          updated_at: new Date().toISOString(),
+          ...passwordPatch,
+        })
+        .eq("id", id)
+        .select("id, password_hash")
+        .single();
+
+      if (error) throw error;
+      if (hasPasswordChange && !await bcrypt.compare(newPassword, data.password_hash)) {
+        throw new Error("The Guidance password update could not be verified.");
+      }
+      return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
     if (user.role === "Parent") {
+      const invalidVerificationRelationship = user.studentDetails?.find((student) =>
+        isMissingOtherGuardianRelationship(student.guardianRelationship, student.guardianRelationshipOther),
+      );
+      const invalidSharedRelationship = user.sharedFamilyDetailsChanged && user.familyDetails
+        && isMissingOtherGuardianRelationship(
+          user.familyDetails.guardianRelationship,
+          user.familyDetails.guardianRelationshipOther,
+        );
+      if (invalidVerificationRelationship || invalidSharedRelationship) {
+        return NextResponse.json(
+          { success: false, message: "Specify the guardian's relationship when Others is selected." },
+          { status: 400 },
+        );
+      }
+
       const ids = user.accountIds?.length ? user.accountIds : [Number(user.id.replace("parent-", ""))];
       const parentAccountIds = ids.filter(Number.isFinite);
+      const wasPendingParent = isPreSignupParentRecord(parentAccountIds, user.parentAccountPasswordSet);
+      const normalizedParentEmail = normalizeParentEmail(user.email);
+      const normalizedParentPhone = normalizeParentPhone(user.phone);
+      const sharedFamilyMembers = !wasPendingParent && user.sharedFamilyDetailsChanged && user.familyDetails
+        ? familyMembersFromDetails(user.familyDetails)
+        : null;
+      const sharedAccountHolder = user.sharedFamilyDetailsChanged
+        ? accountHolderFromFamily(user.familyDetails, user.relationship)
+        : null;
       // SF1-imported students can be displayed as a pending Parent row before
-      // any parent account exists. In that case, save the student/SF1 fields
-      // below and let reconciliation create the link if a matching account is
-      // already present.
+      // any parent account exists. This path corrects only the school
+      // registration/SF1 fields; the parent supplies account details later
+      // during the normal LRN-based sign-up flow.
+      let linkedStudentDbIds = new Set<number>();
       if (parentAccountIds.length > 0) {
-        const { error } = await supabase
-          .from("parents")
-          .update({
-            parent_first_name: user.firstName?.trim() || "",
-            parent_middle_name: user.middleName?.trim() || null,
-            parent_last_name: user.lastName?.trim() || "",
-            parent_suffix: user.suffix && user.suffix !== "None" ? user.suffix : null,
-            email: user.email.trim().toLowerCase(),
-            contact_number: user.phone?.trim() || "",
-            relationship: user.relationship?.trim() || "Guardian",
-            address: user.address?.trim() || "",
-            status: toDbStatus(user.status),
-            updated_at: new Date().toISOString(),
-            ...passwordPatch,
-          })
-          .in("id", parentAccountIds);
+        const { data: linkedRows, error: linkedRowsError } = await supabase
+          .from("parent_student_links")
+          .select("student_id")
+          .in("parent_id", parentAccountIds);
+        if (linkedRowsError) throw linkedRowsError;
 
-        if (error) throw error;
+        const linkedStudentIds = [...new Set((linkedRows ?? []).map((row) => String(row.student_id)).filter(Boolean))];
+        if (linkedStudentIds.length > 0) {
+          const { data: linkedStudents, error: linkedStudentsError } = await supabase
+            .from("students")
+            .select("id")
+            .in("student_id", linkedStudentIds);
+          if (linkedStudentsError) throw linkedStudentsError;
+          linkedStudentDbIds = new Set((linkedStudents ?? []).map((student) => Number(student.id)));
+        }
+
+        if (!wasPendingParent) {
+          const { error } = await supabase
+            .from("parents")
+            .update({
+              parent_first_name: sharedAccountHolder?.first_name ?? (user.firstName?.trim() || ""),
+              parent_middle_name: sharedAccountHolder?.middle_name ?? (user.middleName?.trim() || null),
+              parent_last_name: sharedAccountHolder?.last_name ?? (user.lastName?.trim() || ""),
+              parent_suffix: sharedAccountHolder?.suffix ?? (user.suffix && user.suffix !== "None" ? user.suffix : null),
+              email: normalizedParentEmail,
+              contact_number: normalizedParentPhone,
+              relationship: user.relationship?.trim() || "Guardian",
+              address: user.address?.trim() || "",
+              status: toDbStatus(user.status),
+              ...passwordPatch,
+            })
+            .in("id", parentAccountIds);
+
+          if (error) throw error;
+        }
       }
 
       const reconciledStudentIds = new Set<number>();
+      const lrnCorrections: Array<{ previous: string; current: string; studentDbId: number }> = [];
       for (const student of user.studentDetails ?? []) {
         if (!student.studentId) continue;
         const storedStudentId = student.originalStudentId || student.studentId;
-        await supabase
+        const { data: storedStudent, error: storedStudentError } = await supabase
+          .from("students")
+          .select("id, student_id")
+          .eq("student_id", storedStudentId)
+          .maybeSingle();
+        if (storedStudentError) throw storedStudentError;
+        if (!storedStudent) throw new Error("Student record not found for this ICT update.");
+        if (!wasPendingParent && !linkedStudentDbIds.has(Number(storedStudent.id))) {
+          return NextResponse.json({ success: false, message: "A parent account can only update its currently linked student records." }, { status: 403 });
+        }
+
+        const requestedStudentId = student.studentId.replace(/\D/g, "");
+        let currentStudentId = storedStudent.student_id;
+        if (requestedStudentId !== storedStudent.student_id) {
+          const { data: renamedRows, error: renameError } = await supabase.rpc("rename_student_lrn", {
+            p_student_db_id: storedStudent.id,
+            p_new_student_id: requestedStudentId,
+          });
+          if (renameError) throw new Error(`LRN correction was not saved: ${renameError.message}`);
+          const renamed = Array.isArray(renamedRows) ? renamedRows[0] : renamedRows;
+          if (!renamed?.student_id) throw new Error("LRN correction was not confirmed by the database.");
+          currentStudentId = renamed.student_id as string;
+          lrnCorrections.push({ previous: storedStudent.student_id, current: currentStudentId, studentDbId: Number(storedStudent.id) });
+        }
+
+        const { error: studentUpdateError } = await supabase
           .from("students")
           .update({
             first_name: student.firstName.trim(),
@@ -480,36 +813,67 @@ export async function PATCH(req: NextRequest) {
             municipality_city: student.municipalityCity?.trim() || null,
             province: student.province?.trim() || null,
             learning_modality: student.learningModality?.trim() || null,
-            updated_at: new Date().toISOString(),
           })
-          .eq("student_id", storedStudentId);
+          .eq("id", storedStudent.id);
+        if (studentUpdateError) throw studentUpdateError;
 
-        if (storedStudentId !== student.studentId) {
-          const { error: linkError } = await supabase.from("parent_student_links").update({ student_id: student.studentId }).eq("student_id", storedStudentId);
-          if (linkError) throw linkError;
-          const { error: parentError } = await supabase.from("parents").update({ student_id: student.studentId }).eq("student_id", storedStudentId);
-          if (parentError) throw parentError;
-        }
-        const { data: studentRow } = await supabase.from("students").select("id").eq("student_id", student.studentId).maybeSingle();
-        if (studentRow) {
-          const members = [
-            { role: "Father", first_name: student.fatherFirstName?.trim() || null, middle_name: student.fatherMiddleName?.trim() || null, last_name: student.fatherLastName?.trim() || null, suffix: student.fatherSuffix?.trim() || null, relationship: "Father" },
-            { role: "Mother", first_name: student.motherFirstName?.trim() || null, middle_name: student.motherMiddleName?.trim() || null, last_name: student.motherLastName?.trim() || null, suffix: null, relationship: "Mother" },
-            { role: "Guardian", first_name: student.guardianFirstName?.trim() || null, middle_name: student.guardianMiddleName?.trim() || null, last_name: student.guardianLastName?.trim() || null, suffix: student.guardianSuffix?.trim() || null, relationship: student.guardianRelationship?.trim() || "Guardian" },
-          ];
-          for (const member of members) {
-            const hasName = member.first_name || member.middle_name || member.last_name;
-            if (hasName) await supabase.from("student_family_members").upsert({ ...member, student_db_id: studentRow.id, contact_number: user.phone?.trim() || student.contactNumber?.trim() || null }, { onConflict: "student_db_id,role" });
-            else await supabase.from("student_family_members").delete().eq("student_db_id", studentRow.id).eq("role", member.role);
-          }
-          reconciledStudentIds.add(Number(studentRow.id));
-        }
+        const studentRow = { id: Number(storedStudent.id), student_id: currentStudentId };
+        const verificationMembers = [
+          { role: "Father" as const, first_name: student.fatherFirstName?.trim() || null, middle_name: student.fatherMiddleName?.trim() || null, last_name: student.fatherLastName?.trim() || null, suffix: student.fatherSuffix?.trim() || null, relationship: "Father" },
+          { role: "Mother" as const, first_name: student.motherFirstName?.trim() || null, middle_name: student.motherMiddleName?.trim() || null, last_name: student.motherLastName?.trim() || null, suffix: null, relationship: "Mother" },
+          {
+            role: "Guardian" as const,
+            first_name: student.guardianFirstName?.trim() || null,
+            middle_name: student.guardianMiddleName?.trim() || null,
+            last_name: student.guardianLastName?.trim() || null,
+            suffix: student.guardianSuffix?.trim() || null,
+            relationship: guardianRelationshipForStorage(student.guardianRelationship, student.guardianRelationshipOther),
+          },
+        ];
+        await saveFamilyMembersForStudents(
+          [studentRow.id],
+          verificationMembers,
+          student.contactNumber?.trim() || null,
+        );
+        reconciledStudentIds.add(Number(studentRow.id));
       }
 
-      await Promise.all([
-        ...[...reconciledStudentIds].map((id) => reconcileParentStudentLinks({ studentDbId: id })),
-        ...parentAccountIds.map((id) => reconcileParentStudentLinks({ parentId: id })),
-      ]);
+      if (sharedFamilyMembers && !wasPendingParent && linkedStudentDbIds.size > 0) {
+        // Existing student_family_members remains the sole family store. A
+        // deliberate shared edit synchronizes one role row per linked child.
+        await saveFamilyMembersForStudents(
+          linkedStudentDbIds,
+          sharedFamilyMembers,
+          normalizedParentPhone || null,
+        );
+      }
+
+      // Pre-sign-up records must remain unlinked until the parent completes
+      // the LRN/name verification at Parent sign-up. Existing accounts retain
+      // the normal reconciliation behavior.
+      if (!wasPendingParent) {
+        await Promise.all([
+          ...[...reconciledStudentIds].map((id) => reconcileParentStudentLinks({ studentDbId: id })),
+          ...parentAccountIds.map((id) => reconcileParentStudentLinks({ parentId: id })),
+        ]);
+      }
+
+      if (lrnCorrections.length > 0) {
+        await Promise.all(lrnCorrections.map((correction) => logAudit({
+          action: "Student LRN Corrected",
+          performedById: auth.session.ictId,
+          performedBy: `ICT ${auth.session.ictId}`,
+          performedByRole: "ICT",
+          targetUser: "Student",
+          targetRole: "Student",
+          targetType: "student",
+          targetId: correction.studentDbId,
+          relatedStudentId: correction.current,
+          module: "User Management",
+          details: `Corrected LRN from ${correction.previous} to ${correction.current}. Linked parent and student records were preserved.`,
+          changes: [{ field: "LRN", from: correction.previous, to: correction.current }],
+        })));
+      }
 
       return NextResponse.json({ success: true, ids: parentAccountIds });
     }
@@ -537,11 +901,17 @@ export async function PATCH(req: NextRequest) {
           ...passwordPatch,
         })
         .eq("id", id)
-        .select("id")
+        // Keep the new hash on the server only, then verify it before telling
+        // ICT that the adviser can use the password. It is never returned,
+        // logged, or stored in plaintext.
+        .select("id, password_hash")
         .single();
 
       if (error) throw error;
-      return NextResponse.json({ success: true, id: data.id });
+      if (hasPasswordChange && !(await bcrypt.compare(newPassword, data.password_hash))) {
+        throw new Error("The adviser password update could not be verified.");
+      }
+      return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
     return NextResponse.json(

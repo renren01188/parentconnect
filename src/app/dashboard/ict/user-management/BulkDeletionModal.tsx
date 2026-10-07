@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckSquare,
   Eye,
@@ -23,7 +23,7 @@ export type BulkUser = {
   accountIds?: number[];
   name: string;
   email: string;
-  role: "Adviser" | "Parent" | "ICT";
+  role: "Adviser" | "Parent" | "ICT" | "Guidance";
   classGrade: string;
   employeeId?: string;
   studentDetails?: Student[];
@@ -40,6 +40,10 @@ export type QueueItem = {
   student_lrn?: string | null;
   grade?: string | null;
   section?: string | null;
+  parent_name?: string | null;
+  student_name?: string | null;
+  requested_at?: string | null;
+  approved_at?: string | null;
 };
 type Target = {
   id: number;
@@ -49,6 +53,12 @@ type Target = {
   students?: { name: string; lrn: string }[];
   employeeId?: string;
   advisory?: string;
+};
+type AuthorizationAction = "approve" | "reject" | "restore" | "delete-now";
+type BulkDeletionResult = {
+  successful: number;
+  failed: number;
+  emails: { sent: number; pending: number; failed: number; batchId?: string | null };
 };
 
 export function BulkDeletionModal({
@@ -78,11 +88,40 @@ export function BulkDeletionModal({
   const [busy, setBusy] = useState(false);
   const [queueSelected, setQueueSelected] = useState<number[]>([]);
   const [authorization, setAuthorization] = useState<{
-    action: "approve" | "reject" | "restore" | "delete-now";
+    action: AuthorizationAction;
     ids: number[];
   } | null>(null);
   const [authorizationPassword, setAuthorizationPassword] = useState("");
   const [showAuthorizationPassword, setShowAuthorizationPassword] = useState(false);
+  const [authorizationError, setAuthorizationError] = useState("");
+  const [operationResult, setOperationResult] = useState<BulkDeletionResult | null>(null);
+
+  useEffect(() => {
+    const batchId = operationResult?.emails.batchId;
+    if (!batchId || operationResult.emails.pending === 0) return;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/deletion-email-jobs?batchId=${encodeURIComponent(batchId)}`);
+        const result = await response.json();
+        if (!cancelled && result.success) {
+          setOperationResult((previous) => previous ? {
+            ...previous,
+            emails: { ...previous.emails, sent: result.sent, pending: result.pending, failed: result.failed },
+          } : previous);
+        }
+      } catch {
+        // Keep the last known queued result visible; the scheduler will retry.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [operationResult?.emails.batchId, operationResult?.emails.pending]);
   const activeDeletionKeys = useMemo(
     () =>
       new Set(
@@ -147,7 +186,16 @@ export function BulkDeletionModal({
             .toLowerCase()
             .includes(search.toLowerCase()),
         ),
-    [users, kind, grade, section, search],
+    [
+      users,
+      kind,
+      grade,
+      section,
+      search,
+      activeDeletionKeys,
+      activeParentEmails,
+      activeStudentLrns,
+    ],
   );
   const grades = useMemo(
     () =>
@@ -221,7 +269,16 @@ export function BulkDeletionModal({
       if (!result.success)
         throw new Error(result.message || "Could not schedule deletion.");
       onChanged();
-      onClose();
+      setOperationResult({
+        successful: Number(result.deletion?.successful ?? result.deletions?.length ?? 0),
+        failed: Number(result.deletion?.failed ?? 0),
+        emails: {
+          sent: Number(result.emails?.sent ?? 0),
+          pending: Number(result.emails?.pending ?? 0),
+          failed: Number(result.emails?.failed ?? 0),
+          batchId: result.emails?.batchId ?? null,
+        },
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not schedule deletion.");
     } finally {
@@ -229,38 +286,38 @@ export function BulkDeletionModal({
     }
   };
   const queueItems = queue.filter((item) =>
-    `${item.target_name} ${item.reason}`
+    `${item.parent_name ?? ""} ${item.student_name ?? ""} ${item.target_name} ${item.reason}`
       .toLowerCase()
       .includes(search.toLowerCase()),
   );
-  const queueAction = async (id: number, action: "restore" | "delete-now") => {
-    if (
-      action === "delete-now" &&
-      !confirm("Permanently delete this account and related data now?")
-    )
-      return;
-    setBusy(true);
-    const response = await fetch("/api/scheduled-deletions", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action }),
-    });
-    const result = await response.json();
-    setBusy(false);
-    if (!result.success) setError(result.message || "Action failed.");
-    else onChanged();
-  };
+  const visibleQueueItems = queueItems.filter((item) =>
+    tab === "pending"
+      ? item.status === "PendingICT"
+      : item.status === "Scheduled",
+  );
+  const visibleQueueIds = new Set(visibleQueueItems.map((item) => item.id));
+  const selectedQueueIds = queueSelected.filter((id) => visibleQueueIds.has(id));
   // This page has global form styles; keep every modal form control readable.
   const modalFormStyle = `.bulk-deletion-modal input,.bulk-deletion-modal textarea,.bulk-deletion-modal select{background:#fff!important;color:#1e293b!important}.bulk-deletion-modal input::placeholder,.bulk-deletion-modal textarea::placeholder{color:#94a3b8!important}.bulk-deletion-modal option{background:#fff!important;color:#1e293b!important}`;
+  const openAuthorization = (action: AuthorizationAction, ids: number[]) => {
+    const selectedIds = [...new Set(ids)].filter(
+      (id) => Number.isSafeInteger(id) && id > 0,
+    );
+    if (!selectedIds.length) return;
+    setAuthorization({ action, ids: selectedIds });
+    setAuthorizationPassword("");
+    setShowAuthorizationPassword(false);
+    setAuthorizationError("");
+  };
   const runQueueAction = async () => {
     if (!authorization) return;
     const { action, ids } = authorization;
     if (["approve", "restore", "delete-now"].includes(action) && !authorizationPassword.trim()) {
-      setError("Current ICT password is required.");
+      setAuthorizationError("Current ICT password is required.");
       return;
     }
     setBusy(true);
-    setError("");
+    setAuthorizationError("");
     try {
       for (const id of ids) {
         const response = await fetch("/api/scheduled-deletions", {
@@ -269,15 +326,19 @@ export function BulkDeletionModal({
           body: JSON.stringify({ id, action, password: authorizationPassword }),
         });
         const result = await response.json();
-        if (!result.success)
+        if (!result.success) {
+          if (response.status === 401)
+            throw new Error("Incorrect Password. Please try again.");
           throw new Error(result.message || "Action failed.");
+        }
       }
       setQueueSelected([]);
       setAuthorization(null);
       setAuthorizationPassword("");
+      setAuthorizationError("");
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Action failed.");
+      setAuthorizationError(e instanceof Error ? e.message : "Action failed.");
     } finally {
       setBusy(false);
     }
@@ -310,6 +371,7 @@ export function BulkDeletionModal({
             onClick={() => {
               setTab("create");
               setSearch("");
+              setQueueSelected([]);
             }}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "create" ? "bg-[#274e13] text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
@@ -319,6 +381,7 @@ export function BulkDeletionModal({
             onClick={() => {
               setTab("pending");
               setSearch("");
+              setQueueSelected([]);
             }}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "pending" ? "bg-amber-500 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
@@ -329,6 +392,7 @@ export function BulkDeletionModal({
             onClick={() => {
               setTab("waiting");
               setSearch("");
+              setQueueSelected([]);
             }}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "waiting" ? "bg-red-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
@@ -351,85 +415,61 @@ export function BulkDeletionModal({
               <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
                 <button
                   onClick={() => {
-                    const visibleIds = queueItems
-                      .filter((item) =>
-                        tab === "pending"
-                          ? item.status === "PendingICT"
-                          : item.status === "Scheduled",
-                      )
-                      .map((item) => item.id);
+                    const visibleIds = visibleQueueItems.map((item) => item.id);
                     setQueueSelected(
-                      visibleIds.length > 0 && visibleIds.every((id) => queueSelected.includes(id))
-                        ? []
-                        : visibleIds,
+                      visibleIds.length > 0 && visibleIds.every((id) => selectedQueueIds.includes(id))
+                        ? (previous) => previous.filter((id) => !visibleIds.includes(id))
+                        : (previous) => [...new Set([...previous, ...visibleIds])],
                     );
                   }}
                   className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-extrabold text-emerald-700 transition hover:bg-emerald-50 hover:text-emerald-800"
                 >
                   <CheckSquare className="h-4 w-4" />
-                  {queueItems.filter((item) => tab === "pending" ? item.status === "PendingICT" : item.status === "Scheduled").length > 0 && queueItems.filter((item) => tab === "pending" ? item.status === "PendingICT" : item.status === "Scheduled").every((item) => queueSelected.includes(item.id)) ? "Uncheck All" : "Check All"}
+                  {visibleQueueItems.length > 0 && visibleQueueItems.every((item) => selectedQueueIds.includes(item.id)) ? "Uncheck All" : "Check All"}
                 </button>
-                {queueSelected.length > 0 &&
+                {selectedQueueIds.length > 0 &&
                   (tab === "pending" ? (
                     <div className="flex gap-2">
                       <button
                         onClick={() =>
-                          setAuthorization({
-                            action: "reject",
-                            ids: queueSelected,
-                          })
+                          openAuthorization("reject", selectedQueueIds)
                         }
                         className="rounded-lg bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
                       >
-                        Reject All
+                        {selectedQueueIds.length === 1 ? "Reject" : "Reject All"}
                       </button>
                       <button
                         onClick={() =>
-                          setAuthorization({
-                            action: "approve",
-                            ids: queueSelected,
-                          })
+                          openAuthorization("approve", selectedQueueIds)
                         }
                         className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white"
                       >
-                        Approve All
+                        {selectedQueueIds.length === 1 ? "Approve" : "Approve All"}
                       </button>
                     </div>
                   ) : (
                     <div className="flex gap-2">
                       <button
                         onClick={() =>
-                          setAuthorization({
-                            action: "restore",
-                            ids: queueSelected,
-                          })
+                          openAuthorization("restore", selectedQueueIds)
                         }
                         className="rounded-lg bg-emerald-100 px-3 py-2 text-xs font-bold text-emerald-700"
                       >
-                        Revert All
+                        {selectedQueueIds.length === 1 ? "Revert" : "Revert All"}
                       </button>
                       <button
                         onClick={() =>
-                          setAuthorization({
-                            action: "delete-now",
-                            ids: queueSelected,
-                          })
+                          openAuthorization("delete-now", selectedQueueIds)
                         }
                         className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white"
                       >
-                        Delete Immediately
+                        Archive Immediately
                       </button>
                     </div>
                   ))}
               </div>
               <div className="space-y-2">
-                {queueItems
-                  .filter((item) =>
-                    tab === "pending"
-                      ? item.status === "PendingICT"
-                      : item.status === "Scheduled",
-                  )
-                  .map((item) => (
+                {visibleQueueItems.map((item) => (
                     <div
                       key={item.id}
                       className="flex items-center gap-3 rounded-xl border bg-slate-50 p-3"
@@ -446,12 +486,9 @@ export function BulkDeletionModal({
                         }
                       />
                       <div className="flex-1">
-                        <p className="text-sm font-bold text-slate-700">
-                          {item.target_name}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {item.target_type} · {item.reason}
-                        </p>
+                        <p className="text-sm font-bold text-slate-700">Parent Name: {item.parent_name || "—"}</p>
+                        <p className="text-xs text-slate-600">Student Name: {item.student_name || "—"}</p>
+                        <p className="mt-1 text-xs text-slate-600">Deletion Reason: {item.reason || "—"}</p>
                         {item.target_type === "student" &&
                           item.grade &&
                           item.section && (
@@ -460,12 +497,14 @@ export function BulkDeletionModal({
                             </p>
                           )}
                         {item.status === "Scheduled" && (
-                          <p className="text-[11px] font-semibold text-red-600">
-                            Deletion date:{" "}
+                          <div className="mt-1 text-[11px] font-semibold text-red-600">
+                            <p>Deletion date:{" "}
                             {item.delete_after
                               ? new Date(item.delete_after).toLocaleDateString()
                               : "—"}
-                          </p>
+                            </p>
+                            <p>Approved: {item.approved_at ? new Date(item.approved_at).toLocaleDateString() : "—"}</p>
+                          </div>
                         )}
                       </div>
                       {item.status === "PendingICT" ? (
@@ -473,10 +512,7 @@ export function BulkDeletionModal({
                           <button
                             disabled={busy}
                             onClick={() =>
-                              setAuthorization({
-                                action: "reject",
-                                ids: [item.id],
-                              })
+                              openAuthorization("reject", [item.id])
                             }
                             className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700"
                           >
@@ -485,10 +521,7 @@ export function BulkDeletionModal({
                           <button
                             disabled={busy}
                             onClick={() =>
-                              setAuthorization({
-                                action: "approve",
-                                ids: [item.id],
-                              })
+                              openAuthorization("approve", [item.id])
                             }
                             className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white"
                           >
@@ -500,10 +533,7 @@ export function BulkDeletionModal({
                           <button
                             disabled={busy}
                             onClick={() =>
-                              setAuthorization({
-                                action: "restore",
-                                ids: [item.id],
-                              })
+                              openAuthorization("restore", [item.id])
                             }
                             className="rounded-lg border border-emerald-300 bg-emerald-50 p-2 text-emerald-700"
                             title="Revert"
@@ -513,13 +543,10 @@ export function BulkDeletionModal({
                           <button
                             disabled={busy}
                             onClick={() =>
-                              setAuthorization({
-                                action: "delete-now",
-                                ids: [item.id],
-                              })
+                              openAuthorization("delete-now", [item.id])
                             }
                             className="rounded-lg bg-red-600 p-2 text-white"
-                            title="Delete immediately"
+                            title="Archive immediately and preserve history"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -527,13 +554,26 @@ export function BulkDeletionModal({
                       )}
                     </div>
                   ))}
-                {!queueItems.length && (
+                {!visibleQueueItems.length && (
                   <p className="text-sm text-slate-400">
                     No users are in the deletion waiting period.
                   </p>
                 )}
               </div>
             </>
+          ) : operationResult ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
+              <h3 className="font-extrabold">Bulk deletion scheduled</h3>
+              <p className="mt-1 text-emerald-800">Notifications continue in the background; you can safely close this dialog.</p>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion successful</span><strong>{operationResult.successful}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion failed</span><strong>{operationResult.failed}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails sent</span><strong>{operationResult.emails.sent}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails pending</span><strong>{operationResult.emails.pending}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails failed</span><strong>{operationResult.emails.failed}</strong></div>
+              </div>
+              {operationResult.emails.pending > 0 && <p className="mt-3 text-xs text-emerald-800">Pending emails are sent in controlled batches and temporary failures are retried automatically.</p>}
+            </div>
           ) : (
             <>
               {step === 1 && (
@@ -746,33 +786,39 @@ export function BulkDeletionModal({
         </div>
         {tab === "create" && (
           <footer className="flex justify-between border-t bg-slate-50 p-4">
-            <button
-              onClick={() =>
-                step === 1 ? onClose() : setStep(step === 3 ? 2 : 1)
-              }
-              className="rounded-xl border bg-white px-4 py-2 text-sm font-bold"
-            >
-              {step === 1 ? "Cancel" : "Back"}
-            </button>
-            {step < 3 ? (
-              <button
-                disabled={
-                  (step === 1 && !picked.length) ||
-                  (step === 2 && !reason.trim())
-                }
-                onClick={() => setStep(step === 1 ? 2 : 3)}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
-              >
-                Next
-              </button>
+            {operationResult ? (
+              <button onClick={onClose} className="ml-auto rounded-xl bg-[#274e13] px-4 py-2 text-sm font-bold text-white">Done</button>
             ) : (
-              <button
-                disabled={busy || !password.trim()}
-                onClick={schedule}
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:bg-red-300"
-              >
-                Schedule 30-day deletion
-              </button>
+              <>
+                <button
+                  onClick={() =>
+                    step === 1 ? onClose() : setStep(step === 3 ? 2 : 1)
+                  }
+                  className="rounded-xl border bg-white px-4 py-2 text-sm font-bold"
+                >
+                  {step === 1 ? "Cancel" : "Back"}
+                </button>
+                {step < 3 ? (
+                  <button
+                    disabled={
+                      (step === 1 && !picked.length) ||
+                      (step === 2 && !reason.trim())
+                    }
+                    onClick={() => setStep(step === 1 ? 2 : 3)}
+                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
+                  >
+                    Next
+                  </button>
+                ) : (
+                  <button
+                    disabled={busy || !password.trim()}
+                    onClick={schedule}
+                    className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:bg-red-300"
+                  >
+                    Schedule 30-day deletion
+                  </button>
+                )}
+              </>
             )}
           </footer>
         )}
@@ -828,12 +874,20 @@ export function BulkDeletionModal({
                 <input
                   type={showAuthorizationPassword ? "text" : "password"}
                   value={authorizationPassword}
-                  onChange={(e) => setAuthorizationPassword(e.target.value)}
+                  onChange={(e) => {
+                    setAuthorizationPassword(e.target.value);
+                    setAuthorizationError("");
+                  }}
                   placeholder="Current ICT password"
                   className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-10 text-sm text-slate-800 placeholder:text-slate-400"
                 />
                 <button type="button" onClick={() => setShowAuthorizationPassword(value => !value)} className="absolute right-3 top-3 text-slate-500">{showAuthorizationPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
               </div>
+            )}
+            {authorizationError && (
+              <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
+                {authorizationError}
+              </p>
             )}
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -841,6 +895,7 @@ export function BulkDeletionModal({
                   setAuthorization(null);
                   setAuthorizationPassword("");
                   setShowAuthorizationPassword(false);
+                  setAuthorizationError("");
                 }}
                 className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700"
               >

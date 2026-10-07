@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 
 export type NotificationType = "info" | "warning" | "alert" | "success";
 
@@ -22,11 +23,22 @@ interface NotificationContextValue {
   addNotification: (n: Omit<Notification, "id" | "read">) => void;
   inboxUnreadCount: number;
   setInboxUnreadCount: (n: number) => void;
+  markInboxSeen: () => void;
   annUnreadCount: number;
   refreshCounts: () => Promise<void>;
   setAnnUnreadCount: (n: number) => void;
 }
 const NotificationContext = createContext<NotificationContextValue | null>(null);
+
+function inboxSeenTimestamp() {
+  if (typeof window === "undefined") return 0;
+  const value = Number(window.sessionStorage.getItem("ict-inbox-seen-at") ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+type InboxMessageSummary = { status?: string; sortAt?: number };
+type InboxCountResponse = { messages?: InboxMessageSummary[] };
+type AnnouncementCountResponse = { unreadCount?: number };
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([
@@ -57,6 +69,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   ]);
 
   const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
+  const [inboxSeenAt, setInboxSeenAt] = useState(inboxSeenTimestamp);
   const [annUnreadCount, setAnnUnreadCount] = useState(0);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -78,27 +91,38 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ]);
   }
 
-  const refreshCounts = useCallback(async () => {
-    try {
-      const [msgRes, annRes] = await Promise.all([
-        fetch("/api/reports/staff-messages?role=ict", { cache: "no-store" }),
-        fetch("/api/ict/notifications", { cache: "no-store" }),
-      ]);
-      const msgData = await msgRes.json().catch(() => null);
-      const annData = await annRes.json().catch(() => null);
-      const messages = Array.isArray(msgData?.messages) ? msgData.messages : [];
-      setInboxUnreadCount(msgRes.ok ? messages.filter((m: { status?: string }) => m.status === "New").length : 0);
-      setAnnUnreadCount(annRes.ok ? Number(annData?.unreadCount ?? 0) : 0);
-    } catch {
-      setInboxUnreadCount(0);
-    }
+  const markInboxSeen = useCallback(() => {
+    const now = Date.now();
+    window.sessionStorage.setItem("ict-inbox-seen-at", String(now));
+    setInboxSeenAt(now);
+    setInboxUnreadCount(0);
   }, []);
 
+  const refreshCounts = useCallback(async () => {
+    try {
+      const [messageResult, announcementResult] = await Promise.all([
+        fetchJsonWithRetry<InboxCountResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" }),
+        fetchJsonWithRetry<AnnouncementCountResponse>("/api/ict/notifications", { cache: "no-store" }),
+      ]);
+      const { response: msgRes, data: msgData } = messageResult;
+      const { response: annRes, data: annData } = announcementResult;
+      const messages = Array.isArray(msgData?.messages) ? msgData.messages : [];
+      if (msgRes.ok) {
+        setInboxUnreadCount(messages.filter((message) =>
+          message.status === "New" && Number(message.sortAt ?? 0) > inboxSeenAt
+        ).length);
+      }
+      if (annRes.ok) setAnnUnreadCount(Number(annData?.unreadCount ?? 0));
+    } catch {
+      // Retain the last confirmed counts while a temporary request is retried.
+    }
+  }, [inboxSeenAt]);
+
   useEffect(() => {
-    refreshCounts();
+    const initialRefresh = window.setTimeout(() => { void refreshCounts(); }, 0);
 
     const client = supabaseBrowser;
-    if (!client) return;
+    if (!client) return () => window.clearTimeout(initialRefresh);
 
     const channel = client
       .channel("ict-sidebar-inbox-count")
@@ -111,7 +135,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       .subscribe();
 
 
-    return () => { client.removeChannel(channel); };
+    return () => {
+      window.clearTimeout(initialRefresh);
+      client.removeChannel(channel);
+    };
   }, [refreshCounts]);
 
   return (
@@ -124,6 +151,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         addNotification,
         inboxUnreadCount,
         setInboxUnreadCount,
+        markInboxSeen,
         annUnreadCount,
         refreshCounts,
         setAnnUnreadCount,

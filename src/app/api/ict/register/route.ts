@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { sendIctTempPasswordEmail } from "@/lib/mailer";
+import { getActiveIct } from "@/lib/apiAuthorization";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -12,6 +13,10 @@ function generateTempPassword(): string {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await getActiveIct())) {
+      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
+    }
+
     const {
       firstName,
       middleName,
@@ -34,6 +39,9 @@ export async function POST(req: NextRequest) {
         { success: false, message: "Invalid email address." },
         { status: 400 }
       );
+    }
+    if (!/^\d{11}$/.test(contactNumber.trim())) {
+      return NextResponse.json({ success: false, message: "Contact number must contain exactly 11 digits." }, { status: 400 });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -70,7 +78,7 @@ export async function POST(req: NextRequest) {
     const tempPassword = generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    const { error: insertError } = await supabase
+    const { data: createdIct, error: insertError } = await supabase
       .from("ict_admins")
       .insert({
         first_name: firstName.trim(),
@@ -83,7 +91,9 @@ export async function POST(req: NextRequest) {
         password_hash: passwordHash,
         password_set: false,
         status: "active",
-      });
+      })
+      .select("id")
+      .single();
 
     if (insertError) throw insertError;
 
@@ -95,11 +105,15 @@ export async function POST(req: NextRequest) {
       });
     } catch (mailError) {
       console.error("[ict/register] Email send failed:", mailError);
+      await supabase.from("ict_admins").delete().eq("id", createdIct.id);
+      return NextResponse.json(
+        { success: false, message: "The ICT account was not created because the temporary-password email could not be sent." },
+        { status: 503 },
+      );
     }
 
     return NextResponse.json({
       success: true,
-      tempPassword,
       message: `ICT admin account created. A temporary password has been sent to ${normalizedEmail}.`,
     });
   } catch (error: unknown) {

@@ -117,7 +117,7 @@ function SummaryPanel({ accountType, summaryRows }: { accountType: AccountType; 
   const total = summaryRows.filter(r => r.status !== null).length;
   const pct = total > 0 ? Math.round(filled / total * 100) : 0;
   return (
-    <div className="w-56 shrink-0 space-y-3">
+    <aside className="w-full shrink-0 space-y-3 lg:w-64 xl:w-72">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
         <div className="flex items-center gap-2 mb-3"><Info className="w-3.5 h-3.5 text-gray-400" /><h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Creation Summary</h3></div>
         {accountType && (<><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Account Type</p><div className="mb-3"><span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg text-white bg-[#274e13]"><User className="w-3 h-3" />{typeLabel[accountType]}</span></div></>)}
@@ -128,7 +128,7 @@ function SummaryPanel({ accountType, summaryRows }: { accountType: AccountType; 
         <div className="flex items-center gap-2 mb-3"><Clock className="w-3.5 h-3.5 text-gray-400" /><h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Recently Created</h3></div>
         <div className="space-y-3">{RECENTLY.map(u => (<div key={u.name} className="flex items-center gap-2.5"><div className={`w-8 h-8 rounded-full ${u.color} flex items-center justify-center text-white text-[10px] font-bold shrink-0`}>{u.initials}</div><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-gray-800 truncate">{u.name}</p><p className="text-[10px] text-gray-400">{u.date}</p><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${u.roleColor}`}>{u.role}</span></div></div>))}</div>
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -753,7 +753,7 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
         <p className="font-bold">What happens next?</p>
         <p>A temporary password is sent to <strong>{f.email}</strong></p>
-        <p>Full system access is granted after first login</p>
+        <p>They must set a permanent password before dashboard access</p>
       </div>
       <button onClick={onDone} className="w-full py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
     </div>
@@ -1043,7 +1043,7 @@ function ICTAdminForm({ onDone, onSummaryChange }: { onDone: () => void; onSumma
       <h3 className="text-base font-bold text-gray-800 mb-1">Account Created!</h3>
       <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as an ICT Admin.</p>
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
-        <p className="font-bold">What happens next?</p><p>A temporary password is sent to <strong>{f.email}</strong></p><p>Full system access is granted after first login</p>
+        <p className="font-bold">What happens next?</p><p>A temporary password is sent to <strong>{f.email}</strong></p><p>They must set a permanent password before dashboard access</p>
       </div>
       <button onClick={onDone} className="w-full py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
     </div>
@@ -1144,17 +1144,17 @@ export default function CreateUserPage() {
   };
 
   return (
-    <div className="p-6 min-h-screen bg-gray-100">
+    <div className="min-h-screen min-w-0 overflow-x-clip bg-gray-100 p-4 sm:p-6">
       {showManageSessions && <ManageSessionsModal onClose={() => setShowManageSessions(false)} />}
 
       {/* Page header */}
-      <div className="flex items-start justify-between mb-5">
-        <div className="flex items-center gap-3">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           <button onClick={() => router.push("/dashboard/ict/user-management")}
             className="flex items-center justify-center w-9 h-9 rounded-xl border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition shadow-sm">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-bold text-gray-900">Create User Account</h1>
             <p className="text-sm text-gray-400 mt-0.5">Select an account type and fill in the details to register a new user.</p>
           </div>
@@ -1163,7 +1163,7 @@ export default function CreateUserPage() {
         {/* ── Manage Class Sessions button ── */}
         <button
           onClick={() => setShowManageSessions(true)}
-          className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-white rounded-xl shadow-sm transition hover:opacity-90 active:scale-95"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:opacity-90 active:scale-95 sm:w-auto"
           style={{ background: "#274e13" }}
         >
           <Settings2 className="w-4 h-4" />
@@ -1171,7 +1171,7 @@ export default function CreateUserPage() {
         </button>
       </div>
 
-      <div className="flex gap-4 items-start">
+      <div className="flex flex-col items-stretch gap-4 lg:flex-row lg:items-start">
         <div className="flex-1 min-w-0 space-y-4">
           {/* Step 1 — Account type */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -1179,10 +1179,10 @@ export default function CreateUserPage() {
               <div className="w-6 h-6 rounded-full bg-[#274e13] text-white text-xs font-bold flex items-center justify-center shrink-0">1</div>
               <div><h2 className="text-sm font-bold text-gray-800">Select Account Type</h2><p className="text-xs text-gray-400">Choose the role this user will have in the system.</p></div>
             </div>
-            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
               <RoleCard selected={accountType === "adviser"} onSelect={() => selectType("adviser")} icon={BookOpen} iconBg="bg-violet-50" iconColor="text-violet-600" title="Class Adviser" desc="Assigned teacher managing a class section. Can message parents and submit reports." tags={["Class management", "Reports", "Parent messaging"]} />
               <RoleCard selected={accountType === "ict"} onSelect={() => selectType("ict")} icon={Monitor} iconBg="bg-green-50" iconColor="text-[#274e13]" title="ICT Admin" desc="System administrator managing users, accounts, integrations, and audit logs." tags={["User management", "Audit trail", "Full access"]} />
-              <RoleCard selected={accountType === "student"} onSelect={() => selectType("student")} icon={GraduationCap} iconBg="bg-sky-50" iconColor="text-sky-600" title="Register Student & Parent" desc="Enroll a new student and link their parent or guardian account with RFID and class details." tags={["Student records", "RFID", "Parent account"]} />
+              <RoleCard selected={accountType === "student"} onSelect={() => selectType("student")} icon={GraduationCap} iconBg="bg-sky-50" iconColor="text-sky-600" title="Register Student" desc="Enroll a student with RFID, class, and family verification records. Parents link their own account through Guardian Sign Up." tags={["Student records", "RFID", "Parent verification"]} />
               <RoleCard selected={accountType === "guidance"} onSelect={() => selectType("guidance")} icon={User} iconBg="bg-rose-50" iconColor="text-rose-600" title="Guidance Counselor" desc="School counselor managing student welfare, behavioral reports, and parent communication." tags={["Student welfare", "Reports", "Counseling"]} />
               <RoleCard selected={accountType === "succession"} onSelect={() => selectType("succession")} icon={Repeat2} iconBg="bg-amber-50" iconColor="text-amber-600" title="Principal Succession" desc="Transfer Super Admin rights to an incoming principal. This action is irreversible and permanently logged." tags={["Account transfer", "Audit logged", "Irreversible"]} badge="Sensitive" />
             </div>
@@ -1191,18 +1191,19 @@ export default function CreateUserPage() {
           {/* Step 2 — Form */}
           {accountType && (
             <div key={formKey} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                <div className="flex min-w-0 items-center gap-3">
                   <div className="w-6 h-6 rounded-full bg-[#274e13] text-white text-xs font-bold flex items-center justify-center shrink-0">2</div>
                   <div><h2 className="text-sm font-bold text-gray-800">Account Details</h2><p className="text-xs text-gray-400">Fill in the information for the {typeLabel[accountType]}.</p></div>
                 </div>
-                <span className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#274e13] text-white"><User className="w-3 h-3" />Creating: {typeLabel[accountType]}</span>
+                <span className="flex w-full items-center justify-center gap-1.5 rounded-full bg-[#274e13] px-3 py-2 text-xs font-bold text-white sm:w-auto"><User className="w-3 h-3" />Creating: {typeLabel[accountType]}</span>
               </div>
               {accountType === "adviser" && <AdviserForm key={`adv-${formKey}`} onDone={handleDone} onSummaryChange={setSummaryRows} />}
               {accountType === "ict" && <ICTAdminForm key={`ict-${formKey}`} onDone={handleDone} onSummaryChange={setSummaryRows} />}
               {accountType === "student" && (
                 <StudentParentRegistration key={`stu-${formKey}`} variant="ict" embedded
                   studentsListHref="/dashboard/ict/StudentProfiles"
+                  registrationMode="student-roster"
                   onSummaryChange={setSummaryRows} onSuccess={handleDone} />
               )}
               {accountType === "guidance" && <GuidanceCounselorForm key={`guid-${formKey}`} onDone={handleDone} onSummaryChange={setSummaryRows} />}

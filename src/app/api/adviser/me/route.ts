@@ -28,7 +28,7 @@ export async function GET() {
       const { data: rowsFull, error: errFull } = await supabase
         .from("advisers")
         .select(
-          "id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, grade, section, sections, status, created_at"
+          "id, employee_id, first_name, middle_name, last_name, suffix, email, phone, grade, section, sections, status, created_at"
         )
         .eq(matchField, matchValue)
         .limit(1);
@@ -39,7 +39,7 @@ export async function GET() {
       const { data: rowsSimple, error: errSimple } = await supabase
         .from("advisers")
         .select(
-          "id, employee_id, first_name, last_name, email, phone, profile_picture, grade, section, status, created_at"
+          "id, employee_id, first_name, last_name, email, phone, grade, section, status, created_at"
         )
         .eq(matchField, matchValue)
         .limit(1);

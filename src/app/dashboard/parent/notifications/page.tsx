@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -8,6 +8,7 @@ import {
   CalendarCheck,
   CheckCheck,
   MessageSquare,
+  X,
 } from "lucide-react";
 
 import Sidebar from "../components/Sidebar";
@@ -22,6 +23,10 @@ import {
 type PageNotification = Notification & {
   source?: "database" | "mock";
   announcementId?: number;
+  announcementTitle?: string;
+  notificationIds?: number[];
+  senderName?: string;
+  senderRole?: "Principal" | "Adviser" | "Guidance" | "ICT";
   reportId?: number;
   createdAt?: string;
 };
@@ -59,7 +64,20 @@ const TYPE_CONFIG: Record<
   },
 };
 
-export default function NotificationsPage() {
+function announcementDateLabel(value?: string) {
+  if (!value) return "Date unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function NotificationsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { setUnreadCount } = useNotifContext();
@@ -67,18 +85,23 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<PageNotification[]>([]);
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
   const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<PageNotification | null>(null);
 
   const loadNotifications = useCallback(async () => {
     const res = await fetch("/api/parents/notifications", { cache: "no-store" });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.success || !Array.isArray(data.notifications)) return;
 
-    setNotifications(
-      data.notifications.map((notif: Notification) => ({
-        ...notif,
-        source: "database" as const,
-      }))
-    );
+    const unique = new Map<string, PageNotification>();
+    for (const notif of data.notifications as PageNotification[]) {
+      const key = notif.announcementId
+        ? "announcement:" + (notif.senderRole ?? notif.category) + ":" + notif.announcementId
+        : "notification:" + notif.id;
+      if (!unique.has(key)) {
+        unique.set(key, { ...notif, source: "database" as const });
+      }
+    }
+    setNotifications([...unique.values()]);
   }, []);
 
   useEffect(() => {
@@ -157,7 +180,7 @@ export default function NotificationsPage() {
     activeTab === "All" ? true : notif.tab.includes(activeTab)
   );
 
-  async function markAllRead() {
+  const markAllRead = useCallback(async () => {
     setNotifications((prev) => prev.map((notif) => ({ ...notif, unread: false })));
     await fetch("/api/parents/notifications", {
       method: "PATCH",
@@ -167,13 +190,17 @@ export default function NotificationsPage() {
         reportIds: notifications.flatMap((notif) => notif.reportId ? [notif.reportId] : []),
         notificationIds: notifications
           .filter((notif) => notif.source === "database" && !notif.reportId && notif.id > 0)
-          .map((notif) => notif.id),
+          .flatMap((notif) => notif.notificationIds ?? [notif.id]),
       }),
     }).catch(() => null);
-  }
+  }, [notifications]);
 
   // Clear the sidebar badge once the Notifications page is opened.
-  useEffect(() => { if (notifications.some((notif) => notif.unread)) void markAllRead(); }, [notifications]);
+  useEffect(() => {
+    if (!notifications.some((notif) => notif.unread)) return;
+    const timer = window.setTimeout(() => { void markAllRead(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [notifications, markAllRead]);
 
   function handleClick(notif: PageNotification) {
     setNotifications((prev) =>
@@ -187,11 +214,13 @@ export default function NotificationsPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          notif.id < 0
-            ? { attendanceLogId: -notif.id }
-            : notif.reportId
-              ? { reportId: notif.reportId }
-              : { notificationId: notif.id }
+          notif.reportId
+            ? { reportId: notif.reportId }
+            : notif.announcementId
+              ? { notificationIds: notif.notificationIds ?? [notif.id] }
+              : notif.id < 0
+                ? { attendanceLogId: -notif.id }
+                : { notificationId: notif.id }
         ),
       }).catch(() => null);
     }
@@ -206,6 +235,12 @@ export default function NotificationsPage() {
     }
 
     if (notif.announcementId) {
+      setSelectedAnnouncement({ ...notif, unread: false });
+      return;
+    }
+
+    if (notif.reportId) {
+      router.push(`/dashboard/parent/reports?reportId=${notif.reportId}`);
       return;
     }
 
@@ -224,13 +259,13 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-100 font-sans">
+    <div className="flex min-h-screen flex-col overflow-x-clip bg-slate-100 font-sans md:h-screen md:flex-row md:overflow-hidden">
       <Sidebar />
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 py-6 md:px-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-extrabold text-slate-900">
+      <main className="flex min-w-0 flex-1 flex-col px-3 py-5 pb-8 sm:px-4 md:min-h-0 md:overflow-hidden md:px-8 md:py-6">
+        <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="text-xl font-extrabold text-slate-900 sm:text-2xl">
               Notifications
             </h1>
             <p className="mt-1 text-sm text-slate-500">
@@ -242,7 +277,7 @@ export default function NotificationsPage() {
             <button
               type="button"
               onClick={markAllRead}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50 sm:w-auto"
             >
               <CheckCheck className="h-3.5 w-3.5" />
               Mark all as read
@@ -250,7 +285,11 @@ export default function NotificationsPage() {
           )}
         </div>
 
-        <div className="mb-5 flex flex-wrap items-center gap-2">
+        <div
+          aria-label="Notification filters"
+          className="mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
+          style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
+        >
           {(["All", "Unread", "Principal", "Teacher", "Guidance", "Attendance"] as FilterTab[]).map(
             (tab) => {
               const isActive = activeTab === tab;
@@ -261,7 +300,7 @@ export default function NotificationsPage() {
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
-                  className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${isActive
+                  className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${isActive
                       ? "border-blue-600 bg-blue-600 text-white"
                       : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                     }`}
@@ -283,7 +322,7 @@ export default function NotificationsPage() {
           )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-2">
+        <div className="min-h-0 flex-1 overflow-y-auto sm:pr-2">
           <div className="flex flex-col gap-3">
           {filteredNotifications.map((notif) => {
             const {
@@ -301,7 +340,7 @@ export default function NotificationsPage() {
                 key={notif.id}
                 type="button"
                 onClick={() => handleClick(notif)}
-                className="relative flex w-full items-start gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition-shadow hover:shadow-md"
+                className="relative flex w-full items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left shadow-sm transition-shadow hover:shadow-md sm:gap-4 sm:px-5"
                 style={{
                   borderLeft: `4px solid ${borderColor}`,
                   boxShadow: isHighlighted
@@ -313,14 +352,14 @@ export default function NotificationsPage() {
                   className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full"
                   style={{ background: iconBg }}
                 >
-                  {notif.profilePicture ? <img src={notif.profilePicture} alt="ICT profile" className="h-full w-full object-cover" /> : <Icon className="h-5 w-5" style={{ color: iconColor }} />}
+                  <Icon className="h-5 w-5" style={{ color: iconColor }} />
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <p className="mb-0.5 text-sm font-bold text-slate-900">
+                  <p className="mb-0.5 break-words text-sm font-bold text-slate-900">
                     {notif.title}
                   </p>
-                  <p className="mb-2 text-sm text-slate-600">{notif.msg}</p>
+                  <p className="mb-2 break-words text-sm text-slate-600">{notif.msg}</p>
 
                   <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
                     <span className="inline-flex items-center gap-1">
@@ -357,6 +396,83 @@ export default function NotificationsPage() {
           </div>
         </div>
       </main>
+
+      {selectedAnnouncement?.announcementId ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="announcement-modal-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedAnnouncement(null);
+          }}
+        >
+          <div
+            className="max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-w-xl sm:rounded-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
+              <div className="min-w-0">
+                <p className="mb-1 text-xs font-bold uppercase tracking-wide text-blue-600">
+                  {selectedAnnouncement.senderRole || selectedAnnouncement.category}
+                </p>
+                <h2 id="announcement-modal-title" className="break-words text-lg font-extrabold text-slate-900">
+                  {selectedAnnouncement.announcementTitle || "Announcement"}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close announcement"
+                onClick={() => setSelectedAnnouncement(null)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-5 px-5 py-5 sm:px-6">
+              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+                {selectedAnnouncement.msg}
+              </p>
+
+              <dl className="grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 text-sm sm:grid-cols-2">
+                <div className="min-w-0">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Sender</dt>
+                  <dd className="mt-1 break-words font-semibold text-slate-700">
+                    {selectedAnnouncement.senderName || selectedAnnouncement.teacherName || "School staff"}
+                  </dd>
+                </div>
+                <div className="min-w-0">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Role</dt>
+                  <dd className="mt-1 font-semibold text-slate-700">
+                    {selectedAnnouncement.senderRole || selectedAnnouncement.category}
+                  </dd>
+                </div>
+                <div className="min-w-0">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Date and time</dt>
+                  <dd className="mt-1 break-words font-semibold text-slate-700">
+                    {announcementDateLabel(selectedAnnouncement.createdAt)}
+                  </dd>
+                </div>
+                <div className="min-w-0">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</dt>
+                  <dd>
+                    <span className={"mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-bold " + (selectedAnnouncement.unread
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-emerald-100 text-emerald-700")}>
+                      {selectedAnnouncement.unread ? "Unread" : "Read"}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+export default function NotificationsPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><NotificationsPageContent /></Suspense>;
 }

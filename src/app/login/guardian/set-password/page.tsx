@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye, EyeOff, Lock, CheckCircle, AlertCircle, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
+
+const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
 
 export default function SetPasswordPage() {
   const router = useRouter();
@@ -14,6 +16,20 @@ export default function SetPasswordPage() {
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState("");
   const [success,         setSuccess]         = useState(false);
+
+  useEffect(() => {
+    const expiresAt = new URLSearchParams(window.location.search).get("expiresAt");
+    if (!expiresAt) return;
+
+    const expiresAtMs = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      router.replace(EXPIRED_SIGNUP_URL);
+      return;
+    }
+
+    const expiryTimer = window.setTimeout(() => router.replace(EXPIRED_SIGNUP_URL), expiresAtMs - Date.now());
+    return () => window.clearTimeout(expiryTimer);
+  }, [router]);
 
   // Password strength checks
   const checks = {
@@ -49,12 +65,21 @@ export default function SetPasswordPage() {
       const data = await res.json();
 
       if (!data.success) {
+        if (data.temporaryPasswordExpired) {
+          router.replace(data.redirectTo || EXPIRED_SIGNUP_URL);
+          return;
+        }
         setError(data.message || "Something went wrong.");
         setLoading(false);
         return;
       }
 
       setSuccess(true);
+      try {
+        window.sessionStorage.removeItem("guardian-signup");
+      } catch {
+        // Storage cleanup is optional and must not block the completed signup.
+      }
       setTimeout(() => router.push("/dashboard/parent"), 2000);
 
     } catch {
@@ -87,7 +112,7 @@ export default function SetPasswordPage() {
           </div>
           <h2 className="text-2xl font-extrabold text-slate-800">Create New Password</h2>
           <p className="text-slate-500 text-sm text-center mt-1.5 max-w-xs">
-            You're using a temporary password. Please set a new secure password to continue.
+            You&apos;re using a temporary password. Please set a new secure password to continue.
           </p>
         </div>
 

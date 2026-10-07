@@ -62,14 +62,24 @@ export interface Report {
   unread?: boolean;
   grade?: string;
   section?: string;
+  studentName?: string;
+  submittedByName?: string;
+  submittedByRole?: "Subject Teacher";
+  submittedAt?: string;
   messages: ChatMessage[];
   categories: string[];
   concernLevel: number;
   escalatedToGuidance?: boolean;
   escalatedToPrincipal?: boolean;
   guidanceHasReplied?: boolean;
+  /** A parent reply after the related handoff permanently acknowledges its banner. */
+  parentRepliedAfterPrincipalEscalation?: boolean;
+  parentRepliedAfterAcceptedGuidanceTicket?: boolean;
   /** Parent's explicit decision on whether Principal may view pre-escalation history. */
   allowHistoryAccess?: boolean | null;
+  ticketId?: number | null;
+  ticketStatus?: "pending" | "accepted" | "rejected" | null;
+  ticketRejectionReason?: string | null;
 }
 
 export const INITIAL_REPORTS: Report[] = [

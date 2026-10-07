@@ -35,17 +35,6 @@ function pwdStrength(p: string) {
   return { score: s, ...lvl[Math.min(s, 5)] };
 }
 
-// Sub-components
-function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return (
-    <button onClick={onToggle}
-      className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${on ? "" : "bg-gray-200"}`}
-      style={{ background: on ? PRIMARY : undefined }}>
-      <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${on ? "translate-x-5" : "translate-x-0"}`} />
-    </button>
-  );
-}
-
 function PwdField({ label, value, onChange, placeholder, error }: {
   label: string; value: string; onChange: (v: string) => void;
   placeholder?: string; error?: string;
@@ -75,9 +64,9 @@ function ReadOnlyField({ label, icon: Icon, value }: {
   return (
     <div>
       <label className="block text-xs font-semibold text-gray-500 mb-1.5">{label}</label>
-      <div className="flex items-center border border-gray-100 rounded-xl bg-gray-50 overflow-hidden">
+      <div className="flex min-w-0 items-center border border-gray-100 rounded-xl bg-gray-50 overflow-hidden">
         <div className="pl-3.5 pr-2 shrink-0"><Icon className="w-3.5 h-3.5 text-gray-400" /></div>
-        <span className="flex-1 py-2.5 pr-3 text-sm text-gray-500 select-none truncate">{value || "-"}</span>
+        <span className="min-w-0 flex-1 py-2.5 pr-3 text-sm text-gray-500 select-none break-words">{value || "-"}</span>
         <div className="pr-3 shrink-0"><Lock className="w-3 h-3 text-gray-300" /></div>
       </div>
     </div>
@@ -87,7 +76,7 @@ function ReadOnlyField({ label, icon: Icon, value }: {
 // Toast
 function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-gray-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl">
+    <div className="fixed bottom-4 left-4 right-4 sm:bottom-6 sm:left-auto sm:right-6 sm:w-auto z-50 flex items-center gap-3 bg-gray-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl">
       <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
       <span className="text-sm font-semibold">{msg}</span>
       <button onClick={onClose} className="ml-2 text-white/60 hover:text-white"><X className="w-4 h-4" /></button>
@@ -223,17 +212,17 @@ function SettingsModal({
     `flex items-center border rounded-xl overflow-hidden bg-white transition ${err ? "border-red-300" : "border-gray-200 focus-within:ring-2 focus-within:ring-purple-100 focus-within:border-[#522081]/40"}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={handleClose}>
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 backdrop-blur-sm p-3 sm:p-4" onClick={handleClose}>
+      <div className="my-auto flex w-full max-w-lg max-h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[92vh]"
+        onClick={e => e.stopPropagation()}>
 
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-100 shrink-0 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "#52208115" }}>
               <Settings className="w-4 h-4" style={{ color: PRIMARY }} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-sm font-extrabold text-gray-900">
                 {step === "edit"    && "Account Settings"}
                 {step === "confirm" && "Confirm Changes"}
@@ -246,33 +235,32 @@ function SettingsModal({
               </p>
             </div>
           </div>
-          <button onClick={handleClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition">
+          <button onClick={handleClose} aria-label="Close settings" className="ml-2 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100">
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {step === "edit" && (
-          <div className="px-6 pt-4 pb-0 shrink-0 flex gap-1 border-b border-gray-100">
+          <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-gray-100 px-4 pb-0 pt-4 sm:px-6">
             {([
               { key: "profile",  label: "Personal Info" },
               { key: "password", label: "Password"      },
-              { key: "photo",    label: "Profile Photo" },
             ] as const).map(({ key, label }) => (
               <button key={key}
                 onClick={() => { setTab(key); setPErrors({}); setPwErrors({}); setPAuthErr(""); }}
-                className={`px-4 pb-3 text-sm font-bold border-b-2 transition -mb-px ${tab === key ? "border-[#522081] text-[#522081]" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
+                className={`shrink-0 px-4 pb-3 text-sm font-bold border-b-2 transition -mb-px ${tab === key ? "border-[#522081] text-[#522081]" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
                 {label}
               </button>
             ))}
           </div>
         )}
 
-        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+        <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4 sm:px-6">
 
           {/* Edit: Personal Info */}
           {step === "edit" && tab === "profile" && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 mb-1.5">First Name <span className="text-red-500">*</span></label>
                   <div className={inputCls(pErrors.firstName)}>
@@ -307,7 +295,7 @@ function SettingsModal({
                       className="flex-1 py-2.5 pr-3 text-sm outline-none bg-transparent" style={{ color: "#111827" }} />
                   </div>
                 </div>
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-gray-500 mb-1.5">Email Address <span className="text-red-500">*</span></label>
                   <div className={inputCls(pErrors.email)}>
                     <div className="pl-3 pr-2"><Mail className="w-3.5 h-3.5 text-gray-400" /></div>
@@ -316,7 +304,7 @@ function SettingsModal({
                   </div>
                   {pErrors.email && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{pErrors.email}</p>}
                 </div>
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-gray-500 mb-1.5">Phone Number</label>
                   <div className={inputCls(pErrors.phone)}>
                     <div className="pl-3 pr-2"><Phone className="w-3.5 h-3.5 text-gray-400" /></div>
@@ -325,7 +313,7 @@ function SettingsModal({
                   </div>
                   {pErrors.phone && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{pErrors.phone}</p>}
                 </div>
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-gray-500 mb-1.5">Employee ID <span className="text-red-500">*</span></label>
                   <div className={inputCls(pErrors.employeeId)}>
                     <div className="pl-3 pr-2"><CreditCard className="w-3.5 h-3.5 text-gray-400" /></div>
@@ -388,7 +376,7 @@ function SettingsModal({
           )}
 
           {/* Edit: Profile Photo */}
-          {step === "edit" && tab === "photo" && (
+          {false && step === "edit" && tab === "photo" && (
             <div className="space-y-4">
               <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
                 <Camera className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
@@ -399,7 +387,7 @@ function SettingsModal({
               <div className="flex flex-col items-center gap-4 py-4">
                 <div className="relative">
                   {photoPreview ? (
-                    <Image src={photoPreview} alt="Preview" width={96} height={96} unoptimized className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg" />
+                    <Image src={photoPreview || ""} alt="Preview" width={96} height={96} unoptimized className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg" />
                   ) : (
                     <div className="w-24 h-24 rounded-full flex items-center justify-center text-3xl font-extrabold text-white border-4 border-white shadow-lg"
                       style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
@@ -561,16 +549,16 @@ function SettingsModal({
         </div>
 
         {step !== "success" && tab !== "photo" && (
-          <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/60 flex gap-3 shrink-0">
+          <div className="flex shrink-0 flex-col gap-3 border-t border-gray-100 bg-gray-50/60 px-4 py-4 sm:flex-row sm:px-6">
             {step === "edit" && (
               <>
                 <button onClick={handleClose}
-                  className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+                  className="w-full px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition sm:w-auto">
                   Cancel
                 </button>
                 <button
                   onClick={tab === "profile" ? handleProfileReview : handlePasswordReview}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition"
+                  className="flex w-full flex-1 items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition"
                   style={{ background: PRIMARY }}>
                   <ChevronRight className="w-4 h-4" /> Review Changes
                 </button>
@@ -616,19 +604,6 @@ export default function AccountProfilePage() {
   });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-
-  const [notifs, setNotifs] = useState({
-    escalatedReports: true,
-    announcementRead: true,
-    dailyAttendance:  true,
-  });
-  type NotificationKey = keyof typeof notifs;
-  const notificationItems: { key: NotificationKey; label: string; sub: string }[] = [
-    { key: "escalatedReports", label: "Escalated Report Alerts", sub: "Get notified when a new report is escalated" },
-    { key: "announcementRead", label: "Announcement Read Receipts", sub: "Notify when broadcast reaches 100% read rate" },
-    { key: "dailyAttendance", label: "Daily Attendance Summary", sub: "Receive end-of-day attendance digest" },
-  ];
-
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -762,7 +737,7 @@ export default function AccountProfilePage() {
 
   if (loading) {
     return (
-      <div className="principal-profile-page p-4 sm:p-6 bg-[#f5f3ff] min-h-screen" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+      <div className="principal-profile-page min-w-0 min-h-screen overflow-x-clip bg-[#f5f3ff] p-4 sm:p-6" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 text-sm text-gray-500">
           Loading your profile...
         </div>
@@ -771,17 +746,17 @@ export default function AccountProfilePage() {
   }
 
   return (
-    <div className="principal-profile-page p-4 sm:p-6 bg-[#f5f3ff] min-h-screen" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+    <div className="principal-profile-page min-w-0 min-h-screen overflow-x-clip bg-[#f5f3ff] p-4 sm:p-6" style={{ fontFamily: "'DM Sans', system-ui, sans-serif" }}>
 
       {/* Page Header */}
-      <div className="principal-profile-header flex items-start justify-between mb-6 gap-4">
-        <div>
+      <div className="principal-profile-header mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-extrabold text-gray-900">Account &amp; Profile</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Manage your personal information, security, and preferences</p>
+          <p className="mt-0.5 text-sm text-gray-500">Manage your personal information and security.</p>
         </div>
         <button
           onClick={() => setShowSettingsModal(true)}
-          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 transition shadow-lg shadow-purple-200"
+          className="flex w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-purple-200 transition hover:opacity-90 sm:w-auto"
           style={{ background: PRIMARY }}>
           <Settings className="w-4 h-4" /> Edit Profile
         </button>
@@ -793,11 +768,11 @@ export default function AccountProfilePage() {
         </div>
       )}
 
-      <div className="principal-profile-body flex gap-5 items-start">
+      <div className="principal-profile-body flex min-w-0 items-start gap-5">
         <div className="flex-1 min-w-0 space-y-5">
 
           {/* Personal Information */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <div className="min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
 
             {/* Card header */}
             <div className="mb-5">
@@ -805,11 +780,11 @@ export default function AccountProfilePage() {
             </div>
 
             {/* Avatar + info */}
-            <div className="flex items-center gap-4 mb-6 pb-6 border-b border-gray-100">
+            <div className="mb-6 flex flex-col gap-4 border-b border-gray-100 pb-6 sm:flex-row sm:items-center">
               <div className="shrink-0">
                 <div className="w-16 h-16 rounded-full overflow-hidden flex items-center justify-center text-xl font-extrabold text-white"
                   style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
-                  {profile.profilePicture ? <Image src={profile.profilePicture} alt="Profile picture" width={64} height={64} unoptimized className="h-full w-full object-cover" /> : initials}
+                  {initials}
                 </div>
               </div>
               <div className="min-w-0">
@@ -827,7 +802,7 @@ export default function AccountProfilePage() {
             </div>
 
             {/* Locked info notice */}
-            <div className="flex items-center gap-2 bg-gray-50 border border-gray-100 rounded-xl px-4 py-2.5 mb-4">
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5">
               <Lock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
               <p className="text-xs text-gray-500">
                 Your profile information is <strong>read-only</strong> here. To edit these details, use the{" "}
@@ -838,7 +813,7 @@ export default function AccountProfilePage() {
             </div>
 
             {/* All fields are now read-only display */}
-            <div className="principal-profile-fields grid grid-cols-2 gap-4">
+            <div className="principal-profile-fields grid grid-cols-1 gap-4 sm:grid-cols-2">
               <ReadOnlyField label="First Name"     icon={User}       value={profile.firstName} />
               <ReadOnlyField label="Last Name"      icon={User}       value={profile.lastName}  />
               <ReadOnlyField label="Middle Name"    icon={User}       value={profile.middleName} />
@@ -849,23 +824,6 @@ export default function AccountProfilePage() {
               <ReadOnlyField label="Employee ID"    icon={CreditCard} value={profile.employeeId}     />
             </div>
           </div>
-
-          {/* Notification Preferences */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-            <h2 className="text-sm font-extrabold text-gray-800 mb-4">Notification Preferences</h2>
-            <div className="space-y-4">
-              {notificationItems.map(({ key, label, sub }) => (
-                <div key={key} className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">{label}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{sub}</p>
-                  </div>
-                  <Toggle on={notifs[key]} onToggle={() => setNotifs((prev) => ({ ...prev, [key]: !prev[key] }))} />
-                </div>
-              ))}
-            </div>
-          </div>
-
 
         </div>
       </div>
@@ -882,36 +840,6 @@ export default function AccountProfilePage() {
 
 
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
-      <style jsx global>{`
-        @media (max-width: 1024px) {
-          .principal-profile-body {
-            flex-direction: column;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .principal-profile-header {
-            flex-direction: column;
-          }
-
-          .principal-profile-header > button {
-            width: 100%;
-            justify-content: center;
-          }
-
-          .principal-profile-fields {
-            grid-template-columns: 1fr;
-          }
-
-          .principal-profile-page .grid.grid-cols-2 {
-            grid-template-columns: 1fr !important;
-          }
-
-          .principal-profile-page .mt-2.grid.grid-cols-2 {
-            grid-template-columns: repeat(2, 1fr) !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

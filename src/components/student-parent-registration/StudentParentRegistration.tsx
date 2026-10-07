@@ -3,10 +3,14 @@
 import { useState, useEffect, useRef } from "react";
 import {
   ArrowLeft, ArrowRight, CheckCircle,
-  User, CreditCard, Mail, GraduationCap, UserPlus,
+  User, CreditCard, GraduationCap, UserPlus,
   AlertCircle, Plus, ChevronDown, Users, Keyboard, X, Send,
 } from "lucide-react";
 import Link from "next/link";
+import {
+  GUARDIAN_RELATIONSHIP_OPTIONS,
+  isMissingOtherGuardianRelationship,
+} from "@/lib/guardianRelationship";
 
 export type StudentParentRegistrationProps = {
   variant?: "adviser" | "ict";
@@ -19,21 +23,22 @@ export type StudentParentRegistrationProps = {
   onSuccess?: () => void;
   onSummaryChange?: (rows: { label: string; status: "Filled" | "Pending" | null }[]) => void;
   requirePrincipalApproval?: boolean;
+  /** Save the SF1 roster first; the parent signs up later through Guardian Sign Up. */
+  registrationMode?: "student-roster";
 };
 
 type ApprovalPhase = null | "review" | "sent";
 
-const STEPS = ["Student Info", "RFID & Section", "Parent / Guardian", "Review & Submit"];
+const STEPS = ["Student Info", "RFID & Section", "Verification Records", "Review & Submit"];
 
 const emptyForm = {
   firstName: "", middleName: "", lastName: "", suffix: "", studentId: "", gender: "",
   birthDate: "", motherTongue: "", ipEthnicGroup: "", religion: "", learningModality: "",
   grade: "", classSession: "", section: "", rfidCard: "",
-  parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
-  relationship: "", contactNumber: "", email: "", address: "", barangay: "", municipalityCity: "", province: "",
+  address: "", barangay: "", municipalityCity: "", province: "",
   fatherFirstName: "", fatherMiddleName: "", fatherLastName: "", fatherSuffix: "",
   motherFirstName: "", motherMiddleName: "", motherLastName: "",
-  guardianFirstName: "", guardianMiddleName: "", guardianLastName: "", guardianSuffix: "", guardianRelationship: "",
+  guardianFirstName: "", guardianMiddleName: "", guardianLastName: "", guardianSuffix: "", guardianRelationship: "", guardianRelationshipOther: "",
 };
 
 type FormData = typeof emptyForm;
@@ -42,7 +47,6 @@ type ClassSession = "Morning" | "Afternoon";
 type SectionOption = { name: string; count: number; class_session?: ClassSession | null };
 
 const capitalize    = (val: string) => val.toUpperCase();
-const isValidEmail   = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
 function Field({ label, required, error, hint, children }: {
   label: string; required?: boolean; error?: string; hint?: string; children: React.ReactNode;
@@ -313,11 +317,12 @@ export function StudentParentRegistration({
   backHref = "/dashboard/adviser/students",
   backLabel = "Back to Students",
   title = "Add New Student",
-  subtitle = "Fill in the student details and active parent email to register.",
+  subtitle = "Save the student and family verification records. Parents create their own accounts through Guardian Sign Up.",
   studentsListHref = "/dashboard/adviser/students",
   onSuccess,
   onSummaryChange,
   requirePrincipalApproval = false,
+  registrationMode = "student-roster",
 }: StudentParentRegistrationProps) {
   const isIct = variant === "ict";
   const btnPrimary = isIct ? "bg-[#274e13] hover:bg-[#1e3d0f]" : "bg-emerald-500 hover:bg-emerald-600 shadow-sm shadow-emerald-200";
@@ -331,10 +336,6 @@ export function StudentParentRegistration({
   const [apiError,  setApiError]  = useState("");
   const [touched,   setTouched]   = useState<Partial<Record<keyof FormData, boolean>>>({});
   const [tryNext,   setTryNext]   = useState(false);
-  const [tempPassword, setTempPassword] = useState("");
-  const [copiedPass,   setCopiedPass]   = useState(false);
-  const [alreadyRegistered, setAlreadyRegistered] = useState(false);
-  const [emailWarning, setEmailWarning] = useState("");
 
   const [sections,        setSections]        = useState<SectionOption[]>([]);
   const [loadingSections, setLoadingSections] = useState(false);
@@ -367,23 +368,6 @@ export function StudentParentRegistration({
       else            { setStudentIdTaken(false); setStudentIdOwner(""); }
     } catch { setStudentIdTaken(false); }
     finally { setStudentIdChecking(false); }
-  }
-
-  // ── Parent email duplicate check ──
-  const [parentEmailExists,  setParentEmailExists]  = useState(false);
-  const [parentEmailName,    setParentEmailName]    = useState("");
-  const [parentEmailChecking, setParentEmailChecking] = useState(false);
-
-  async function checkParentEmail(email: string) {
-    if (!email.trim() || !isValidEmail(email)) { setParentEmailExists(false); setParentEmailName(""); return; }
-    setParentEmailChecking(true);
-    try {
-      const res  = await fetch(`/api/parents/check-email?email=${encodeURIComponent(email.trim())}`);
-      const json = await res.json();
-      if (json.exists) { setParentEmailExists(true); setParentEmailName(json.name ?? ""); }
-      else             { setParentEmailExists(false); setParentEmailName(""); }
-    } catch { setParentEmailExists(false); }
-    finally { setParentEmailChecking(false); }
   }
 
   useEffect(() => {
@@ -442,7 +426,7 @@ export function StudentParentRegistration({
   }
 
   function addAnotherStudent() {
-    setStudents(prev => [...prev, { ...emptyForm, email: form.email }]);
+    setStudents(prev => [...prev, emptyForm]);
     setActiveStudentIndex(students.length);
     setTouched({});
     setTryNext(false);
@@ -461,7 +445,6 @@ export function StudentParentRegistration({
 
   const nameFields: (keyof FormData)[] = [
     "firstName","middleName","lastName","suffix",
-    "parentFirstName","parentMiddleName","parentLastName","parentSuffix",
     "fatherFirstName","fatherMiddleName","fatherLastName","fatherSuffix",
     "motherFirstName","motherMiddleName","motherLastName",
     "guardianFirstName","guardianMiddleName","guardianLastName","guardianSuffix",
@@ -489,20 +472,47 @@ export function StudentParentRegistration({
   if (show("lastName")     && !form.lastName.trim())     E.lastName     = "Last name is required.";
   if (show("studentId")) {
     if (!form.studentId.trim())                    E.studentId = "LRN is required.";
-    else if (!/^\d+$/.test(form.studentId.trim())) E.studentId = "LRN must contain numbers only.";
+    else if (!/^\d{12}$/.test(form.studentId.trim())) E.studentId = "LRN must contain exactly 12 digits.";
     else if (duplicateStudentId)                   E.studentId = "This LRN is already used by another student in this registration.";
   }
   if (show("gender")   && !form.gender)            E.gender   = "Please select a gender.";
   if (show("grade")    && !form.grade)             E.grade    = "Grade level is required.";
   if (show("classSession") && !form.classSession)  E.classSession = "Class session is required.";
   if (show("section")  && !form.section.trim())    E.section  = "Section is required.";
-  if (show("email")) {
-    if (!form.email.trim())             E.email = "Active email is required.";
-    else if (!isValidEmail(form.email)) E.email = "Enter a valid email (e.g. parent@email.com).";
+  const recordHasAnyName = (student: FormData, role: "Father" | "Mother" | "Guardian") => {
+    const fields = role === "Father"
+      ? [student.fatherFirstName, student.fatherMiddleName, student.fatherLastName]
+      : role === "Mother"
+        ? [student.motherFirstName, student.motherMiddleName, student.motherLastName]
+        : [student.guardianFirstName, student.guardianMiddleName, student.guardianLastName];
+    return fields.some(value => value.trim());
+  };
+  const recordHasCompleteName = (student: FormData, role: "Father" | "Mother" | "Guardian") => {
+    const [firstName, lastName] = role === "Father"
+      ? [student.fatherFirstName, student.fatherLastName]
+      : role === "Mother"
+        ? [student.motherFirstName, student.motherLastName]
+        : [student.guardianFirstName, student.guardianLastName];
+    return Boolean(firstName.trim() && lastName.trim());
+  };
+  const hasVerificationRecord = (student: FormData) =>
+    (["Father", "Mother", "Guardian"] as const).some(role => recordHasCompleteName(student, role));
+  const hasIncompleteVerificationRecord = (student: FormData) =>
+    (["Father", "Mother", "Guardian"] as const).some(role =>
+      recordHasAnyName(student, role) && !recordHasCompleteName(student, role)
+    );
+  const guardianHasName = recordHasAnyName(form, "Guardian");
+  const guardianRelationshipMissing = guardianHasName && !form.guardianRelationship;
+  const guardianOtherRelationshipMissing = isMissingOtherGuardianRelationship(
+    guardianHasName ? form.guardianRelationship : "",
+    form.guardianRelationshipOther,
+  );
+  if (show("guardianRelationship") && guardianRelationshipMissing) {
+    E.guardianRelationship = "Select the guardian's relationship.";
   }
-  if (show("contactNumber")) {
-    if (!form.contactNumber) E.contactNumber = "Contact number is required.";
-    else if (!/^\d{11}$/.test(form.contactNumber)) E.contactNumber = "Contact number must be exactly 11 digits.";
+
+  if ((show("guardianRelationship") || show("guardianRelationshipOther")) && guardianOtherRelationshipMissing) {
+    E.guardianRelationshipOther = "Specify the guardian's relationship when Others is selected.";
   }
 
   const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender
@@ -510,15 +520,15 @@ export function StudentParentRegistration({
     && !studentIdTaken && !studentIdChecking && !duplicateStudentId;
   const step1OK = !E.grade && !E.classSession && !E.section && !!(form.grade && form.classSession && form.section) && !rfidConflict
     && !pendingManualRfid.trim() && !duplicateRfid;
-  const step2OK = !E.email && !E.contactNumber && form.email && /^\d{11}$/.test(form.contactNumber)
-    && !parentEmailChecking;
+  const step2OK = !guardianRelationshipMissing && !guardianOtherRelationshipMissing
+    && hasVerificationRecord(form) && !hasIncompleteVerificationRecord(form);
 
   const handleNext = () => {
     setTryNext(true);
     if (step === 0) {
       const incompleteIndex = students.findIndex(student =>
         !student.firstName.trim() || !student.middleName.trim() || !student.lastName.trim() ||
-        !student.studentId.trim() || !/^\d+$/.test(student.studentId.trim()) || !student.gender
+        !student.studentId.trim() || !/^\d{12}$/.test(student.studentId.trim()) || !student.gender
       );
       const duplicateIndex = students.findIndex((student, index) =>
         !!student.studentId.trim() && students.some((other, otherIndex) =>
@@ -547,6 +557,24 @@ export function StudentParentRegistration({
         return;
       }
     }
+    if (step === 2) {
+      const invalidIndex = students.findIndex(student => {
+        const hasGuardian = recordHasAnyName(student, "Guardian");
+        return !hasVerificationRecord(student)
+          || hasIncompleteVerificationRecord(student)
+          || (hasGuardian && !student.guardianRelationship)
+          || isMissingOtherGuardianRelationship(
+            hasGuardian ? student.guardianRelationship : "",
+            student.guardianRelationshipOther,
+          );
+      });
+      if (invalidIndex >= 0) {
+        selectStudent(invalidIndex);
+        setTryNext(true);
+        setApiError("Record at least one complete Father, Mother, or Guardian verification name for each student.");
+        return;
+      }
+    }
     const ok = step === 0 ? step0OK : step === 1 ? step1OK : step === 2 ? step2OK : true;
     if (ok) {
       setStep(s => s + 1);
@@ -561,23 +589,26 @@ export function StudentParentRegistration({
     form.lastName, form.suffix,
   ].filter(Boolean).join(" ");
 
-  const parentFullName = [
-    form.parentFirstName,
-    form.parentMiddleName && form.parentMiddleName.toUpperCase() !== "N/A" && form.parentMiddleName.toLowerCase() !== "none" ? form.parentMiddleName : "",
-    form.parentLastName, form.parentSuffix,
-  ].filter(Boolean).join(" ");
-
   function validateBeforeSubmit(): boolean {
-    const parentEmail = form.email.trim();
     const ids = students.map(s => s.studentId.trim()).filter(Boolean);
     const rfids = students.map(s => s.rfidCard.trim().toUpperCase()).filter(Boolean);
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
-      !s.studentId.trim() || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
     );
-    if (!parentEmail || !isValidEmail(parentEmail) || incompleteStudent
+    const invalidVerificationRecord = students.some(student => {
+      const hasGuardian = recordHasAnyName(student, "Guardian");
+      return !hasVerificationRecord(student)
+        || hasIncompleteVerificationRecord(student)
+        || (hasGuardian && !student.guardianRelationship)
+        || isMissingOtherGuardianRelationship(
+          hasGuardian ? student.guardianRelationship : "",
+          student.guardianRelationshipOther,
+        );
+    });
+    if (incompleteStudent || invalidVerificationRecord
       || new Set(ids).size !== ids.length || new Set(rfids).size !== rfids.length) {
-      setApiError("Please complete every student, use unique LRNs/RFIDs, and enter a valid parent email before submitting.");
+      setApiError("Complete every student, record one complete family verification name, specify an Others guardian relationship, and use unique 12-digit LRNs/RFIDs before submitting.");
       return false;
     }
     return true;
@@ -598,25 +629,31 @@ export function StudentParentRegistration({
   const handleSubmit = async () => {
     if (requirePrincipalApproval) { handleProceedToApproval(); return; }
     setLoading(true); setApiError("");
-    const parentEmail = form.email.trim();
     const ids = students.map(s => s.studentId.trim()).filter(Boolean);
     const rfids = students.map(s => s.rfidCard.trim().toUpperCase()).filter(Boolean);
     const hasDuplicateIds = new Set(ids).size !== ids.length;
     const hasDuplicateRfids = new Set(rfids).size !== rfids.length;
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
-      !s.studentId.trim() || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
     );
-    if (!parentEmail || !isValidEmail(parentEmail) || incompleteStudent || hasDuplicateIds || hasDuplicateRfids) {
-      setApiError("Please complete every student, use unique LRNs/RFIDs, and enter a valid parent email before submitting.");
+    const invalidVerificationRecord = students.some(student => {
+      const hasGuardian = recordHasAnyName(student, "Guardian");
+      return !hasVerificationRecord(student)
+        || hasIncompleteVerificationRecord(student)
+        || (hasGuardian && !student.guardianRelationship)
+        || isMissingOtherGuardianRelationship(
+          hasGuardian ? student.guardianRelationship : "",
+          student.guardianRelationshipOther,
+        );
+    });
+    if (incompleteStudent || invalidVerificationRecord || hasDuplicateIds || hasDuplicateRfids) {
+      setApiError("Complete every student, record one complete family verification name, specify an Others guardian relationship, and use unique 12-digit LRNs/RFIDs before submitting.");
       setLoading(false);
       return;
     }
 
     try {
-      let firstTempPassword = "";
-      let parentWasExisting = false;
-      let emailWarningMessage = "";
       let saved = 0;
 
       for (const student of students) {
@@ -632,16 +669,8 @@ export function StudentParentRegistration({
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             ...student,
-            email: parentEmail,
-            parentFirstName: form.parentFirstName,
-            parentMiddleName: form.parentMiddleName,
-            parentLastName: form.parentLastName,
-            parentSuffix: form.parentSuffix,
-            relationship: form.relationship,
-            contactNumber: form.contactNumber,
-            address: form.address,
+            registrationMode,
             fullName: studentFullName,
-            parentFullName,
           }),
         });
         const data = await res.json();
@@ -650,15 +679,9 @@ export function StudentParentRegistration({
           setLoading(false); return;
         }
         saved += 1;
-        if (data.tempPassword && !firstTempPassword) firstTempPassword = data.tempPassword;
-        if (data.alreadyRegistered) parentWasExisting = true;
-        if (data.emailError && !emailWarningMessage) emailWarningMessage = data.emailError;
       }
 
       setRegisteredCount(saved);
-      setTempPassword(firstTempPassword);
-      setAlreadyRegistered(parentWasExisting && !firstTempPassword);
-      setEmailWarning(emailWarningMessage);
       setSubmitted(true);
     } catch {
       setApiError("Cannot connect to server. Please check your connection.");
@@ -671,9 +694,7 @@ export function StudentParentRegistration({
     setStudents([emptyForm]); setActiveStudentIndex(0); setStep(0); setSubmitted(false);
     setApprovalPhase(null);
     setApiError(""); setTouched({}); setTryNext(false);
-    setTempPassword(""); setCopiedPass(false); setAlreadyRegistered(false); setEmailWarning("");
     setStudentIdTaken(false); setStudentIdOwner("");
-    setParentEmailExists(false); setParentEmailName("");
     setPendingManualRfid(""); setRfidConflict("");
     setRegisteredCount(0);
   };
@@ -685,7 +706,13 @@ export function StudentParentRegistration({
       { label: "Student Name", status: active.firstName && active.lastName ? "Filled" : "Pending" },
       { label: "LRN", status: active.studentId ? "Filled" : "Pending" },
       { label: "Grade & Section", status: active.grade && active.classSession && active.section ? "Filled" : "Pending" },
-      { label: "Parent Email", status: active.email ? "Filled" : "Pending" },
+      {
+        label: "Verification Record",
+        status: (active.fatherFirstName && active.fatherLastName)
+          || (active.motherFirstName && active.motherLastName)
+          || (active.guardianFirstName && active.guardianLastName)
+          ? "Filled" : "Pending",
+      },
     ]);
   }, [students, activeStudentIndex, onSummaryChange]);
 
@@ -709,7 +736,7 @@ export function StudentParentRegistration({
           <div className="mb-4 flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <p>
-              Enroll one or more students and link them to a parent account. A temporary password is sent to the parent email on first registration.
+              Enroll one or more students and save their family verification records. Parents create and link their accounts through Guardian Sign Up.
             </p>
           </div>
         )}
@@ -724,8 +751,8 @@ export function StudentParentRegistration({
             <div className="w-full bg-amber-50 border border-amber-200 rounded-xl p-3 text-left mb-5 text-xs text-amber-700 space-y-1">
               <p className="font-bold">What happens next?</p>
               <p>Principal reviews the registration request</p>
-              <p>If approved, student and parent accounts are created in the system</p>
-              <p>A temporary password is sent to <strong>{form.email}</strong> for new parent accounts</p>
+              <p>If approved, student and family verification records are created in the system</p>
+              <p>Parents create their own linked account through Guardian Sign Up</p>
             </div>
             <button type="button" onClick={() => { onSuccess?.(); reset(); }}
               className={`w-full py-2.5 text-sm font-bold text-white rounded-lg transition ${btnPrimary}`}>Done</button>
@@ -749,7 +776,7 @@ export function StudentParentRegistration({
               ))}
               <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 sm:col-span-2">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Parent / Guardian</p>
-                <ReviewRow label="Active Email" value={form.email} />
+                <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
               </div>
             </div>
             <div className="flex gap-3 pt-2 border-t border-slate-100">
@@ -777,70 +804,11 @@ export function StudentParentRegistration({
               </span> {registeredCount > 1 ? "have" : "has"} been successfully saved.
             </p>
 
-            {emailWarning && (
-              <div className="w-full bg-red-50 border border-red-200 rounded-2xl p-4 mb-5 text-left">
-                <p className="text-xs font-bold text-red-700 uppercase tracking-wider mb-1">
-                  Email Not Sent
-                </p>
-                <p className="text-xs text-red-600 leading-relaxed">
-                  The student record was saved, but the parent email could not be sent. Please give the temporary password to the parent manually and check the SMTP settings. Error: {emailWarning}
-                </p>
-              </div>
-            )}
-
-            {alreadyRegistered ? (
-              /* ── Parent already has an account ── */
-              <div className="w-full bg-blue-50 border border-blue-200 rounded-2xl p-5 mb-6 text-left">
-                <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                  📧 Parent Already Has an Account
-                </p>
-                <p className="text-sm text-blue-700 font-medium mt-1">
-                  This parent is already registered in the system.
-                </p>
-                <p className="text-xs text-blue-600 mt-1.5 leading-relaxed">
-                  No new password was generated. The parent already has a temporary password —
-                  <span className="font-bold">{form.email}</span>. The parent should use their existing login credentials.
-                </p>
-              </div>
-            ) : tempPassword ? (
-              /* ── New parent: show temp password ── */
-              <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-5 mb-6 text-left">
-                <p className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                  🔑 Temporary Password — Give this to the parent
-                </p>
-                <p className="text-xs text-amber-600 mb-3">
-                  The parent will use this to log in for the first time and will be asked to create a new password.
-                </p>
-                <div className="flex items-center gap-3 bg-white border border-amber-300 rounded-xl px-4 py-3">
-                  <span className="flex-1 font-mono font-bold text-lg text-slate-800 tracking-widest">{tempPassword}</span>
-                  <button
-                    onClick={() => { navigator.clipboard.writeText(tempPassword); setCopiedPass(true); setTimeout(() => setCopiedPass(false), 2000); }}
-                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${copiedPass ? "bg-emerald-500 text-white" : "bg-amber-100 hover:bg-amber-200 text-amber-700"}`}>
-                    {copiedPass ? "✓ Copied!" : "Copy"}
-                  </button>
-                </div>
-                <p className="text-[11px] text-amber-500 mt-2">⚠ This password will not be shown again. Please note it down.</p>
-              </div>
-            ) : null}
-
-            <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-4 mb-6 text-left">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Login Credentials for Parent</p>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-slate-400">Email</span>
-                <span className="font-semibold text-slate-700">{form.email}</span>
-              </div>
-              {!alreadyRegistered && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">Temp Password</span>
-                  <span className="font-mono font-bold text-slate-700">{tempPassword}</span>
-                </div>
-              )}
-              {alreadyRegistered && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">Password</span>
-                  <span className="text-blue-600 font-semibold">Check registered email</span>
-                </div>
-              )}
+            <div className="w-full rounded-2xl border border-blue-200 bg-blue-50 p-4 mb-6 text-left">
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-700 mb-1">Parent account is not created yet</p>
+              <p className="text-xs leading-relaxed text-blue-700">
+                The parent or guardian must use <strong>Guardian Sign Up</strong> with their full name, selected relationship, and a linked student&apos;s 12-digit LRN. Their email and contact number are collected there, then their temporary password is sent to that email.
+              </p>
             </div>
 
             <div className="flex gap-3">
@@ -1195,9 +1163,12 @@ export function StudentParentRegistration({
                     <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
                       <Users className="w-4 h-4 text-emerald-600" />
                     </div>
-                    <h2 className="font-bold text-slate-800">Parent / Guardian Details</h2>
+                    <h2 className="font-bold text-slate-800">Parent / Guardian Verification Records</h2>
                   </div>
-                  <Field label="Active Email" required error={E.email}>
+                  <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-relaxed text-blue-700">
+                    Record at least one complete Father, Mother, or Guardian name. These records verify the parent during Guardian Sign Up; email and contact number are entered by the parent at sign-up.
+                  </p>
+                  {/* The parent enters their email during Guardian Sign Up.
                     <div className="relative">
                       <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input type="email" className={`${E.email ? inputErr : inputOk} pl-9`} placeholder="e.g. parent@email.com"
@@ -1207,7 +1178,10 @@ export function StudentParentRegistration({
                           setTouched(p => ({ ...p, email: true }));
                           setParentEmailExists(false); setParentEmailName("");
                         }}
-                        onBlur={() => { touch("email"); checkParentEmail(form.email); }}
+                        onBlur={() => {
+                          touch("email");
+                          if (!isManualAdviserRegistration) checkParentEmail(form.email);
+                        }}
                       />
                       {parentEmailChecking && (
                         <svg className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24">
@@ -1216,7 +1190,7 @@ export function StudentParentRegistration({
                         </svg>
                       )}
                     </div>
-                    {parentEmailExists && (
+                    {!isManualAdviserRegistration && parentEmailExists && (
                       <div className="flex items-start gap-2 mt-1.5 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5">
                         <AlertCircle className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
                         <p className="text-xs text-blue-700 leading-relaxed">
@@ -1226,7 +1200,7 @@ export function StudentParentRegistration({
                         </p>
                       </div>
                     )}
-                  </Field>
+                  */}
                   <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Household Address</h3>
                     <div className="space-y-4">
@@ -1242,8 +1216,29 @@ export function StudentParentRegistration({
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Mother&apos;s Maiden Information <span className="font-normal text-slate-400">(if available)</span></h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3"><Field label="Last Name"><input className={inputOk} value={form.motherLastName} onChange={e => set("motherLastName", e.target.value)} /></Field><Field label="First Name"><input className={inputOk} value={form.motherFirstName} onChange={e => set("motherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.motherMiddleName} onChange={e => set("motherMiddleName", e.target.value)} /></Field></div>
                   </section>
-                  <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4"><h3 className="mb-1 text-sm font-bold text-slate-800">Guardian Information</h3><p className="mb-4 text-xs text-slate-500">Complete this if a guardian is responsible for the student; otherwise, leave it blank.</p><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><Field label="Last Name"><input className={inputOk} value={form.guardianLastName} onChange={e => set("guardianLastName", e.target.value)} /></Field><Field label="First Name"><input className={inputOk} value={form.guardianFirstName} onChange={e => set("guardianFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.guardianMiddleName} onChange={e => set("guardianMiddleName", e.target.value)} /></Field><Field label="Suffix" hint="Optional"><select className={inputOk} value={form.guardianSuffix} onChange={e => set("guardianSuffix", e.target.value)}><option value="">None</option>{["Jr.", "Sr.", "II", "III", "IV"].map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field><Field label="Relationship"><input className={inputOk} value={form.guardianRelationship} onChange={e => set("guardianRelationship", e.target.value)} /></Field></div></section>
-                  <Field label="Contact Number of Parent or Guardian" required error={E.contactNumber}><input inputMode="numeric" maxLength={11} className={E.contactNumber ? inputErr : inputOk} placeholder="e.g. 09171234567" value={form.contactNumber} onChange={e => set("contactNumber", e.target.value.replace(/\D/g, "").slice(0, 11))} onBlur={() => touch("contactNumber")} /></Field>
+                  <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                    <h3 className="mb-1 text-sm font-bold text-slate-800">Guardian Information</h3>
+                    <p className="mb-4 text-xs text-slate-500">Complete this if a guardian is responsible for the student; otherwise, leave it blank.</p>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field label="Last Name"><input className={inputOk} value={form.guardianLastName} onChange={e => set("guardianLastName", e.target.value)} /></Field>
+                      <Field label="First Name"><input className={inputOk} value={form.guardianFirstName} onChange={e => set("guardianFirstName", e.target.value)} /></Field>
+                      <Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.guardianMiddleName} onChange={e => set("guardianMiddleName", e.target.value)} /></Field>
+                      <Field label="Suffix" hint="Optional"><select className={inputOk} value={form.guardianSuffix} onChange={e => set("guardianSuffix", e.target.value)}><option value="">None</option>{["Jr.", "Sr.", "II", "III", "IV"].map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field>
+                      <Field label="Guardian relationship" required={guardianHasName} error={E.guardianRelationship}>
+                        <select className={E.guardianRelationship ? inputErr : inputOk} value={form.guardianRelationship} onChange={e => set("guardianRelationship", e.target.value)}>
+                          <option value="">Select guardian relationship</option>
+                          {GUARDIAN_RELATIONSHIP_OPTIONS.map(option => <option key={option} value={option}>{option === "Other" ? "Others" : option}</option>)}
+                        </select>
+                      </Field>
+                    </div>
+                    {form.guardianRelationship === "Other" && (
+                      <div className="mt-4">
+                        <Field label="Specify the guardian's relationship" required error={E.guardianRelationshipOther}>
+                          <textarea rows={2} className={E.guardianRelationshipOther ? inputErr : inputOk} placeholder="e.g. Aunt, Uncle, Foster parent" value={form.guardianRelationshipOther} onChange={e => set("guardianRelationshipOther", e.target.value)} onBlur={() => touch("guardianRelationshipOther")} />
+                        </Field>
+                      </div>
+                    )}
+                  </section>
                 </div>
               )}
 
@@ -1271,7 +1266,7 @@ export function StudentParentRegistration({
                     <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 sm:col-span-2">
                       <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Parent / Guardian</p>
                       <div>
-                        <ReviewRow label="Active Email" value={form.email} />
+                        <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
                       </div>
                     </div>
                   </div>

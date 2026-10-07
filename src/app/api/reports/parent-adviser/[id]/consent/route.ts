@@ -16,7 +16,7 @@ export async function PATCH(
       return NextResponse.json({ success: false, message: "A consent choice is required." }, { status: 400 });
     }
 
-    const report = await getReportForParent(reportId, parent.email);
+    const report = await getReportForParent(reportId, parent.id);
     if (!report) return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     if (!report.subject.startsWith("[Student Concern] ")) {
       return NextResponse.json({ success: false, message: "Consent is only required for Student Concerns." }, { status: 400 });
@@ -26,7 +26,7 @@ export async function PATCH(
       .from("parent_adviser_reports")
       .update({ allow_history_access: allowHistoryAccess, updated_at: new Date().toISOString() })
       .eq("id", reportId)
-      .eq("parent_email", parent.email);
+      .eq("parent_id", parent.id);
     if (error) throw error;
 
     return NextResponse.json({ success: true, allowHistoryAccess });

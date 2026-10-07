@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getParentSession, getReportForParent } from "../../_lib";
+import { logAudit } from "@/lib/audit";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -22,7 +23,7 @@ export async function PATCH(
       return NextResponse.json({ success: false, message: "Invalid report." }, { status: 400 });
     }
 
-    const report = await getReportForParent(reportId, parent.email);
+    const report = await getReportForParent(reportId, parent.id);
     if (!report) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
@@ -33,7 +34,7 @@ export async function PATCH(
       .from("parent_adviser_report_messages")
       .update({ read_by_parent: true })
       .eq("report_id", reportId)
-      .in("sender_role", ["adviser", "principal", "guidance"]);
+      .in("sender_role", ["adviser", "principal", "guidance", "subject_teacher"]);
 
     if (messageError) throw messageError;
 
@@ -43,6 +44,8 @@ export async function PATCH(
       .eq("id", reportId);
 
     if (reportError) throw reportError;
+
+    await logAudit({ action: "Report Viewed", performedById: parent.id, performedBy: parent.name, performedByRole: "Parent/Guardian", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, module: "Reports", details: `Opened report #${reportId}.` });
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {

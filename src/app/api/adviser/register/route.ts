@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { sendAdviserTempPasswordEmail } from "@/lib/mailer";
+import { getActiveIct } from "@/lib/apiAuthorization";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -44,6 +45,10 @@ export async function POST(req: NextRequest) {
   console.log("[adviser/register] Request received");
 
   try {
+    if (!(await getActiveIct())) {
+      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
+    }
+
     const body = await req.json();
     console.log("[adviser/register] Body parsed:", JSON.stringify({
       ...body,
@@ -70,6 +75,9 @@ export async function POST(req: NextRequest) {
         { success: false, message: "Invalid email address." },
         { status: 400 }
       );
+    }
+    if (!/^\d{11}$/.test(contactNumber.trim())) {
+      return NextResponse.json({ success: false, message: "Contact number must contain exactly 11 digits." }, { status: 400 });
     }
 
     // ── Duplicate email check ────────────────────────────────────────────────
@@ -129,7 +137,7 @@ export async function POST(req: NextRequest) {
 
     // ── Insert adviser ───────────────────────────────────────────────────────
     console.log("[adviser/register] Inserting adviser record...");
-    const { error: insertError } = await supabase.from("advisers").insert({
+    const { data: createdAdviser, error: insertError } = await supabase.from("advisers").insert({
       first_name: firstName,
       middle_name: middleName || null,
       last_name: lastName,
@@ -144,7 +152,7 @@ export async function POST(req: NextRequest) {
       password_set: false,
       status: "active",
       class_session: classSession,
-    });
+    }).select("id").single();
 
     if (insertError) {
       console.error("[adviser/register] INSERT ERROR:", JSON.stringify(insertError));
@@ -180,11 +188,15 @@ export async function POST(req: NextRequest) {
       console.log("[adviser/register] Email sent");
     } catch (mailErr) {
       console.error("[adviser/register] Email send failed:", mailErr);
+      await supabase.from("advisers").delete().eq("id", createdAdviser.id);
+      return NextResponse.json(
+        { success: false, message: "The adviser account was not created because the temporary-password email could not be sent." },
+        { status: 503 },
+      );
     }
 
     return NextResponse.json({
       success: true,
-      tempPassword,
       message: `Adviser account created. A temporary password has been sent to ${email}.`,
     });
 

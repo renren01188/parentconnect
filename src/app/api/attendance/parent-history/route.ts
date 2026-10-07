@@ -23,12 +23,9 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const verified = await jwtVerify(token, SECRET);
-        const parentId = Number(verified.payload.id);
-        const parentEmail = typeof verified.payload.email === "string"
-            ? verified.payload.email
-            : "";
-        if (!parentId) {
+    const verified = await jwtVerify(token, SECRET);
+    const parentId = Number(verified.payload.id);
+        if (!parentId || verified.payload.role !== "parent") {
             return NextResponse.json(
                 { success: false, message: "Invalid session." },
                 { status: 401 }
@@ -47,8 +44,8 @@ export async function GET(req: NextRequest) {
 
         const { data: linkedRows, error: parentError } = await supabase
             .from("parent_student_links")
-            .select("parent_id, parents!inner(email)")
-            .eq("parents.email", parentEmail)
+            .select("parent_id")
+            .eq("parent_id", parentId)
             .eq("student_id", studentLrn)
             .limit(1);
 

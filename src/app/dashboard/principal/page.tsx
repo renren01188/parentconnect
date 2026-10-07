@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ─── Color Palette ───────────────────────────────────────────────
@@ -72,6 +72,7 @@ interface AttendanceDay {
   present: number;
   absent: number;
   late: number;
+  hasRecords: boolean;
 }
 
 // ─── Sub-components ──────────────────────────────────────────────
@@ -94,7 +95,15 @@ function Badge({ status }: { status: BadgeStatus }) {
   );
 }
 
-function AttendanceBar({ data }: { data: AttendanceDay[] }) {
+function AttendanceBar({ data, loading }: { data: AttendanceDay[]; loading: boolean }) {
+  if (loading) {
+    return <div aria-live="polite" style={{ height: 80, display: "flex", alignItems: "center", justifyContent: "center", color: GRAY_400, fontSize: 12 }}>Loading attendance…</div>;
+  }
+
+  if (!data.some((day) => day.hasRecords)) {
+    return <div aria-live="polite" style={{ height: 80, display: "flex", alignItems: "center", justifyContent: "center", color: GRAY_400, fontSize: 12, textAlign: "center" }}>No attendance records have been recorded this week.</div>;
+  }
+
   const maxVal = 100;
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-end", height: 80 }}>
@@ -318,7 +327,7 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
 // ─── Main Dashboard ───────────────────────────────────────────────
 type DashboardStats = {
   totalStudents: number;
-  attendancePercent: number;
+  attendancePercent: number | null;
   pendingReports: number;
   announcementsSentThisMonth: number;
 };
@@ -348,40 +357,38 @@ export default function Page() {
   const [principalName, setPrincipalName] = useState("Principal");
   const [stats, setStats] = useState<DashboardStats>({
     totalStudents: 0,
-    attendancePercent: 0,
+    attendancePercent: null,
     pendingReports: 0,
     announcementsSentThisMonth: 0,
   });
-  const [attendanceData, setAttendanceData] = useState<AttendanceDay[]>([
-    { day: "Mon", present: 0, absent: 0, late: 0 },
-    { day: "Tue", present: 0, absent: 0, late: 0 },
-    { day: "Wed", present: 0, absent: 0, late: 0 },
-    { day: "Thu", present: 0, absent: 0, late: 0 },
-    { day: "Fri", present: 0, absent: 0, late: 0 },
-  ]);
+  const [attendanceData, setAttendanceData] = useState<AttendanceDay[]>([]);
   const [escalatedReports, setEscalatedReports] = useState<EscalatedReport[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/principal/dashboard", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load the dashboard.");
+
+      setStats(data.stats);
+      setAttendanceData(Array.isArray(data.attendanceData) ? data.attendanceData : []);
+      setEscalatedReports(data.escalatedReports);
+      setAnnouncements(data.recentAnnouncements);
+      setPrincipalName(data.principalName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load the dashboard.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/principal/dashboard");
-        const data = await res.json();
-        if (data.success) {
-          setStats(data.stats);
-          setAttendanceData(data.attendanceData);
-          setEscalatedReports(data.escalatedReports);
-          setAnnouncements(data.recentAnnouncements);
-          setPrincipalName(data.principalName);
-        }
-      } catch (err) {
-        console.error("Dashboard fetch error:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+    void loadDashboard();
+  }, [loadDashboard]);
 
   return (
     <div className="pd-wrap">
@@ -393,9 +400,16 @@ export default function Page() {
           <p style={{ margin: "4px 0 0", fontSize: 13, color: PRIMARY }}>Welcome back, {principalName}! Here&apos;s what&apos;s happening today.</p>
         </div>
         <div className="pd-date-chip">
-          <Icons.Calendar /><span>{new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</span>
+          <Icons.Calendar /><span>{new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" }).format(new Date())}</span>
         </div>
       </div>
+
+      {error && (
+        <div className="pd-error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => void loadDashboard()}>Try again</button>
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="pd-stats">
@@ -404,17 +418,25 @@ export default function Page() {
           { label: "Today's Attendance", value: loading ? "—" : `${stats.attendancePercent}%`, sub: "Today", subColor: SUCCESS_GREEN, bg: WHITE, light: true },
           { label: "Pending Reports", value: loading ? "—" : String(stats.pendingReports), sub: "Escalated", subColor: URGENT_RED, bg: WHITE, light: true },
           { label: "Announcements Sent", value: loading ? "—" : String(stats.announcementsSentThisMonth), sub: "This month", subColor: GRAY_400, bg: WHITE, light: true },
-        ].map(card => (
-          <div key={card.label} style={{
+        ].map(card => {
+          const value = card.label === "Today's Attendance" && stats.attendancePercent === null ? "—" : card.value;
+          return <div
+            key={card.label}
+            className="pd-clickable"
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push(card.label === "Pending Reports" ? "/dashboard/principal/reports" : card.label === "Announcements Sent" ? "/dashboard/principal/announcements" : "/dashboard/principal/AttendanceSummary")}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(card.label === "Pending Reports" ? "/dashboard/principal/reports" : card.label === "Announcements Sent" ? "/dashboard/principal/announcements" : "/dashboard/principal/AttendanceSummary"); }}
+            style={{
             background: card.bg, borderRadius: 16, padding: "18px 20px",
             border: card.light ? `1px solid ${GRAY_200}` : "none",
             boxShadow: card.light ? "0 1px 4px rgba(0,0,0,0.04)" : "0 6px 24px rgba(82,32,129,0.2)",
           }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: card.light ? GRAY_400 : "rgba(255,255,255,0.75)", marginBottom: 6 }}>{card.label}</div>
-            <div style={{ fontSize: 30, fontWeight: 800, color: card.light ? GRAY_800 : WHITE, lineHeight: 1 }}>{card.value}</div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: card.light ? GRAY_800 : WHITE, lineHeight: 1 }}>{value}</div>
             <span style={{ fontSize: 11, fontWeight: 600, color: card.light ? card.subColor : "rgba(255,255,255,0.7)", marginTop: 4, display: "block" }}>{card.sub}</span>
-          </div>
-        ))}
+          </div>;
+        })}
       </div>
 
       {/* Bottom Grid */}
@@ -427,15 +449,18 @@ export default function Page() {
           <div style={{ background: WHITE, borderRadius: 16, padding: 22, border: `1px solid ${GRAY_200}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: GRAY_800 }}>Attendance Overview</h2>
-              <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 500 }}>
+              <button onClick={() => router.push("/dashboard/principal/AttendanceSummary")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 500 }}>
                 <Icons.Calendar /> This Week
               </button>
             </div>
             <div className="pd-attendance-wrap">
-              <div style={{ flex: 1 }}><AttendanceBar data={attendanceData} /></div>
+              <div style={{ flex: 1 }}><AttendanceBar data={attendanceData} loading={loading} /></div>
               <div className="pd-attendance-legend">
                 {(() => {
-                  const days = attendanceData.filter(d => d.present + d.absent + d.late > 0);
+                  const days = attendanceData.filter(d => d.hasRecords);
+                  if (!days.length) {
+                    return <span style={{ fontSize: 12, color: GRAY_400 }}>No averages yet</span>;
+                  }
                   const avgPresent = days.length ? Math.round(days.reduce((s, d) => s + d.present, 0) / days.length) : 0;
                   const avgAbsent = days.length ? Math.round(days.reduce((s, d) => s + d.absent, 0) / days.length) : 0;
                   const avgLate = days.length ? Math.round(days.reduce((s, d) => s + d.late, 0) / days.length) : 0;
@@ -463,17 +488,18 @@ export default function Page() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {announcements.map(ann => (
-                <div key={ann.id} className="pd-list-item" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: GRAY_50, border: `1px solid ${GRAY_100}` }}>
+                <div key={ann.id} className="pd-list-item pd-clickable" role="button" tabIndex={0} onClick={() => router.push("/dashboard/principal/announcements")} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push("/dashboard/principal/announcements"); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: GRAY_50, border: `1px solid ${GRAY_100}` }}>
                   <div style={{ width: 32, height: 32, borderRadius: 8, background: `${PRIMARY}15`, display: "flex", alignItems: "center", justifyContent: "center", color: PRIMARY, flexShrink: 0 }}>
                     <Icons.Megaphone />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: GRAY_800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ann.title}</div>
+                    <div className="pd-list-title" style={{ fontSize: 13, fontWeight: 600, color: GRAY_800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ann.title}</div>
                     <div style={{ fontSize: 11, color: GRAY_400, marginTop: 2 }}>{ann.date} · {ann.audience}</div>
                   </div>
                   <Badge status={ann.priority} />
                 </div>
               ))}
+              {!loading && announcements.length === 0 && <p className="pd-empty">No announcements sent this month.</p>}
             </div>
           </div>
         </div>
@@ -528,7 +554,7 @@ export default function Page() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {escalatedReports.map(r => (
-                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div key={r.id} className="pd-clickable" role="button" tabIndex={0} onClick={() => router.push(`/dashboard/principal/reports?reportId=${r.id}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(`/dashboard/principal/reports?reportId=${r.id}`); }} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 34, height: 34, borderRadius: "50%", background: `${PRIMARY}18`, display: "flex", alignItems: "center", justifyContent: "center", color: PRIMARY, fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{r.initials}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: GRAY_800 }}>{r.name}</div>
@@ -537,6 +563,7 @@ export default function Page() {
                   <Badge status={r.status} />
                 </div>
               ))}
+              {!loading && escalatedReports.length === 0 && <p className="pd-empty">No escalated reports need review.</p>}
             </div>
             <button onClick={() => router.push("/dashboard/principal/reports")} style={{
               width: "100%", marginTop: 14, padding: "10px", borderRadius: 10,
@@ -554,9 +581,11 @@ export default function Page() {
       <style>{`
         .pd-wrap {
           width: 100%;
+          min-width: 0;
           box-sizing: border-box;
           padding: 28px;
           font-family: 'Inter', 'Segoe UI', sans-serif;
+          overflow-x: hidden;
         }
         .pd-header {
           display: flex;
@@ -610,6 +639,44 @@ export default function Page() {
           display: flex;
           align-items: center;
         }
+        .pd-clickable {
+          cursor: pointer;
+        }
+        .pd-clickable:focus-visible {
+          outline: 2px solid ${PRIMARY};
+          outline-offset: 2px;
+        }
+        .pd-empty {
+          margin: 4px 0;
+          color: ${GRAY_400};
+          font-size: 12px;
+          text-align: center;
+          padding: 18px 8px;
+        }
+        .pd-error {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin: -8px 0 16px;
+          padding: 10px 12px;
+          border: 1px solid #fecaca;
+          border-radius: 10px;
+          background: #fef2f2;
+          color: #b91c1c;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .pd-error button {
+          flex-shrink: 0;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 6px 10px;
+          background: ${WHITE};
+          color: #b91c1c;
+          font: inherit;
+          cursor: pointer;
+        }
 
         /* Tablet */
         @media (max-width: 1024px) {
@@ -627,6 +694,8 @@ export default function Page() {
           .pd-attendance-wrap { flex-direction: column; }
           .pd-attendance-legend { flex-direction: row; flex-wrap: wrap; gap: 10px; width: 100%; margin-top: 8px; }
           .pd-list-item { flex-wrap: wrap; gap: 8px; }
+          .pd-list-title { white-space: normal !important; overflow-wrap: anywhere; }
+          .pd-error { align-items: flex-start; flex-direction: column; }
         }
 
         /* Very small screens */

@@ -10,16 +10,13 @@ import {
   Eye,
   FileText,
   Filter,
-  Monitor,
-  Shield,
-  X,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 type GuidanceNotification = {
   id: string;
-  type: "escalated" | "resolved" | "principal" | "ict";
+  type: "escalated" | "resolved" | "ticket";
   title: string;
   message: string;
   time: string;
@@ -31,6 +28,7 @@ type GuidanceNotification = {
 type GuidanceNotificationResponseRow = Omit<GuidanceNotification, "type" | "date"> & {
   type: string;
 };
+type NotificationFilter = "all" | "unread" | "reports";
 
 function getDateBucket(time: string): "today" | "yesterday" | "older" {
   const now = new Date();
@@ -47,10 +45,8 @@ function getNotifStyle(type: GuidanceNotification["type"]) {
       return { icon: AlertTriangle, iconClass: "bg-red-500 text-white" };
     case "resolved":
       return { icon: CheckCircle, iconClass: "bg-emerald-100 text-emerald-700" };
-    case "principal":
-      return { icon: Shield, iconClass: "bg-sky-100 text-sky-700" };
-    case "ict":
-      return { icon: Shield, iconClass: "bg-green-100 text-green-700" };
+    case "ticket":
+      return { icon: FileText, iconClass: "bg-sky-100 text-sky-700" };
   }
 }
 function formatTime(time: string): string {
@@ -79,63 +75,20 @@ function NotifRow({
         <Icon className="h-[17px] w-[17px]" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center justify-between gap-3">
-          <span className="flex items-center gap-2 flex-wrap">
-            {notification.title.startsWith("[ICT]") && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">ICT</span>
-            )}
-            <span className="text-sm font-bold text-slate-800">
-              {notification.title.replace(/^\[ICT\]\s*/, "")}
-            </span>
-          </span>
-          <span className="flex shrink-0 items-center gap-2">
+        <span className="flex min-w-0 items-start justify-between gap-2">
+          <span className="break-words text-sm font-bold text-slate-800">{notification.title}</span>
+          <span className="flex shrink-0 items-center gap-2 pt-0.5">
             <span className="whitespace-nowrap text-xs text-slate-400">{formatTime(notification.time)}</span>
             {!notification.read && <span className="h-2 w-2 rounded-full bg-sky-500" />}
           </span>
         </span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">{notification.message}</span>
-        <span className="mt-1 flex items-center gap-1 text-[10.5px] font-semibold text-sky-500 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="mt-0.5 block break-words text-xs leading-relaxed text-slate-500">{notification.message}</span>
+        <span className="guidance-notification-view-link mt-1 flex items-center gap-1 text-[10.5px] font-semibold text-sky-500 opacity-0 transition-opacity group-hover:opacity-100">
           <Eye className="h-3 w-3" />
-          {notification.type === "escalated" || notification.type === "resolved" ? "View report" : "View full announcement"}
+          View report
         </span>
       </span>
     </button>
-  );
-}
-function AnnouncementViewModal({ notif, onClose }: { notif: GuidanceNotification; onClose: () => void }) {
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-slate-200" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
-              <Monitor className="w-4 h-4 text-green-700" />
-            </div>
-            <span className="text-base font-bold text-slate-800">
-              {notif.title.replace(/^\[(ICT|Principal)\]\s*/, "")}
-            </span>
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="px-6 py-5">
-          <p className="text-xs text-slate-400 mb-3">{formatTime(notif.time)}</p>
-          <p className="text-sm text-slate-700 leading-relaxed">{notif.message}</p>
-          <div className="flex justify-end mt-6">
-            <button onClick={onClose} className="px-5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold transition-colors">
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 export default function GuidanceNotificationsPage() {
@@ -143,7 +96,8 @@ export default function GuidanceNotificationsPage() {
   const { setNotifUnreadCount } = useNotifContext();
   const [notifications, setNotifications] = useState<GuidanceNotification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewNotif, setViewNotif] = useState<GuidanceNotification | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<NotificationFilter>("all");
 
   const loadNotifications = useCallback(() => fetch("/api/guidance/notifications", { cache: "no-store" })
     .then(r => r.json())
@@ -152,13 +106,11 @@ export default function GuidanceNotificationsPage() {
         setNotifications(
           ((data.notifications ?? []) as GuidanceNotificationResponseRow[]).map((n) => ({
             ...n,
-            type: n.type === "principal-announcement"
-              ? "principal"
-              : n.type === "ict-announcement"
-                ? "ict"
-                : n.type === "resolved"
-                  ? "resolved"
-                  : "escalated",
+            type: n.type === "ticket"
+              ? "ticket"
+              : n.type === "resolved"
+                ? "resolved"
+                : "escalated",
             date: getDateBucket(n.time),
           }))
         );
@@ -175,8 +127,6 @@ export default function GuidanceNotificationsPage() {
     const channel = client
       .channel("guidance-notification-feed")
       .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => void loadNotifications())
-      .on("postgres_changes", { event: "*", schema: "public", table: "principal_announcements" }, () => void loadNotifications())
-      .on("postgres_changes", { event: "*", schema: "public", table: "ict_announcements" }, () => void loadNotifications())
       .on("postgres_changes", { event: "*", schema: "public", table: "guidance_notification_reads" }, () => void loadNotifications())
       .subscribe();
 
@@ -184,9 +134,14 @@ export default function GuidanceNotificationsPage() {
   }, [loadNotifications]);
 
   const unread = notifications.filter((notification) => !notification.read).length;
-  const today = notifications.filter((notification) => notification.date === "today");
-  const yesterday = notifications.filter((notification) => notification.date === "yesterday");
-  const older = notifications.filter((notification) => notification.date === "older");
+  const filteredNotifications = notifications.filter((notification) => {
+    if (activeFilter === "unread") return !notification.read;
+    if (activeFilter === "reports") return notification.type === "escalated" || notification.type === "resolved" || notification.type === "ticket";
+    return true;
+  });
+  const today = filteredNotifications.filter((notification) => notification.date === "today");
+  const yesterday = filteredNotifications.filter((notification) => notification.date === "yesterday");
+  const older = filteredNotifications.filter((notification) => notification.date === "older");
 
   const summary = useMemo(
     () => [
@@ -196,9 +151,9 @@ export default function GuidanceNotificationsPage() {
         count: notifications.filter((n) => n.type === "escalated").length,
       },
       {
-        label: "Principal Announcements",
-        icon: Shield,
-        count: notifications.filter((n) => n.type === "principal").length,
+        label: "Guidance Tickets",
+        icon: FileText,
+        count: notifications.filter((n) => n.type === "ticket").length,
       },
       {
         label: "Unread",
@@ -209,7 +164,7 @@ export default function GuidanceNotificationsPage() {
     [notifications, unread],
   );
 
-  const markAll = async () => {
+  const markAll = useCallback(async () => {
     const unreadKeys = notifications.filter(n => !n.read).map(n => n.id);
     setNotifications(current => current.map(n => ({ ...n, read: true })));
     setNotifUnreadCount(0);
@@ -219,7 +174,7 @@ export default function GuidanceNotificationsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mark_all: true, notif_keys: unreadKeys }),
     });
-  };
+  }, [notifications, setNotifUnreadCount]);
 
   const markOne = useCallback(async (id: string) => {
     setNotifications(current =>
@@ -233,16 +188,17 @@ export default function GuidanceNotificationsPage() {
     });
   }, [notifications, setNotifUnreadCount]);
 
-  // Viewing this page acknowledges all notifications currently shown.
-  useEffect(() => { if (!loading && notifications.some(n => !n.read)) void markAll(); }, [loading, notifications]);
+  // Viewing this page acknowledges all notifications currently shown. Defer the
+  // update until after paint so the effect remains a subscription boundary.
+  useEffect(() => {
+    if (loading || !notifications.some(n => !n.read)) return;
+    const timer = window.setTimeout(() => { void markAll(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loading, markAll, notifications]);
 
   const handleNotifClick = useCallback(
     (notification: GuidanceNotification) => {
       markOne(notification.id);
-      if (notification.type === "principal" || notification.type === "ict") {
-        setViewNotif(notification);
-        return;
-      }
       router.push(
         notification.parentName
           ? `/dashboard/guidance/reports?parent=${encodeURIComponent(notification.parentName)}`
@@ -253,9 +209,8 @@ export default function GuidanceNotificationsPage() {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-auto bg-slate-50 p-6">
-      {viewNotif && <AnnouncementViewModal notif={viewNotif} onClose={() => setViewNotif(null)} />}
-      <div className="mb-5 flex items-start justify-between">
+    <div className="guidance-notifications-page flex h-full flex-col overflow-auto bg-slate-50 p-6">
+      <div className="guidance-notifications-header mb-5 flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-800">Notifications</h1>
           <p className="mt-0.5 text-sm text-slate-400">
@@ -264,16 +219,16 @@ export default function GuidanceNotificationsPage() {
         </div>
         <button
           onClick={markAll}
-          className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-400 hover:text-sky-600"
+          className="guidance-mark-all flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-sky-400 hover:text-sky-600"
         >
           <CheckCheck className="h-4 w-4" />
           Mark All Read
         </button>
       </div>
 
-      <div className="flex items-start gap-5">
-        <section className="max-h-[calc(100vh-210px)] flex-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+      <div className="guidance-notifications-content flex items-start gap-5">
+        <section className="guidance-notifications-list max-h-none flex-1 overflow-visible rounded-2xl border border-slate-200 bg-white shadow-sm md:max-h-[calc(100vh-210px)] md:overflow-y-auto">
+          <div className="relative flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
             <div className="flex items-center gap-3">
               <span className="text-sm font-bold text-slate-800">All Notifications</span>
               {unread > 0 && (
@@ -282,10 +237,23 @@ export default function GuidanceNotificationsPage() {
                 </span>
               )}
             </div>
-            <button className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50">
+            <button type="button" onClick={() => setFilterOpen((open) => !open)} aria-expanded={filterOpen} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50">
               <Filter className="h-3.5 w-3.5" />
               Filter
             </button>
+            {filterOpen && (
+              <div className="absolute right-5 top-[calc(100%-4px)] z-20 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                {([
+                  ["all", "All notifications"],
+                  ["unread", "Unread only"],
+                  ["reports", "Reports and tickets"],
+                ] as Array<[NotificationFilter, string]>).map(([value, label]) => (
+                  <button key={value} type="button" onClick={() => { setActiveFilter(value); setFilterOpen(false); }} className={`flex min-h-10 w-full items-center rounded-lg px-3 text-left text-xs font-semibold transition ${activeFilter === value ? "bg-sky-50 text-sky-700" : "text-slate-600 hover:bg-slate-50"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {today.length > 0 && (
@@ -313,9 +281,9 @@ export default function GuidanceNotificationsPage() {
               Loading notifications...
             </div>
           )}
-          {!loading && notifications.length === 0 && (
+          {!loading && filteredNotifications.length === 0 && (
             <div className="px-5 py-12 text-center text-sm font-semibold text-slate-400">
-              No notifications yet.
+              No notifications match this filter.
             </div>
           )}
           {older.length > 0 && (
@@ -328,10 +296,10 @@ export default function GuidanceNotificationsPage() {
           )}
         </section>
 
-        <aside className="flex w-[248px] shrink-0 flex-col gap-4">
+        <aside className="guidance-notifications-sidebar flex w-[248px] shrink-0 flex-col gap-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="mb-4 text-sm font-bold text-slate-800">Notification Summary</p>
-            <div className="flex flex-col gap-3">
+            <div className="guidance-notification-summary flex flex-col gap-3">
               {summary.map(({ label, icon: Icon, count }) => (
                 <div key={label} className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5 text-sm text-slate-600">
@@ -346,13 +314,112 @@ export default function GuidanceNotificationsPage() {
 
           <button
             onClick={() => router.push("/dashboard/guidance/reports")}
-            className="flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-extrabold text-white transition-colors hover:bg-sky-600"
+            className="guidance-review-reports flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-extrabold text-white transition-colors hover:bg-sky-600"
           >
             <FileText className="h-4 w-4" />
             Review Reports
           </button>
         </aside>
       </div>
+
+      <style jsx global>{`
+        @media (max-width: 767px) {
+          .guidance-notifications-page {
+            min-height: calc(100dvh - 64px);
+            padding: 16px;
+          }
+
+          .guidance-notifications-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 12px;
+            margin-bottom: 16px;
+          }
+
+          .guidance-notifications-header h1 {
+            font-size: 22px;
+          }
+
+          .guidance-mark-all,
+          .guidance-review-reports {
+            min-height: 44px;
+            width: 100%;
+            justify-content: center;
+          }
+
+          .guidance-notifications-content {
+            flex-direction: column;
+            gap: 16px;
+          }
+
+          .guidance-notifications-list,
+          .guidance-notifications-sidebar {
+            width: 100%;
+          }
+
+          .guidance-notifications-sidebar {
+            gap: 12px;
+          }
+
+          .guidance-notification-summary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+          }
+
+          .guidance-notification-summary > div {
+            min-width: 0;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 5px;
+            padding: 10px;
+            border-radius: 10px;
+            background: #f8fafc;
+          }
+
+          .guidance-notification-summary > div > div {
+            min-width: 0;
+            align-items: flex-start;
+            gap: 5px;
+            font-size: 11px;
+            line-height: 1.3;
+          }
+
+          .guidance-notification-summary > div > span {
+            font-size: 18px;
+          }
+
+          .guidance-notifications-list > div:first-child {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+
+          .guidance-notifications-list > button {
+            gap: 12px;
+            padding: 14px 16px;
+          }
+
+          .guidance-notifications-list .whitespace-nowrap {
+            font-size: 10px;
+          }
+
+          .guidance-notification-view-link {
+            opacity: 1;
+          }
+
+        }
+
+        @media (max-width: 359px) {
+          .guidance-notification-summary {
+            grid-template-columns: 1fr;
+          }
+
+          .guidance-notification-summary > div {
+            flex-direction: row;
+            align-items: center;
+          }
+        }
+      `}</style>
     </div>
   );
 }

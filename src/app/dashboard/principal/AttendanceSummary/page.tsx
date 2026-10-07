@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import ExcelJS from "exceljs";
+import PrincipalAttendanceSummaryGuide from "../components/PrincipalAttendanceSummaryGuide";
 
 
 // ─── Color Palette ────────────────────────────────────────────────
@@ -31,6 +32,7 @@ interface StudentRecord {
   excused: number;
   dailyAbsences?: Record<number, boolean>;
   dailyExcused?: Record<number, boolean>;
+  active_from: string;
 }
 
 interface Section {
@@ -172,6 +174,35 @@ function setCellValue(ws: ExcelJS.Worksheet, ref: string, value: string | number
   ws.getCell(ref).value = value;
 }
 
+function escapePrintHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]!);
+}
+
+function toManilaDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function setSf2DateHeader(ws: ExcelJS.Worksheet, col0: number, day: number) {
+  const cell = ws.getCell(col0ToRef(col0, 6));
+  cell.value = String(day);
+  cell.numFmt = "@";
+  cell.alignment = {
+    ...cell.alignment,
+    horizontal: "center",
+    vertical: "top",
+    wrapText: false,
+    shrinkToFit: true,
+  };
+}
+
 function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, result: number = 0) {
   ws.getCell(ref).value = { formula, result };
 }
@@ -223,36 +254,153 @@ function copyWorksheetToWorkbook(
   return target;
 }
 
+type MergeRange = { top: number; left: number; bottom: number; right: number };
+
+function getMergeRanges(ws: ExcelJS.Worksheet): MergeRange[] {
+  const merges = (ws as unknown as { _merges?: Record<string, MergeRange> })._merges ?? {};
+  return Object.values(merges).map(({ top, left, bottom, right }) => ({ top, left, bottom, right }));
+}
+
+function copyWorksheetWithDynamicAttendanceRows(
+  workbook: ExcelJS.Workbook,
+  templateWs: ExcelJS.Worksheet,
+  maleStudentCount: number,
+  femaleStudentCount: number,
+) {
+  const maleDelta = maleStudentCount - MAX_MALE_ROWS;
+  const femaleDelta = femaleStudentCount - MAX_FEMALE_ROWS;
+  if (maleDelta === 0 && femaleDelta === 0) return templateWs;
+
+  const maleTotalRow = MALE_START_ROW + maleStudentCount;
+  const femaleStartRow = maleTotalRow + 1;
+  const femaleTotalRow = femaleStartRow + femaleStudentCount;
+  const combinedRow = femaleTotalRow + 1;
+  const totalDelta = maleDelta + femaleDelta;
+  const originalName = templateWs.name;
+  const expanded = workbook.addWorksheet(`${originalName} Expanded`);
+  expanded.properties = { ...templateWs.properties };
+  expanded.pageSetup = { ...templateWs.pageSetup };
+  expanded.views = templateWs.views.map((view) => ({ ...view }));
+
+  for (let col = 1; col <= templateWs.columnCount; col++) {
+    const source = templateWs.getColumn(col);
+    const target = expanded.getColumn(col);
+    target.width = source.width;
+    target.hidden = source.hidden;
+    target.outlineLevel = source.outlineLevel;
+    target.style = source.style;
+  }
+
+  const mapRow = (row: number): number | null => {
+    if (row < MALE_START_ROW) return row;
+    if (row < MALE_TOTAL_ROW) return row - MALE_START_ROW < maleStudentCount ? row : null;
+    if (row === MALE_TOTAL_ROW) return maleTotalRow;
+    if (row < FEMALE_TOTAL_ROW) {
+      const index = row - FEMALE_START_ROW;
+      return index < femaleStudentCount ? femaleStartRow + index : null;
+    }
+    if (row === FEMALE_TOTAL_ROW) return femaleTotalRow;
+    if (row === COMBINED_ROW) return combinedRow;
+    return row + totalDelta;
+  };
+
+  for (let row = 1; row <= templateWs.rowCount; row++) {
+    const targetRowNumber = mapRow(row);
+    if (targetRowNumber === null) continue;
+    const sourceRow = templateWs.getRow(row);
+    const targetRow = expanded.getRow(targetRowNumber);
+    targetRow.height = sourceRow.height;
+    targetRow.hidden = sourceRow.hidden;
+    targetRow.outlineLevel = sourceRow.outlineLevel;
+    for (let col = 1; col <= templateWs.columnCount; col++) {
+      const source = sourceRow.getCell(col);
+      const target = targetRow.getCell(col);
+      target.value = source.value;
+      target.style = source.style;
+    }
+  }
+
+  const copyStudentFormat = (sourceRowNumber: number, firstTargetRow: number, count: number) => {
+    const sourceRow = templateWs.getRow(sourceRowNumber);
+    for (let index = 0; index < count; index++) {
+      const targetRow = expanded.getRow(firstTargetRow + index);
+      targetRow.height = sourceRow.height;
+      for (let col = 1; col <= templateWs.columnCount; col++) {
+        targetRow.getCell(col).value = null;
+        targetRow.getCell(col).style = sourceRow.getCell(col).style;
+      }
+    }
+  };
+  copyStudentFormat(MALE_TOTAL_ROW - 1, MALE_START_ROW + MAX_MALE_ROWS, Math.max(0, maleDelta));
+  copyStudentFormat(FEMALE_TOTAL_ROW - 1, femaleStartRow + MAX_FEMALE_ROWS, Math.max(0, femaleDelta));
+
+  const merges = getMergeRanges(templateWs);
+  const mergeWithBorders = (merge: MergeRange, top: number, bottom: number) => {
+    expanded.mergeCells(top, merge.left, bottom, merge.right);
+    const first = templateWs.getCell(merge.top, merge.left);
+    const last = templateWs.getCell(merge.bottom, merge.right);
+    expanded.getCell(top, merge.left).border = {
+      ...first.border,
+      right: last.border.right ?? first.border.right,
+      bottom: last.border.bottom ?? first.border.bottom,
+    };
+  };
+  for (const merge of merges) {
+    const top = mapRow(merge.top);
+    const bottom = mapRow(merge.bottom);
+    if (top !== null && bottom !== null) mergeWithBorders(merge, top, bottom);
+  }
+  const copyStudentMerges = (sourceRow: number, targetStart: number, count: number) => {
+    const rowMerges = merges.filter((merge) => merge.top === sourceRow && merge.bottom === sourceRow);
+    for (let index = 0; index < count; index++) {
+      for (const merge of rowMerges) mergeWithBorders(merge, targetStart + index, targetStart + index);
+    }
+  };
+  copyStudentMerges(MALE_TOTAL_ROW - 1, MALE_START_ROW + MAX_MALE_ROWS, Math.max(0, maleDelta));
+  copyStudentMerges(FEMALE_TOTAL_ROW - 1, femaleStartRow + MAX_FEMALE_ROWS, Math.max(0, femaleDelta));
+
+  workbook.removeWorksheet(templateWs.id);
+  expanded.name = originalName;
+  return expanded;
+}
+
 function populateSF2Worksheet(
-  ws: ExcelJS.Worksheet,
+  workbook: ExcelJS.Workbook,
+  templateWs: ExcelJS.Worksheet,
   section: Section,
   gradeLabel: string,
   month: string,
   year: number,
-  holidayDates: string[] = []
+  holidayDates: string[] = [],
+  schoolDayDates: string[] = [],
 ) {
+  const maleCount = section.students.filter((student) => student.gender === "M").length;
+  const femaleCount = section.students.filter((student) => student.gender === "F").length;
+  const ws = copyWorksheetWithDynamicAttendanceRows(workbook, templateWs, maleCount, femaleCount);
   const holidaySet = new Set(holidayDates);
   const allSchoolDaysList = getSchoolDaysOfMonth(month, year);
   const monthIdx = MONTHS.indexOf(month);
   const allSchoolDayPlacements = getSchoolDayPlacements(month, year);
+  const fallbackSchoolDays = allSchoolDaysList
+    .map((day) => `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`)
+    .filter((date) => date <= toManilaDateString());
+  const schoolDaySet = new Set(schoolDayDates.length ? schoolDayDates : fallbackSchoolDays);
 
-  // Class days = school days excluding holidays
-  const classDaysList = allSchoolDaysList.filter(d => {
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    return !holidaySet.has(iso);
-  });
+  // Class days are the server-provided, eligible dates excluding selected holidays.
   const classPlacements = allSchoolDayPlacements.filter(({ day }) => {
     const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    return !holidaySet.has(iso);
+    return schoolDaySet.has(iso) && !holidaySet.has(iso);
   });
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const schoolDays = classPlacements.filter(({ day }) => {
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    return iso <= todayIso;
-  }).length;
+  const schoolDays = classPlacements.length;
 
   const maleStudents = section.students.filter((s) => s.gender === "M");
   const femaleStudents = section.students.filter((s) => s.gender === "F");
+  const maleTotalRow = MALE_START_ROW + maleStudents.length;
+  const femaleStartRow = maleTotalRow + 1;
+  const femaleTotalRow = femaleStartRow + femaleStudents.length;
+  const combinedRow = femaleTotalRow + 1;
+  const summaryStartRow = combinedRow + 1;
+  const totalRowDelta = (maleStudents.length - MAX_MALE_ROWS) + (femaleStudents.length - MAX_FEMALE_ROWS);
 
   setCellValue(ws, "F3", 107966);
   setCellValue(ws, "M3", `${year} - ${year + 1}`);
@@ -275,14 +423,13 @@ function populateSF2Worksheet(
   allSchoolDayPlacements.forEach(({ day, slotIdx, dowLabel }) => {
     const [col0] = SF2_DAY_SLOTS[slotIdx];
     const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    setCellValue(ws, col0ToRef(col0, 6), day);
+    setSf2DateHeader(ws, col0, day);
     setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(iso) ? "H" : dowLabel);
   });
 
   function fillRows(
     students: StudentRecord[],
     startRow: number,
-    maxRows: number,
     totalRow: number
   ) {
     students.forEach((st, idx) => {
@@ -300,12 +447,12 @@ function populateSF2Worksheet(
       allSchoolDayPlacements.forEach(({ day, slotIdx }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
         const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        if (!schoolDaySet.has(iso)) return;
+        if (iso < st.active_from) return;
         if (holidaySet.has(iso)) {
           setCellValue(ws, col0ToRef(col0, row), "H");
           return;
         }
-        const todayIso = new Date().toISOString().slice(0, 10);
-        if (iso > todayIso) return;
         const isExcused = !!st.dailyExcused?.[day];
         const isAbsent = !!st.dailyAbsences?.[day];
         if (isExcused) {
@@ -318,26 +465,16 @@ function populateSF2Worksheet(
       });
 
       setCellValue(ws, `AM${row}`, absenceCount);
-      const todayIso = new Date().toISOString().slice(0, 10);
       const pastClassDays = classPlacements.filter(({ day }) => {
         const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return iso <= todayIso;
+        return iso >= st.active_from;
       }).length;
       setCellValue(ws, `AO${row}`, pastClassDays - absenceCount);
     });
 
-    for (let idx = students.length; idx < maxRows; idx++) {
-      const row = startRow + idx;
-      ["A", "B", "C", "AM", "AO"].forEach((col) => clearCellPreserveFormat(ws, `${col}${row}`));
-      for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
-        clearCellPreserveFormat(ws, col0ToRef(col0, row));
-        if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, row));
-      }
-    }
-
     setCellValue(ws, `A${totalRow}`, students.length);
-    setCellFormula(ws, `AM${totalRow}`, `SUM(AM${startRow}:AM${totalRow - 1})`);
-    setCellFormula(ws, `AO${totalRow}`, `SUM(AO${startRow}:AO${totalRow - 1})`);
+    setCellFormula(ws, `AM${totalRow}`, students.length ? `SUM(AM${startRow}:AM${totalRow - 1})` : "0");
+    setCellFormula(ws, `AO${totalRow}`, students.length ? `SUM(AO${startRow}:AO${totalRow - 1})` : "0");
 
     for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
       clearCellPreserveFormat(ws, col0ToRef(col0, totalRow));
@@ -347,46 +484,59 @@ function populateSF2Worksheet(
     // Per-day totals only for non-holiday days
     classPlacements.forEach(({ slotIdx }) => {
       const [col0] = SF2_DAY_SLOTS[slotIdx];
-      const startRef = col0ToRef(col0, startRow);
-      const endRef = col0ToRef(col0, totalRow - 1);
-      setCellFormula(ws, col0ToRef(col0, totalRow), `COUNTIF(${startRef}:${endRef},"X")`);
+      const formula = students.length
+        ? `COUNTIF(${col0ToRef(col0, startRow)}:${col0ToRef(col0, totalRow - 1)},"X")`
+        : "0";
+      setCellFormula(ws, col0ToRef(col0, totalRow), formula);
     });
   }
 
-  fillRows(maleStudents, MALE_START_ROW, MAX_MALE_ROWS, MALE_TOTAL_ROW);
-  fillRows(femaleStudents, FEMALE_START_ROW, MAX_FEMALE_ROWS, FEMALE_TOTAL_ROW);
+  fillRows(maleStudents, MALE_START_ROW, maleTotalRow);
+  fillRows(femaleStudents, femaleStartRow, femaleTotalRow);
 
   for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
-    clearCellPreserveFormat(ws, col0ToRef(col0, COMBINED_ROW));
-    if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, COMBINED_ROW));
+    clearCellPreserveFormat(ws, col0ToRef(col0, combinedRow));
+    if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, combinedRow));
   }
 
-  setCellFormula(ws, `A${COMBINED_ROW}`, `A${FEMALE_TOTAL_ROW}+A${MALE_TOTAL_ROW}`);
-  setCellFormula(ws, `AM${COMBINED_ROW}`, `AM${MALE_TOTAL_ROW}+AM${FEMALE_TOTAL_ROW}`);
-  setCellFormula(ws, `AO${COMBINED_ROW}`, `AO${FEMALE_TOTAL_ROW}+AO${MALE_TOTAL_ROW}`);
+  setCellFormula(ws, `A${combinedRow}`, `A${femaleTotalRow}+A${maleTotalRow}`);
+  setCellFormula(ws, `AM${combinedRow}`, `AM${maleTotalRow}+AM${femaleTotalRow}`);
+  setCellFormula(ws, `AO${combinedRow}`, `AO${maleTotalRow}+AO${femaleTotalRow}`);
 
   classPlacements.forEach(({ slotIdx }) => {
     const [col0] = SF2_DAY_SLOTS[slotIdx];
-    setCellFormula(ws, col0ToRef(col0, COMBINED_ROW),
-      `${col0ToRef(col0, MALE_TOTAL_ROW)}+${col0ToRef(col0, FEMALE_TOTAL_ROW)}`);
+    setCellFormula(ws, col0ToRef(col0, combinedRow),
+      `${col0ToRef(col0, maleTotalRow)}+${col0ToRef(col0, femaleTotalRow)}`);
   });
 
-  ["AN74", "Z80", "AN80"].forEach((ref) => clearCellPreserveFormat(ws, ref));
+  [74, 80].forEach((templateRow) => {
+    const row = templateRow + totalRowDelta;
+    clearCellPreserveFormat(ws, `AN${row}`);
+    if (templateRow === 80) clearCellPreserveFormat(ws, `Z${row}`);
+  });
 
-  setCellValue(ws, "AM49", `Month : ${month.toUpperCase()}`);
-  setCellValue(ws, "AP49", `No. of Days of Classes: ${schoolDays}`);
-  setCellValue(ws, "AR51", maleStudents.length);
-  setCellValue(ws, "AS51", femaleStudents.length);
-  setCellValue(ws, "AT51", section.students.length);
-  setCellValue(ws, "AR57", maleStudents.length);
-  setCellValue(ws, "AS57", femaleStudents.length);
-  setCellFormula(ws, "AT57", "AR57+AS57");
-  setCellFormula(ws, "AR61", `AO${MALE_TOTAL_ROW}/${schoolDays || 1}`);
-  setCellFormula(ws, "AS61", `AO${FEMALE_TOTAL_ROW}/${schoolDays || 1}`);
-  setCellFormula(ws, "AT61", `AO${COMBINED_ROW}/${schoolDays || 1}`);
-  setCellFormula(ws, "AR63", "IF(AR57=0,0,AR61/AR57)");
-  setCellFormula(ws, "AS63", "IF(AS57=0,0,AS61/AS57)");
-  setCellFormula(ws, "AT63", "IF(AT57=0,0,AT61/AT57)");
+  const enrollmentRow = summaryStartRow + 2;
+  const registeredRow = summaryStartRow + 8;
+  const enrollmentPctRow = summaryStartRow + 10;
+  const dailyAttendanceRow = summaryStartRow + 12;
+  const attendancePctRow = summaryStartRow + 14;
+  setCellValue(ws, `AM${summaryStartRow}`, `Month : ${month.toUpperCase()}`);
+  setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${schoolDays}`);
+  setCellValue(ws, `AR${enrollmentRow}`, maleStudents.length);
+  setCellValue(ws, `AS${enrollmentRow}`, femaleStudents.length);
+  setCellValue(ws, `AT${enrollmentRow}`, section.students.length);
+  setCellValue(ws, `AR${registeredRow}`, maleStudents.length);
+  setCellValue(ws, `AS${registeredRow}`, femaleStudents.length);
+  setCellFormula(ws, `AT${registeredRow}`, `AR${registeredRow}+AS${registeredRow}`);
+  setCellFormula(ws, `AR${enrollmentPctRow}`, `IF(AR${enrollmentRow}=0,0,AR${registeredRow}/AR${enrollmentRow})`);
+  setCellFormula(ws, `AS${enrollmentPctRow}`, `IF(AS${enrollmentRow}=0,0,AS${registeredRow}/AS${enrollmentRow})`);
+  setCellFormula(ws, `AT${enrollmentPctRow}`, `IF(AT${enrollmentRow}=0,0,AT${registeredRow}/AT${enrollmentRow})`);
+  setCellFormula(ws, `AR${dailyAttendanceRow}`, `AO${maleTotalRow}/${schoolDays || 1}`);
+  setCellFormula(ws, `AS${dailyAttendanceRow}`, `AO${femaleTotalRow}/${schoolDays || 1}`);
+  setCellFormula(ws, `AT${dailyAttendanceRow}`, `AO${combinedRow}/${schoolDays || 1}`);
+  setCellFormula(ws, `AR${attendancePctRow}`, `IF(AR${registeredRow}=0,0,AR${dailyAttendanceRow}/AR${registeredRow})`);
+  setCellFormula(ws, `AS${attendancePctRow}`, `IF(AS${registeredRow}=0,0,AS${dailyAttendanceRow}/AS${registeredRow})`);
+  setCellFormula(ws, `AT${attendancePctRow}`, `IF(AT${registeredRow}=0,0,AT${dailyAttendanceRow}/AT${registeredRow})`);
 }
 
 async function exportSF2(
@@ -394,11 +544,12 @@ async function exportSF2(
   gradeLabel: string,
   month: string,
   year: number,
-  holidayDates: string[] = []
+  holidayDates: string[] = [],
+  schoolDayDates: string[] = [],
 ) {
   const workbook = await loadTemplateWorkbook();
   const worksheet = getTemplateWorksheet(workbook);
-  populateSF2Worksheet(worksheet, section, gradeLabel, month, year, holidayDates);
+  populateSF2Worksheet(workbook, worksheet, section, gradeLabel, month, year, holidayDates, schoolDayDates);
   const out = await workbook.xlsx.writeBuffer();
   downloadArrayBuffer(out as ArrayBuffer, `SF2_${section.name}_${month}_${year}.xlsx`);
 }
@@ -407,7 +558,8 @@ async function exportGradeSF2(
   grade: GradeLevel,
   month: string,
   year: number,
-  holidayDates: string[] = []
+  holidayDates: string[] = [],
+  schoolDayDates: string[] = [],
 ) {
   const templateWorkbook = await loadTemplateWorkbook();
   const templateSheet = getTemplateWorksheet(templateWorkbook);
@@ -418,7 +570,7 @@ async function exportGradeSF2(
   for (const section of grade.sections) {
     const sheetName = String(section?.name ?? "").replace(/[:\\/?*\[\]]/g, "").substring(0, 31) || "Sheet";
     const ws = copyWorksheetToWorkbook(templateSheet, outputWorkbook, sheetName);
-    populateSF2Worksheet(ws, section, grade.label, month, year, holidayDates);
+    populateSF2Worksheet(outputWorkbook, ws, section, grade.label, month, year, holidayDates, schoolDayDates);
   }
   const out = await outputWorkbook.xlsx.writeBuffer();
   downloadArrayBuffer(out as ArrayBuffer, `SF2_${grade.label.replace(" ", "_")}_${month}_${year}.xlsx`);
@@ -491,10 +643,11 @@ interface SF2ExportModalProps {
   gradeLabel: string;
   month: string;
   year: number;
+  schoolDayDates: string[];
   onClose: () => void;
 }
 
-function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2ExportModalProps) {
+function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, onClose }: SF2ExportModalProps) {
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<"sf2" | "print" | null>(null);
@@ -510,7 +663,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
   async function handleExportSF2() {
     setExporting(true);
     try {
-      await exportSF2(section, gradeLabel, month, year, holidayDates);
+      await exportSF2(section, gradeLabel, month, year, holidayDates, schoolDayDates);
       setExported("sf2");
       setTimeout(() => setExported(null), 2500);
     } catch (e) {
@@ -532,7 +685,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
     const totalAbsent = section.students.reduce((s, r) => s + r.absent, 0);
 
     const printContent = `
-      <html><head><title>SF2 – ${section.name} – ${month} ${year}</title>
+      <html><head><title>SF2 – ${escapePrintHtml(section.name)} – ${escapePrintHtml(month)} ${year}</title>
       <style>
         body { font-family: Arial, sans-serif; padding: 18px; color: #1f2937; font-size: 11px; }
         h2 { color: #522081; margin-bottom: 2px; font-size: 14px; }
@@ -552,8 +705,8 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
       </style></head><body>
       <h2>School Form 2 (SF2) Daily Attendance Report</h2>
       <div class="meta">
-        School: Santiago Elementary School &nbsp;|&nbsp; ${gradeLabel} – Section ${section.name}
-        &nbsp;|&nbsp; Adviser: ${section.adviser} &nbsp;|&nbsp; Month: ${month} ${year}
+        School: Santiago Elementary School &nbsp;|&nbsp; ${escapePrintHtml(gradeLabel)} – Section ${escapePrintHtml(section.name)}
+        &nbsp;|&nbsp; Adviser: ${escapePrintHtml(section.adviser)} &nbsp;|&nbsp; Month: ${escapePrintHtml(month)} ${year}
         &nbsp;|&nbsp; Class Days: ${classDays}
       </div>
       ${holidayDates.length > 0 ? `<div class="holiday-note">Holidays (marked H in SF2): ${holidayDates.map(d => formatDateLabel(d)).join(", ")}</div>` : ""}
@@ -561,7 +714,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
       <table>
         <thead><tr><th>#</th><th>Name (Last, First MI)</th><th>Absent</th><th>Present</th></tr></thead>
         <tbody>
-          ${maleStudents.map((s, i) => `<tr><td>${i + 1}</td><td>${s.name}</td><td class="absent">${s.absent}</td><td class="present">${s.present}</td></tr>`).join("")}
+          ${maleStudents.map((s, i) => `<tr><td>${i + 1}</td><td>${escapePrintHtml(s.name)}</td><td class="absent">${s.absent}</td><td class="present">${s.present}</td></tr>`).join("")}
           <tr class="total-row"><td colspan="2">Male Total</td><td class="absent">${mAbsent}</td><td class="present">${mPresent}</td></tr>
         </tbody>
       </table>
@@ -569,7 +722,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
       <table>
         <thead><tr><th>#</th><th>Name (Last, First MI)</th><th>Absent</th><th>Present</th></tr></thead>
         <tbody>
-          ${femaleStudents.map((s, i) => `<tr><td>${i + 1}</td><td>${s.name}</td><td class="absent">${s.absent}</td><td class="present">${s.present}</td></tr>`).join("")}
+          ${femaleStudents.map((s, i) => `<tr><td>${i + 1}</td><td>${escapePrintHtml(s.name)}</td><td class="absent">${s.absent}</td><td class="present">${s.present}</td></tr>`).join("")}
           <tr class="total-row"><td colspan="2">Female Total</td><td class="absent">${fAbsent}</td><td class="present">${fPresent}</td></tr>
         </tbody>
       </table>
@@ -585,7 +738,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
         </table>
       </div>
       <div class="sig-area">
-        <div class="sig-line"><div class="sig-name">${section.adviser}</div>(Signature of Adviser over Printed Name)</div>
+        <div class="sig-line"><div class="sig-name">${escapePrintHtml(section.adviser)}</div>(Signature of Adviser over Printed Name)</div>
         <div class="sig-line"><div class="sig-name">&nbsp;</div>(Signature of School Head over Printed Name)</div>
       </div>
       </body></html>
@@ -598,10 +751,12 @@ function SF2ExportModal({ section, gradeLabel, month, year, onClose }: SF2Export
 
   return (
     <div
+      className="principal-attendance-modal-overlay"
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
       onClick={onClose}
     >
       <div
+        className="principal-attendance-modal"
         style={{ background: WHITE, borderRadius: 22, width: "100%", maxWidth: 480, boxShadow: "0 24px 64px rgba(82,32,129,0.28)", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}
         onClick={e => e.stopPropagation()}
       >
@@ -749,10 +904,11 @@ interface GradeSF2ExportModalProps {
   grade: GradeLevel;
   month: string;
   year: number;
+  schoolDayDates: string[];
   onClose: () => void;
 }
 
-function GradeSF2ExportModal({ grade, month, year, onClose }: GradeSF2ExportModalProps) {
+function GradeSF2ExportModal({ grade, month, year, schoolDayDates, onClose }: GradeSF2ExportModalProps) {
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<"sf2" | "print" | null>(null);
@@ -772,7 +928,7 @@ function GradeSF2ExportModal({ grade, month, year, onClose }: GradeSF2ExportModa
   async function handleExportSF2() {
     setExporting(true);
     try {
-      await exportGradeSF2(grade, month, year, holidayDates);
+      await exportGradeSF2(grade, month, year, holidayDates, schoolDayDates);
       setExported("sf2");
       setTimeout(() => setExported(null), 2500);
     } catch (e) {
@@ -790,20 +946,20 @@ function GradeSF2ExportModal({ grade, month, year, onClose }: GradeSF2ExportModa
       const sa = sec.students.reduce((a, r) => a + r.absent, 0);
       const sl = sec.students.reduce((a, r) => a + r.late, 0);
       sectionRows += `
-        <tr class="section-header"><td colspan="5">Section ${sec.name} — ${sec.adviser}</td></tr>
-        ${sec.students.map((s, i) => `<tr><td>${i + 1}</td><td>${s.name}</td><td class="present">${s.present}</td><td class="absent">${s.absent}</td><td class="late">${s.late}</td></tr>`).join("")}
-        <tr class="subtotal-row"><td colspan="2">Section ${sec.name} Subtotal</td><td class="present">${sp}</td><td class="absent">${sa}</td><td class="late">${sl}</td></tr>
+        <tr class="section-header"><td colspan="5">Section ${escapePrintHtml(sec.name)} — ${escapePrintHtml(sec.adviser)}</td></tr>
+        ${sec.students.map((s, i) => `<tr><td>${i + 1}</td><td>${escapePrintHtml(s.name)}</td><td class="present">${s.present}</td><td class="absent">${s.absent}</td><td class="late">${s.late}</td></tr>`).join("")}
+        <tr class="subtotal-row"><td colspan="2">Section ${escapePrintHtml(sec.name)} Subtotal</td><td class="present">${sp}</td><td class="absent">${sa}</td><td class="late">${sl}</td></tr>
         <tr><td colspan="5" style="height:8px"></td></tr>`;
     });
     const holidayNote = holidayDates.length > 0
       ? `<div style="margin-bottom:14px;padding:8px 12px;background:#ede9fe;border-radius:6px;font-size:11px;color:#522081;">Holidays (marked H in SF2): ${holidayDates.map(d => formatDateLabel(d)).join(", ")}</div>`
       : "";
-    const printContent = `<html><head><title>SF2 ${grade.label} – ${month} ${year}</title>
+    const printContent = `<html><head><title>SF2 ${escapePrintHtml(grade.label)} – ${escapePrintHtml(month)} ${year}</title>
       <style>body{font-family:Arial,sans-serif;padding:20px;color:#1f2937;font-size:11px}h2{color:#522081;margin-bottom:3px;font-size:13px}p{margin:2px 0;font-size:11px;color:#6b7280}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}th{background:#522081;color:white;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}tr:nth-child(even) td{background:#f9fafb}.section-header td{background:#ede9fe;color:#522081;font-weight:700}.subtotal-row td{background:#f3f4f6;font-weight:700;border-top:1.5px solid #d1d5db}.total-row td{background:#522081;color:white;font-weight:700}.present{color:#10b981;font-weight:600}.absent{color:#ef4444;font-weight:600}.late{color:#f59e0b;font-weight:600}</style></head><body>
-      <h2>School Form 2 (SF2) – ${grade.label}</h2><p>Santiago Elementary School &nbsp;|&nbsp; ${month} ${year} &nbsp;|&nbsp; Class Days: ${classDays}</p>
+      <h2>School Form 2 (SF2) – ${escapePrintHtml(grade.label)}</h2><p>Santiago Elementary School &nbsp;|&nbsp; ${escapePrintHtml(month)} ${year} &nbsp;|&nbsp; Class Days: ${classDays}</p>
       ${holidayNote}
       <table><thead><tr><th>#</th><th>Student Name</th><th>Present</th><th>Absent</th><th>Late</th></tr></thead>
-      <tbody>${sectionRows}<tr class="total-row"><td colspan="2">${grade.label} GRAND TOTAL</td><td>${totalPresent}</td><td>${totalAbsent}</td><td>${totalLate}</td></tr></tbody></table>
+      <tbody>${sectionRows}<tr class="total-row"><td colspan="2">${escapePrintHtml(grade.label)} GRAND TOTAL</td><td>${totalPresent}</td><td>${totalAbsent}</td><td>${totalLate}</td></tr></tbody></table>
       </body></html>`;
     const w = window.open("", "_blank", "width=800,height=700");
     if (w) { w.document.write(printContent); w.document.close(); w.print(); }
@@ -813,10 +969,12 @@ function GradeSF2ExportModal({ grade, month, year, onClose }: GradeSF2ExportModa
 
   return (
     <div
+      className="principal-attendance-modal-overlay"
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
       onClick={onClose}
     >
       <div
+        className="principal-attendance-modal"
         style={{ background: WHITE, borderRadius: 22, width: "100%", maxWidth: 500, boxShadow: "0 24px 64px rgba(82,32,129,0.28)", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}
         onClick={e => e.stopPropagation()}
       >
@@ -971,12 +1129,14 @@ function ExportModal({
   gradeLabel,
   month,
   year,
+  schoolDayDates,
   onClose,
 }: {
   section: Section;
   gradeLabel: string;
   month: string;
   year: number;
+  schoolDayDates: string[];
   onClose: () => void;
 }) {
   const [showSF2Modal, setShowSF2Modal] = useState(false);
@@ -994,6 +1154,7 @@ function ExportModal({
         gradeLabel={gradeLabel}
         month={month}
         year={year}
+        schoolDayDates={schoolDayDates}
         onClose={onClose}
       />
     );
@@ -1001,10 +1162,12 @@ function ExportModal({
 
   return (
     <div
+      className="principal-attendance-modal-overlay"
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
       onClick={onClose}
     >
       <div
+        className="principal-attendance-modal"
         style={{ background: WHITE, borderRadius: 22, width: "100%", maxWidth: 640, boxShadow: "0 24px 64px rgba(82,32,129,0.28)", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}
         onClick={e => e.stopPropagation()}
       >
@@ -1105,7 +1268,7 @@ function StudentTable({ students }: { students: StudentRecord[] }) {
 }
 
 // ─── Grade Export Modal (with holiday picker trigger) ─────────────
-function GradeExportModal({ grade, month, year, onClose }: { grade: GradeLevel; month: string; year: number; onClose: () => void; }) {
+function GradeExportModal({ grade, month, year, schoolDayDates, onClose }: { grade: GradeLevel; month: string; year: number; schoolDayDates: string[]; onClose: () => void; }) {
   const [showSF2Modal, setShowSF2Modal] = useState(false);
 
   const allStudents = grade.sections.flatMap(sec => sec.students.map(st => ({ ...st, section: sec.name, adviser: sec.adviser })));
@@ -1120,28 +1283,28 @@ function GradeExportModal({ grade, month, year, onClose }: { grade: GradeLevel; 
       const sa = sec.students.reduce((a, r) => a + r.absent, 0);
       const sl = sec.students.reduce((a, r) => a + r.late, 0);
       sectionRows += `
-        <tr class="section-header"><td colspan="5">Section ${sec.name} — ${sec.adviser}</td></tr>
-        ${sec.students.map((s, i) => `<tr><td>${i + 1}</td><td>${s.name}</td><td class="present">${s.present}</td><td class="absent">${s.absent}</td><td class="late">${s.late}</td></tr>`).join("")}
-        <tr class="subtotal-row"><td colspan="2">Section ${sec.name} Subtotal</td><td class="present">${sp}</td><td class="absent">${sa}</td><td class="late">${sl}</td></tr>
+        <tr class="section-header"><td colspan="5">Section ${escapePrintHtml(sec.name)} — ${escapePrintHtml(sec.adviser)}</td></tr>
+        ${sec.students.map((s, i) => `<tr><td>${i + 1}</td><td>${escapePrintHtml(s.name)}</td><td class="present">${s.present}</td><td class="absent">${s.absent}</td><td class="late">${s.late}</td></tr>`).join("")}
+        <tr class="subtotal-row"><td colspan="2">Section ${escapePrintHtml(sec.name)} Subtotal</td><td class="present">${sp}</td><td class="absent">${sa}</td><td class="late">${sl}</td></tr>
         <tr><td colspan="5" style="height:8px"></td></tr>`;
     });
-    const printContent = `<html><head><title>SF2 ${grade.label} – ${month} ${year}</title>
+    const printContent = `<html><head><title>SF2 ${escapePrintHtml(grade.label)} – ${escapePrintHtml(month)} ${year}</title>
       <style>body{font-family:Arial,sans-serif;padding:20px;color:#1f2937;font-size:11px}h2{color:#522081;margin-bottom:3px;font-size:13px}p{margin:2px 0;font-size:11px;color:#6b7280}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}th{background:#522081;color:white;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}tr:nth-child(even) td{background:#f9fafb}.section-header td{background:#ede9fe;color:#522081;font-weight:700}.subtotal-row td{background:#f3f4f6;font-weight:700;border-top:1.5px solid #d1d5db}.total-row td{background:#522081;color:white;font-weight:700}.present{color:#10b981;font-weight:600}.absent{color:#ef4444;font-weight:600}.late{color:#f59e0b;font-weight:600}</style></head><body>
-      <h2>School Form 2 (SF2) – ${grade.label}</h2><p>Santiago Elementary School &nbsp;|&nbsp; ${month} ${year}</p>
+      <h2>School Form 2 (SF2) – ${escapePrintHtml(grade.label)}</h2><p>Santiago Elementary School &nbsp;|&nbsp; ${escapePrintHtml(month)} ${year}</p>
       <table><thead><tr><th>#</th><th>Student Name</th><th>Present</th><th>Absent</th><th>Late</th></tr></thead>
-      <tbody>${sectionRows}<tr class="total-row"><td colspan="2">${grade.label} GRAND TOTAL</td><td>${totalPresent}</td><td>${totalAbsent}</td><td>${totalLate}</td></tr></tbody></table>
+      <tbody>${sectionRows}<tr class="total-row"><td colspan="2">${escapePrintHtml(grade.label)} GRAND TOTAL</td><td>${totalPresent}</td><td>${totalAbsent}</td><td>${totalLate}</td></tr></tbody></table>
       </body></html>`;
     const w = window.open("", "_blank", "width=800,height=700");
     if (w) { w.document.write(printContent); w.document.close(); w.print(); }
   }
 
   if (showSF2Modal) {
-    return <GradeSF2ExportModal grade={grade} month={month} year={year} onClose={onClose} />;
+    return <GradeSF2ExportModal grade={grade} month={month} year={year} schoolDayDates={schoolDayDates} onClose={onClose} />;
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }} onClick={onClose}>
-      <div style={{ background: WHITE, borderRadius: 22, width: "100%", maxWidth: 720, boxShadow: "0 24px 64px rgba(82,32,129,0.28)", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "92vh", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+    <div className="principal-attendance-modal-overlay" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }} onClick={onClose}>
+      <div className="principal-attendance-modal" style={{ background: WHITE, borderRadius: 22, width: "100%", maxWidth: 720, boxShadow: "0 24px 64px rgba(82,32,129,0.28)", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "92vh", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
         <div style={{ padding: "20px 24px 16px", borderBottom: `1px solid ${GRAY_100}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 800, fontSize: 17, color: GRAY_800 }}>{grade.label} — Monthly Attendance Tally</div>
@@ -1234,21 +1397,26 @@ function GradeExportModal({ grade, month, year, onClose }: { grade: GradeLevel; 
 
 // ─── Main Page ────────────────────────────────────────────────────
 export default function AttendanceSummaryPage() {
-  const now = new Date();
-  const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
+  const [manilaToday] = useState(() => toManilaDateString());
+  const [manilaYear, manilaMonth] = manilaToday.split("-").map(Number);
+  const yearOptions = Array.from({ length: 5 }, (_, i) => manilaYear - 2 + i);
+  const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | null>(null);
   const [selectedSection, setSelectedSection] = useState<Section | null>(null);
   const [showExport, setShowExport] = useState(false);
-  const [selectedMonth, setSelectedMonth] = useState(MONTHS[now.getMonth()]);
-  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(MONTHS[manilaMonth - 1]);
+  const [selectedYear, setSelectedYear] = useState(manilaYear);
 
   // ── new ──────────────────────────────────────────────────────────
   const [gradeData, setGradeData] = useState<GradeLevel[]>([]);
+  const [schoolDayDates, setSchoolDayDates] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const monthIndex = MONTHS.indexOf(selectedMonth) + 1; // convert to 1-based number
+    const controller = new AbortController();
 
     async function fetchSummary() {
       setSelectedGrade(null);
@@ -1257,26 +1425,36 @@ export default function AttendanceSummaryPage() {
       setFetchError(null);
       try {
         const res = await fetch(
-          `/api/attendance/monthly-summary?year=${selectedYear}&month=${monthIndex}`
+          `/api/attendance/monthly-summary?year=${selectedYear}&month=${monthIndex}`,
+          { signal: controller.signal, cache: "no-store" }
         );
-        const json = await res.json();
+        const json = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(json?.message ?? "Failed to load attendance data");
         if (!json.success) throw new Error(json.message ?? "Unknown error");
+        if (controller.signal.aborted) return;
         setGradeData(json.gradeData ?? []);
-      } catch (err: any) {
-        setFetchError(err.message ?? "Failed to load attendance data");
+        setSchoolDayDates(Array.isArray(json.schoolDays) ? json.schoolDays : []);
+      } catch (err: unknown) {
+        if (controller.signal.aborted) return;
+        setFetchError(err instanceof Error ? err.message : "Failed to load attendance data");
         setGradeData([]);
+        setSchoolDayDates([]);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     fetchSummary();
-  }, [selectedMonth, selectedYear]);
+    return () => controller.abort();
+  }, [selectedMonth, selectedYear, reloadKey]);
   // ─────────────────────────────────────────────────────────────────
 
   function handleSelectGrade(g: GradeLevel) { setSelectedGrade(g); setSelectedSection(null); }
   function handleSelectSection(s: Section) { setSelectedSection(s); }
-  function handleBack() { selectedSection ? setSelectedSection(null) : setSelectedGrade(null); }
+  function handleBack() {
+    if (selectedSection) setSelectedSection(null);
+    else setSelectedGrade(null);
+  }
 
   const totalSchoolPresent = gradeData.flatMap(g => g.sections).flatMap(s => s.students).reduce((a, r) => a + r.present, 0);
   const totalSchoolExcused = gradeData.flatMap(g => g.sections).flatMap(s => s.students).reduce((a, r) => a + r.excused, 0);
@@ -1286,32 +1464,43 @@ export default function AttendanceSummaryPage() {
   const crumbs: string[] = ["Grade Levels"];
   if (selectedGrade) crumbs.push(selectedGrade.label);
   if (selectedSection) crumbs.push(`Section ${selectedSection.name}`);
+  const guideHighlight = (target: string) => guideTarget === target
+    ? "relative z-[85] rounded-2xl ring-4 ring-violet-400 ring-offset-4 ring-offset-slate-50"
+    : "";
 
   return (
-    <div className="principal-attendance-page" style={{ fontFamily: "'Inter','Segoe UI',sans-serif", padding: 28 }}>
+    <div className="principal-attendance-page" style={{ fontFamily: "'Inter','Segoe UI',sans-serif", padding: 28, minWidth: 0, overflowX: "hidden" }}>
       <div className="principal-attendance-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, color: GRAY_800 }}>Attendance Summary</h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: PRIMARY }}>Monthly attendance tally by grade level and section</p>
         </div>
-        <div className="principal-attendance-pickers" style={{ display: "flex", gap: 8 }}>
-          <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, fontSize: 13, fontWeight: 600, color: GRAY_800, background: WHITE, cursor: "pointer", outline: "none" }}>
+        <div
+          data-parent-guide="principal-attendance-period"
+          className={`principal-attendance-pickers ${guideHighlight("principal-attendance-period")}`}
+          style={{ display: "flex", gap: 8 }}
+        >
+          <select aria-label="Attendance month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ minHeight: 44, padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, fontSize: 13, fontWeight: 600, color: GRAY_800, background: WHITE, cursor: "pointer", outline: "none" }}>
             {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
-          <select value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))} style={{ padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, fontSize: 13, fontWeight: 600, color: GRAY_800, background: WHITE, cursor: "pointer", outline: "none" }}>
+          <select aria-label="Attendance year" value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))} style={{ minHeight: 44, padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, fontSize: 13, fontWeight: 600, color: GRAY_800, background: WHITE, cursor: "pointer", outline: "none" }}>
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
       </div>
 
-      <div className="principal-attendance-stats" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
+      <div
+        data-parent-guide="principal-attendance-schoolwide"
+        className={`principal-attendance-stats ${guideHighlight("principal-attendance-schoolwide")}`}
+        style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 24 }}
+      >
         {[
           { label: "School-wide Present", value: totalSchoolPresent, color: SUCCESS_GREEN, bg: "#f0fdf4", border: "#bbf7d0" },
           { label: "School-wide Excused", value: totalSchoolExcused, color: "#0369a1", bg: "#e0f2fe", border: "#bae6fd" },
           { label: "School-wide Absent", value: totalSchoolAbsent, color: URGENT_RED, bg: "#fef2f2", border: "#fecaca" },
           { label: "School-wide Late", value: totalSchoolLate, color: WARNING_AMBER, bg: "#fffbeb", border: "#fde68a" },
         ].map(s => (
-          <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${s.border}`, borderRadius: 16, padding: "20px 22px" }}>
+          <div className="principal-attendance-stat-card" key={s.label} style={{ background: s.bg, border: `1.5px solid ${s.border}`, borderRadius: 16, padding: "20px 22px" }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: s.color, opacity: 0.8, marginBottom: 8 }}>{s.label}</div>
             <div style={{ fontSize: 32, fontWeight: 800, color: s.color, lineHeight: 1 }}>{s.value}</div>
             <div style={{ fontSize: 11, color: s.color, opacity: 0.6, marginTop: 6 }}>{selectedMonth} {selectedYear}</div>
@@ -1320,8 +1509,8 @@ export default function AttendanceSummaryPage() {
       </div>
 
       {selectedGrade && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 16 }}>
-          <button onClick={handleBack} style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 600 }}>
+        <div className="principal-attendance-breadcrumb" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 16 }}>
+          <button onClick={handleBack} style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 600 }}>
             <ChevronLeft /> Back
           </button>
           {crumbs.map((c, i) => (
@@ -1341,12 +1530,17 @@ export default function AttendanceSummaryPage() {
 
       {fetchError && !loading && (
         <div style={{ textAlign: "center", padding: "32px", background: "#fef2f2", borderRadius: 14, border: "1.5px solid #fecaca", color: URGENT_RED, fontSize: 13, fontWeight: 600 }}>
-          {fetchError}
+          <p style={{ margin: 0 }}>{fetchError}</p>
+          <button onClick={() => setReloadKey(value => value + 1)} style={{ marginTop: 14, minHeight: 40, padding: "8px 14px", borderRadius: 9, border: `1px solid ${URGENT_RED}`, background: WHITE, color: URGENT_RED, fontWeight: 700, cursor: "pointer" }}>Try again</button>
         </div>
       )}
 
       {!loading && !fetchError && !selectedGrade && (
-        <div className="principal-attendance-grade-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
+        <div
+          data-parent-guide="principal-attendance-grades"
+          className={`principal-attendance-grade-grid ${guideHighlight("principal-attendance-grades")}`}
+          style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}
+        >
           {gradeData.map(grade => {
             const gPresent = grade.sections.flatMap(s => s.students).reduce((a, r) => a + r.present, 0);
             const gExcused = grade.sections.flatMap(s => s.students).reduce((a, r) => a + r.excused, 0);
@@ -1354,7 +1548,7 @@ export default function AttendanceSummaryPage() {
             const gLate = grade.sections.flatMap(s => s.students).reduce((a, r) => a + r.late, 0);
             const total = grade.sections.reduce((a, s) => a + s.students.length, 0);
             return (
-              <button key={grade.grade} onClick={() => handleSelectGrade(grade)}
+              <button className="principal-attendance-grade-card" key={grade.grade} onClick={() => handleSelectGrade(grade)}
                 style={{ background: WHITE, border: `1.5px solid ${GRAY_200}`, borderRadius: 18, padding: "24px 22px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = PRIMARY; (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 8px 28px rgba(82,32,129,0.18)`; (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = GRAY_200; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 2px 8px rgba(0,0,0,0.04)"; (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; }}
@@ -1365,7 +1559,7 @@ export default function AttendanceSummaryPage() {
                 </div>
                 <div style={{ fontWeight: 800, fontSize: 18, color: GRAY_800, marginBottom: 4 }}>{grade.label}</div>
                 <div style={{ fontSize: 12, color: GRAY_400, marginBottom: 16 }}>{grade.sections.length} sections · {total} students</div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div className="principal-attendance-mini-stats" style={{ display: "flex", gap: 8 }}>
                   {[{ label: "Present", val: gPresent, color: SUCCESS_GREEN, bg: "#f0fdf4" }, { label: "Excused", val: gExcused, color: "#0369a1", bg: "#e0f2fe" }, { label: "Absent", val: gAbsent, color: URGENT_RED, bg: "#fef2f2" }, { label: "Late", val: gLate, color: WARNING_AMBER, bg: "#fffbeb" }].map(s => (
                     <div key={s.label} style={{ flex: 1, background: s.bg, borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
                       <div style={{ fontSize: 16, fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -1376,6 +1570,12 @@ export default function AttendanceSummaryPage() {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {!loading && !fetchError && !selectedGrade && gradeData.length === 0 && (
+        <div style={{ textAlign: "center", padding: "48px 24px", background: WHITE, border: `1.5px solid ${GRAY_200}`, borderRadius: 16, color: GRAY_400, fontSize: 14 }}>
+          No grade or attendance records are available for {selectedMonth} {selectedYear}.
         </div>
       )}
 
@@ -1397,7 +1597,7 @@ export default function AttendanceSummaryPage() {
               const mCount = section.students.filter(s => s.gender === "M").length;
               const fCount = section.students.filter(s => s.gender === "F").length;
               return (
-                <button key={section.id} onClick={() => handleSelectSection(section)}
+                <button className="principal-attendance-section-card" key={section.id} onClick={() => handleSelectSection(section)}
                   style={{ background: WHITE, border: `1.5px solid ${GRAY_200}`, borderRadius: 18, padding: "22px 20px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
                   onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = ACCENT; (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 8px 28px rgba(139,92,246,0.18)`; (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = GRAY_200; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 2px 8px rgba(0,0,0,0.04)"; (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; }}
@@ -1410,7 +1610,7 @@ export default function AttendanceSummaryPage() {
                     </div>
                     <div style={{ width: 36, height: 36, borderRadius: 10, background: `${ACCENT}18`, display: "flex", alignItems: "center", justifyContent: "center", color: ACCENT }}><Users /></div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div className="principal-attendance-mini-stats" style={{ display: "flex", gap: 8 }}>
                   {[{ label: "Present", val: sPresent, color: SUCCESS_GREEN, bg: "#f0fdf4", border: "#bbf7d0" }, { label: "Excused", val: sExcused, color: "#0369a1", bg: "#e0f2fe", border: "#bae6fd" }, { label: "Absent", val: sAbsent, color: URGENT_RED, bg: "#fef2f2", border: "#fecaca" }, { label: "Late", val: sLate, color: WARNING_AMBER, bg: "#fffbeb", border: "#fde68a" }].map(s => (
                       <div key={s.label} style={{ flex: 1, background: s.bg, borderRadius: 10, padding: "10px 8px", textAlign: "center", border: `1px solid ${s.border}` }}>
                         <div style={{ fontSize: 18, fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -1430,12 +1630,12 @@ export default function AttendanceSummaryPage() {
 
       {selectedSection && (
         <div className="principal-attendance-table-card" style={{ background: WHITE, borderRadius: 18, border: `1.5px solid ${GRAY_200}`, overflow: "hidden" }}>
-          <div style={{ padding: "20px 24px", borderBottom: `1px solid ${GRAY_100}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div className="principal-attendance-detail-header" style={{ padding: "20px 24px", borderBottom: `1px solid ${GRAY_100}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: 16, color: GRAY_800 }}>Section {selectedSection.name} — Student Attendance</div>
               <div style={{ fontSize: 12, color: GRAY_400, marginTop: 3 }}>{selectedGrade?.label} · {selectedSection.adviser} · {selectedSection.students.filter(s => s.gender === "M").length}M {selectedSection.students.filter(s => s.gender === "F").length}F · {selectedSection.students.length} total</div>
             </div>
-            <button onClick={() => setShowExport(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 11, border: "none", background: `linear-gradient(135deg, ${PRIMARY} 0%, ${PRIMARY_LIGHT} 100%)`, color: WHITE, fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 4px 14px rgba(82,32,129,0.3)" }}>
+            <button onClick={() => setShowExport(true)} style={{ minHeight: 44, display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 11, border: "none", background: `linear-gradient(135deg, ${PRIMARY} 0%, ${PRIMARY_LIGHT} 100%)`, color: WHITE, fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 4px 14px rgba(82,32,129,0.3)" }}>
               <Download /> Export / Print SF2
             </button>
           </div>
@@ -1445,7 +1645,7 @@ export default function AttendanceSummaryPage() {
             const sLate = selectedSection.students.reduce((a, r) => a + r.late, 0);
             const sExcused = selectedSection.students.reduce((a, r) => a + (r.excused ?? 0), 0);
             return (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: "16px 24px", background: GRAY_50, borderBottom: `1px solid ${GRAY_100}` }}>
+              <div className="principal-attendance-detail-stats" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: "16px 24px", background: GRAY_50, borderBottom: `1px solid ${GRAY_100}` }}>
                 {[{ label: "Total Present", val: sPresent, color: SUCCESS_GREEN, bg: "#f0fdf4", border: "#bbf7d0" }, { label: "Total Excused", val: sExcused, color: "#0369a1", bg: "#e0f2fe", border: "#bae6fd" }, { label: "Total Absent", val: sAbsent, color: URGENT_RED, bg: "#fef2f2", border: "#fecaca" }, { label: "Total Late", val: sLate, color: WARNING_AMBER, bg: "#fffbeb", border: "#fde68a" }].map(s => (
                   <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${s.border}`, borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
                     <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -1540,6 +1740,7 @@ export default function AttendanceSummaryPage() {
           gradeLabel={selectedGrade?.label ?? ""}
           month={selectedMonth}
           year={selectedYear}
+          schoolDayDates={schoolDayDates}
           onClose={() => setShowExport(false)}
         />
       )}
@@ -1549,6 +1750,7 @@ export default function AttendanceSummaryPage() {
           grade={selectedGrade}
           month={selectedMonth}
           year={selectedYear}
+          schoolDayDates={schoolDayDates}
           onClose={() => setShowExport(false)}
         />
       )}
@@ -1557,22 +1759,37 @@ export default function AttendanceSummaryPage() {
         @media (max-width: 1024px) {
           .principal-attendance-grade-grid { grid-template-columns: repeat(2,1fr) !important; }
           .principal-attendance-stats { grid-template-columns: repeat(2,1fr) !important; }
-          .principal-attendance-table-card { overflow-x: auto !important; }
+          .principal-attendance-table-card { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
         }
         @media (max-width: 640px) {
-          .principal-attendance-page { padding: 16px !important; }
+          .principal-attendance-page { padding: 16px !important; overflow-x: hidden !important; }
           .principal-attendance-header { flex-direction: column; gap: 12px; }
-          .principal-attendance-pickers { width: 100%; flex-direction: column; }
-          .principal-attendance-pickers select { width: 100%; }
-          .principal-attendance-stats,
+          .principal-attendance-header h1 { font-size: 24px !important; }
+          .principal-attendance-pickers { width: 100%; }
+          .principal-attendance-pickers select:first-child { flex: 1 1 0; min-width: 0; }
+          .principal-attendance-pickers select:last-child { width: 104px; flex: 0 0 104px; }
+          .principal-attendance-stats { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 10px !important; }
+          .principal-attendance-stat-card { min-width: 0; padding: 16px !important; }
           .principal-attendance-grade-grid,
           .principal-attendance-section-grid { grid-template-columns: 1fr !important; }
-          .principal-attendance-table-card { overflow-x: auto !important; }
-        }
-        @media (max-width: 400px) {
-          .principal-attendance-stats { grid-template-columns: 1fr !important; }
+          .principal-attendance-grade-card,
+          .principal-attendance-section-card { min-width: 0; padding: 18px 16px !important; }
+          .principal-attendance-mini-stats { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+          .principal-attendance-detail-header { padding: 16px !important; align-items: stretch !important; }
+          .principal-attendance-detail-header > button { width: 100%; justify-content: center; }
+          .principal-attendance-detail-stats { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; padding: 12px 16px !important; gap: 8px !important; }
+          .principal-attendance-detail-stats > div { min-width: 0; padding: 10px !important; gap: 8px !important; }
+          .principal-attendance-breadcrumb { flex-wrap: wrap; row-gap: 8px; }
+          .principal-attendance-breadcrumb > span { min-width: 0; overflow-wrap: anywhere; }
+          .principal-attendance-table-card { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+          .principal-attendance-modal-overlay { align-items: flex-end !important; padding: 8px !important; }
+          .principal-attendance-modal { width: 100% !important; max-height: calc(100dvh - 16px) !important; border-radius: 18px !important; }
+          .principal-attendance-modal [style*="padding: 20px 24px"] { padding-left: 16px !important; padding-right: 16px !important; }
+          .principal-attendance-modal [style*="margin: 12px 24px"] { margin-left: 16px !important; margin-right: 16px !important; }
+          .principal-attendance-modal table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
         }
       `}</style>
+      <PrincipalAttendanceSummaryGuide onStepChange={setGuideTarget} />
     </div>
   );
 }

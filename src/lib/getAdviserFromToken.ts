@@ -1,10 +1,9 @@
 import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { supabase } from "@/lib/supabase";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
 
 export interface AdviserPayload {
   id: number;
@@ -15,6 +14,7 @@ export interface AdviserPayload {
   grade: string | null;
   section: string | null;
   sections: string[];          // all sections this adviser handles
+  notifications_last_seen_at: string | null;
   role: string;
 }
 
@@ -31,11 +31,11 @@ export async function getAdviserFromToken(): Promise<AdviserPayload | null> {
     // from the official adviser record before an adviser-scoped query is run.
     const { data, error } = await supabase
       .from("advisers")
-      .select("id, employee_id, first_name, last_name, email, grade, section, sections, status")
+      .select("id, employee_id, first_name, last_name, email, grade, section, sections, notifications_last_seen_at, status, archive_status")
       .eq("id", tokenAdviser.id)
       .maybeSingle();
 
-    if (error || !data || data.status !== "active") return null;
+    if (error || !data || data.status !== "active" || data.archive_status === "archived") return null;
 
     const sections = Array.isArray(data.sections) && data.sections.length > 0
       ? data.sections
@@ -51,6 +51,7 @@ export async function getAdviserFromToken(): Promise<AdviserPayload | null> {
       grade: data.grade,
       section: data.section,
       sections,
+      notifications_last_seen_at: data.notifications_last_seen_at ?? null,
     };
   } catch {
     return null;

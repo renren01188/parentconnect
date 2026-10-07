@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getActiveAdviser, getActiveIct } from "@/lib/apiAuthorization";
 
 export async function GET(req: NextRequest) {
   try {
+    const [adviser, ict] = await Promise.all([getActiveAdviser(), getActiveIct()]);
+    if (!adviser && !ict) {
+      return NextResponse.json({ success: false, message: "Staff access is required." }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id")?.trim();
 
@@ -15,7 +21,7 @@ export async function GET(req: NextRequest) {
 
     const { data: found, error } = await supabase
       .from("students")
-      .select("student_id, first_name, last_name, grade, section")
+      .select("id")
       .eq("student_id", id)
       .limit(1);
 
@@ -25,16 +31,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, taken: false });
     }
 
-    const owner = found[0];
-    return NextResponse.json({
-      success: true,
-      taken: true,
-      owner: {
-        full_name: `${owner.first_name} ${owner.last_name}`,
-        grade: owner.grade,
-        section: owner.section,
-      },
-    });
+    // Do not turn an identifier check into a directory of children or their
+    // class assignments.  Callers only need the availability result.
+    return NextResponse.json({ success: true, taken: true });
   } catch (error) {
     console.error("GET /api/students/check-id error:", error);
     return NextResponse.json(

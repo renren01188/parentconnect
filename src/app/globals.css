@@ -27,6 +27,34 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Google renders its checkbox in a fixed-width iframe. Scale it only on
+   phone-sized viewports so the unchanged CAPTCHA remains fully usable. */
+.report-captcha-shell {
+  width: 100%;
+  overflow: hidden;
+}
+
+@media (max-width: 400px) {
+  .report-captcha-shell {
+    min-height: 74px;
+  }
+
+  .report-captcha {
+    transform: scale(0.94);
+    transform-origin: top left;
+  }
+}
+
+@media (max-width: 360px) {
+  .report-captcha-shell {
+    min-height: 62px;
+  }
+
+  .report-captcha {
+    transform: scale(0.78);
+  }
+}
+
 /* Guidance dashboard shell styles are kept global so refreshes do not flash unstyled content before client hydration. */
 .guidance-shell {
   min-height: 100vh;

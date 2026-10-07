@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import ExcelJS from "exceljs";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { resolveRfidScanValue } from "@/lib/rfid";
+import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
 import {
     CreditCard, UserPlus, History, Check,
     ChevronDown, IdCard, ChevronLeft, ChevronRight,
@@ -12,6 +15,7 @@ import {
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ScanMode = "Time In" | "Time Out";
 type AttendanceStatus = "On Time" | "Late" | "Absent" | "Excused";
+type ManualAttendanceStatus = "On Time" | "Absent" | "Present";
 type AttendanceVia = "RFID" | "Manual" | "Auto";
 
 type ClassSessionStatus = "Active" | "Ended" | "Not Started";
@@ -20,6 +24,8 @@ type ClassSessionInfo = {
     status: ClassSessionStatus;
     scheduled_start: string;
     scheduled_end: string;
+    late_after?: string | null;
+    absent_after?: string | null;
     actual_start: string | null;
 };
 
@@ -84,6 +90,13 @@ type MonthlyAttendanceRow = {
     remark: string | null;
     is_absent: boolean;
     is_excused: boolean;
+    active_from: string;
+};
+
+type MonthlyAttendanceData = {
+    rows: MonthlyAttendanceRow[];
+    schoolDays: string[];
+    studentCount: number;
 };
 
 type HistoryStats = { total: number; present: number; late: number; absent: number; excused?: number };
@@ -152,7 +165,16 @@ function buildFullName(student: Student) {
 }
 
 function toLocalDateString(date: Date) {
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    return `${year}-${month}-${day}`;
 }
 
 const MONTH_NAMES = [
@@ -204,9 +226,9 @@ function printAttendance(rows: HistorySummaryRow[], dateStr: string, sectionLabe
     const tableRows = rows.map((row, i) => `
         <tr style="border-bottom:1px solid #e2e8f0;${row.is_absent ? "background:#fff5f5;" : i % 2 === 0 ? "background:#f8fafc;" : ""}">
             <td style="padding:8px 10px;font-size:12px;color:#374151;">${i + 1}</td>
-            <td style="padding:8px 10px;font-size:12px;color:#374151;">${row.student_id}</td>
-            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:#111827;">${row.full_name}</td>
-            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${formatTime(row.time_in)}</td>
+            <td style="padding:8px 10px;font-size:12px;color:#374151;">${escapePrintHtml(row.student_id)}</td>
+            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:#111827;">${escapePrintHtml(row.full_name)}</td>
+            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(formatTime(row.time_in))}</td>
             <td style="padding:8px 10px;font-size:12px;text-align:center;">
                 <span style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;
                     ${row.time_in_status === "On Time" ? "background:#d1fae5;color:#065f46;" :
@@ -214,12 +236,12 @@ function printAttendance(rows: HistorySummaryRow[], dateStr: string, sectionLabe
                 row.time_in_status === "Excused" ? "background:#e0f2fe;color:#0369a1;" :
                     row.is_absent ? "background:#fee2e2;color:#991b1b;" :
                         "background:#f1f5f9;color:#64748b;"}">
-                    ${row.time_in_status ?? "No Record"}
+                    ${escapePrintHtml(row.time_in_status ?? "No Record")}
                 </span>
             </td>
-            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${formatTime(row.time_out)}</td>
-            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${row.via ?? "—"}</td>
-            <td style="padding:8px 10px;font-size:12px;color:#6b7280;font-style:italic;">${row.remark ?? ""}</td>
+            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(formatTime(row.time_out))}</td>
+            <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(row.via ?? "—")}</td>
+            <td style="padding:8px 10px;font-size:12px;color:#6b7280;font-style:italic;">${escapePrintHtml(row.remark ?? "")}</td>
         </tr>`).join("");
 
     const html = `<!DOCTYPE html>
@@ -255,9 +277,9 @@ function printAttendance(rows: HistorySummaryRow[], dateStr: string, sectionLabe
         <div class="school-name">School Attendance Record</div>
         <div class="doc-title">Daily Attendance Sheet</div>
         <div class="meta">
-            <div class="meta-item">Date: <strong>${dateLabel}</strong></div>
-            <div class="meta-item">Section: <strong>${sectionLabel}</strong></div>
-            <div class="meta-item">Adviser: <strong>${adviserName}</strong></div>
+            <div class="meta-item">Date: <strong>${escapePrintHtml(dateLabel)}</strong></div>
+            <div class="meta-item">Section: <strong>${escapePrintHtml(sectionLabel)}</strong></div>
+            <div class="meta-item">Adviser: <strong>${escapePrintHtml(adviserName)}</strong></div>
             <div class="meta-item">Printed: <strong>${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</strong></div>
         </div>
     </div>
@@ -285,7 +307,7 @@ function printAttendance(rows: HistorySummaryRow[], dateStr: string, sectionLabe
     </table>
     <div class="signature-section">
         <div class="signature-box">
-            <div class="signature-name">${adviserName}</div>
+            <div class="signature-name">${escapePrintHtml(adviserName)}</div>
             <div class="signature-line">Class Adviser's Signature over Printed Name</div>
         </div>
         <div class="signature-box">
@@ -330,12 +352,187 @@ function col0ToRef(col0: number, row: number): string {
     return colLetter(col0) + row;
 }
 
+function escapePrintHtml(value: unknown): string {
+    return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[character]!);
+}
+
+type MergeRange = { top: number; left: number; bottom: number; right: number };
+
+function getMergeRanges(ws: ExcelJS.Worksheet): MergeRange[] {
+    const merges = (ws as unknown as { _merges?: Record<string, MergeRange> })._merges ?? {};
+    return Object.values(merges).map(({ top, left, bottom, right }) => ({ top, left, bottom, right }));
+}
+
+function copyWorksheetWithDynamicAttendanceRows(
+    workbook: ExcelJS.Workbook,
+    templateWs: ExcelJS.Worksheet,
+    maleStudentCount: number,
+    femaleStudentCount: number,
+) {
+    const maleRowDelta = maleStudentCount - MAX_MALE_ROWS;
+    const femaleRowDelta = femaleStudentCount - MAX_FEMALE_ROWS;
+    if (maleRowDelta === 0 && femaleRowDelta === 0) return templateWs;
+
+    const maleTotalRow = MALE_START_ROW + maleStudentCount;
+    const femaleStartRow = maleTotalRow + 1;
+    const femaleTotalRow = femaleStartRow + femaleStudentCount;
+    const combinedRow = femaleTotalRow + 1;
+    const totalRowDelta = maleRowDelta + femaleRowDelta;
+
+    const expandedWs = workbook.addWorksheet("SF2 Expanded");
+    expandedWs.properties = { ...templateWs.properties };
+    expandedWs.pageSetup = { ...templateWs.pageSetup };
+    expandedWs.views = templateWs.views.map((view) => ({ ...view }));
+
+    for (let col = 1; col <= templateWs.columnCount; col++) {
+        const sourceColumn = templateWs.getColumn(col);
+        const targetColumn = expandedWs.getColumn(col);
+        targetColumn.width = sourceColumn.width;
+        targetColumn.hidden = sourceColumn.hidden;
+        targetColumn.outlineLevel = sourceColumn.outlineLevel;
+        targetColumn.style = sourceColumn.style;
+    }
+
+    const mapTemplateRow = (row: number): number | null => {
+        if (row < MALE_START_ROW) return row;
+
+        if (row < MALE_TOTAL_ROW) {
+            const studentIndex = row - MALE_START_ROW;
+            return studentIndex < maleStudentCount ? MALE_START_ROW + studentIndex : null;
+        }
+
+        if (row === MALE_TOTAL_ROW) return maleTotalRow;
+
+        if (row < FEMALE_TOTAL_ROW) {
+            const studentIndex = row - FEMALE_START_ROW;
+            return studentIndex < femaleStudentCount ? femaleStartRow + studentIndex : null;
+        }
+
+        if (row === FEMALE_TOTAL_ROW) return femaleTotalRow;
+        if (row === COMBINED_ROW) return combinedRow;
+
+        return row + totalRowDelta;
+    };
+
+    for (let row = 1; row <= templateWs.rowCount; row++) {
+        const sourceRow = templateWs.getRow(row);
+        const targetRowNumber = mapTemplateRow(row);
+        if (targetRowNumber === null) continue;
+        const targetRow = expandedWs.getRow(targetRowNumber);
+        targetRow.height = sourceRow.height;
+        targetRow.hidden = sourceRow.hidden;
+        targetRow.outlineLevel = sourceRow.outlineLevel;
+
+        for (let col = 1; col <= templateWs.columnCount; col++) {
+            const sourceCell = sourceRow.getCell(col);
+            const targetCell = targetRow.getCell(col);
+            targetCell.value = sourceCell.value;
+            targetCell.style = sourceCell.style;
+        }
+    }
+
+    const copyStudentRowFormat = (sourceRowNumber: number, firstTargetRow: number, count: number) => {
+        const sourceRow = templateWs.getRow(sourceRowNumber);
+        for (let index = 0; index < count; index++) {
+            const targetRow = expandedWs.getRow(firstTargetRow + index);
+            targetRow.height = sourceRow.height;
+            targetRow.hidden = sourceRow.hidden;
+            targetRow.outlineLevel = sourceRow.outlineLevel;
+            for (let col = 1; col <= templateWs.columnCount; col++) {
+                const sourceCell = sourceRow.getCell(col);
+                const targetCell = targetRow.getCell(col);
+                targetCell.value = null;
+                targetCell.style = sourceCell.style;
+            }
+        }
+    };
+
+    copyStudentRowFormat(
+        MALE_TOTAL_ROW - 1,
+        MALE_START_ROW + MAX_MALE_ROWS,
+        Math.max(0, maleRowDelta),
+    );
+    copyStudentRowFormat(
+        FEMALE_TOTAL_ROW - 1,
+        femaleStartRow + MAX_FEMALE_ROWS,
+        Math.max(0, femaleRowDelta),
+    );
+
+    const templateMerges = getMergeRanges(templateWs);
+    const mergeWithTemplateBorder = (merge: MergeRange, targetTop: number, targetBottom: number) => {
+        expandedWs.mergeCells(targetTop, merge.left, targetBottom, merge.right);
+
+        // ExcelJS takes the top-left cell's style when it creates a merged
+        // range. Restore the source range's right and bottom edges so outer
+        // lines (notably the month and section header) stay visible.
+        const sourceTopLeft = templateWs.getCell(merge.top, merge.left);
+        const sourceBottomRight = templateWs.getCell(merge.bottom, merge.right);
+        const targetTopLeft = expandedWs.getCell(targetTop, merge.left);
+        targetTopLeft.border = {
+            ...sourceTopLeft.border,
+            right: sourceBottomRight.border.right ?? sourceTopLeft.border.right,
+            bottom: sourceBottomRight.border.bottom ?? sourceTopLeft.border.bottom,
+        };
+    };
+
+    for (const merge of templateMerges) {
+        const targetTop = mapTemplateRow(merge.top);
+        const targetBottom = mapTemplateRow(merge.bottom);
+        if (targetTop !== null && targetBottom !== null) {
+            mergeWithTemplateBorder(merge, targetTop, targetBottom);
+        }
+    }
+
+    const copyStudentRowMerges = (sourceRow: number, firstTargetRow: number, count: number) => {
+        const rowMerges = templateMerges.filter((merge) => merge.top === sourceRow && merge.bottom === sourceRow);
+        for (let index = 0; index < count; index++) {
+            const targetRow = firstTargetRow + index;
+            for (const merge of rowMerges) {
+                mergeWithTemplateBorder(merge, targetRow, targetRow);
+            }
+        }
+    };
+
+    copyStudentRowMerges(
+        MALE_TOTAL_ROW - 1,
+        MALE_START_ROW + MAX_MALE_ROWS,
+        Math.max(0, maleRowDelta),
+    );
+    copyStudentRowMerges(
+        FEMALE_TOTAL_ROW - 1,
+        femaleStartRow + MAX_FEMALE_ROWS,
+        Math.max(0, femaleRowDelta),
+    );
+
+    workbook.removeWorksheet(templateWs.id);
+    expandedWs.name = "SF2";
+    return expandedWs;
+}
+
 function clearCellPreserveFormat(ws: ExcelJS.Worksheet, ref: string) {
     ws.getCell(ref).value = null;
 }
 
 function setCellValue(ws: ExcelJS.Worksheet, ref: string, value: string | number | null) {
     ws.getCell(ref).value = value;
+}
+
+function setSf2DateHeader(ws: ExcelJS.Worksheet, col0: number, day: number) {
+    const cell = ws.getCell(col0ToRef(col0, 6));
+    // Excel renders narrow numeric cells as ###. The template has a few
+    // intentionally narrow day columns, so store the day as text and let it
+    // shrink inside the existing cell instead of changing the report layout.
+    cell.value = String(day);
+    cell.numFmt = "@";
+    cell.alignment = {
+        ...cell.alignment,
+        horizontal: "center",
+        vertical: "top",
+        wrapText: false,
+        shrinkToFit: true,
+    };
 }
 
 function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, result: number = 0) {
@@ -384,7 +581,8 @@ async function exportMonthlySF2(
     year: number,
     month: number,
     sectionLabel: string,
-    holidayDates: string[] = []
+    holidayDates: string[] = [],
+    schoolDayDates: string[] = [],
 ) {
     const res = await fetch("/SF2_2025_newtemplate.xlsx");
     if (!res.ok) throw new Error("Failed to load SF2 template.");
@@ -393,15 +591,16 @@ async function exportMonthlySF2(
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(templateBuf);
 
-    const ws = workbook.worksheets[0];
+    let ws = workbook.worksheets[0];
     if (!ws) throw new Error("Template worksheet not found.");
 
     const monthName = MONTH_NAMES[month - 1];
     const placements = getSchoolDayPlacementsForMonth(month, year);
     const holidaySet = new Set(holidayDates);
+    const schoolDaySet = new Set(schoolDayDates);
     const classPlacements = placements.filter(({ day }) => {
         const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return !holidaySet.has(iso);
+        return schoolDaySet.has(iso) && !holidaySet.has(iso);
     });
 
     const [gradePart, sectionPartRaw] = sectionLabel.split("·").map(s => s.trim());
@@ -427,7 +626,7 @@ async function exportMonthlySF2(
     placements.forEach(({ day, slotIdx, dowLabel }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
         const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        setCellValue(ws, col0ToRef(col0, 6), day);
+        setSf2DateHeader(ws, col0, day);
         setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(iso) ? "H" : dowLabel);
     });
 
@@ -449,20 +648,34 @@ async function exportMonthlySF2(
             student_id: sample.student_id,
             name: sample.full_name,
             gender: inferredGender as "M" | "F",
+            activeFrom: sample.active_from,
             days,
         };
     }).sort((a, b) => a.name.localeCompare(b.name));
 
     const maleStudents = students.filter(s => s.gender === "M");
     const femaleStudents = students.filter(s => s.gender === "F");
+    const maleRowDelta = maleStudents.length - MAX_MALE_ROWS;
+    const femaleRowDelta = femaleStudents.length - MAX_FEMALE_ROWS;
+    ws = copyWorksheetWithDynamicAttendanceRows(
+        workbook,
+        ws,
+        maleStudents.length,
+        femaleStudents.length,
+    );
+
+    const maleTotalRow = MALE_START_ROW + maleStudents.length;
+    const femaleStartRow = maleTotalRow + 1;
+    const femaleTotalRow = femaleStartRow + femaleStudents.length;
+    const combinedRow = femaleTotalRow + 1;
+    const summaryStartRow = combinedRow + 1;
 
     function fillRows(
         studentList: typeof students,
         startRow: number,
-        maxRows: number,
         totalRow: number
     ) {
-        studentList.slice(0, maxRows).forEach((student, idx) => {
+        studentList.forEach((student, idx) => {
             const row = startRow + idx;
             setCellValue(ws, `A${row}`, idx + 1);
             setCellValue(ws, `C${row}`, student.name);
@@ -483,6 +696,9 @@ async function exportMonthlySF2(
                 const [col0] = SF2_DAY_SLOTS[slotIdx];
                 const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
+                if (!schoolDaySet.has(iso)) return;
+                if (iso < student.activeFrom) return;
+
                 if (holidaySet.has(iso)) {
                     setCellValue(ws, col0ToRef(col0, row), "H");
                     return;
@@ -492,7 +708,7 @@ async function exportMonthlySF2(
 
                 // Future dates — leave blank, no record possible yet
                 const isoDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                const today = new Date().toISOString().slice(0, 10);
+                const today = toLocalDateString(new Date());
                 if (isoDate > today) return;
 
                 const isExcused =
@@ -508,9 +724,8 @@ async function exportMonthlySF2(
 
                 const isAbsent =
                     !isExcused &&
-                    (!rec ||
-                        rec.is_absent === true ||
-                        rec.time_in_status === "Absent");
+                    !!rec &&
+                    (rec.is_absent === true || rec.time_in_status === "Absent");
 
                 if (isExcused) {
                     setCellValue(ws, col0ToRef(col0, row), "E");
@@ -522,26 +737,25 @@ async function exportMonthlySF2(
             });
 
             setCellValue(ws, `AM${row}`, absenceCount);
-            const today = new Date().toISOString().slice(0, 10);
+            const today = toLocalDateString(new Date());
             const pastClassDays = classPlacements.filter(({ day }) => {
                 const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                return iso <= today;
+                return iso >= student.activeFrom && iso <= today;
             }).length;
             setCellValue(ws, `AO${row}`, pastClassDays - absenceCount);
         });
 
-        for (let idx = studentList.length; idx < maxRows; idx++) {
-            const row = startRow + idx;
-            ["A", "B", "C", "AM", "AO"].forEach((col) => clearCellPreserveFormat(ws, `${col}${row}`));
-            for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
-                clearCellPreserveFormat(ws, col0ToRef(col0, row));
-                if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, row));
-            }
-        }
-
-        setCellValue(ws, `A${totalRow}`, Math.min(studentList.length, maxRows));
-        setCellFormula(ws, `AM${totalRow}`, `SUM(AM${startRow}:AM${totalRow - 1})`);
-        setCellFormula(ws, `AO${totalRow}`, `SUM(AO${startRow}:AO${totalRow - 1})`);
+        setCellValue(ws, `A${totalRow}`, studentList.length);
+        setCellFormula(
+            ws,
+            `AM${totalRow}`,
+            studentList.length ? `SUM(AM${startRow}:AM${totalRow - 1})` : "0",
+        );
+        setCellFormula(
+            ws,
+            `AO${totalRow}`,
+            studentList.length ? `SUM(AO${startRow}:AO${totalRow - 1})` : "0",
+        );
 
         for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
             clearCellPreserveFormat(ws, col0ToRef(col0, totalRow));
@@ -552,50 +766,63 @@ async function exportMonthlySF2(
             const [col0] = SF2_DAY_SLOTS[slotIdx];
             const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             if (holidaySet.has(iso)) return;
-            const startRef = col0ToRef(col0, startRow);
-            const endRef = col0ToRef(col0, totalRow - 1);
-            setCellFormula(ws, col0ToRef(col0, totalRow), `COUNTIF(${startRef}:${endRef},"X")`);
+            const formula = studentList.length
+                ? `COUNTIF(${col0ToRef(col0, startRow)}:${col0ToRef(col0, totalRow - 1)},"X")`
+                : "0";
+            setCellFormula(ws, col0ToRef(col0, totalRow), formula);
         });
     }
 
-    fillRows(maleStudents, MALE_START_ROW, MAX_MALE_ROWS, MALE_TOTAL_ROW);
-    fillRows(femaleStudents, FEMALE_START_ROW, MAX_FEMALE_ROWS, FEMALE_TOTAL_ROW);
+    fillRows(maleStudents, MALE_START_ROW, maleTotalRow);
+    fillRows(femaleStudents, femaleStartRow, femaleTotalRow);
 
     for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
-        clearCellPreserveFormat(ws, col0ToRef(col0, COMBINED_ROW));
-        if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, COMBINED_ROW));
+        clearCellPreserveFormat(ws, col0ToRef(col0, combinedRow));
+        if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, combinedRow));
     }
 
-    setCellFormula(ws, `A${COMBINED_ROW}`, `A${MALE_TOTAL_ROW}+A${FEMALE_TOTAL_ROW}`);
-    setCellFormula(ws, `AM${COMBINED_ROW}`, `AM${MALE_TOTAL_ROW}+AM${FEMALE_TOTAL_ROW}`);
-    setCellFormula(ws, `AO${COMBINED_ROW}`, `AO${MALE_TOTAL_ROW}+AO${FEMALE_TOTAL_ROW}`);
+    setCellFormula(ws, `A${combinedRow}`, `A${maleTotalRow}+A${femaleTotalRow}`);
+    setCellFormula(ws, `AM${combinedRow}`, `AM${maleTotalRow}+AM${femaleTotalRow}`);
+    setCellFormula(ws, `AO${combinedRow}`, `AO${maleTotalRow}+AO${femaleTotalRow}`);
 
     placements.forEach(({ slotIdx }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
-        setCellFormula(ws, col0ToRef(col0, COMBINED_ROW), `${col0ToRef(col0, MALE_TOTAL_ROW)}+${col0ToRef(col0, FEMALE_TOTAL_ROW)}`);
+        setCellFormula(ws, col0ToRef(col0, combinedRow), `${col0ToRef(col0, maleTotalRow)}+${col0ToRef(col0, femaleTotalRow)}`);
     });
 
-    setCellValue(ws, "AM49", `Month : ${monthName.toUpperCase()}`);
-    const todayIso = new Date().toISOString().slice(0, 10);
+    setCellValue(ws, `AM${summaryStartRow}`, `Month : ${monthName.toUpperCase()}`);
+    const todayIso = toLocalDateString(new Date());
     const pastClassDaysCount = classPlacements.filter(({ day }) => {
         const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         return iso <= todayIso;
     }).length;
-    setCellValue(ws, "AP49", `No. of Days of Classes: ${pastClassDaysCount}`);
-    setCellValue(ws, "AR51", Math.min(maleStudents.length, MAX_MALE_ROWS));
-    setCellValue(ws, "AS51", Math.min(femaleStudents.length, MAX_FEMALE_ROWS));
-    setCellValue(ws, "AT51", Math.min(students.length, MAX_MALE_ROWS + MAX_FEMALE_ROWS));
-    setCellValue(ws, "AR57", Math.min(maleStudents.length, MAX_MALE_ROWS));
-    setCellValue(ws, "AS57", Math.min(femaleStudents.length, MAX_FEMALE_ROWS));
-    setCellFormula(ws, "AT57", "AR57+AS57");
-    setCellFormula(ws, "AR61", `AO${MALE_TOTAL_ROW}/${pastClassDaysCount || 1}`);
-    setCellFormula(ws, "AS61", `AO${FEMALE_TOTAL_ROW}/${pastClassDaysCount || 1}`);
-    setCellFormula(ws, "AT61", `AO${COMBINED_ROW}/${pastClassDaysCount || 1}`);
-    setCellFormula(ws, "AR63", "IF(AR57=0,0,AR61/AR57)");
-    setCellFormula(ws, "AS63", "IF(AS57=0,0,AS61/AS57)");
-    setCellFormula(ws, "AT63", "IF(AT57=0,0,AT61/AT57)");
+    setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${pastClassDaysCount}`);
+    const enrollmentRow = summaryStartRow + 2;
+    const attendanceRow = summaryStartRow + 8;
+    const enrollmentPercentageRow = summaryStartRow + 10;
+    const totalPresentRow = summaryStartRow + 12;
+    const attendanceRateRow = summaryStartRow + 14;
+    setCellValue(ws, `AR${enrollmentRow}`, maleStudents.length);
+    setCellValue(ws, `AS${enrollmentRow}`, femaleStudents.length);
+    setCellValue(ws, `AT${enrollmentRow}`, students.length);
+    setCellValue(ws, `AR${attendanceRow}`, maleStudents.length);
+    setCellValue(ws, `AS${attendanceRow}`, femaleStudents.length);
+    setCellFormula(ws, `AT${attendanceRow}`, `AR${attendanceRow}+AS${attendanceRow}`);
+    setCellFormula(ws, `AR${enrollmentPercentageRow}`, `IF(AR${enrollmentRow}=0,0,AR${attendanceRow}/AR${enrollmentRow})`);
+    setCellFormula(ws, `AS${enrollmentPercentageRow}`, `IF(AS${enrollmentRow}=0,0,AS${attendanceRow}/AS${enrollmentRow})`);
+    setCellFormula(ws, `AT${enrollmentPercentageRow}`, `IF(AT${enrollmentRow}=0,0,AT${attendanceRow}/AT${enrollmentRow})`);
+    setCellFormula(ws, `AR${totalPresentRow}`, `AO${maleTotalRow}/${pastClassDaysCount || 1}`);
+    setCellFormula(ws, `AS${totalPresentRow}`, `AO${femaleTotalRow}/${pastClassDaysCount || 1}`);
+    setCellFormula(ws, `AT${totalPresentRow}`, `AO${combinedRow}/${pastClassDaysCount || 1}`);
+    setCellFormula(ws, `AR${attendanceRateRow}`, `IF(AR${attendanceRow}=0,0,AR${totalPresentRow}/AR${attendanceRow})`);
+    setCellFormula(ws, `AS${attendanceRateRow}`, `IF(AS${attendanceRow}=0,0,AS${totalPresentRow}/AS${attendanceRow})`);
+    setCellFormula(ws, `AT${attendanceRateRow}`, `IF(AT${attendanceRow}=0,0,AT${totalPresentRow}/AT${attendanceRow})`);
 
-    ["AN74", "Z80", "AN80"].forEach((ref) => clearCellPreserveFormat(ws, ref));
+    [74, 80].forEach((templateRow) => {
+        const expandedRow = templateRow + maleRowDelta + femaleRowDelta;
+        clearCellPreserveFormat(ws, `AN${expandedRow}`);
+        if (templateRow === 80) clearCellPreserveFormat(ws, `Z${expandedRow}`);
+    });
 
     const out = await workbook.xlsx.writeBuffer();
     const safeSection = sectionName.replace(/[^a-z0-9]+/gi, "_");
@@ -637,10 +864,10 @@ function printMonthlyAttendance(
         return `
         <tr style="border-bottom:1px solid #e2e8f0;${idx % 2 === 0 ? "background:#f8fafc;" : "background:#ffffff;"}">
             <td style="padding:9px 12px;font-size:12px;color:#374151;text-align:center;">${idx + 1}</td>
-            <td style="padding:9px 12px;font-size:12px;color:#374151;">${sid}</td>
-            <td style="padding:9px 12px;font-size:12px;font-weight:600;color:#111827;">${info.name}</td>
-            <td style="padding:9px 12px;font-size:12px;color:#374151;text-align:center;">${info.grade}</td>
-            <td style="padding:9px 12px;font-size:12px;color:#374151;text-align:center;">${info.section}</td>
+            <td style="padding:9px 12px;font-size:12px;color:#374151;">${escapePrintHtml(sid)}</td>
+            <td style="padding:9px 12px;font-size:12px;font-weight:600;color:#111827;">${escapePrintHtml(info.name)}</td>
+            <td style="padding:9px 12px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(info.grade)}</td>
+            <td style="padding:9px 12px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(info.section)}</td>
             <td style="padding:9px 12px;font-size:12px;color:#065f46;font-weight:700;text-align:center;">${present}</td>
             <td style="padding:9px 12px;font-size:12px;color:#92400e;font-weight:700;text-align:center;">${late}</td>
             <td style="padding:9px 12px;font-size:12px;color:#991b1b;font-weight:700;text-align:center;">${absent}</td>
@@ -667,9 +894,9 @@ function printMonthlyAttendance(
         <div style="font-size:20px;font-weight:800;color:#065f46;">School Attendance Record</div>
         <div style="font-size:13px;font-weight:600;color:#374151;margin-top:3px;">Monthly Attendance Summary Report</div>
         <div style="display:flex;gap:32px;margin-top:12px;flex-wrap:wrap;">
-            <div style="font-size:12px;color:#6b7280;">Month: <strong style="color:#111827;">${monthLabel}</strong></div>
-            <div style="font-size:12px;color:#6b7280;">Section: <strong style="color:#111827;">${sectionLabel}</strong></div>
-            <div style="font-size:12px;color:#6b7280;">Adviser: <strong style="color:#111827;">${adviserName}</strong></div>
+            <div style="font-size:12px;color:#6b7280;">Month: <strong style="color:#111827;">${escapePrintHtml(monthLabel)}</strong></div>
+            <div style="font-size:12px;color:#6b7280;">Section: <strong style="color:#111827;">${escapePrintHtml(sectionLabel)}</strong></div>
+            <div style="font-size:12px;color:#6b7280;">Adviser: <strong style="color:#111827;">${escapePrintHtml(adviserName)}</strong></div>
             <div style="font-size:12px;color:#6b7280;">Printed: <strong style="color:#111827;">${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</strong></div>
             <div style="font-size:12px;color:#6b7280;">Total Students: <strong style="color:#111827;">${totalStudents}</strong></div>
         </div>
@@ -726,7 +953,7 @@ function printMonthlyAttendance(
 
     <div style="margin-top:48px;display:flex;justify-content:space-between;gap:40px;">
         <div style="flex:1;text-align:center;">
-            <div style="font-weight:700;font-size:13px;color:#111827;">${adviserName}</div>
+            <div style="font-weight:700;font-size:13px;color:#111827;">${escapePrintHtml(adviserName)}</div>
             <div style="border-top:1px solid #374151;margin-top:40px;padding-top:6px;font-size:11px;color:#6b7280;">Class Adviser's Signature over Printed Name</div>
         </div>
         <div style="flex:1;text-align:center;">
@@ -766,15 +993,18 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
     const years = [now.getFullYear(), now.getFullYear() - 1, now.getFullYear() - 2];
     const availableHolidayDates = getWeekdayDateStrings(selectedYear, selectedMonth);
 
-    async function fetchMonthlyData(): Promise<MonthlyAttendanceRow[] | null> {
+    async function fetchMonthlyData(): Promise<MonthlyAttendanceData | null> {
         setIsLoading(true); setError("");
         try {
             const sectionParam = activeSection ? `&section=${encodeURIComponent(activeSection)}` : "";
             const res = await fetch(`/api/attendance/monthly?year=${selectedYear}&month=${selectedMonth}${sectionParam}`, { cache: "no-store" });
             const data = await res.json();
             if (data.success) {
-
-                return data.rows as MonthlyAttendanceRow[];
+                return {
+                    rows: data.rows as MonthlyAttendanceRow[],
+                    schoolDays: Array.isArray(data.schoolDays) ? data.schoolDays as string[] : [],
+                    studentCount: Number(data.studentCount ?? 0),
+                };
             }
             setError(data.message || "Failed to fetch monthly data");
             return null;
@@ -787,39 +1017,49 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
     }
 
     async function handlePreview() {
-        const rows = await fetchMonthlyData();
-        if (!rows) return;
-        const days = Math.max(0, new Set(rows.map(r => r.date)).size - holidayDates.length);
-        const students = new Set(rows.map(r => r.student_id)).size;
-        const present = rows.filter(r => !r.is_absent).length;
-        const pct = rows.length > 0 ? Math.round((present / rows.length) * 100) : 0;
-        setPreview({ totalDays: days, totalStudents: students, presentPct: pct });
+        const monthlyData = await fetchMonthlyData();
+        if (!monthlyData) return;
+
+        const holidaySet = new Set(holidayDates);
+        const countableRows = monthlyData.rows.filter((row) =>
+            !holidaySet.has(row.date) && !row.is_excused
+        );
+        const present = countableRows.filter((row) =>
+            row.time_in_status === "On Time" || row.time_in_status === "Late" ||
+            row.time_out_status === "On Time" || row.time_out_status === "Late"
+        ).length;
+        const pct = countableRows.length > 0 ? Math.round((present / countableRows.length) * 100) : 0;
+        setPreview({
+            totalDays: monthlyData.schoolDays.filter((date) => !holidaySet.has(date)).length,
+            totalStudents: monthlyData.studentCount,
+            presentPct: pct,
+        });
     }
 
     async function handleExportSF2() {
-        const rows = await fetchMonthlyData();
-        if (!rows || rows.length === 0) {
+        const monthlyData = await fetchMonthlyData();
+        if (!monthlyData || monthlyData.rows.length === 0) {
             setError("No records found for this month.");
             return;
         }
-        await exportMonthlySF2(rows, selectedYear, selectedMonth, sectionLabel, holidayDates);
+        await exportMonthlySF2(monthlyData.rows, selectedYear, selectedMonth, sectionLabel, holidayDates, monthlyData.schoolDays);
     }
 
     async function handlePrintPDF() {
-        const rows = await fetchMonthlyData();
-        if (!rows || rows.length === 0) {
+        const monthlyData = await fetchMonthlyData();
+        if (!monthlyData || monthlyData.rows.length === 0) {
             setError("No records found for this month.");
             return;
         }
-        printMonthlyAttendance(rows, selectedYear, selectedMonth, sectionLabel, adviserName);
+        printMonthlyAttendance(monthlyData.rows, selectedYear, selectedMonth, sectionLabel, adviserName);
     }
 
     const isFuture = selectedYear > now.getFullYear() ||
         (selectedYear === now.getFullYear() && selectedMonth > now.getMonth() + 1);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4">
+            <div className="my-auto w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 bg-gradient-to-r from-emerald-50 to-white">
                     <div className="flex items-center gap-3">
@@ -846,7 +1086,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                     </div>
 
                     {/* Month & Year selectors */}
-                    <div className="grid grid-cols-2 gap-3 mb-5">
+                    <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
                             <label className="mb-1.5 block text-xs font-semibold text-slate-600">Month</label>
                             <div className="relative">
@@ -1010,6 +1250,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
     const [declineReasons, setDeclineReasons] = useState<Record<number, string>>({});
     const [declineErrors, setDeclineErrors] = useState<Record<number, string>>({});
     const [actionLoading, setActionLoading] = useState<Record<number, boolean>>({});
+    const actionInFlightRef = useRef(new Set<number>());
 
     const fetchRequests = useCallback(async () => {
         try {
@@ -1038,7 +1279,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
                 submitted_at: string;
                 status: ExcuseRequestStatus;
                 decline_reason?: string;
-                excuse_letter_attachments?: { id: number; file_name: string; file_type: string; file_data: string }[];
+                attachment?: { file_name: string; file_type: string; file_data: string } | null;
             }) => ({
                 id: l.id,
                 studentName: l.studentName,
@@ -1052,12 +1293,12 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
                     month: "long", day: "numeric", year: "numeric",
                     hour: "2-digit", minute: "2-digit",
                 }),
-                attachments: (l.excuse_letter_attachments || []).map(a => a.file_name),
-                attachmentData: (l.excuse_letter_attachments || []).map(a => ({
-                    file_name: a.file_name,
-                    file_type: a.file_type,
-                    file_data: a.file_data,
-                })),
+                attachments: l.attachment ? [l.attachment.file_name] : [],
+                attachmentData: l.attachment ? [{
+                    file_name: l.attachment.file_name,
+                    file_type: l.attachment.file_type,
+                    file_data: l.attachment.file_data,
+                }] : [],
                 status: l.status,
                 declineReason: l.decline_reason ?? undefined,
             }));
@@ -1079,6 +1320,8 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
     useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
     async function handleApprove(id: number) {
+        if (actionInFlightRef.current.has(id)) return;
+        actionInFlightRef.current.add(id);
         setActionLoading(prev => ({ ...prev, [id]: true }));
         try {
             const res = await fetch(`/api/excuse-letters/${id}`, {
@@ -1089,12 +1332,14 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             const data = await res.json();
             if (!data.success) {
                 setDeclineErrors(prev => ({ ...prev, [id]: data.message || "Failed to approve." }));
+                if (res.status === 409) void fetchRequests();
                 return;
             }
             setRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Approved", declineReason: undefined } : r));
         } catch {
             setDeclineErrors(prev => ({ ...prev, [id]: "Failed to connect to server." }));
         } finally {
+            actionInFlightRef.current.delete(id);
             setActionLoading(prev => ({ ...prev, [id]: false }));
         }
     }
@@ -1105,6 +1350,8 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             setDeclineErrors(prev => ({ ...prev, [id]: "Enter a reason before declining this request." }));
             return;
         }
+        if (actionInFlightRef.current.has(id)) return;
+        actionInFlightRef.current.add(id);
         setActionLoading(prev => ({ ...prev, [id]: true }));
         try {
             const res = await fetch(`/api/excuse-letters/${id}`, {
@@ -1115,6 +1362,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             const data = await res.json();
             if (!data.success) {
                 setDeclineErrors(prev => ({ ...prev, [id]: data.message || "Failed to decline." }));
+                if (res.status === 409) void fetchRequests();
                 return;
             }
             setRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Declined", declineReason: reason } : r));
@@ -1122,6 +1370,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
         } catch {
             setDeclineErrors(prev => ({ ...prev, [id]: "Failed to connect to server." }));
         } finally {
+            actionInFlightRef.current.delete(id);
             setActionLoading(prev => ({ ...prev, [id]: false }));
         }
     }
@@ -1339,14 +1588,13 @@ export default function AdviserAttendancePage() {
     const [logs, setLogs] = useState<AttendanceLog[]>([]);
     const [lastScanned, setLastScanned] = useState<AttendanceLog | null>(null);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
     const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
     const [students, setStudents] = useState<Student[]>([]);
     const [isLoadingStudents, setIsLoadingStudents] = useState(false);
 
-    const [selectedStudentId, setSelectedStudentId] = useState("");
+    const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
     const [manualType, setManualType] = useState<ScanMode>("Time In");
-    const [manualStatus, setManualStatus] = useState<AttendanceStatus>("On Time");
+    const [manualStatus, setManualStatus] = useState<ManualAttendanceStatus>("On Time");
     const [manualRemark, setManualRemark] = useState("");
     const [manualStudentSearch, setManualStudentSearch] = useState("");
     const [isManualStudentPickerOpen, setIsManualStudentPickerOpen] = useState(false);
@@ -1371,6 +1619,7 @@ export default function AdviserAttendancePage() {
     const [historyIsHoliday, setHistoryIsHoliday] = useState(false);
     const [historySearch, setHistorySearch] = useState("");
     const [historyFilter, setHistoryFilter] = useState<"All" | "Present" | "Absent" | "Late" | "Excused">("All");
+    const [historyPage, setHistoryPage] = useState(1);
 
     // ── Monthly export modal ──
     const [showMonthlyExport, setShowMonthlyExport] = useState(false);
@@ -1378,13 +1627,17 @@ export default function AdviserAttendancePage() {
 
     // ── Class session ──
     const [classSession, setClassSession] = useState<ClassSessionInfo | null>(null);
+    const [classSessions, setClassSessions] = useState<ClassSessionInfo[]>([]);
     const [sessionLoading, setSessionLoading] = useState(false);
 
     // ── Multi-section support ──
     const [activeSection, setActiveSection] = useState<string>("");
+    const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
     const inputRef = useRef<HTMLInputElement | null>(null);
     const newRfidInputRef = useRef<HTMLInputElement | null>(null);
+    const scanValueRef = useRef("");
+    const scanInFlightRef = useRef(false);
 
     // A school-wide session can be active while this adviser's section belongs
     // to the other session. Scanning must be enabled only for matching sections.
@@ -1396,7 +1649,7 @@ export default function AdviserAttendancePage() {
     function focusScanner() { inputRef.current?.focus(); }
     function focusNewRfidScanner() { newRfidInputRef.current?.focus(); }
 
-    async function loadStudents(section?: string) {
+    const loadStudents = useCallback(async (section?: string) => {
         try {
             setIsLoadingStudents(true);
             const sec = section !== undefined ? section : activeSection;
@@ -1414,9 +1667,9 @@ export default function AdviserAttendancePage() {
             }
         } catch (error) { console.error("Failed to load students:", error); }
         finally { setIsLoadingStudents(false); }
-    }
+    }, [activeSection]);
 
-    async function loadTodayLogs(section?: string) {
+    const loadTodayLogs = useCallback(async (section?: string) => {
         try {
             setIsLoadingLogs(true);
             const sec = section !== undefined ? section : activeSection;
@@ -1435,10 +1688,10 @@ export default function AdviserAttendancePage() {
             }
         } catch (error) { console.error("Failed to load logs:", error); }
         finally { setIsLoadingLogs(false); }
-    }
+    }, [activeSection]);
 
     async function loadHistory(date: string, section?: string) {
-        setIsLoadingHistory(true); setHistoryError(""); setHistoryIsHoliday(false);
+        setIsLoadingHistory(true); setHistoryError(""); setHistoryIsHoliday(false); setHistoryPage(1);
         try {
             const sec = section !== undefined ? section : activeSection;
             const secParam = sec ? `&section=${encodeURIComponent(sec)}` : "";
@@ -1455,21 +1708,25 @@ export default function AdviserAttendancePage() {
         finally { setIsLoadingHistory(false); }
     }
 
-    async function loadClassSession() {
+    const loadClassSession = useCallback(async () => {
         try {
             setSessionLoading(true);
             const res = await fetch("/api/attendance/class-session", { cache: "no-store" });
             const data = await res.json();
             if (data.success) {
-                const active = (data.sessions || []).find((session: ClassSessionInfo) => session.status === "Active");
-                const upcoming = (data.sessions || []).find((session: ClassSessionInfo) => session.status === "Not Started");
+                const sessions = (data.sessions || []) as ClassSessionInfo[];
+                setClassSessions(sessions);
+                const active = sessions.find((session) => session.status === "Active");
+                const upcoming = sessions.find((session) => session.status === "Not Started");
                 setClassSession(active || null);
                 if (active) {
-                    setScanMessage(`${active.session_type} class is within schedule. Waiting for RFID card tap...`);
+                    setScanMessage(`${active.session_type} class is active under ICT's saved schedule. Waiting for RFID card tap...`);
                 } else if (upcoming) {
-                    setScanMessage("Scanning is not yet available. Please wait until the scheduled class time.");
+                    setScanMessage(`Not started. Scanning opens at ${formatTime(upcoming.scheduled_start)} under ICT's saved schedule.`);
+                } else if (sessions.length === 0) {
+                    setScanMessage("Scanning is unavailable today because there is no school session.");
                 } else {
-                    setScanMessage("Scanning for this class session has ended.");
+                    setScanMessage("Ended. Scanning is unavailable outside ICT's saved class schedule.");
                 }
             } else {
                 setScanMessage(data.message || "Failed to load class session");
@@ -1480,7 +1737,7 @@ export default function AdviserAttendancePage() {
         } finally {
             setSessionLoading(false);
         }
-    }
+    }, []);
 
     function changeHistoryDate(offset: number) {
         const [y, m, d] = historyDate.split("-").map(Number);
@@ -1490,18 +1747,23 @@ export default function AdviserAttendancePage() {
         loadHistory(nextStr);
     }
 
-    async function handleScan() {
-        const value = scanValue.trim();
-        if (!value || isSubmitting) return;
+    async function handleScan(inputValue?: string) {
+        // Do not rely solely on scanValue here. Hardware readers can send the
+        // final UID character and Enter before React commits onChange, which
+        // made the first tap submit a truncated, "not registered" card value.
+        const value = resolveRfidScanValue(inputValue, scanValueRef.current);
+        if (!value || scanInFlightRef.current) return;
+        scanInFlightRef.current = true;
         if (!isScanningOpen) {
+            scanValueRef.current = "";
             setScanValue("");
             await loadClassSession();
-            setScanMessage("RFID scanning is unavailable for this section outside its configured class time.");
+            setScanMessage("RFID scanning is unavailable outside this section's ICT-configured class schedule.");
+            scanInFlightRef.current = false;
             inputRef.current?.focus();
             return;
         }
         try {
-            setIsSubmitting(true);
             setScanMessage("Processing RFID scan...");
             const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
             const res = await fetch("/api/attendance/scan", {
@@ -1522,35 +1784,61 @@ export default function AdviserAttendancePage() {
             console.error("Scan failed:", error);
             setScanMessage("Failed to connect to server");
         } finally {
-            setScanValue(""); setIsSubmitting(false);
+            scanValueRef.current = "";
+            setScanValue("");
+            scanInFlightRef.current = false;
             inputRef.current?.focus();
         }
     }
 
     async function handleManualSave() {
-        if (!selectedStudentId || isSavingManual) return;
+        if (selectedStudentIds.length === 0 || isSavingManual) return;
+
+        const studentIdsToSave = [...selectedStudentIds];
+        const failedStudentIds: string[] = [];
+        const failures: string[] = [];
+        let savedCount = 0;
+
         try {
             setIsSavingManual(true);
-            setManualMessage("Saving manual attendance...");
-            const res = await fetch("/api/attendance/manual", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ student_id: selectedStudentId, type: manualType, status: manualStatus, remark: manualRemark }),
-            });
-            const data = await res.json();
-            if (data.success) {
-                const newLog: AttendanceLog = data.log;
-                setLogs(prev => [newLog, ...prev]);
-                setLastScanned(newLog);
-                setTodayLogPage(1);
-                setManualMessage("Manual attendance saved successfully");
-                setSelectedStudentId(""); setManualStudentSearch(""); setManualType("Time In");
-                setManualStatus("On Time"); setManualRemark("");
-            } else {
-                setManualMessage(data.message || "Failed to save attendance");
+            for (const [index, studentId] of studentIdsToSave.entries()) {
+                setManualMessage(`Saving attendance ${index + 1} of ${studentIdsToSave.length}...`);
+                try {
+                    const res = await fetch("/api/attendance/manual", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ student_id: studentId, type: manualType, status: manualStatus, remark: manualRemark }),
+                    });
+                    const data = await res.json();
+                    if (!data.success) {
+                        failedStudentIds.push(studentId);
+                        failures.push(data.message || "Failed to save attendance");
+                        continue;
+                    }
+
+                    const newLog: AttendanceLog = data.log;
+                    setLogs(prev => prev.some(log => log.id === newLog.id)
+                        ? prev.map(log => log.id === newLog.id ? newLog : log)
+                        : [newLog, ...prev]);
+                    setLastScanned(newLog);
+                    savedCount += 1;
+                } catch (error) {
+                    console.error("Manual save failed:", error);
+                    failedStudentIds.push(studentId);
+                    failures.push("Failed to connect to server");
+                }
             }
-        } catch (error) {
-            console.error("Manual save failed:", error);
-            setManualMessage("Failed to connect to server");
+
+            setTodayLogPage(1);
+            setSelectedStudentIds(failedStudentIds);
+            if (failedStudentIds.length === 0) {
+                setManualStudentSearch(""); setManualType("Time In");
+                setManualStatus("On Time"); setManualRemark("");
+                setManualMessage(`Manual attendance saved for ${savedCount} student${savedCount === 1 ? "" : "s"}.`);
+            } else {
+                setManualMessage(
+                    `${savedCount} saved; ${failedStudentIds.length} still selected. ${failures[0] ?? "Review and try again."}`,
+                );
+            }
         } finally { setIsSavingManual(false); }
     }
 
@@ -1583,14 +1871,28 @@ export default function AdviserAttendancePage() {
         loadClassSession();
         loadTodayLogs();
         loadStudents();
-    }, []);
+    }, [loadClassSession, loadStudents, loadTodayLogs]);
 
     // Keep the screen aligned with ICT's configured start/end times even when
     // the Adviser leaves this page open while a session changes state.
     useEffect(() => {
         const timer = window.setInterval(loadClassSession, 30_000);
         return () => window.clearInterval(timer);
-    }, []);
+    }, [loadClassSession]);
+
+    // ICT schedule edits are reflected immediately; polling remains as a
+    // safe fallback for deployments that have not enabled this table yet.
+    useEffect(() => {
+        const client = supabaseBrowser;
+        if (!client) return;
+        const channel = client
+            .channel("adviser-attendance-class-schedule")
+            .on("postgres_changes", { event: "*", schema: "public", table: "class_sessions" }, () => {
+                void loadClassSession();
+            })
+            .subscribe();
+        return () => { void client.removeChannel(channel); };
+    }, [loadClassSession]);
 
     useEffect(() => {
         if (isScanningOpen) {
@@ -1610,6 +1912,10 @@ export default function AdviserAttendancePage() {
     const adviserName = adviser?.full_name || "Class Adviser";
     const todayStr = toLocalDateString(new Date());
     const scannerLabel = isScanningOpen && classSession ? `${classSession.session_type} Class` : "Outside Schedule";
+    const selectedSchedule = classSessions.find((session) => session.session_type === selectedSectionSession)
+        ?? classSessions.find((session) => session.status === "Active")
+        ?? classSessions[0]
+        ?? null;
 
     const filteredHistoryRows = historySummary.filter(row => {
         const matchSearch = historySearch === "" ||
@@ -1623,10 +1929,25 @@ export default function AdviserAttendancePage() {
                             row.is_absent;
         return matchSearch && matchFilter;
     });
-    const manualStudentOptions = students.filter(student =>
-        buildFullName(student).toLowerCase().includes(manualStudentSearch.trim().toLowerCase())
+    const HISTORY_ROWS_PER_PAGE = 10;
+    const historyPageCount = Math.max(1, Math.ceil(filteredHistoryRows.length / HISTORY_ROWS_PER_PAGE));
+    const currentHistoryPage = Math.min(historyPage, historyPageCount);
+    const paginatedHistoryRows = filteredHistoryRows.slice(
+        (currentHistoryPage - 1) * HISTORY_ROWS_PER_PAGE,
+        currentHistoryPage * HISTORY_ROWS_PER_PAGE,
     );
-    const selectedManualStudent = students.find(student => student.student_id === selectedStudentId);
+    const manualStudentOptions = students.filter(student => {
+        const search = manualStudentSearch.trim().toLowerCase();
+        return !search
+            || buildFullName(student).toLowerCase().includes(search)
+            || student.student_id.toLowerCase().includes(search);
+    });
+    const selectedManualStudent = selectedStudentIds.length === 1
+        ? students.find(student => student.student_id === selectedStudentIds[0])
+        : undefined;
+    const selectedManualLateLog = selectedStudentIds.length === 1
+        ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === manualType && log.status === "Late")
+        : undefined;
     const filteredTodayLogs = logs.filter(log => {
         const search = todayLogSearch.trim().toLowerCase();
         return !search || log.full_name.toLowerCase().includes(search) || log.student_id.toLowerCase().includes(search);
@@ -1638,17 +1959,20 @@ export default function AdviserAttendancePage() {
         (currentTodayLogPage - 1) * TODAY_LOGS_PER_PAGE,
         currentTodayLogPage * TODAY_LOGS_PER_PAGE
     );
+    const guideHighlight = (target: string) => guideTarget === target
+        ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100"
+        : "";
 
     return (
-        <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 min-h-screen font-sans">
+        <main className="min-w-0 flex-1 overflow-y-auto bg-slate-100 px-3 py-5 font-sans sm:px-4 md:px-6 md:py-6">
 
             {/* Header */}
-            <div className="flex items-start justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">RFID Attendance</h1>
+            <div className="mb-5 flex flex-col gap-3 lg:mb-6 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <h1 className="text-xl font-extrabold tracking-tight text-slate-800 sm:text-2xl">RFID Attendance</h1>
                     <p className="text-slate-400 text-sm mt-0.5">{todayLabel} · {sectionLabel}</p>
                 </div>
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
                     {/* ── NEW: Monthly Export button ── */}
                     <button
                         onClick={() => setShowExcuseApproval(true)}
@@ -1673,18 +1997,22 @@ export default function AdviserAttendancePage() {
 
             {/* Multi-section switcher */}
             {adviser && adviser.sections?.length > 1 && (
-                <div className="mb-5 flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-400 mr-1">Section:</span>
+                <div data-parent-guide="section-switcher" className={`mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 ${guideHighlight("section-switcher")}`}>
+                    <span className="mr-1 shrink-0 text-xs font-semibold text-slate-400">Section:</span>
                     {adviser.sections.map(sec => (
                         <button
                             key={sec}
                             onClick={() => {
                                 setActiveSection(sec);
+                                setSelectedStudentIds([]);
+                                setManualStudentSearch("");
+                                setIsManualStudentPickerOpen(false);
+                                setManualStatus("On Time");
                                 loadStudents(sec);
                                 loadTodayLogs(sec);
                                 if (showHistory) loadHistory(historyDate, sec);
                             }}
-                            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
+                            className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
                                 ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
                                 : "bg-white border border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-700"
                                 }`}
@@ -1698,8 +2026,8 @@ export default function AdviserAttendancePage() {
             )}
 
             {/* Action cards */}
-            <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+            <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-3 xl:items-stretch">
+                <div data-parent-guide="rfid-actions" className={`flex flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5 ${guideHighlight("rfid-actions")}`}>
                     <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50">
                         <UserPlus className="h-4 w-4 text-emerald-600" />
                     </div>
@@ -1707,12 +2035,12 @@ export default function AdviserAttendancePage() {
                     <p className="mt-1 text-xs text-slate-400">Assign a new RFID card to a student</p>
                     <button
                         onClick={() => { setShowRegisterRfid(true); setRfidMessage("Waiting for new RFID card tap..."); setTimeout(() => focusNewRfidScanner(), 100); }}
-                        className="mt-4 w-full rounded-xl bg-emerald-500 hover:bg-emerald-600 py-2.5 text-xs font-bold text-white transition-colors">
+                        className="mt-auto min-h-11 w-full rounded-xl bg-emerald-500 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-600">
                         Register Card
                     </button>
                 </div>
 
-                <div className={`rounded-2xl border shadow-sm p-5 transition-all duration-200 ${isScanningOpen ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
+                <div className={`flex flex-col rounded-2xl border p-4 shadow-sm transition-all duration-200 sm:p-5 ${isScanningOpen ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
                     <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl ${isScanningOpen ? "bg-white/20" : "bg-slate-50"}`}>
                         <PlayCircle className={`h-4 w-4 ${isScanningOpen ? "text-white" : "text-slate-500"}`} />
                     </div>
@@ -1720,14 +2048,22 @@ export default function AdviserAttendancePage() {
                     <p className="mt-1 text-xs opacity-80">
                         {isScanningOpen && classSession ? `${classSession.session_type} class is accepting RFID scans` : "Scanning follows the saved class schedule"}
                     </p>
+                    {selectedSchedule ? (
+                        <p className="mt-3 rounded-lg bg-white/15 px-2.5 py-2 text-[11px] leading-5 opacity-95">
+                            {selectedSchedule.session_type}: {formatTime(selectedSchedule.scheduled_start)} – {formatTime(selectedSchedule.scheduled_end)}<br />
+                            Late after {formatTime(selectedSchedule.late_after ?? null)} · Absent after {formatTime(selectedSchedule.absent_after ?? null)}
+                        </p>
+                    ) : (
+                        <p className="mt-3 text-[11px] opacity-80">ICT has not saved a schedule for this class yet.</p>
+                    )}
                     <button
                         onClick={() => { setActiveTopAction(null); setShowHistory(false); loadClassSession(); focusScanner(); }}
-                        className={`mt-4 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${isScanningOpen ? "bg-white text-emerald-600" : "bg-slate-800 hover:bg-slate-900 text-white"}`}>
+                        className={`mt-auto min-h-11 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${isScanningOpen ? "bg-white text-emerald-600" : "bg-slate-800 hover:bg-slate-900 text-white"}`}>
                         {sessionLoading ? "Checking..." : isScanningOpen ? "Scanning Active" : "Check Schedule"}
                     </button>
                 </div>
 
-                <div className={`rounded-2xl border shadow-sm p-5 transition-all duration-200 ${activeTopAction === "history" ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
+                <div className={`flex flex-col rounded-2xl border p-4 shadow-sm transition-all duration-200 sm:p-5 ${activeTopAction === "history" ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
                     <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl ${activeTopAction === "history" ? "bg-white/20" : "bg-emerald-50"}`}>
                         <History className={`h-4 w-4 ${activeTopAction === "history" ? "text-white" : "text-emerald-600"}`} />
                     </div>
@@ -1735,7 +2071,7 @@ export default function AdviserAttendancePage() {
                     <p className="mt-1 text-xs opacity-80">View past attendance records</p>
                     <button
                         onClick={() => { setActiveTopAction("history"); setShowHistory(true); loadHistory(historyDate); }}
-                        className={`mt-4 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${activeTopAction === "history" ? "bg-white text-emerald-600" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
+                        className={`mt-auto min-h-11 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${activeTopAction === "history" ? "bg-white text-emerald-600" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
                         {activeTopAction === "history" ? "Viewing History" : "View History"}
                     </button>
                 </div>
@@ -1744,13 +2080,13 @@ export default function AdviserAttendancePage() {
             {/* History Panel */}
             {showHistory && (
                 <div className="mb-5 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                    <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 gap-4 flex-wrap">
+                    <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                         <div className="flex items-center gap-3">
                             <History className="w-5 h-5 text-emerald-500" />
                             <h3 className="text-base font-bold text-slate-800">Attendance History</h3>
                             <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-lg">{sectionLabel}</span>
                         </div>
-                        <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex flex-wrap items-center gap-2">
                             <button onClick={() => changeHistoryDate(-1)}
                                 className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">
                                 <ChevronLeft className="w-4 h-4 text-slate-500" />
@@ -1772,7 +2108,7 @@ export default function AdviserAttendancePage() {
                         </div>
                     </div>
 
-                    <div className={`px-5 py-3 border-b flex items-center justify-between flex-wrap gap-3 ${historyIsHoliday ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"}`}>
+                    <div className={`flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-5 ${historyIsHoliday ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"}`}>
                         <div className="flex items-center gap-2">
                             <p className={`text-sm font-bold ${historyIsHoliday ? "text-amber-700" : "text-emerald-700"}`}>
                                 {formatDateLabel(historyDate)}
@@ -1784,30 +2120,30 @@ export default function AdviserAttendancePage() {
                             )}
                         </div>
                         {historyStats && !historyIsHoliday && (
-                            <div className="flex items-center gap-3 text-xs font-semibold">
-                                <span className="bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full">✓ Present: {historyStats.present}</span>
-                                <span className="bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full">⏰ Late: {historyStats.late}</span>
-                                <span className="bg-red-100 text-red-600 px-2.5 py-1 rounded-full">✗ Absent: {historyStats.absent}</span>
-                                <span className="bg-sky-100 text-sky-700 px-2.5 py-1 rounded-full">Excused: {historyStats.excused ?? 0}</span>
-                                <span className="bg-slate-100 text-slate-500 px-2.5 py-1 rounded-full">Total: {historyStats.total}</span>
+                            <div className="grid grid-cols-2 gap-2 text-xs font-semibold sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+                                <span className="flex min-h-10 items-center rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">✓ Present: {historyStats.present}</span>
+                                <span className="flex min-h-10 items-center rounded-full bg-amber-100 px-2.5 py-1 text-amber-700">⏰ Late: {historyStats.late}</span>
+                                <span className="flex min-h-10 items-center rounded-full bg-red-100 px-2.5 py-1 text-red-600">✗ Absent: {historyStats.absent}</span>
+                                <span className="flex min-h-10 items-center rounded-full bg-sky-100 px-2.5 py-1 text-sky-700">Excused: {historyStats.excused ?? 0}</span>
+                                <span className="flex min-h-10 items-center rounded-full bg-slate-100 px-2.5 py-1 text-slate-500">Total: {historyStats.total}</span>
                             </div>
                         )}
                     </div>
 
                     {!historyError && (
-                        <div className="px-5 py-3 border-b border-slate-100">
-                            <div className="flex items-center gap-3">
+                        <div className="border-b border-slate-100 px-4 py-3 sm:px-5">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                                 <div className="relative flex-1">
                                     <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                                         <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
                                     </svg>
-                                    <input type="text" value={historySearch} onChange={e => setHistorySearch(e.target.value)}
+                                    <input type="text" value={historySearch} onChange={e => { setHistorySearch(e.target.value); setHistoryPage(1); }}
                                         placeholder="Search by name or student ID..."
                                         className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex max-w-full items-center gap-2 overflow-x-auto overscroll-x-contain">
                                     {(["All", "Present", "Absent", "Late", "Excused"] as const).map(f => (
-                                        <button key={f} onClick={() => setHistoryFilter(f)}
+                                        <button key={f} onClick={() => { setHistoryFilter(f); setHistoryPage(1); }}
                                             className={`px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${historyFilter === f
                                                 ? f === "Late" ? "bg-amber-400 text-white shadow-sm"
                                                     : f === "Absent" ? "bg-red-500 text-white shadow-sm"
@@ -1838,6 +2174,7 @@ export default function AdviserAttendancePage() {
                     )}
 
                     {!isLoadingHistory && !historyError && (
+                        <>
                         <div className="overflow-x-auto">
                             <table className="w-full min-w-[700px] text-sm">
                                 <thead>
@@ -1853,7 +2190,7 @@ export default function AdviserAttendancePage() {
                                             {historySummary.length === 0 ? "No students found for this section." : "No results match your search or filter."}
                                         </td></tr>
                                     ) : (
-                                        filteredHistoryRows.map(row => (
+                                        paginatedHistoryRows.map(row => (
                                             <tr key={row.student_id}
                                                 className={`border-b border-slate-50 last:border-0 transition-colors ${row.is_absent ? "bg-red-50/40 hover:bg-red-50/60" : "hover:bg-slate-50/60"}`}>
                                                 <td className="px-5 py-3">
@@ -1892,6 +2229,21 @@ export default function AdviserAttendancePage() {
                                 </tbody>
                             </table>
                         </div>
+                        {filteredHistoryRows.length > HISTORY_ROWS_PER_PAGE && (
+                            <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
+                                <p className="text-xs text-slate-400">
+                                    Showing {(currentHistoryPage - 1) * HISTORY_ROWS_PER_PAGE + 1}-{Math.min(currentHistoryPage * HISTORY_ROWS_PER_PAGE, filteredHistoryRows.length)} of {filteredHistoryRows.length} students
+                                </p>
+                                <div className="flex items-center gap-2">
+                                    <button type="button" disabled={currentHistoryPage === 1} onClick={() => setHistoryPage(page => Math.max(1, page - 1))}
+                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+                                    <span className="text-xs text-slate-500">{currentHistoryPage} / {historyPageCount}</span>
+                                    <button type="button" disabled={currentHistoryPage === historyPageCount} onClick={() => setHistoryPage(page => Math.min(historyPageCount, page + 1))}
+                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+                                </div>
+                            </div>
+                        )}
+                        </>
                     )}
                 </div>
             )}
@@ -1899,18 +2251,18 @@ export default function AdviserAttendancePage() {
             {/* Main grid */}
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
                 <div className="xl:col-span-4">
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                    <div data-parent-guide="live-scanner" className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("live-scanner")}`}>
+                        <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                             <h3 className="text-base font-bold text-slate-800">Live Scanner</h3>
                             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isScanningOpen ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{scannerLabel}</span>
                         </div>
-                        <div className="p-6 flex flex-col items-center">
+                        <div className="flex flex-col items-center p-4 sm:p-6">
                             <input ref={inputRef} value={scanValue}
-                                onChange={e => setScanValue(e.target.value)}
-                                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleScan(); } }}
+                                onChange={e => { scanValueRef.current = e.currentTarget.value; setScanValue(e.currentTarget.value); }}
+                                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void handleScan(e.currentTarget.value); } }}
                                 className="absolute opacity-0 pointer-events-none" autoFocus />
                             <button onClick={() => { loadClassSession(); if (isScanningOpen) focusScanner(); }} disabled={!isScanningOpen}
-                                className={`flex h-52 w-52 flex-col items-center justify-center rounded-full border-[3px] border-dashed transition-colors ${isScanningOpen ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}`}>
+                                className={`flex h-44 w-44 flex-col items-center justify-center rounded-full border-[3px] border-dashed transition-colors sm:h-52 sm:w-52 ${isScanningOpen ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}`}>
                                 <CreditCard className="mb-2 h-10 w-10" />
                                 <span className="text-xl font-bold">{isScanningOpen ? "Scan Now" : "Unavailable"}</span>
                             </button>
@@ -1931,20 +2283,26 @@ export default function AdviserAttendancePage() {
                 </div>
 
                 <div className="flex flex-col gap-5 xl:col-span-8">
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                    <div data-parent-guide="manual-attendance" className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("manual-attendance")}`}>
+                        <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                             <h3 className="text-base font-bold text-slate-800">Manual Attendance</h3>
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-400">Backup Option</span>
+                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-400">ICT schedule rules apply</span>
                         </div>
-                        <div className="p-5">
+                        <div className="p-4 sm:p-5">
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
                                 <div className="md:col-span-8">
                                     <label className="mb-1.5 block text-xs font-semibold text-slate-600">Student ({sectionLabel})</label>
                                     <div className="relative">
                                         <button type="button" onClick={() => setIsManualStudentPickerOpen(open => !open)}
                                             className="flex h-11 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 text-left text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
-                                            <span className={selectedManualStudent ? "" : "text-slate-400"}>
-                                                {isLoadingStudents ? "Loading students..." : selectedManualStudent ? buildFullName(selectedManualStudent) : "Select student..."}
+                                            <span className={selectedStudentIds.length > 0 ? "" : "text-slate-400"}>
+                                                {isLoadingStudents
+                                                    ? "Loading students..."
+                                                    : selectedManualStudent
+                                                        ? buildFullName(selectedManualStudent)
+                                                        : selectedStudentIds.length > 0
+                                                            ? `${selectedStudentIds.length} students selected`
+                                                            : "Select student(s)..."}
                                             </span>
                                             <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
                                         </button>
@@ -1955,21 +2313,57 @@ export default function AdviserAttendancePage() {
                                                         onChange={e => setManualStudentSearch(e.target.value)}
                                                         placeholder="Search student by name..."
                                                         className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                                    <div className="mt-2 flex items-center justify-between gap-2">
+                                                        <button type="button"
+                                                            onClick={() => {
+                                                                setSelectedStudentIds(current => [...new Set([
+                                                                    ...current,
+                                                                    ...manualStudentOptions.map(student => student.student_id),
+                                                                ])]);
+                                                                setManualStatus("On Time");
+                                                                setManualMessage("");
+                                                            }}
+                                                            disabled={manualStudentOptions.length === 0}
+                                                            className="min-h-9 rounded-lg px-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-400">
+                                                            Select all
+                                                        </button>
+                                                        <button type="button"
+                                                            onClick={() => { setSelectedStudentIds([]); setManualStatus("On Time"); setManualMessage(""); }}
+                                                            disabled={selectedStudentIds.length === 0}
+                                                            className="min-h-9 rounded-lg px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400">
+                                                            Unselect all
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 <div className="max-h-56 overflow-y-auto py-1">
                                                     {manualStudentOptions.length === 0 ? (
                                                         <p className="px-3 py-3 text-sm text-slate-400">No students found.</p>
                                                     ) : manualStudentOptions.map(student => (
-                                                        <button key={student.student_id} type="button"
-                                                            onClick={() => {
-                                                                setSelectedStudentId(student.student_id);
-                                                                setManualStudentSearch("");
-                                                                setIsManualStudentPickerOpen(false);
-                                                            }}
-                                                            className="block w-full px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-emerald-50 hover:text-emerald-800">
-                                                            {buildFullName(student)}
-                                                        </button>
+                                                        <label key={student.student_id}
+                                                            className={`flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 ${selectedStudentIds.includes(student.student_id) ? "bg-emerald-50" : ""}`}>
+                                                            <input type="checkbox"
+                                                                checked={selectedStudentIds.includes(student.student_id)}
+                                                                onChange={() => {
+                                                                    setSelectedStudentIds(current => current.includes(student.student_id)
+                                                                        ? current.filter(id => id !== student.student_id)
+                                                                        : [...current, student.student_id]);
+                                                                    setManualStatus("On Time");
+                                                                    setManualMessage("");
+                                                                }}
+                                                                className="h-4 w-4 shrink-0 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400" />
+                                                            <span className="min-w-0">
+                                                                <span className="block truncate">{buildFullName(student)}</span>
+                                                                <span className="block text-xs text-slate-400">{student.student_id}</span>
+                                                            </span>
+                                                        </label>
                                                     ))}
+                                                </div>
+                                                <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2">
+                                                    <span className="text-xs text-slate-400">{selectedStudentIds.length} selected</span>
+                                                    <button type="button" onClick={() => setIsManualStudentPickerOpen(false)}
+                                                        className="min-h-9 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-white hover:bg-emerald-600">
+                                                        Done
+                                                    </button>
                                                 </div>
                                             </div>
                                         )}
@@ -1978,7 +2372,7 @@ export default function AdviserAttendancePage() {
                                 <div className="md:col-span-4">
                                     <label className="mb-1.5 block text-xs font-semibold text-slate-600">Type</label>
                                     <div className="relative">
-                                        <select value={manualType} onChange={e => setManualType(e.target.value as ScanMode)}
+                                        <select value={manualType} onChange={e => { setManualType(e.target.value as ScanMode); setManualStatus("On Time"); }}
                                             className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition">
                                             <option value="Time In">Time In</option>
                                             <option value="Time Out">Time Out</option>
@@ -1990,16 +2384,25 @@ export default function AdviserAttendancePage() {
                             <div className="mt-4">
                                 <label className="mb-1.5 block text-xs font-semibold text-slate-600">Status</label>
                                 <div className="grid grid-cols-3 gap-3">
-                                    {(["On Time", "Late", "Absent"] as AttendanceStatus[]).map(status => (
-                                        <button key={status} type="button" onClick={() => setManualStatus(status)}
-                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === status
-                                                ? status === "On Time" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
-                                                    : status === "Late" ? "border-amber-400 bg-amber-400 text-white shadow-sm"
+                                    {(["On Time", "Late", "Absent"] as const).map(status => (
+                                        <button key={status} type="button" onClick={() => status !== "Late" && setManualStatus(status)} disabled={status === "Late"}
+                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${status === "Late"
+                                                ? "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                                : manualStatus === status
+                                                    ? status === "On Time" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
                                                         : "border-red-500 bg-red-500 text-white shadow-sm"
-                                                : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
+                                                    : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
                                                 }`}>{status}</button>
                                     ))}
+                                    {selectedManualLateLog && (
+                                        <button type="button" onClick={() => setManualStatus("Present")}
+                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === "Present"
+                                                ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
+                                                : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
+                                                }`}>Present</button>
+                                    )}
                                 </div>
+                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : ""}</p>
                             </div>
                             <div className="mt-4">
                                 <div className="mb-1.5 flex items-center justify-between">
@@ -2010,17 +2413,17 @@ export default function AdviserAttendancePage() {
                                     placeholder="e.g. Excuse letter submitted"
                                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                             </div>
-                            <button onClick={handleManualSave} disabled={isSavingManual}
+                            <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0}
                                 className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white transition-colors disabled:opacity-60">
                                 <Check className="h-4 w-4" />
-                                {isSavingManual ? "Saving..." : "Save Attendance"}
+                                {isSavingManual ? "Saving..." : selectedStudentIds.length > 1 ? `Save Attendance for ${selectedStudentIds.length} Students` : "Save Attendance"}
                             </button>
                             {manualMessage && <p className="mt-2.5 text-sm text-slate-500">{manualMessage}</p>}
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                    <div data-parent-guide="today-log" className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("today-log")}`}>
+                        <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                             <h3 className="text-base font-bold text-slate-800">Today&apos;s Log · {sectionLabel}</h3>
                             <div className="flex items-center gap-3">
                                 <span className="text-xs text-slate-400">{filteredTodayLogs.length} records</span>
@@ -2030,7 +2433,7 @@ export default function AdviserAttendancePage() {
                                 </button>
                             </div>
                         </div>
-                        <div className="border-b border-slate-100 px-5 py-3">
+                        <div className="border-b border-slate-100 px-4 py-3 sm:px-5">
                             <input value={todayLogSearch}
                                 onChange={e => { setTodayLogSearch(e.target.value); setTodayLogPage(1); }}
                                 placeholder="Search today's log by student name or LRN..."
@@ -2100,18 +2503,18 @@ export default function AdviserAttendancePage() {
 
             {/* Register RFID Modal */}
             {showRegisterRfid && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-                    <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
-                        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-                            <div>
+                <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4">
+                    <div className="my-auto w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
+                            <div className="min-w-0">
                                 <h3 className="text-base font-bold text-slate-800">Register RFID</h3>
                                 <p className="mt-0.5 text-xs text-slate-400">Assign a new RFID card to a student in {sectionLabel}</p>
                             </div>
-                            <button onClick={() => setShowRegisterRfid(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 transition-colors">
+                            <button onClick={() => setShowRegisterRfid(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100">
                                 <X className="h-4 w-4" />
                             </button>
                         </div>
-                        <div className="p-6">
+                        <div className="p-4 sm:p-6">
                             <label className="mb-1.5 block text-xs font-semibold text-slate-600">Student</label>
                             <div className="relative">
                                 <select value={rfidStudentId} onChange={e => setRfidStudentId(e.target.value)}
@@ -2144,13 +2547,13 @@ export default function AdviserAttendancePage() {
                                     </div>
                                 )}
                             </div>
-                            <div className="mt-5 flex items-center justify-end gap-3">
+                            <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                                 <button onClick={() => setShowRegisterRfid(false)}
-                                    className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
+                                    className="min-h-11 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 sm:w-auto">
                                     Cancel
                                 </button>
                                 <button onClick={handleRegisterNewRfid} disabled={!rfidStudentId || !newRfidValue.trim() || isSavingRfid}
-                                    className="rounded-xl bg-emerald-500 hover:bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition-colors disabled:opacity-60">
+                                    className="min-h-11 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-60 sm:w-auto">
                                     {isSavingRfid ? "Saving..." : "Save New RFID"}
                                 </button>
                             </div>
@@ -2174,6 +2577,7 @@ export default function AdviserAttendancePage() {
                     adviserGrade={adviser?.grade || ""}
                 />
             )}
+            <AdviserAttendanceGuide onStepChange={setGuideTarget} />
         </main>
     );
 }

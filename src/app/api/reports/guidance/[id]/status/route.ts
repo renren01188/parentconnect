@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidancePrincipalEscalationEmail } from "@/lib/mailer";
 import { getGuidanceSession, listMessages, toGuidanceReport, unreadGuidanceMessageIds } from "../../../parent-adviser/_lib";
+import { logAudit } from "@/lib/audit";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -26,6 +27,22 @@ export async function PATCH(
     const { status } = await req.json();
     const requested = String(status ?? "").toLowerCase();
     const now = new Date().toISOString();
+
+    const { data: currentReport, error: currentReportError } = await supabase
+      .from("parent_adviser_reports")
+      .select("id, status, escalated_to_guidance, escalated_to_principal")
+      .eq("id", reportId)
+      .eq("escalated_to_guidance", true)
+      .limit(1)
+      .maybeSingle();
+    if (currentReportError) throw currentReportError;
+    if (!currentReport) return NextResponse.json({ success: false, message: "Escalated report not found." }, { status: 404 });
+    if (requested === "resolved" && String(currentReport.status ?? "").toLowerCase() === "resolved") {
+      return NextResponse.json({ success: false, message: "This report has already been resolved." }, { status: 409 });
+    }
+    if (requested === "resolved" && currentReport.escalated_to_principal) {
+      return NextResponse.json({ success: false, message: "The Principal owns this escalated report and must resolve it." }, { status: 403 });
+    }
 
     if (requested === "seen") {
       const { error } = await supabase
@@ -68,6 +85,7 @@ export async function PATCH(
       }
 
       const refreshedMessages = unreadMessageIds.length > 0 ? await listMessages([reportId]) : messages;
+      await logAudit({ action: "Report Viewed", performedById: guidance.id, performedBy: guidance.name, performedByRole: "Guidance Counselor", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: currentReport.status, newStatus: "ongoing", module: "Reports", details: `Opened escalated report #${reportId} for review.` });
       return NextResponse.json({
         success: true,
         report: toGuidanceReport(report, refreshedMessages.get(reportId) ?? []),
@@ -97,24 +115,32 @@ export async function PATCH(
     };
     if (escalatedToPrincipal) updatePayload.escalated_to_principal = true;
 
-    let { error } = await supabase
+    let updateResult = await supabase
       .from("parent_adviser_reports")
       .update(updatePayload)
       .eq("id", reportId)
-      .eq("escalated_to_guidance", true);
+      .eq("escalated_to_guidance", true)
+      .select("id")
+      .maybeSingle();
+    let error = updateResult.error;
 
     if (error?.message?.includes("status_updated_at")) {
       const { status_updated_at: _statusUpdatedAt, ...fallbackPayload } = updatePayload;
       void _statusUpdatedAt;
-      const fallback = await supabase
+      updateResult = await supabase
         .from("parent_adviser_reports")
         .update(fallbackPayload)
         .eq("id", reportId)
-        .eq("escalated_to_guidance", true);
-      error = fallback.error;
+        .eq("escalated_to_guidance", true)
+        .select("id")
+        .maybeSingle();
+      error = updateResult.error;
     }
 
     if (error) throw error;
+    if (!updateResult.data) {
+      return NextResponse.json({ success: false, message: "This report is not available for Guidance escalation." }, { status: 409 });
+    }
 
     const { data: report, error: reportError } = await supabase
       .from("parent_adviser_reports")
@@ -154,6 +180,8 @@ export async function PATCH(
         console.error("Guidance principal escalation email failed:", emailError);
       }
     }
+
+    await logAudit({ action: normalized === "resolved" ? "Report Resolved" : escalatedToPrincipal ? "Escalated to Principal" : "Report Status Updated", performedById: guidance.id, performedBy: guidance.name, performedByRole: "Guidance Counselor", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: currentReport.status, newStatus: normalized, module: "Reports", details: escalatedToPrincipal ? `Escalated report #${reportId} from Guidance to the Principal.` : `Changed report #${reportId} from ${currentReport.status} to ${normalized}.` });
 
     const messages = await listMessages([reportId]);
     return NextResponse.json({

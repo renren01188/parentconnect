@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle, Inbox, Loader2, MessageSquare, Paperclip, Plus, Reply, Search, Send, Upload, X } from "lucide-react";
+import { ArrowLeft, CheckCircle, Inbox, Loader2, MessageSquare, Paperclip, Plus, Reply, Search, Send, Upload, X } from "lucide-react";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 
 type Recipient = {
   id: string;
@@ -53,6 +55,7 @@ type StaffApiRecipient = Recipient & {
 };
 
 type StaffApiReply = {
+  id: number;
   sender: ThreadMessage["senderRole"];
   sender_name: string;
   sender_email: string;
@@ -79,6 +82,13 @@ type StaffApiMessage = {
   status: Conversation["status"];
   replies?: StaffApiReply[];
   sortAt?: number;
+};
+
+type StaffMessagesResponse = {
+  success: boolean;
+  message?: string;
+  messages?: StaffApiMessage[];
+  recipients?: StaffApiRecipient[];
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -132,20 +142,20 @@ function formatAttachmentSize(size: number) {
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
   if (!attachments?.length) return null;
   return (
-    <div className={`mt-2 flex max-w-[76%] flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
+    <div className={`mt-2 flex max-w-full flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
       {attachments.map((attachment, index) => (
         <a
           key={`${attachment.name}-${index}`}
           href={attachment.dataUrl}
           download={attachment.name}
-          className={`inline-flex max-w-full items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+          className={`inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
             mine
               ? "border-[#274e13]/20 bg-white text-gray-700 hover:bg-gray-50"
               : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
           }`}
         >
           <Paperclip className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-          <span className="max-w-[180px] truncate">{attachment.name}</span>
+          <span className="max-w-[140px] truncate sm:max-w-[180px]">{attachment.name}</span>
           <span className="shrink-0 text-gray-400">{formatAttachmentSize(attachment.size)}</span>
         </a>
       ))}
@@ -192,6 +202,7 @@ function normalizeStaffConversation(message: StaffApiMessage): Conversation {
         attachments: message.attachments ?? [],
       },
       ...((message.replies ?? []).map((reply) => ({
+        id: reply.id,
         senderRole: reply.sender,
         senderName: reply.sender_name,
         senderEmail: reply.sender_email,
@@ -202,6 +213,22 @@ function normalizeStaffConversation(message: StaffApiMessage): Conversation {
       }))),
     ],
   };
+}
+
+function mergeConversations(current: Conversation[], incoming: Conversation[]) {
+  const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
+  return incoming.map((conversation) => {
+    const existing = currentById.get(conversation.conversationId);
+    if (!existing) return conversation;
+
+    // A database event can arrive while the post-response update is being
+    // rendered. Stable message IDs make the merge idempotent in either order.
+    const messages = new Map<string, ThreadMessage>();
+    [...existing.thread, ...conversation.thread].forEach((message) => {
+      messages.set(String(message.id ?? `${message.senderEmail}-${message.sentAt}-${message.body}`), message);
+    });
+    return { ...conversation, thread: Array.from(messages.values()) };
+  });
 }
 
 function ComposeModal({
@@ -220,6 +247,7 @@ function ComposeModal({
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const filteredRecipients = useMemo(() => {
     const query = recipientSearch.trim().toLowerCase();
@@ -235,9 +263,12 @@ function ComposeModal({
   async function handleSend() {
     if (!canSend) return;
     setSending(true);
+    setSendError(null);
     try {
       await onSent({ recipientId, subject: subject.trim(), message: message.trim(), attachments });
       setSent(true);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Unable to send message.");
     } finally {
       setSending(false);
     }
@@ -252,10 +283,10 @@ function ComposeModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/40 p-5" onClick={onClose}>
-      <div className="flex max-h-[calc(100vh-40px)] w-[520px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
-          <div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:items-start sm:justify-end sm:p-5" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[520px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="min-w-0">
             <h2 className="text-base font-bold text-gray-900">New Message</h2>
             <p className="mt-0.5 text-xs text-gray-400">Send a message to school staff or the principal</p>
           </div>
@@ -276,7 +307,7 @@ function ComposeModal({
             </button>
           </div>
         ) : (
-          <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-6 py-5">
+          <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
             <div>
               <label className="mb-1.5 block text-xs font-bold text-gray-600">Recipient</label>
               <div className="mb-2 flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2">
@@ -314,6 +345,7 @@ function ComposeModal({
                   </button>
                 ))}
               </div>
+              {sendError && <p role="alert" className="mt-2 text-xs font-semibold text-red-600">{sendError}</p>}
             </div>
 
             <div>
@@ -372,7 +404,7 @@ function ComposeModal({
               )}
             </div>
 
-            <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+            <div className="flex items-center justify-between gap-3 border-t border-gray-100 pt-2">
               <button onClick={onClose} className="rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
                 Cancel
               </button>
@@ -382,7 +414,7 @@ function ComposeModal({
                 className="flex items-center gap-2 rounded-xl bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1f3f0f] disabled:cursor-not-allowed disabled:bg-[#274e13]/40"
               >
                 {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                Send Message
+                {sending ? "Sending..." : "Send Message"}
               </button>
             </div>
           </div>
@@ -393,7 +425,7 @@ function ComposeModal({
 }
 
 export default function ICTInboxPage() {
-  const { setInboxUnreadCount } = useNotifications();
+  const { markInboxSeen } = useNotifications();
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -404,11 +436,19 @@ export default function ICTInboxPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sendingReply, setSendingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const [showCompose, setShowCompose] = useState(false);
+  const [mobileThreadOpen, setMobileThreadOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
   const unreadCount = conversations.filter((conversation) => conversation.isUnread).length;
+
+  // Dismiss the sidebar attention badge without changing a thread's read state.
+  // A thread is still marked read only by openConversation or a reply.
+  useEffect(() => {
+    markInboxSeen();
+  }, [markInboxSeen]);
 
   const filteredConversations = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -425,13 +465,12 @@ export default function ICTInboxPage() {
     });
   }, [conversations, filterTab, search]);
 
-  const loadMessages = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadMessages = useCallback(async (background = false): Promise<boolean> => {
+    if (!background) setLoading(true);
+    if (!background) setError(null);
     try {
-      const res = await fetch("/api/reports/staff-messages?role=ict", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message || "Unable to load staff messages.");
+      const { response: res, data } = await fetchJsonWithRetry<StaffMessagesResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" });
+      if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load staff messages.");
 
       const nextConversations = ((data.messages ?? []) as StaffApiMessage[]).map(normalizeStaffConversation);
       setRecipients(((data.recipients ?? []) as StaffApiRecipient[]).map((recipient) => ({
@@ -442,50 +481,50 @@ export default function ICTInboxPage() {
         grade: recipient.grade,
         section: recipient.section,
       })));
-      setConversations(nextConversations);
-      setInboxUnreadCount(nextConversations.filter((conversation) => conversation.isUnread).length);
+      setConversations((current) => mergeConversations(current, nextConversations));
       setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
+      setError(null);
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load staff messages.");
-      setConversations([]);
-      setInboxUnreadCount(0);
+      if (!background) {
+        setError(err instanceof Error ? err.message : "Unable to load staff messages.");
+        setConversations([]);
+      }
+      return false;
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
-  }, [setInboxUnreadCount]);
+  }, []);
 
   useEffect(() => {
     loadMessages();
   }, [loadMessages]);
 
-  // Opening Inbox acknowledges the received conversations and clears its badge.
-  useEffect(() => {
-    const unread = conversations.filter((conversation) => conversation.isUnread);
-    if (!unread.length) return;
-    setConversations((current) => current.map((conversation) => ({ ...conversation, status: "Read", isUnread: false })));
-    setInboxUnreadCount(0);
-    void Promise.all(unread.map((conversation) => fetch("/api/reports/staff-messages", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "ict", conversationId: conversation.conversationId, status: "read" }) })));
-  }, [conversations, setInboxUnreadCount]);
+  const liveUpdateNotice = useStaffMessagesRealtime("ict-inbox-messages", loadMessages);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const frame = window.requestAnimationFrame(() => {
+      threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [selected?.thread.length, selectedId]);
 
   async function openConversation(conversation: Conversation) {
     setSelectedId(conversation.conversationId);
+    setMobileThreadOpen(true);
     if (!conversation.isUnread) return;
 
     setConversations((prev) =>
       prev.map((item) => item.conversationId === conversation.conversationId ? { ...item, status: "Read", isUnread: false } : item)
     );
-    setInboxUnreadCount(Math.max(0, unreadCount - 1));
-
     await fetch("/api/reports/staff-messages", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "ict", conversationId: conversation.conversationId, status: "read" }),
+    }).then((res) => {
+      if (!res.ok) throw new Error("Unable to mark this conversation as read.");
     }).catch(() => null);
-    loadMessages();
+    void loadMessages(true);
   }
 
   async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -495,13 +534,47 @@ export default function ICTInboxPage() {
       body: JSON.stringify({ ...payload, role: "ict", categories: ["General"] }),
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
-    await loadMessages();
+    if (!res.ok || !data?.success || !data.message) throw new Error(data?.message || "Unable to send message.");
+
+    const recipient = recipients.find((item) => item.id === payload.recipientId);
+    if (!recipient) {
+      void loadMessages(true);
+      return;
+    }
+    const created = data.message as { id: number; created_at: string; sender_name: string; sender_email: string };
+    const conversation: Conversation = {
+      id: created.id,
+      conversationId: `staff-message:${created.id}`,
+      recipientId: payload.recipientId,
+      otherRole: recipient.role,
+      otherName: recipient.name,
+      otherEmail: recipient.email,
+      subject: payload.subject,
+      body: payload.message,
+      sentAt: formatDate(created.created_at),
+      updatedAt: formatDate(created.created_at),
+      status: "Read",
+      isUnread: false,
+      thread: [{
+        id: created.id,
+        senderRole: "ICT",
+        senderName: created.sender_name || "ICT",
+        senderEmail: created.sender_email || "",
+        isCurrentUser: true,
+        body: payload.message,
+        sentAt: formatDate(created.created_at),
+        status: "Read",
+        attachments: payload.attachments,
+      }],
+    };
+    setConversations((current) => mergeConversations(current, [conversation, ...current]));
+    void loadMessages(true);
   }
 
   async function sendReply() {
     if (!selected || (!reply.trim() && replyAttachments.length === 0) || sendingReply) return;
     setSendingReply(true);
+    setReplyError(null);
     try {
       const res = await fetch("/api/reports/staff-messages", {
         method: "PATCH",
@@ -515,39 +588,67 @@ export default function ICTInboxPage() {
         }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
+      if (!res.ok || !data?.success || !data.message) throw new Error(data?.message || "Unable to send reply.");
+      const created = data.message as { id: number; created_at: string; sender_name: string; sender_email: string };
+      const message: ThreadMessage = {
+        id: created.id,
+        senderRole: "ICT",
+        senderName: created.sender_name || "ICT",
+        senderEmail: created.sender_email || "",
+        isCurrentUser: true,
+        body: reply.trim(),
+        sentAt: formatDate(created.created_at),
+        status: "Replied",
+        attachments: replyAttachments,
+      };
+      setConversations((current) => current.map((conversation) => {
+        if (conversation.conversationId !== selected.conversationId) return conversation;
+        if (conversation.thread.some((item) => item.id === message.id)) return conversation;
+        return {
+          ...conversation,
+          status: "Replied",
+          isUnread: false,
+          updatedAt: message.sentAt,
+          thread: [...conversation.thread, message],
+        };
+      }));
       setReply("");
       setReplyAttachments([]);
-      await loadMessages();
+      void loadMessages(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to send reply.");
+      setReplyError(err instanceof Error ? err.message : "Unable to send reply.");
     } finally {
       setSendingReply(false);
     }
   }
 
   return (
-    <div className="flex h-full flex-col bg-gray-50">
-      <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-center gap-3">
+    <div className="flex h-[calc(100dvh-4rem)] min-h-0 flex-col overflow-hidden bg-gray-50 md:h-[100dvh] md:max-h-[100dvh]">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#274e13]/10">
             <Inbox className="h-5 w-5 text-[#274e13]" />
           </div>
-          <div>
-            <h1 className="text-xl font-extrabold text-gray-900">Inbox</h1>
-            <p className="mt-0.5 text-xs text-gray-400">School staff and principal message threads</p>
+          <div className="min-w-0">
+            <h1 className="text-lg font-extrabold text-gray-900 sm:text-xl">Inbox</h1>
+            <p className="mt-0.5 truncate text-xs text-gray-400">School staff and principal message threads</p>
           </div>
         </div>
         <button
           onClick={() => setShowCompose(true)}
-          className="flex items-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#1f3f0f]"
+          className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[#274e13] px-3 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#1f3f0f] sm:gap-2 sm:px-4 sm:text-sm"
         >
           <Plus className="h-4 w-4" /> New Message
         </button>
       </div>
+      {liveUpdateNotice && (
+        <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 sm:px-6">
+          {liveUpdateNotice}
+        </div>
+      )}
 
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="flex w-full max-w-[420px] shrink-0 flex-col border-r border-gray-200 bg-white">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <aside className={`${mobileThreadOpen ? "hidden" : "flex"} w-full max-w-[420px] shrink-0 flex-col border-r border-gray-200 bg-white md:flex`}>
           <div className="space-y-3 border-b border-gray-100 px-4 py-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -558,12 +659,12 @@ export default function ICTInboxPage() {
                 className="w-full rounded-xl border border-gray-200 py-2 pl-9 pr-3 text-sm text-gray-700 outline-none focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/10"
               />
             </div>
-            <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+            <div className="flex gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1 [scrollbar-width:none]">
               {(["All", "Unread", "Read", "Replied"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setFilterTab(tab)}
-                  className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
+                  className={`min-w-max flex-1 rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
                     filterTab === tab ? "bg-white text-[#274e13] shadow-sm" : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
@@ -600,14 +701,15 @@ export default function ICTInboxPage() {
                         <p className="truncate text-sm font-bold text-gray-900">{conversation.otherName}</p>
                         {conversation.isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-[#274e13]" />}
                       </div>
+                      <p className="mt-0.5 text-xs font-semibold text-[#274e13]">{conversation.otherRole}</p>
                       <p className="truncate text-xs font-semibold text-gray-700">{conversation.subject}</p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between pl-[52px]">
+                  <div className="flex min-w-0 items-center justify-between gap-2 pl-[52px]">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusClass(conversation.status)}`}>
                       {conversation.status}
                     </span>
-                    <span className="text-[10px] text-gray-400">{formatDate(conversation.updatedAt)}</span>
+                    <span className="truncate text-[10px] text-gray-400">{formatDate(conversation.updatedAt)}</span>
                   </div>
                 </button>
               ))}
@@ -615,7 +717,7 @@ export default function ICTInboxPage() {
           </div>
         </aside>
 
-        <main className="flex flex-1 flex-col overflow-hidden">
+        <main className={`${mobileThreadOpen ? "flex" : "hidden"} min-w-0 flex-1 flex-col overflow-hidden md:flex`}>
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center text-gray-400">
               <Inbox className="mb-3 h-10 w-10 opacity-30" />
@@ -623,53 +725,70 @@ export default function ICTInboxPage() {
             </div>
           ) : (
             <>
-              <div className="shrink-0 border-b border-gray-200 bg-white px-6 py-5">
+              <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-4 sm:px-6 sm:py-5">
+                <button
+                  type="button"
+                  onClick={() => setMobileThreadOpen(false)}
+                  className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-bold text-gray-600 transition hover:bg-gray-50 md:hidden"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Inbox
+                </button>
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#274e13] text-sm font-bold text-white">
                       {initials(selected.otherName)}
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-base font-bold text-gray-900">{selected.otherName}</p>
+                        <p className="break-words text-base font-bold text-gray-900">{selected.otherName}</p>
                         <span className="rounded-full bg-[#274e13]/10 px-2 py-0.5 text-[10px] font-bold text-[#274e13]">
-                          {selected.otherRole === "Guidance" ? "School Staff" : selected.otherRole}
+                          {selected.otherRole}
                         </span>
                       </div>
-                      <p className="mt-0.5 text-xs text-gray-400">{selected.otherEmail}</p>
+                      <p className="mt-0.5 break-all text-xs text-gray-400">{selected.otherEmail}</p>
                     </div>
                   </div>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>
+                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>
                 </div>
-                <h2 className="mt-4 text-xl font-extrabold leading-tight text-gray-900">{selected.subject}</h2>
+                <h2 className="mt-4 break-words text-lg font-extrabold leading-tight text-gray-900 sm:text-xl">{selected.subject}</h2>
                 <p className="mt-1 text-xs text-gray-400">{formatDate(selected.sentAt)}</p>
               </div>
 
-              <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
                 {selected.thread.map((message, index) => (
-                  <div key={`${message.id ?? "thread-message"}-${message.sentAt}-${index}`} className={`flex flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
-                    {message.body && (
-                      <div className={`max-w-[76%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                        message.isCurrentUser
-                          ? "rounded-br-sm bg-[#274e13] text-white"
-                          : "rounded-bl-sm border border-gray-100 bg-white text-gray-700 shadow-sm"
-                      }`}>
-                        {message.body}
+                  <div key={`${message.id ?? "thread-message"}-${message.sentAt}-${index}`} className={`flex gap-2.5 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#274e13] text-[10px] font-bold text-white">
+                      {initials(message.senderName)}
+                    </div>
+                    <div className={`flex min-w-0 max-w-[76%] flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
+                      <div className={`flex max-w-full flex-wrap items-center gap-1.5 text-[10px] font-semibold text-gray-500 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
+                        <span className="break-words">{message.senderName || message.senderRole}</span>
+                        <span className={`rounded-full px-1.5 py-0.5 ${roleClass(message.senderRole)}`}>{message.senderRole}</span>
                       </div>
-                    )}
-                    <AttachmentChips attachments={message.attachments} mine={message.isCurrentUser} />
-                    <p className="mt-1 text-[10px] text-gray-400">
-                      {message.isCurrentUser ? "ICT" : message.senderName} - {formatDate(message.sentAt)}
-                    </p>
+                      {message.body && (
+                        <div className={`max-w-full break-words whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                          message.isCurrentUser
+                            ? "rounded-br-sm bg-[#274e13] text-white"
+                            : "rounded-bl-sm border border-gray-100 bg-white text-gray-700 shadow-sm"
+                        }`}>
+                          {message.body}
+                        </div>
+                      )}
+                      <AttachmentChips attachments={message.attachments} mine={message.isCurrentUser} />
+                      <p className="mt-1 text-[10px] text-gray-400">
+                        {formatDate(message.sentAt)}
+                      </p>
+                      </div>
                   </div>
                 ))}
                 <div ref={threadEndRef} />
               </div>
 
-              <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
+              <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 sm:px-6 sm:py-4">
                 <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
                   <Reply className="h-3.5 w-3.5" /> Reply to {selected.otherName}
                 </div>
+                {replyError && <p role="alert" className="mb-2 text-xs font-semibold text-red-600">{replyError}</p>}
                 {replyAttachments.length > 0 && (
                   <div className="mb-2 flex flex-wrap gap-2">
                     {replyAttachments.map((attachment, index) => (
@@ -684,7 +803,7 @@ export default function ICTInboxPage() {
                     ))}
                   </div>
                 )}
-                <div className="flex items-end gap-3">
+                <div className="flex min-w-0 items-end gap-2 sm:gap-3">
                   <textarea
                     value={reply}
                     onChange={(event) => setReply(event.target.value)}
@@ -696,7 +815,7 @@ export default function ICTInboxPage() {
                     }}
                     placeholder="Write your reply..."
                     rows={2}
-                    className="flex-1 resize-none rounded-xl border border-gray-200 px-3.5 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/10"
+                    className="min-w-0 flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/10 sm:px-3.5"
                   />
                   <label className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-gray-200 text-gray-500 transition hover:bg-gray-50">
                     <Paperclip className="h-4 w-4" />
@@ -716,10 +835,10 @@ export default function ICTInboxPage() {
                   <button
                     onClick={sendReply}
                     disabled={(!reply.trim() && replyAttachments.length === 0) || sendingReply}
-                    className="flex items-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1f3f0f] disabled:cursor-not-allowed disabled:bg-[#274e13]/40"
+                    className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[#274e13] px-3 py-2.5 text-xs font-bold text-white transition hover:bg-[#1f3f0f] disabled:cursor-not-allowed disabled:bg-[#274e13]/40 sm:gap-2 sm:px-4 sm:text-sm"
                   >
                     {sendingReply ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    Reply
+                    {sendingReply ? "Sending..." : "Reply"}
                   </button>
                 </div>
               </div>

@@ -9,31 +9,25 @@ export async function GET() {
             return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
         }
 
-const [adviserAnnRes, guidanceAnnRes, readsRes, ictAnnRes, escalationsRes] = await Promise.all([
-            supabase
-                .from("adviser_announcements")
-                .select("id, title, message, created_at, adviser_id")
-                .order("created_at", { ascending: false })
-                .limit(20),
-            supabase
-                .from("guidance_announcements")
-                .select("id, title, message, created_at")
-                .eq("status", "Published")
-                .order("created_at", { ascending: false })
-                .limit(20),
+        const [readsRes, reportsRes, acceptedTicketsRes] = await Promise.all([
             supabase
                 .from("principal_notification_reads")
                 .select("notif_key")
                 .eq("principal_id", principal.id),
             supabase
-                .from("ict_announcements")
-                .select("id, title, message, created_at")
-                .contains("audience", ["Principal"])
-                .eq("status", "Published")
-                .order("created_at", { ascending: false })
-                .limit(20),
-            supabase.from("parent_adviser_reports").select("id, parent_name, student_name, subject, created_at, status_updated_at").eq("escalated_to_principal", true).order("status_updated_at", { ascending: false }).limit(30),
+                .from("parent_adviser_reports")
+                .select("id, parent_name, student_name, subject, status, created_at, status_updated_at, escalated_to_principal")
+                .order("created_at", { ascending: false }),
+            supabase
+                .from("parent_report_guidance_tickets")
+                .select("id, report_id, decided_at, created_at")
+                .eq("status", "accepted")
+                .order("decided_at", { ascending: false }),
         ]);
+
+        for (const result of [readsRes, reportsRes, acceptedTicketsRes]) {
+            if (result.error) throw result.error;
+        }
 
         const readKeys = new Set(
             (readsRes.data ?? []).map((r: { notif_key: string }) => r.notif_key)
@@ -42,56 +36,68 @@ const [adviserAnnRes, guidanceAnnRes, readsRes, ictAnnRes, escalationsRes] = awa
         const notifications: {
             id: string;
             type: string;
+            category: "report";
+            reportId?: number;
             title: string;
             message: string;
             time: string;
             read: boolean;
         }[] = [];
 
-        for (const ann of adviserAnnRes.data ?? []) {
-            const key = `adviser-${ann.id}`;
+        const reports = reportsRes.data ?? [];
+        const reportsById = new Map(reports.map((report) => [report.id, report]));
+
+        // These event keys are deterministic. The report/ticket rows are the source of
+        // truth and principal_notification_reads stores only whether each event was read.
+        // That creates exactly one notification per event without a second notification table.
+        for (const report of reports) {
+            const key = `parent-report-submitted-${report.id}`;
             notifications.push({
                 id: key,
-                type: "adviser-announcement",
-                title: ann.title ?? "Adviser Announcement",
-                message: ann.message,
-                time: ann.created_at,
+                type: "parent-report-submitted",
+                category: "report",
+                reportId: report.id,
+                title: "New Parent Report",
+                message: `${report.parent_name} submitted a report for ${report.student_name}: ${report.subject}`,
+                time: report.created_at,
                 read: readKeys.has(key),
             });
         }
 
-        for (const ann of guidanceAnnRes.data ?? []) {
-            const key = `guidance-${ann.id}`;
+        for (const ticket of acceptedTicketsRes.data ?? []) {
+            const report = reportsById.get(ticket.report_id);
+            if (!report) continue;
+            const key = `guidance-ticket-accepted-${ticket.id}`;
             notifications.push({
                 id: key,
-                type: "guidance-announcement",
-                title: ann.title ?? "Guidance Announcement",
-                message: ann.message,
-                time: ann.created_at,
-                read: readKeys.has(key),
+                type: "guidance-ticket-accepted",
+                category: "report",
+                reportId: report.id,
+                title: "Guidance Ticket Accepted",
+                message: `Guidance accepted ${report.parent_name}'s ticket for ${report.student_name}: ${report.subject}`,
+                time: ticket.decided_at ?? ticket.created_at ?? report.status_updated_at ?? report.created_at,
+                read: readKeys.has(key) || String(report.status ?? "").toLowerCase() === "ongoing",
             });
         }
-        for (const ann of ictAnnRes.data ?? []) {
-            const key = `ict-announcement-${ann.id}`;
-            notifications.push({
-                id: key,
-                type: "ict-announcement",
-                title: `[ICT] ${ann.title}`,
-                message: ann.message,
-                time: ann.created_at,
-                read: readKeys.has(key),
-            });
-        }
-        for (const report of escalationsRes.data ?? []) {
+
+        for (const report of reports.filter((item) => item.escalated_to_principal)) {
             const key = `guidance-escalated-${report.id}`;
-            notifications.push({ id: key, type: "guidance-escalated", title: "Report Escalated by Guidance", message: `Guidance escalated ${report.parent_name}'s report for ${report.student_name}: ${report.subject}`, time: report.status_updated_at ?? report.created_at, read: readKeys.has(key) });
+            notifications.push({ id: key, type: "guidance-escalated", category: "report", reportId: report.id, title: "Report Escalated by Guidance", message: `Guidance escalated ${report.parent_name}'s report for ${report.student_name}: ${report.subject}`, time: report.status_updated_at ?? report.created_at, read: readKeys.has(key) });
         }
 
         notifications.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
-        const unreadCount = notifications.filter(n => !n.read).length;
+        // The Reports badge represents reports the Principal has not opened,
+        // rather than notification cards they have merely viewed. Opening the
+        // Notifications page can therefore clear its own badge without
+        // incorrectly clearing the Reports badge.
+        const reportUnreadCount = reports.filter((report) =>
+            String(report.status ?? "").toLowerCase() !== "resolved" &&
+            !readKeys.has(`principal-report-read-${report.id}`)
+        ).length;
+        const unreadCount = reportUnreadCount;
 
-        return NextResponse.json({ success: true, notifications, unreadCount });
+        return NextResponse.json({ success: true, notifications, unreadCount, reportUnreadCount });
     } catch (error) {
         console.error("GET /api/principal/notifications error:", error);
         return NextResponse.json({ success: false, message: "Failed to fetch notifications." }, { status: 500 });

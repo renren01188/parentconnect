@@ -8,7 +8,7 @@ import {
   Search, ChevronLeft, ChevronRight, ArrowUpCircle,
   CheckSquare, Square, RefreshCw, AlertTriangle, X,
   Eye, EyeOff, GraduationCap, ShieldAlert, XCircle,
-  CheckCircle2, ChevronDown, Users, Filter,
+  CheckCircle2, ChevronDown, Users, Filter, Trash2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -62,6 +62,13 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
+function sortStudentsByName(students: Student[]) {
+  return [...students].sort((first, second) =>
+    first.full_name.localeCompare(second.full_name, undefined, { sensitivity: "base" })
+    || first.student_id.localeCompare(second.student_id)
+  );
+}
+
 /* Removed: Excel-based student export modal.
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -112,11 +119,13 @@ function TransferModal({
   students,
   selected,
   onClose,
+  onRemove,
   onTransferred,
 }: {
   students: Student[];
   selected: Set<number>;
   onClose: () => void;
+  onRemove: (id: number) => void;
   onTransferred: (ids: number[]) => void;
 }) {
   const [step,           setStep]           = useState<TransferStep>("grade");
@@ -130,7 +139,7 @@ function TransferModal({
   const [sections,       setSections]       = useState<string[]>([]);
   const [loadingSections,setLoadingSections]= useState(false);
 
-  const selectedStudents = students.filter(s => selected.has(s.id));
+  const selectedStudents = sortStudentsByName(students.filter(s => selected.has(s.id)));
 
   // Students that would be transferred to the section they are already in
   const conflictingStudents = targetSection
@@ -206,12 +215,12 @@ function TransferModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 px-3 py-3 backdrop-blur-sm sm:px-4 sm:py-6"
       onClick={e => { if (e.target === e.currentTarget && !submitting && !success) onClose(); }}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg flex flex-col"
-        style={{ maxHeight: "92vh", animation: "tm-in .2s ease" }}
+        className="flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl"
+        style={{ maxHeight: "calc(100dvh - 1.5rem)", animation: "tm-in .2s ease" }}
       >
         <style>{`
           @keyframes tm-in {
@@ -221,7 +230,7 @@ function TransferModal({
         `}</style>
 
         {/* ── Header ── */}
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 pb-4 pt-4 sm:px-6 sm:pt-6">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
               <ArrowUpCircle className="w-5 h-5 text-amber-600" />
@@ -246,7 +255,7 @@ function TransferModal({
 
         {/* ── Step indicator ── */}
         {!success && (
-          <div className="px-6 py-4 border-b border-slate-100 shrink-0">
+          <div className="shrink-0 border-b border-slate-100 px-4 py-4 sm:px-6">
             <div className="flex items-center">
               {STEPS.map((s, i) => {
                 const done   = i < stepIndex;
@@ -276,7 +285,7 @@ function TransferModal({
         )}
 
         {/* ── Body ── */}
-        <div className="overflow-y-auto flex-1 px-6 py-5 flex flex-col gap-4">
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
 
           {/* Success */}
           {success && (
@@ -399,7 +408,7 @@ function TransferModal({
               </div>
               <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
                 {selectedStudents.map(s => (
-                  <div key={s.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50">
+                  <div key={s.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50">
                     <CheckSquare className="w-4 h-4 text-emerald-500 shrink-0" />
                     <div className={`w-8 h-8 rounded-full ${avatarColor(s.full_name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>
                       {getInitials(s.full_name)}
@@ -409,6 +418,16 @@ function TransferModal({
                       <p className="text-[11px] text-slate-400">{s.student_id} · {formatGradeLabel(s.grade)} · {s.section}</p>
                     </div>
                     <StatusBadge status={s.today_status} />
+                    <button
+                      type="button"
+                      onClick={() => onRemove(s.id)}
+                      disabled={submitting}
+                      title={`Remove ${s.full_name} from this transfer`}
+                      aria-label={`Remove ${s.full_name} from this transfer`}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-500 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus:opacity-100 focus:pointer-events-auto hover:bg-red-100 disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -465,11 +484,11 @@ function TransferModal({
         </div>
 
         {/* ── Footer ── */}
-        <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50 rounded-b-2xl">
+        <div className="flex shrink-0 flex-col-reverse gap-2 rounded-b-2xl border-t border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:gap-3 sm:px-6 sm:py-4">
           {success ? (
             <button
               onClick={() => onTransferred(selectedStudents.map(s => s.id))}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl transition-colors"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-600"
             >
               <CheckCircle2 className="w-4 h-4" /> Done
             </button>
@@ -478,7 +497,7 @@ function TransferModal({
               <button
                 onClick={goBack}
                 disabled={submitting}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 font-bold text-sm rounded-xl transition-colors disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 sm:w-auto"
               >
                 <XCircle className="w-4 h-4" />
                 {step === "grade" ? "Cancel" : "Back"}
@@ -486,7 +505,7 @@ function TransferModal({
               <button
                 onClick={goNext}
                 disabled={nextDisabled}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-amber-200"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-amber-200 transition-colors hover:bg-amber-600 disabled:bg-amber-300 sm:flex-1"
               >
                 {submitting ? (
                   <>
@@ -548,7 +567,7 @@ export default function TransferLevelPage() {
       const res  = await fetch(`/api/students/all?${qs}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || json.message || "Unknown error");
-      setStudents(json.data);
+      setStudents(sortStudentsByName(json.data ?? []));
       setPagination(json.pagination);
       setSections(json.sections ?? []);
       setAdviserGrade(json.grade ?? "");
@@ -578,7 +597,7 @@ export default function TransferLevelPage() {
         const res = await fetch(`/api/students/all?${qs}`);
         const json = await res.json();
         if (!json.success) throw new Error(json.message || "Could not select all students.");
-        const everyStudent = (json.data ?? []) as Student[];
+        const everyStudent = sortStudentsByName((json.data ?? []) as Student[]);
         setSelectedIds(new Set(everyStudent.map(s => s.id)));
         setSelectedStudents(new Map(everyStudent.map(s => [s.id, s])));
       } catch (e) {
@@ -623,25 +642,37 @@ export default function TransferLevelPage() {
   };
 
   return (
-    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50 font-sans">
+    <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-50 px-4 py-4 font-sans sm:px-6 sm:py-6">
 
       {showModal && selectedIds.size > 0 && (
         <TransferModal
           students={Array.from(selectedStudents.values())}
           selected={selectedIds}
           onClose={() => setShowModal(false)}
+          onRemove={(id) => {
+            setSelectedIds(previous => {
+              const next = new Set(previous);
+              next.delete(id);
+              return next;
+            });
+            setSelectedStudents(previous => {
+              const next = new Map(previous);
+              next.delete(id);
+              return next;
+            });
+          }}
           onTransferred={handleTransferred}
         />
       )}
 
       {/* Page header */}
-      <div className="flex items-start justify-between mb-2">
-        <div>
+      <div className="mb-3 flex flex-col gap-3 sm:mb-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center">
               <ArrowUpCircle className="w-4 h-4 text-amber-600" />
             </div>
-            <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Transfer New Level</h1>
+            <h1 className="text-xl font-extrabold tracking-tight text-slate-800 sm:text-2xl">Transfer New Level</h1>
           </div>
           <p className="text-slate-400 text-sm">
             {loading
@@ -650,13 +681,13 @@ export default function TransferLevelPage() {
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex w-full gap-2 sm:w-auto">
         <button
           onClick={() => {
             if (selectedIds.size > 0) setShowModal(true);
           }}
           disabled={!someSelected}
-          className={`flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-xl transition-all
+          className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition-all sm:w-auto
             ${someSelected
               ? "bg-amber-500 hover:bg-amber-600 text-white shadow-sm shadow-amber-200"
               : "bg-slate-100 text-slate-400 cursor-not-allowed"}`}
@@ -682,9 +713,9 @@ export default function TransferLevelPage() {
       </div>
 
       {/* Adviser section selector */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4 mb-5">
+      <div className="mb-5 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm sm:px-5">
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
             <Filter className="w-4 h-4 text-slate-400" />
             <p className="text-sm font-bold text-slate-700">Section</p>
             <span className="text-xs text-slate-400">
@@ -695,7 +726,7 @@ export default function TransferLevelPage() {
           </div>
 
           {sections.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
               {sections.map(section => {
                 const active = section === selectedSection;
                 return (
@@ -703,7 +734,7 @@ export default function TransferLevelPage() {
                     key={section}
                     type="button"
                     onClick={() => handleSectionChange(section)}
-                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-bold transition-all
+                    className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-bold transition-all
                       ${active
                         ? "bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-200"
                         : "bg-slate-50 border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50"}`}
@@ -719,7 +750,7 @@ export default function TransferLevelPage() {
       </div>
 
       {/* Table card */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5">
 
         {/* Toolbar */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-5">
@@ -730,12 +761,12 @@ export default function TransferLevelPage() {
               placeholder="Search by name or student ID..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }}
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition"
+              className="min-h-11 w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-4 text-sm text-slate-700 transition placeholder-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
           </div>
 
           {someSelected && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 shrink-0">
+            <div className="flex min-h-11 items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 shrink-0">
               <CheckSquare className="w-4 h-4 text-amber-500" />
               <span className="text-xs font-bold text-amber-700">{selectedIds.size} selected</span>
               <button
@@ -748,8 +779,48 @@ export default function TransferLevelPage() {
           )}
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto">
+        <div className="mb-3 flex items-center justify-between gap-3 md:hidden">
+          <button
+            type="button"
+            onClick={toggleAll}
+            className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-3 text-sm font-bold text-slate-600 transition hover:border-amber-300 hover:bg-amber-50"
+            title={allSelected ? "Deselect all" : "Select all"}
+          >
+            {allSelected ? <CheckSquare className="h-5 w-5 text-amber-500" /> : <Square className="h-5 w-5 text-slate-400" />}
+            {allSelected ? "Deselect all" : "Select all"}
+          </button>
+          <span className="text-xs font-medium text-slate-400">{pagination.total} students</span>
+        </div>
+
+        {/* Mobile student cards */}
+        <div className="flex flex-col gap-3 md:hidden">
+          {loading && <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-400"><RefreshCw className="h-4 w-4 animate-spin" /> Loading students…</div>}
+          {!loading && error && <div className="py-12 text-center"><p className="mb-1 text-sm font-semibold text-red-500">Failed to load students</p><p className="mb-3 text-xs text-slate-400">{error}</p><button onClick={() => fetchStudents(page)} className="min-h-10 rounded-lg bg-emerald-500 px-4 text-xs font-bold text-white transition hover:bg-emerald-600">Retry</button></div>}
+          {!loading && !error && students.length === 0 && <div className="flex flex-col items-center gap-2 py-12"><Users className="h-8 w-8 text-slate-200" /><p className="text-sm font-semibold text-slate-400">No students found</p>{debSearch && <p className="text-xs text-slate-300">Try a different search term</p>}</div>}
+          {!loading && !error && students.map(s => {
+            const isSelected = selectedIds.has(s.id);
+            return (
+              <div key={s.id} role="button" tabIndex={0} onClick={() => toggleOne(s.id)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleOne(s.id); } }} className={`rounded-xl border p-3.5 text-left transition-colors ${isSelected ? "border-amber-200 bg-amber-50/70" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                <div className="flex items-start gap-3">
+                  <button type="button" onClick={e => { e.stopPropagation(); toggleOne(s.id); }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-300 transition hover:bg-amber-50 hover:text-amber-500" aria-label={`${isSelected ? "Deselect" : "Select"} ${s.full_name}`}>
+                    {isSelected ? <CheckSquare className="h-6 w-6 text-amber-500" /> : <Square className="h-6 w-6" />}
+                  </button>
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${avatarColor(s.full_name)} text-xs font-bold text-white`}>{getInitials(s.full_name)}</div>
+                  <div className="min-w-0 flex-1"><p className="break-words text-sm font-bold text-slate-800">{s.full_name}</p><p className="mt-0.5 text-xs text-slate-400">{s.gender}</p></div>
+                  <StatusBadge status={s.today_status} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-100 pt-3 text-xs">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Student ID</p><p className="mt-0.5 break-all font-mono font-medium text-slate-600">{s.student_id}</p></div>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Section</p><p className="mt-0.5 font-semibold text-slate-600">{s.section}</p></div>
+                  <div className="col-span-2"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Grade Level</p><span className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600"><GraduationCap className="h-3 w-3" />{formatGradeLabel(s.grade)}</span></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
@@ -871,16 +942,16 @@ export default function TransferLevelPage() {
 
         {/* Pagination */}
         {!loading && !error && pagination.total > 0 && (
-          <div className="flex items-center justify-between mt-5 pt-4 border-t border-slate-100">
+          <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-slate-400">
               Showing {(pagination.page - 1) * pagination.limit + 1}–
               {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} students
             </p>
-            <div className="flex items-center gap-1">
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 transition-colors"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40 sm:h-8 sm:w-8"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -888,7 +959,7 @@ export default function TransferLevelPage() {
                 <button
                   key={p}
                   onClick={() => setPage(p)}
-                  className={`w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold transition-colors ${
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold transition-colors sm:h-8 sm:w-8 ${
                     page === p
                       ? "bg-amber-500 text-white"
                       : "border border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -900,7 +971,7 @@ export default function TransferLevelPage() {
               <button
                 onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
                 disabled={page === pagination.totalPages}
-                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 transition-colors"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40 sm:h-8 sm:w-8"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

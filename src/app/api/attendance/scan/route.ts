@@ -1,6 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { getScheduledStudentLrns } from "@/lib/deletionAccess";
+import { logAudit } from "@/lib/audit";
+import { enqueueAttendanceSms } from "@/lib/attendanceSmsQueue";
+import { processAttendanceSmsJobs } from "@/lib/attendanceSmsWorker";
+import { enqueueAttendanceEmail } from "@/lib/attendanceEmailQueue";
+import { processAttendanceEmailJobs } from "@/lib/attendanceEmailWorker";
+import { settleAttendanceNotificationTasks } from "@/lib/attendanceNotificationDispatch";
+import { normalizeRfidCard } from "@/lib/rfid";
 
 type ScanBody = {
   rfid_card: string;
@@ -16,11 +24,18 @@ type StudentNameFields = {
 
 type ClassSessionType = "Morning" | "Afternoon";
 type AttendanceType = "Time In" | "Time Out";
-
-const DEFAULT_SESSIONS = [
-  { session_type: "Morning", scheduled_start: "06:00", scheduled_end: "12:00", late_after: "06:30" },
-  { session_type: "Afternoon", scheduled_start: "12:00", scheduled_end: "18:00", late_after: "12:30" },
-] as const;
+// A second RFID tap becomes Time Out only after this minimum period. This
+// protects against a late student's accidental double tap being recorded as
+// departure. The setting cannot be lower than one hour.
+const RFID_TIME_OUT_MIN_DELAY_SECONDS = Math.max(
+  60 * 60,
+  Math.min(
+    8 * 60 * 60,
+    Number(process.env.RFID_TIME_OUT_MIN_DELAY_SECONDS ?? process.env.RFID_SCAN_DEBOUNCE_SECONDS ?? 60 * 60) || 60 * 60,
+  ),
+);
+const SCHEDULED_ATTENDANCE_SMS_WORKER = process.env.ATTENDANCE_SMS_SCHEDULED_WORKER === "true";
+const SCHEDULED_ATTENDANCE_EMAIL_WORKER = process.env.ATTENDANCE_EMAIL_SCHEDULED_WORKER === "true";
 
 function getToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -34,6 +49,11 @@ function getToday() {
   const month = parts.find((p) => p.type === "month")?.value;
   const day = parts.find((p) => p.type === "day")?.value;
   return `${year}-${month}-${day}`;
+}
+
+function isWeekend(date: string) {
+  const day = new Date(`${date}T00:00:00+08:00`).getDay();
+  return day === 0 || day === 6;
 }
 
 function getNowTime() {
@@ -61,89 +81,9 @@ function timeToMinutes(value: string) {
   return hour * 60 + minute;
 }
 
-function validateSchedule(
-  sessionType: ClassSessionType,
-  scheduledStart: string,
-  scheduledEnd: string
-) {
-  const timePattern = /^\d{2}:\d{2}/;
-  if (!timePattern.test(scheduledStart) || !timePattern.test(scheduledEnd)) return false;
-
-  const start = timeToMinutes(scheduledStart);
-  const end = timeToMinutes(scheduledEnd);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  if (end <= start) return false;
-  if (sessionType === "Morning" && start >= timeToMinutes("12:00")) return false;
-  if (sessionType === "Afternoon" && start < timeToMinutes("12:00")) return false;
-  return true;
-}
-
-async function ensureSessionRow(
-  sessionDate: string,
-  sessionType: ClassSessionType,
-  scheduledStart: string,
-  scheduledEnd: string,
-  lateAfter: string,
-  absentAfter: string
-) {
-  const { data: existing, error: selectError } = await supabase
-    .from("class_sessions")
-    .select("session_date")
-    .eq("session_date", sessionDate)
-    .eq("session_type", sessionType)
-    .limit(1);
-
-  if (selectError) throw selectError;
-  if (existing && existing.length > 0) return;
-
-  const { error: insertError } = await supabase
-    .from("class_sessions")
-    .upsert({
-      session_date: sessionDate,
-      session_type: sessionType,
-      scheduled_start: scheduledStart,
-      scheduled_end: scheduledEnd,
-      late_after: lateAfter,
-      absent_after: absentAfter,
-      status: "Not Started",
-    }, { onConflict: "session_date,session_type", ignoreDuplicates: true });
-
-  if (insertError) throw insertError;
-}
-
-async function ensureTodaySessionRows(sessionDate: string) {
-  for (const def of DEFAULT_SESSIONS) {
-    const { data: latest, error } = await supabase
-      .from("class_sessions")
-      .select("scheduled_start, scheduled_end, late_after, absent_after")
-      .eq("session_type", def.session_type)
-      .lt("session_date", sessionDate)
-      .order("session_date", { ascending: false })
-      .limit(1);
-
-    if (error) throw error;
-
-    const savedSchedule = latest?.[0];
-    const scheduledStart = savedSchedule?.scheduled_start ?? def.scheduled_start;
-    const scheduledEnd = savedSchedule?.scheduled_end ?? def.scheduled_end;
-    const lateAfter = savedSchedule?.late_after ?? def.late_after;
-    const absentAfter = savedSchedule?.absent_after ?? scheduledEnd;
-    const isValidSchedule = validateSchedule(def.session_type, scheduledStart, scheduledEnd);
-
-    await ensureSessionRow(
-      sessionDate,
-      def.session_type,
-      isValidSchedule ? scheduledStart : def.scheduled_start,
-      isValidSchedule ? scheduledEnd : def.scheduled_end,
-      isValidSchedule ? lateAfter : def.late_after,
-      isValidSchedule ? absentAfter : def.scheduled_end
-    );
-  }
-}
-
 /**
- * Determines Present vs Late based on the saved ICT class schedule.
- * Scans are accepted only while the current Philippine time is inside a session window.
+ * Determines availability and Present/Late from the saved ICT schedule.  A
+ * scanner cannot be opened merely because somebody previously clicked Start.
  */
 async function getScheduledSessionStatus(): Promise<
   | { status: "On Time" | "Late"; sessionType: ClassSessionType }
@@ -152,45 +92,39 @@ async function getScheduledSessionStatus(): Promise<
   const today = getToday();
   const now = getCurrentMinutes();
 
-  await ensureTodaySessionRows(today);
-
   const { data: sessions } = await supabase
     .from("class_sessions")
-    .select("session_type, scheduled_start, scheduled_end, late_after, absent_after")
+    .select("session_type, scheduled_start, scheduled_end, late_after, absent_after, status")
     .eq("session_date", today)
     .order("scheduled_start", { ascending: true });
 
-  const sessionList = sessions && sessions.length > 0 ? sessions : DEFAULT_SESSIONS;
-
-  for (const session of sessionList) {
+  const activeSession = sessions?.find((session) => {
     const start = timeToMinutes(session.scheduled_start);
     const end = timeToMinutes(session.scheduled_end);
-    // The configured end is exclusive: scanning closes at that exact minute.
-    const isInside = now >= start && now < end;
-
-    if (isInside) {
-      return {
-        status: now <= timeToMinutes(session.late_after ?? session.scheduled_start) ? "On Time" : "Late",
-        sessionType: session.session_type as ClassSessionType,
-      };
+    return now >= start && now < end;
+  });
+  if (!activeSession) {
+    if (!sessions?.length) {
+      return { unavailable: true, message: "Scanning is unavailable until ICT saves the class schedule." };
     }
-  }
-
-  const nextSession = sessionList.find(
-    (session) => now < timeToMinutes(session.scheduled_start)
-  );
-
-  if (nextSession) {
+    const hasFutureSession = sessions?.some((session) => now < timeToMinutes(session.scheduled_start));
     return {
       unavailable: true,
-      message: "Scanning is not yet available. Please wait until the scheduled class time.",
+      message: hasFutureSession
+        ? "Scanning is not started yet. It opens at the ICT-configured scheduled start."
+        : "Scanning is unavailable because the ICT-configured class schedule has ended.",
     };
   }
 
   return {
-    unavailable: true,
-    message: "Scanning for this class session has ended.",
+    status: now <= timeToMinutes(activeSession.late_after ?? activeSession.scheduled_start) ? "On Time" : "Late",
+    sessionType: activeSession.session_type as ClassSessionType,
   };
+}
+
+function timeToSeconds(value: string) {
+  const [hour = 0, minute = 0, second = 0] = value.split(":").map(Number);
+  return hour * 3600 + minute * 60 + second;
 }
 
 function buildFullName(student: StudentNameFields) {
@@ -199,12 +133,51 @@ function buildFullName(student: StudentNameFields) {
     .join(" ");
 }
 
+function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAttendanceSms>[0]) {
+  // RFID scanning records attendance first. Queueing and providers are deferred
+  // so notification failures can never turn a saved attendance event into a
+  // failed scan response.
+  after(async () => {
+    const outcomes = await settleAttendanceNotificationTasks([
+      {
+        channel: "sms",
+        run: async () => {
+          // The trigger normally creates this job atomically. This fallback
+          // preserves existing installations; its conflict key keeps it idempotent.
+          await enqueueAttendanceSms(input);
+          if (!SCHEDULED_ATTENDANCE_SMS_WORKER) {
+            await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 1, concurrency: 1 });
+          }
+        },
+      },
+      {
+        channel: "email",
+        run: async () => {
+          await enqueueAttendanceEmail(input);
+          if (!SCHEDULED_ATTENDANCE_EMAIL_WORKER) {
+            await processAttendanceEmailJobs({ attendanceLogId: input.attendanceLogId, batchSize: 1 });
+          }
+        },
+      },
+    ]);
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
+        console.error("Could not process attendance notification after RFID scan:", outcome.reason);
+      }
+    }
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
     const body = (await req.json()) as ScanBody;
 
-    if (!body.rfid_card) {
+    const rfidCard = normalizeRfidCard(body.rfid_card);
+    if (!rfidCard) {
       return NextResponse.json(
         { success: false, message: "rfid_card is required" },
         { status: 400 }
@@ -253,7 +226,11 @@ export async function POST(req: NextRequest) {
       .select(
         "id, student_id, first_name, middle_name, last_name, suffix, grade, section, class_session, rfid_card"
       )
-      .eq("rfid_card", body.rfid_card);
+      .eq("archive_status", "active")
+      // Use the same case-insensitive lookup used by the RFID assignment
+      // routes. This also supports pre-existing card rows saved before the
+      // canonical uppercase rule was introduced.
+      .ilike("rfid_card", rfidCard);
 
     if (activeSection) query = query.eq("section", activeSection);
     if (adviser?.grade) query = query.eq("grade", adviser.grade);
@@ -265,7 +242,7 @@ export async function POST(req: NextRequest) {
       const { data: anyStudent } = await supabase
         .from("students")
         .select("id")
-        .eq("rfid_card", body.rfid_card)
+        .ilike("rfid_card", rfidCard)
         .limit(1);
 
       return NextResponse.json(
@@ -281,6 +258,33 @@ export async function POST(req: NextRequest) {
     }
 
     const student = students[0];
+    const scheduledStudentLrns = await getScheduledStudentLrns([student.student_id]);
+    if (scheduledStudentLrns.has(student.student_id)) {
+      return NextResponse.json(
+        { success: false, message: "This student is temporarily unavailable while a deletion request is in the waiting period." },
+        { status: 403 }
+      );
+    }
+    if (isWeekend(today)) {
+      return NextResponse.json(
+        { success: false, message: "Attendance scanning is unavailable on weekends." },
+        { status: 403 }
+      );
+    }
+    const { data: holidayRows, error: holidayError } = await supabase
+      .from("school_holidays")
+      .select("id")
+      .eq("school_year_config_id", activeSY.id)
+      .eq("holiday_date", today)
+      .limit(1);
+    // school_holidays is optional until its migration has been applied.
+    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+    if ((holidayRows?.length ?? 0) > 0) {
+      return NextResponse.json(
+        { success: false, message: "Attendance scanning is unavailable on a school holiday." },
+        { status: 403 }
+      );
+    }
     const attendanceDate = getToday();
     const timeLogged = getNowTime();
 
@@ -318,7 +322,7 @@ export async function POST(req: NextRequest) {
 
     const { data: existingLogs, error: existingError } = await supabase
       .from("attendance_logs")
-      .select("id, type, status")
+      .select("id, type, status, time_logged")
       .eq("student_db_id", student.id)
       .eq("attendance_date", attendanceDate)
       .eq("session_type", sessionType)
@@ -350,6 +354,26 @@ export async function POST(req: NextRequest) {
       (log) => log.type === "Time In" && (log.status === "On Time" || log.status === "Late")
     );
     const hasTimeOut = (existingLogs ?? []).some((log) => log.type === "Time Out");
+
+    // RFID readers frequently emit the same card value more than once. A
+    // second read immediately after a Time In is not evidence of departure.
+    const mostRecentTimeIn = (existingLogs ?? [])
+      .filter((log) => log.type === "Time In" && (log.status === "On Time" || log.status === "Late"))
+      .sort((first, second) => String(second.time_logged).localeCompare(String(first.time_logged)))[0];
+    if (mostRecentTimeIn && !hasTimeOut) {
+      const elapsed = timeToSeconds(timeLogged) - timeToSeconds(String(mostRecentTimeIn.time_logged));
+      if (elapsed >= 0 && elapsed < RFID_TIME_OUT_MIN_DELAY_SECONDS) {
+        return NextResponse.json(
+          {
+            success: false,
+            duplicate: true,
+            alreadyRecorded: true,
+            message: "This student is already Time In. Time Out can be scanned at least one hour after the Time In tap.",
+          },
+          { status: 409 },
+        );
+      }
+    }
     const nextType: AttendanceType = hasTimeIn ? "Time Out" : "Time In";
 
     if (hasTimeIn && hasTimeOut) {
@@ -387,7 +411,27 @@ export async function POST(req: NextRequest) {
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      // The database unique index is the cross-instance concurrency guard.
+      // Do not turn a racing duplicate request into a retry that records a
+      // Time Out immediately after a successful Time In.
+      if (insertError.code === "23505") {
+        return NextResponse.json(
+          { success: false, duplicate: true, alreadyRecorded: true, message: "This attendance event was already recorded." },
+          { status: 409 },
+        );
+      }
+      throw insertError;
+    }
+
+    await logAudit({ action: "Attendance Recorded", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, newStatus: logStatus, details: `Recorded ${nextType} via RFID for ${buildFullName(student)} (${student.student_id}).` });
+    queueNotificationsAfterAttendance({
+      attendanceLogId: log.id,
+      studentId: student.student_id,
+      studentName: buildFullName(student),
+      attendanceDate,
+      timeLogged,
+    });
 
     return NextResponse.json({
       success: true,

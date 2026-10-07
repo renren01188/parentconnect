@@ -4,6 +4,8 @@ import { useState } from "react";
 import { ShieldCheck, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { LoginRecaptcha } from "@/components/LoginRecaptcha";
+import { useLoginProtection } from "@/hooks/useLoginProtection";
 
 export default function PrincipalLoginPage() {
   const [identifier, setIdentifier] = useState("");
@@ -11,23 +13,37 @@ export default function PrincipalLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const {
+    applyServerResult,
+    captchaRequired,
+    captchaResetSignal,
+    captchaToken,
+    isLocked,
+    lockoutMessage,
+    setCaptchaToken,
+  } = useLoginProtection("principal");
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
+    if (isLocked) {
+      setErrorMsg(lockoutMessage || "Too many failed attempts. Please try again later.");
+      return;
+    }
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/principal/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, password }),
+        body: JSON.stringify({ identifier, password, captchaToken }),
       });
       const data = await res.json();
 
       if (!data.success) {
         setErrorMsg(data.message || "Login failed. Please try again.");
+        applyServerResult(data);
         return;
       }
 
@@ -107,6 +123,11 @@ export default function PrincipalLoginPage() {
               {errorMsg}
             </div>
           )}
+          {lockoutMessage && (
+            <div role="status" aria-live="polite" className="bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium px-4 py-3 rounded-xl mb-4">
+              {lockoutMessage}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
@@ -117,6 +138,7 @@ export default function PrincipalLoginPage() {
                 onChange={e => { setIdentifier(e.target.value); setErrorMsg(""); }}
                 placeholder="principal@school.edu or EMP-2025-002"
                 required
+                disabled={isLocked}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition placeholder-slate-400"
               />
             </div>
@@ -128,8 +150,9 @@ export default function PrincipalLoginPage() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => { setPassword(e.target.value); setErrorMsg(""); }}
-                  placeholder="Enter your password"
-                  required
+                placeholder="Enter your password"
+                required
+                disabled={isLocked}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition placeholder-slate-400 pr-11"
                 />
                 <button
@@ -142,9 +165,11 @@ export default function PrincipalLoginPage() {
               </div>
             </div>
 
+            <LoginRecaptcha required={captchaRequired} resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || isLocked || (captchaRequired && !captchaToken)}
               className="flex items-center justify-center gap-2 w-full bg-violet-600 hover:bg-violet-700 disabled:bg-violet-300 text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md shadow-violet-200 mt-1 text-sm"
             >
               {loading ? (

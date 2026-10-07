@@ -1,4 +1,4 @@
-import { sameFamilyName } from "@/lib/familyName";
+import { sameParentEnrollmentName } from "@/lib/familyName";
 import { supabase } from "@/lib/supabase";
 
 type FamilyRole = "Father" | "Mother" | "Guardian";
@@ -33,15 +33,16 @@ type FamilyMember = {
 
 const FAMILY_ROLES = new Set<FamilyRole>(["Father", "Mother", "Guardian"]);
 
-function isFamilyRole(value: string): value is FamilyRole {
+function isFamilyRole(value: unknown): value is FamilyRole {
   return FAMILY_ROLES.has(value as FamilyRole);
 }
 
 /**
  * Adds missing links between existing parent accounts and SF1 family records.
  *
- * Matching is intentionally exact after the application's standard name
- * normalization and requires the same Father/Mother/Guardian role. This never
+ * Matching requires the same Father/Mother/Guardian role and exact normalized
+ * first and last names. Middle names and suffixes are optional in Parent
+ * enrollment, so they cannot prevent a legitimate sibling link. This never
  * removes links: a historical link remains valid until staff explicitly remove
  * it through the existing management workflow.
  */
@@ -50,27 +51,58 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
     throw new Error("A parent or student is required for link reconciliation.");
   }
 
-  const studentsQuery = supabase.from("students").select("id, student_id");
-  const parentsQuery = supabase
-    .from("parents")
-    .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship");
-  const familyQuery = supabase
-    .from("student_family_members")
-    .select("student_db_id, role, first_name, middle_name, last_name");
+  let parents: ParentRow[] = [];
+  if (parentId) {
+    const { data, error } = await supabase
+      .from("parents")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship")
+      .eq("id", parentId);
+    if (error) throw error;
+    parents = (data ?? []) as ParentRow[];
+  }
 
-  const [studentsResult, parentsResult, familyResult] = await Promise.all([
-    studentDbId ? studentsQuery.eq("id", studentDbId) : studentsQuery,
-    parentId ? parentsQuery.eq("id", parentId) : parentsQuery,
-    studentDbId ? familyQuery.eq("student_db_id", studentDbId) : familyQuery,
-  ]);
+  const parentRoles = [...new Set(
+    parents.map((parent) => parent.relationship).filter(isFamilyRole),
+  )];
+  if (parentId && parentRoles.length === 0) {
+    return { parentIds: [], studentIds: [], linksAddedOrAlreadyPresent: 0 };
+  }
 
-  if (studentsResult.error) throw studentsResult.error;
-  if (parentsResult.error) throw parentsResult.error;
+  const familyResult = studentDbId
+    ? await supabase
+      .from("student_family_members")
+      .select("student_db_id, role, first_name, middle_name, last_name")
+      .eq("student_db_id", studentDbId)
+    : await supabase
+      .from("student_family_members")
+      .select("student_db_id, role, first_name, middle_name, last_name")
+      .in("role", parentRoles);
   if (familyResult.error) throw familyResult.error;
 
-  const students = (studentsResult.data ?? []) as StudentRow[];
-  const parents = (parentsResult.data ?? []) as ParentRow[];
   const familyMembers = (familyResult.data ?? []) as FamilyMember[];
+  const familyRoles = [...new Set(
+    familyMembers.map((member) => member.role).filter(isFamilyRole),
+  )];
+  if (!familyMembers.length || (!parentId && !familyRoles.length)) {
+    return { parentIds: [], studentIds: [], linksAddedOrAlreadyPresent: 0 };
+  }
+
+  if (!parentId) {
+    const { data, error } = await supabase
+      .from("parents")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship")
+      .in("relationship", familyRoles);
+    if (error) throw error;
+    parents = (data ?? []) as ParentRow[];
+  }
+
+  const studentDbIds = [...new Set(familyMembers.map((member) => member.student_db_id))];
+  const { data: studentData, error: studentError } = await supabase
+    .from("students")
+    .select("id, student_id")
+    .in("id", studentDbIds);
+  if (studentError) throw studentError;
+  const students = (studentData ?? []) as StudentRow[];
   const studentsByDbId = new Map(students.map((student) => [Number(student.id), student]));
 
   const links = familyMembers.flatMap((member) => {
@@ -80,7 +112,7 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
 
     return parents
       .filter((parent) => parent.relationship === member.role)
-      .filter((parent) => sameFamilyName(
+      .filter((parent) => sameParentEnrollmentName(
         {
           firstName: parent.parent_first_name,
           middleName: parent.parent_middle_name,

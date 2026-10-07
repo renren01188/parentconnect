@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
+import { normalizeMiddleName } from "@/lib/sf1Name";
+import { getActiveAdviser } from "@/lib/apiAuthorization";
+import {
+  guardianRelationshipForStorage,
+  isMissingOtherGuardianRelationship,
+} from "@/lib/guardianRelationship";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -12,6 +18,18 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const adviser = await getActiveAdviser();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Not authorized." }, { status: 401 });
+    }
+
+    const adviserSections = adviser.sections?.length
+      ? adviser.sections
+      : adviser.section ? [adviser.section] : [];
+    if (!adviser.grade || adviserSections.length === 0) {
+      return NextResponse.json({ success: false, message: "No class assignment is available for this account." }, { status: 403 });
+    }
+
     const { id } = await params;
 
     const { data: student, error } = await supabase
@@ -23,6 +41,8 @@ export async function GET(
         house_street_sitio_purok, barangay, municipality_city, province, learning_modality
       `)
       .eq("id", id)
+      .eq("grade", adviser.grade)
+      .in("section", adviserSections)
       .single();
 
     if (error || !student) {
@@ -37,7 +57,7 @@ export async function GET(
       .select(`
         relationship,
         parents!inner (
-          parent_first_name, parent_middle_name, parent_last_name,
+          id, parent_first_name, parent_middle_name, parent_last_name,
           parent_suffix, contact_number,
           email, address, password_set, status
         )
@@ -53,9 +73,17 @@ export async function GET(
       .eq("student_db_id", student.id)
       .order("id");
     if (familyError) throw familyError;
+    // Present legacy SF1 records in the same normalized form as new imports.
+    // The migration in database/normalize_sf1_middle_names.sql persists this
+    // cleanup when run, but guardian verification must work before then too.
+    const normalizedFamilyMembers = (familyMembers ?? []).map((member) => ({
+      ...member,
+      middle_name: normalizeMiddleName(member.middle_name),
+    }));
 
     const link = linkRows?.[0] ?? null;
     const parent = (link?.parents ?? {}) as {
+      id?: number | null;
       parent_first_name?: string | null;
       parent_middle_name?: string | null;
       parent_last_name?: string | null;
@@ -93,6 +121,9 @@ export async function GET(
       contact_number:     parent.contact_number,
       parent_email:       parent.email,
       parent_address:     parent.address ?? "",   // ← new
+      // A family verification record is not a Parent account. The Adviser UI
+      // must use the actual link rather than copied/imported contact data.
+      parent_account_linked: Boolean(link),
       password_set:       parent.password_set,
       parent_status:      parent.status,
       birth_date: student.birth_date,
@@ -104,7 +135,7 @@ export async function GET(
       municipality_city: student.municipality_city,
       province: student.province,
       learning_modality: student.learning_modality,
-      family_members: familyMembers ?? [],
+      family_members: normalizedFamilyMembers,
     };
 
     return NextResponse.json({ success: true, data });
@@ -124,6 +155,18 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const adviser = await getActiveAdviser();
+    if (!adviser) {
+      return NextResponse.json({ success: false, message: "Not authorized." }, { status: 401 });
+    }
+
+    const adviserSections = adviser.sections?.length
+      ? adviser.sections
+      : adviser.section ? [adviser.section] : [];
+    if (!adviser.grade || adviserSections.length === 0) {
+      return NextResponse.json({ success: false, message: "No class assignment is available for this account." }, { status: 403 });
+    }
+
     const { id } = await params;
     const body    = await req.json();
 
@@ -136,8 +179,16 @@ export async function PATCH(
       familyMembers,
     } = body;
 
+    if ((grade && grade !== adviser.grade) || (section && !adviserSections.includes(section))) {
+      return NextResponse.json({ success: false, message: "You can only edit students in your assigned class." }, { status: 403 });
+    }
+
     const { data: existing, error: fetchError } = await supabase
-      .from("students").select("id, student_id").eq("id", id).single();
+      .from("students").select("id, student_id")
+      .eq("id", id)
+      .eq("grade", adviser.grade)
+      .in("section", adviserSections)
+      .single();
 
     if (fetchError || !existing)
       return NextResponse.json({ success: false, message: "Student not found." }, { status: 404 });
@@ -151,13 +202,24 @@ export async function PATCH(
         return NextResponse.json({ success: false, message: "This Student ID is already used by another student." }, { status: 409 });
     }
 
-    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    const guardianVerification = Array.isArray(familyMembers)
+      ? familyMembers.find((member) => member?.role === "Guardian")
+      : null;
+    if (guardianVerification && isMissingOtherGuardianRelationship(
+      guardianVerification.relationship,
+      guardianVerification.guardianRelationshipOther,
+    )) {
+      return NextResponse.json(
+        { success: false, message: "Specify the guardian's relationship when Others is selected." },
+        { status: 400 },
+      );
+    }
 
     const { error: studentUpdateError } = await supabase
       .from("students")
       .update({
         first_name:  firstName   || undefined,
-        middle_name: middleName  ?? null,
+        middle_name: normalizeMiddleName(middleName),
         last_name:   lastName    || undefined,
         suffix:      suffix      ?? null,
         gender:      gender      || undefined,
@@ -185,16 +247,10 @@ export async function PATCH(
       .limit(1);
     if (linkFetchError) throw linkFetchError;
 
-    let parentId = linkRows?.[0]?.parent_id as number | undefined;
-    if (!parentId && normalizedEmail) {
-      const { data: existingParentRows, error: existingParentError } = await supabase
-        .from("parents")
-        .select("id")
-        .eq("email", normalizedEmail)
-        .limit(1);
-      if (existingParentError) throw existingParentError;
-      parentId = existingParentRows?.[0]?.id;
-    }
+    // Imported school email/contact data is not proof of ownership. Only a
+    // pre-existing link may update an account or preserve account behavior.
+    // SF1 records below remain editable before Parent signup.
+    const parentId = linkRows?.[0]?.parent_id as number | undefined;
 
     if (parentId) {
       const { error: parentUpdateError } = await supabase
@@ -205,11 +261,12 @@ export async function PATCH(
         parent_last_name:   parentLastName   || undefined,
         parent_suffix:      parentSuffix     ?? null,
         contact_number:     contactNumber    || undefined,
-        email:              normalizedEmail   || undefined,
+        email:              typeof email === "string" ? email.trim().toLowerCase() || undefined : undefined,
         address:            address          ?? null,    // ← new
       })
       .eq("id", parentId);
       if (parentUpdateError) throw parentUpdateError;
+
     }
 
     // These SF1 family records are the source of truth for parent signup.
@@ -218,7 +275,7 @@ export async function PATCH(
       for (const member of familyMembers) {
         if (!allowedRoles.has(member?.role)) continue;
         const first = typeof member.firstName === "string" ? member.firstName.trim() : "";
-        const middle = typeof member.middleName === "string" ? member.middleName.trim() : "";
+        const middle = normalizeMiddleName(member.middleName) ?? "";
         const last = typeof member.lastName === "string" ? member.lastName.trim() : "";
         if (!first && !middle && !last) {
           const { error } = await supabase.from("student_family_members").delete().eq("student_db_id", id).eq("role", member.role);
@@ -229,8 +286,15 @@ export async function PATCH(
           student_db_id: Number(id), role: member.role, first_name: first || null,
           middle_name: middle || null, last_name: last || null,
           suffix: typeof member.suffix === "string" ? member.suffix.trim() || null : null,
-          relationship: member.role === "Guardian" ? (typeof member.relationship === "string" ? member.relationship.trim() || "Guardian" : "Guardian") : member.role,
-          contact_number: contactNumber || null,
+          // Role remains "Guardian" for secure sign-up matching. Relationship
+          // is separate optional family information, not a guardian name or
+          // a fallback value that should appear in an empty guardian field.
+          relationship: member.role === "Guardian"
+            ? guardianRelationshipForStorage(member.relationship, member.guardianRelationshipOther)
+            : member.role,
+          // Do not erase imported family contact data when only a
+          // pre-sign-up verification name is being corrected.
+          ...(parentId ? { contact_number: contactNumber || null } : {}),
         }, { onConflict: "student_db_id,role" });
         if (error) throw error;
       }

@@ -82,7 +82,6 @@ export async function GET() {
         suffix: data.suffix ?? "",
         email: data.email ?? "",
         phone: data.phone ?? "",
-        profilePicture: data.profile_picture ?? "",
         status: data.status ?? "active",
         name: getFullName(data),
       },
@@ -115,7 +114,6 @@ export async function PATCH(req: NextRequest) {
       suffix,
       email,
       phone,
-      profilePicture,
     } = await req.json();
 
     if (!employeeId || !firstName || !lastName || !email || !phone) {
@@ -131,13 +129,6 @@ export async function PATCH(req: NextRequest) {
     if (!/\S+@\S+\.\S+/.test(normalizedEmail)) {
       return NextResponse.json(
         { success: false, message: "Enter a valid email address." },
-        { status: 400 }
-      );
-    }
-
-    if (profilePicture && (typeof profilePicture !== "string" || !/^data:image\/(png|jpe?g|webp);base64,/.test(profilePicture) || profilePicture.length > 14_000_000)) {
-      return NextResponse.json(
-        { success: false, message: "Profile picture must be a PNG, JPEG, or WebP image smaller than 10 MB." },
         { status: 400 }
       );
     }
@@ -180,7 +171,6 @@ export async function PATCH(req: NextRequest) {
       suffix: suffix ? String(suffix).trim() : null,
       email: normalizedEmail,
       phone: String(phone).trim(),
-      profile_picture: typeof profilePicture === "string" ? profilePicture : undefined,
       updated_at: new Date().toISOString(),
     };
 
@@ -188,7 +178,7 @@ export async function PATCH(req: NextRequest) {
       .from("ict_admins")
       .update(updatePayload)
       .eq("id", session.ictId)
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, status, password_set")
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status, password_set")
       .single();
 
     if (error) throw error;
@@ -255,7 +245,6 @@ export async function PATCH(req: NextRequest) {
         suffix: data.suffix ?? "",
         email: data.email ?? "",
         phone: data.phone ?? "",
-        profilePicture: data.profile_picture ?? "",
         status: data.status ?? "active",
         name: getFullName(data),
       },

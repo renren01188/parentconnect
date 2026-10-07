@@ -16,11 +16,6 @@ export async function GET() {
 
         if (error) throw error;
 
-        const senderIds = [...new Set((data ?? []).map((a: any) => a.sender_id).filter(Boolean))];
-        const { data: profiles } = senderIds.length
-            ? await supabase.from("principals").select("id, profile_picture").in("id", senderIds)
-            : { data: [] as Array<{ id: number; profile_picture: string | null }> };
-        const pictureById = new Map((profiles ?? []).map((profile) => [profile.id, profile.profile_picture]));
         const announcements = (data ?? []).map((a: any) => ({
             id: String(a.id),
             title: a.title,
@@ -29,7 +24,6 @@ export async function GET() {
             audience: [a.audience],
             author: "Principal",
             source: "principal",
-            profilePicture: pictureById.get(a.sender_id) ?? null,
             created_at: a.created_at,
         }));
 

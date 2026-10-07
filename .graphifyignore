@@ -1,0 +1,5 @@
+# Generated Graphify reports are outputs, not source inputs.
+graphify-out/
+
+# Graphify 0.4.41's PowerShell extractor cannot parse this helper script.
+write_adviser.ps1

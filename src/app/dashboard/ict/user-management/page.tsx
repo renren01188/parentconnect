@@ -1,8 +1,14 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { Fragment, useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { useRouter } from "next/navigation";
 import { getStudentAge } from "@/lib/studentAge";
+import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import {
+  GUARDIAN_RELATIONSHIP_OPTIONS,
+  isMissingOtherGuardianRelationship,
+  splitGuardianRelationship,
+} from "@/lib/guardianRelationship";
 import { BulkDeletionModal } from "./BulkDeletionModal";
 import {
   Search, ChevronDown, Pencil, MoreHorizontal,
@@ -15,20 +21,23 @@ import {
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────
-type Role = "Adviser" | "Parent" | "ICT";
+type Role = "Adviser" | "Parent" | "ICT" | "Guidance";
 type Status = "Active" | "Inactive";
 type AuditAction = "created" | "edited" | "activated" | "deactivated" | "deleted" | "approved" | "rejected";
 type ApprovalStatus = "Pending" | "Approved" | "Rejected";
 type Gender = "Male" | "Female" | "";
 interface DeleteSchedule { scheduledAtMs: number; deleteAtMs: number; }
-interface ScheduledDeletion { id: number; target_type: "student" | "parent" | "adviser" | "ict"; target_id: string; target_name: string; target_email?: string | null; reason: string; status: "PendingICT" | "Scheduled" | "Rejected" | "Restored" | "Deleted"; requested_at: string; delete_after?: string | null; grade?: string | null; section?: string | null; }
+interface ScheduledDeletion { id: number; target_type: "student" | "parent" | "adviser" | "ict" | "guidance"; target_id: string; target_name: string; target_email?: string | null; reason: string; status: "PendingICT" | "Scheduled" | "Rejected" | "Restored" | "Archived" | "Deleted"; requested_at: string; delete_after?: string | null; grade?: string | null; section?: string | null; }
 
 interface UserRow {
   id: string; accountIds?: number[]; initials: string; name: string; email: string;
+  parentAccountPasswordSet?: boolean;
   role: Role; classGrade: string; status: Status; students?: string[];
   studentDetails?: EditableStudent[];
   firstName?: string; middleName?: string; lastName?: string; suffix?: string;
   phone?: string; employeeId?: string; relationship?: string; address?: string;
+  familyDetails?: FamilyDetails;
+  sharedFamilyDetailsChanged?: boolean;
   deleteSchedule?: DeleteSchedule;
 }
 
@@ -67,6 +76,7 @@ const ROLE_BADGE: Record<Role, string> = {
   Adviser: "bg-violet-100 text-violet-700 border border-violet-200",
   Parent: "bg-sky-100 text-sky-700 border border-sky-200",
   ICT: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+  Guidance: "bg-amber-100 text-amber-700 border border-amber-200",
 };
 
 const AUDIT_META: Record<AuditAction, { label: string; color: string; bg: string; border: string; Icon: React.ElementType }> = {
@@ -373,9 +383,73 @@ interface EditableStudent {
   houseStreetSitioPurok?: string; barangay?: string; municipalityCity?: string; province?: string; learningModality?: string;
   fatherFirstName?: string; fatherMiddleName?: string; fatherLastName?: string; fatherSuffix?: string;
   motherFirstName?: string; motherMiddleName?: string; motherLastName?: string;
-  guardianFirstName?: string; guardianMiddleName?: string; guardianLastName?: string; guardianSuffix?: string; guardianRelationship?: string;
+  guardianFirstName?: string; guardianMiddleName?: string; guardianLastName?: string; guardianSuffix?: string; guardianRelationship?: string; guardianRelationshipOther?: string;
   contactNumber?: string;
 }
+
+interface FamilyDetails {
+  fatherFirstName?: string; fatherMiddleName?: string; fatherLastName?: string; fatherSuffix?: string;
+  motherFirstName?: string; motherMiddleName?: string; motherLastName?: string;
+  guardianFirstName?: string; guardianMiddleName?: string; guardianLastName?: string; guardianSuffix?: string; guardianRelationship?: string; guardianRelationshipOther?: string;
+}
+
+const STUDENT_EDIT_FIELDS: (keyof EditableStudent)[] = [
+  "firstName", "middleName", "lastName", "studentId", "gender", "grade", "section", "rfid",
+  "birthDate", "motherTongue", "ipEthnicGroup", "religion", "learningModality",
+  "houseStreetSitioPurok", "barangay", "municipalityCity", "province",
+];
+
+function studentEditSignature(students: EditableStudent[]) {
+  return JSON.stringify(students.map((student) =>
+    STUDENT_EDIT_FIELDS.map((field) => String(student[field] ?? "")),
+  ));
+}
+
+function normalizeFamilyDetails(family?: FamilyDetails): FamilyDetails {
+  const guardianRelationship = splitGuardianRelationship(family?.guardianRelationship);
+  return {
+    ...family,
+    guardianRelationship: guardianRelationship.selection,
+    guardianRelationshipOther: family?.guardianRelationship === "Other"
+      ? family.guardianRelationshipOther ?? ""
+      : family?.guardianRelationshipOther ?? guardianRelationship.other,
+  };
+}
+
+function familyDetailsFromStudent(student?: EditableStudent): FamilyDetails {
+  const guardianRelationship = splitGuardianRelationship(student?.guardianRelationship);
+  return {
+    fatherFirstName: student?.fatherFirstName ?? "", fatherMiddleName: student?.fatherMiddleName ?? "", fatherLastName: student?.fatherLastName ?? "", fatherSuffix: student?.fatherSuffix ?? "",
+    motherFirstName: student?.motherFirstName ?? "", motherMiddleName: student?.motherMiddleName ?? "", motherLastName: student?.motherLastName ?? "",
+    guardianFirstName: student?.guardianFirstName ?? "", guardianMiddleName: student?.guardianMiddleName ?? "", guardianLastName: student?.guardianLastName ?? "", guardianSuffix: student?.guardianSuffix ?? "",
+    guardianRelationship: guardianRelationship.selection,
+    guardianRelationshipOther: student?.guardianRelationship === "Other"
+      ? student.guardianRelationshipOther ?? ""
+      : student?.guardianRelationshipOther ?? guardianRelationship.other,
+  };
+}
+
+function familyDetailsSignature(family: FamilyDetails) {
+  return JSON.stringify([
+    family.fatherFirstName, family.fatherMiddleName, family.fatherLastName, family.fatherSuffix,
+    family.motherFirstName, family.motherMiddleName, family.motherLastName,
+    family.guardianFirstName, family.guardianMiddleName, family.guardianLastName, family.guardianSuffix, family.guardianRelationship, family.guardianRelationshipOther,
+  ].map(value => String(value ?? "")));
+}
+
+function verificationRecordsSignature(students: EditableStudent[]) {
+  return JSON.stringify(students.map((student) => familyDetailsSignature(familyDetailsFromStudent(student))));
+}
+
+function applyFamilyDetailsToStudent(student: EditableStudent, family: FamilyDetails) {
+  return {
+    ...student,
+    fatherFirstName: family.fatherFirstName ?? "", fatherMiddleName: family.fatherMiddleName ?? "", fatherLastName: family.fatherLastName ?? "", fatherSuffix: family.fatherSuffix ?? "",
+    motherFirstName: family.motherFirstName ?? "", motherMiddleName: family.motherMiddleName ?? "", motherLastName: family.motherLastName ?? "",
+    guardianFirstName: family.guardianFirstName ?? "", guardianMiddleName: family.guardianMiddleName ?? "", guardianLastName: family.guardianLastName ?? "", guardianSuffix: family.guardianSuffix ?? "", guardianRelationship: family.guardianRelationship ?? "", guardianRelationshipOther: family.guardianRelationshipOther ?? "",
+  };
+}
+
 function StudentInfoCard({ student, index, total, onChange }: {
   student: EditableStudent; index: number; total: number; onChange: (u: EditableStudent) => void;
 }) {
@@ -444,21 +518,47 @@ function StudentInfoCard({ student, index, total, onChange }: {
   );
 }
 
-function FamilyInformationCard({ student, onChange }: { student: EditableStudent; onChange: (u: EditableStudent) => void }) {
-  const set = (key: keyof EditableStudent) => (value: string) => onChange({ ...student, [key]: value });
+function FamilyInformationCard({ family, onChange, title = "Shared family details", description, readOnly = false }: {
+  family: FamilyDetails; onChange: (u: FamilyDetails) => void; title?: string; description?: string; readOnly?: boolean;
+}) {
+  const set = (key: keyof FamilyDetails) => (value: string) => onChange({ ...family, [key]: value });
+  const storedGuardianRelationship = splitGuardianRelationship(family.guardianRelationship);
+  const guardianRelationship = storedGuardianRelationship.selection;
+  const guardianRelationshipOther = family.guardianRelationship === "Other"
+    ? family.guardianRelationshipOther ?? ""
+    : family.guardianRelationshipOther ?? storedGuardianRelationship.other;
   const inp = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#274e13]/20 transition bg-white text-gray-900";
-  const studentName = [student.firstName, student.lastName].filter(Boolean).join(" ") || student.displayName;
+  const readOnlyInput = "w-full px-2.5 py-1.5 text-xs border border-gray-100 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed";
 
-  const hasParentInformation = Boolean(student.fatherFirstName || student.fatherMiddleName || student.fatherLastName || student.motherFirstName || student.motherMiddleName || student.motherLastName);
-  const field = (label: string, key: keyof EditableStudent) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(student[key] ?? "")} onChange={e => set(key)(e.target.value)} className={inp} /></div>;
+  const field = (label: string, key: keyof FamilyDetails) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(family[key] ?? "")} onChange={e => set(key)(e.target.value)} className={readOnly ? readOnlyInput : inp} readOnly={readOnly} /></div>;
 
   return (
     <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
-      <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-gray-400">Family details for {studentName}</p>
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">{title}</p>
+      <p className="mb-3 text-[10px] text-gray-400">{description ?? "Edit once for this account. This does not change the student registration-verification records."}</p>
       <div className="space-y-3">
-        <div className="rounded-lg border border-blue-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-700">Father&apos;s Name</p><div className="grid grid-cols-1 gap-3">{field("First Name", "fatherFirstName")}{field("Middle Name", "fatherMiddleName")}{field("Last Name", "fatherLastName")}<div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={student.fatherSuffix || ""} onChange={e => set("fatherSuffix")(e.target.value)} className={inp}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div></div></div>
+        <div className="rounded-lg border border-blue-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-700">Father&apos;s Name</p><div className="grid grid-cols-1 gap-3">{field("First Name", "fatherFirstName")}{field("Middle Name", "fatherMiddleName")}{field("Last Name", "fatherLastName")}<div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={family.fatherSuffix || ""} onChange={e => set("fatherSuffix")(e.target.value)} className={readOnly ? readOnlyInput : inp} disabled={readOnly}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div></div></div>
         <div className="rounded-lg border border-pink-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-pink-700">Mother&apos;s Name</p><div className="grid grid-cols-1 gap-3">{field("First Name", "motherFirstName")}{field("Middle Name", "motherMiddleName")}{field("Last Name", "motherLastName")}</div></div>
-        {!hasParentInformation && <div className="rounded-lg border border-emerald-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Guardian Information</p><div className="grid grid-cols-1 gap-3">{field("First Name", "guardianFirstName")}{field("Middle Name", "guardianMiddleName")}{field("Last Name", "guardianLastName")}<div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={student.guardianSuffix || ""} onChange={e => set("guardianSuffix")(e.target.value)} className={inp}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div>{field("Guardian Relationship", "guardianRelationship")}</div></div>}
+        <div className="rounded-lg border border-emerald-100 bg-white p-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Guardian Information</p>
+          <div className="grid grid-cols-1 gap-3">
+            {field("First Name", "guardianFirstName")}{field("Middle Name", "guardianMiddleName")}{field("Last Name", "guardianLastName")}
+            <div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={family.guardianSuffix || ""} onChange={e => set("guardianSuffix")(e.target.value)} className={readOnly ? readOnlyInput : inp} disabled={readOnly}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold text-gray-500">Guardian relationship</label>
+              <select value={guardianRelationship} onChange={e => onChange({ ...family, guardianRelationship: e.target.value, guardianRelationshipOther })} className={readOnly ? readOnlyInput : inp} disabled={readOnly}>
+                <option value="">Select guardian relationship</option>
+                {GUARDIAN_RELATIONSHIP_OPTIONS.map(option => <option key={option} value={option}>{option === "Other" ? "Others" : option}</option>)}
+              </select>
+            </div>
+          </div>
+          {guardianRelationship === "Other" && (
+            <div className="mt-3">
+              <label className="mb-1 block text-[10px] font-semibold text-gray-500">Specify the guardian&apos;s relationship <span className="text-red-500">*</span></label>
+              <textarea rows={2} value={guardianRelationshipOther} onChange={e => onChange({ ...family, guardianRelationship: "Other", guardianRelationshipOther: e.target.value })} className={readOnly ? readOnlyInput : inp} readOnly={readOnly} placeholder="e.g. Aunt, Uncle, Foster parent" />
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -598,7 +698,7 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
                 <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-700 space-y-1">
                   <p className="font-bold">30-day retention period</p>
-                  <p>The account remains recoverable for 30 days. You can restore it during that period before related data is permanently removed.</p>
+                  <p>The account remains recoverable for 30 days. After that it is archived, while all related history is retained.</p>
                 </div>
               </div>
 
@@ -689,13 +789,13 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
                   </div>
                 </div>
                 <span className="text-xs text-gray-600 leading-relaxed">
-                  I understand this schedules a <strong>reversible 30-day deletion</strong>. Permanent removal happens only after the retention period expires.
+                  I understand this schedules a <strong>reversible 30-day archive</strong>. Related history will not be removed.
                 </span>
               </label>
 
               {/* Action flow hint */}
               <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-[11px] text-gray-500">
-                🔒 Password verified → <strong className="text-gray-700">30-day retention period</strong> → Revert if needed → Permanent deletion
+                🔒 Password verified → <strong className="text-gray-700">30-day retention period</strong> → Revert if needed → Archive
               </div>
 
               {/* Buttons */}
@@ -750,7 +850,7 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
             <div className="bg-red-50 border border-red-100 rounded-xl p-4 text-left mb-5 text-xs text-red-700 space-y-1.5">
               <p className="font-bold">⏳ What happens next?</p>
               <p>• Principal receives and reviews the deletion request</p>
-              <p>• If approved, the account is permanently removed</p>
+              <p>• If approved, the account is archived and access is removed</p>
               <p>• If rejected, the account stays active and ICT is notified</p>
               <p>• All actions are recorded in the audit trail</p>
             </div>
@@ -776,13 +876,15 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
   onAudit: (e: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) => void;
   onSave?: (u: UserRow) => void;
 }) {
-  const [step, setStep] = useState<"edit" | "confirm" | "sent" | "success">("edit");
+  const [step, setStep] = useState<"edit" | "confirm" | "success">("edit");
   const [saving, setSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const isICT = user.role === "ICT";
-  const assignmentLabel = isICT ? "Access Scope" : "Class/Grade";
+  const isGuidance = user.role === "Guidance";
+  const assignmentLabel = isICT || isGuidance ? "Department" : "Class/Grade";
 
   const [form, setForm] = useState({
     firstName: user.firstName || "",
@@ -793,7 +895,6 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
     phone: user.phone || "",
     employeeId: user.employeeId || "",
     classGrade: user.classGrade,
-    status: user.status as Status,
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -805,8 +906,9 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
   const changes: { field: string; from: string; to: string }[] = [];
   if (fullName !== user.name) changes.push({ field: "Name", from: user.name, to: fullName });
   if (form.email !== user.email) changes.push({ field: "Email", from: user.email, to: form.email });
+  if (form.phone !== (user.phone || "")) changes.push({ field: "Contact Number", from: user.phone || "—", to: form.phone || "—" });
+  if (form.employeeId !== (user.employeeId || "")) changes.push({ field: "Employee ID", from: user.employeeId || "—", to: form.employeeId || "—" });
   if (form.classGrade !== user.classGrade) changes.push({ field: assignmentLabel, from: user.classGrade, to: form.classGrade });
-  if (form.status !== user.status) changes.push({ field: "Status", from: user.status, to: form.status });
   if (form.newPassword) changes.push({ field: "Password", from: "Current password", to: "Updated password" });
   const hasChanges = changes.length > 0;
 
@@ -840,95 +942,56 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
   async function handleSend() {
     setSaving(true);
     try {
-      // If password is being changed, save it directly via PATCH — no approval needed
-      if (form.newPassword) {
-        const pwRes = await fetch("/api/ict/user-management", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user: { ...user, role: user.role },
-            currentPassword: form.currentPassword,
-            newPassword: form.newPassword,
-          }),
-        });
-        const pwData = await pwRes.json();
-        if (!pwData.success) {
-          setPasswordError(pwData.message || "Failed to update password.");
-          setSaving(false);
-          return;
-        }
-      }
+      // Save the profile and optional password in one authenticated update so a
+      // second request cannot leave the UI reporting a partially saved change.
+      const initials = `${form.firstName[0] || ""}${form.lastName[0] || ""}`.toUpperCase();
+      const updated: UserRow = {
+        ...user,
+        name: fullName,
+        email: form.email,
+        classGrade: form.classGrade,
+        initials,
+        firstName: form.firstName,
+        middleName: form.middleName,
+        lastName: form.lastName,
+        suffix: form.suffix,
+        phone: form.phone,
+        employeeId: form.employeeId,
+      };
+      const res = await fetch("/api/ict/user-management", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user: updated,
+          currentPassword: form.newPassword ? form.currentPassword : undefined,
+          newPassword: form.newPassword || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Failed to save account details.");
 
-      const nonPasswordChanges = changes.filter(c => c.field !== "Password");
-
-      if (true) {
-        // ICT manages both ICT and Adviser accounts directly.
-        const initials = `${form.firstName[0] || ""}${form.lastName[0] || ""}`.toUpperCase();
-        const updated: UserRow = { ...user, name: fullName, email: form.email, classGrade: form.classGrade, status: form.status, initials };
-        const res = await fetch("/api/ict/user-management", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user: { ...updated, firstName: form.firstName, middleName: form.middleName, lastName: form.lastName, suffix: form.suffix, phone: form.phone, employeeId: form.employeeId } }),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.message);
-        if (onSave) onSave(updated);
-        const action: AuditAction = form.status !== user.status && form.status === "Inactive" ? "deactivated" : form.status !== user.status ? "activated" : "edited";
-        await onAudit({
-          action, targetUser: updated.name, targetRole: user.role, targetEmail: updated.email,
-          performedBy: "ICT Admin", details: changes.map(c => `${c.field}: "${c.from}" -> "${c.to}"`).join("; "), changes
-        });
-        setStep("success");
-        return;
-      }
-
-      // Adviser — only send non-password changes for principal approval
-      if (nonPasswordChanges.length > 0) {
-        const adviserId = user.accountIds?.[0];
-        const res = await fetch("/api/ict/approvals", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            adviserId,
-            adviserName: user.name,
-            adviserEmail: user.email,
-            adviserInitials: user.initials,
-            classGrade: user.classGrade,
-            changes: nonPasswordChanges,
-          }),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.message);
-        await onAudit({
-          action: "edited", targetUser: user.name, targetRole: user.role, targetEmail: user.email,
-          performedBy: "ICT Admin", details: "Adviser profile update submitted for Principal approval.", changes: nonPasswordChanges
-        });
-      }
-
-      setStep(nonPasswordChanges.length > 0 ? "sent" : "success");
-    } catch (err: any) {
-      setPasswordError(err.message || "Something went wrong.");
+      if (onSave) onSave(updated);
+      await onAudit({
+        action: "edited", targetUser: updated.name, targetRole: user.role, targetEmail: updated.email,
+        performedBy: "ICT Admin", details: changes.map(c => `${c.field}: "${c.from}" -> "${c.to}"`).join("; "), changes,
+      });
+      setStep("success");
+    } catch (err: unknown) {
+      setPasswordError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setSaving(false);
     }
   }
 
-  if (step === "sent" || step === "success") return (
+  if (step === "success") return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()} role="status" aria-live="polite">
         <div className="p-8 text-center">
           <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4">
-            {step === "sent" ? <Send className="w-7 h-7 text-teal-600" /> : <CheckCircle className="w-7 h-7 text-teal-600" />}
+            <CheckCircle className="w-7 h-7 text-teal-600" />
           </div>
           <h3 className="text-lg font-bold text-gray-800 mb-1">Changes Saved!</h3>
-          <p className="text-sm text-gray-500 mb-5">Changes for <strong>{user.name}</strong> were saved directly by ICT and logged in the audit trail.</p>
-          {step === "sent" && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-left mb-5 text-xs text-amber-700 space-y-1.5">
-            <p className="font-bold">⏳ What happens next?</p>
-            <p>• Principal reviews the change request</p>
-            <p>• If approved, the adviser account is updated</p>
-            <p>• The adviser is notified via email</p>
-          </div>
-          }
+          <p className="text-sm text-gray-500 mb-5">Changes for <strong>{fullName}</strong> were saved directly by ICT and logged in the audit trail.</p>
           <button onClick={onClose} className="w-full py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
         </div>
       </div>
@@ -945,9 +1008,9 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
             </button>
           )}
           <div className="flex-1">
-            <h2 className="text-base font-bold text-gray-900">{step === "edit" ? (isICT ? "Edit ICT Account" : "Edit Adviser") : "Review Changes"}</h2>
+            <h2 className="text-base font-bold text-gray-900">{step === "edit" ? (isICT ? "Edit ICT Account" : isGuidance ? "Edit Guidance Account" : "Edit Adviser") : "Confirm Changes"}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              {step === "edit" ? `Editing: ${user.name}` : "Review before saving changes"}
+              {step === "edit" ? `Editing: ${user.name}` : "Confirm before saving changes directly"}
             </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><X className="w-4 h-4" /></button>
@@ -988,10 +1051,12 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
               <FInput label="Employee ID" required value={form.employeeId} onChange={v => setForm(p => ({ ...p, employeeId: v }))} />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">{isICT ? "System Access" : "Class Assignment"}</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">{isICT ? "System Access" : isGuidance ? "Department" : "Class Assignment"}</p>
               {isICT
                 ? <FInput label="Access Scope" required value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />
-                : <GradeSectionPicker value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />}
+                : isGuidance
+                  ? <p className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm font-semibold text-gray-600">Student Support Services</p>
+                  : <GradeSectionPicker value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />}
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
@@ -1012,21 +1077,18 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
                     <button type="button" onClick={() => setShowNewPassword(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
                   </div>
                 </div>
-                <FInput label="Confirm Password" type="password" value={form.confirmPassword} onChange={v => { setForm(p => ({ ...p, confirmPassword: v })); setPasswordError(""); }} />
+                <div>
+                  <FLabel>Confirm Password</FLabel>
+                  <div className="relative">
+                    <input id="adviser-confirm-password" type={showConfirmPassword ? "text" : "password"} value={form.confirmPassword} onChange={e => { setForm(p => ({ ...p, confirmPassword: e.target.value })); setPasswordError(""); }} placeholder="Confirm new password" autoComplete="new-password"
+                      className="w-full pr-10 px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
+                    <button type="button" onClick={() => setShowConfirmPassword(p => !p)} aria-controls="adviser-confirm-password" aria-label={showConfirmPassword ? "Hide confirmation password" : "Show confirmation password"} aria-pressed={showConfirmPassword} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-[#274e13]/30 rounded-sm">
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
+                    </button>
+                  </div>
+                </div>
               </div>
               {passwordError && <p className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">Status</label>
-              <div className="flex gap-3">
-                {(["Active", "Inactive"] as Status[]).map(s => (
-                  <button key={s} type="button" onClick={() => setForm(p => ({ ...p, status: s }))}
-                    className="flex-1 py-2.5 rounded-xl border text-sm font-semibold transition"
-                    style={{ borderColor: form.status === s ? (s === "Active" ? "#10b981" : "#ef4444") : "#e5e7eb", background: form.status === s ? (s === "Active" ? "#f0fdf4" : "#fef2f2") : "white", color: form.status === s ? (s === "Active" ? "#059669" : "#dc2626") : "#374151" }}>
-                    {s === "Active" ? "● Active" : "● Inactive"}
-                  </button>
-                ))}
-              </div>
             </div>
             <div className="flex justify-between pt-2">
               <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
@@ -1045,7 +1107,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
               <p className="text-xs text-amber-700">Save changes to <strong>{user.name}</strong>? Password changes were authorized with the current ICT password.</p>
             </div>
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
-              <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{changes.length} Change{changes.length !== 1 ? "s" : ""} Requested</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{changes.length} Change{changes.length !== 1 ? "s" : ""} Ready to Save</p>
               <div className="space-y-3">
                 {changes.map(({ field, from, to }) => (
                   <div key={field} className="flex items-start justify-between gap-4">
@@ -1060,13 +1122,14 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
               </div>
             </div>
             <div className="bg-teal-50 border border-teal-200 rounded-lg px-3 py-2.5 text-xs text-teal-700">
-              📧 ICT sends request → <strong>Principal Reviews</strong> → Approved/Rejected → Adviser notified
+              ICT saves these changes directly. Account details are updated immediately and recorded in the audit trail.
             </div>
+            {passwordError && <p role="alert" className="text-xs font-semibold text-red-600">{passwordError}</p>}
             <div className="flex gap-3">
               <button onClick={() => setStep("edit")} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Go Back</button>
               <button onClick={handleSend} disabled={saving}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-60 hover:opacity-90 bg-[#274e13]">
-                {saving ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Sending…</> : <><Send className="w-4 h-4" />Confirm</>}
+                {saving ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Saving…</> : <><Save className="w-4 h-4" />Save Changes</>}
               </button>
             </div>
           </div>
@@ -1096,13 +1159,13 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     phone: user.phone || "",
     relationship: user.relationship || "",
     address: user.address || "",
-    status: user.status as Status,
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
   });
 
   const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") + (form.suffix && form.suffix !== "None" ? ` ${form.suffix}` : "");
+  const isPendingImportedParent = isPreSignupParentRecord(user.accountIds, user.parentAccountPasswordSet);
 
   const [editableStudents, setEditableStudents] = useState<EditableStudent[]>(
     (user.studentDetails ?? []).map(s => ({
@@ -1119,8 +1182,32 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
       rfid: s.rfid,
     }))
   );
+  const [familyDetails, setFamilyDetails] = useState<FamilyDetails>(() =>
+    normalizeFamilyDetails(user.familyDetails ?? familyDetailsFromStudent(user.studentDetails?.[0])),
+  );
   const updateStudent = (i: number, updated: EditableStudent) =>
     setEditableStudents(prev => prev.map((s, idx) => idx === i ? updated : s));
+  const accountHolderFields = (family: FamilyDetails, relationship: string) => {
+    if (relationship === "Father") {
+      return { firstName: family.fatherFirstName || "", middleName: family.fatherMiddleName || "", lastName: family.fatherLastName || "", suffix: family.fatherSuffix || "None" };
+    }
+    if (relationship === "Mother") {
+      return { firstName: family.motherFirstName || "", middleName: family.motherMiddleName || "", lastName: family.motherLastName || "", suffix: "None" };
+    }
+    if (relationship === "Guardian") {
+      return { firstName: family.guardianFirstName || "", middleName: family.guardianMiddleName || "", lastName: family.guardianLastName || "", suffix: family.guardianSuffix || "None" };
+    }
+    return null;
+  };
+  const updateFamilyDetails = (updated: FamilyDetails) => {
+    setFamilyDetails(updated);
+    const fields = accountHolderFields(updated, form.relationship);
+    if (fields) setForm(previous => ({ ...previous, ...fields }));
+  };
+  const setAccountHolder = (relationship: "Father" | "Mother" | "Guardian") => {
+    const fields = accountHolderFields(familyDetails, relationship);
+    if (fields) setForm(prev => ({ ...prev, ...fields, relationship }));
+  };
 
   const changes: { field: string; from: string; to: string }[] = [];
   if (fullName !== user.name) changes.push({ field: "Name", from: user.name, to: fullName });
@@ -1128,13 +1215,34 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   if (form.phone !== (user.phone || "")) changes.push({ field: "Phone", from: user.phone || "—", to: form.phone });
   if (form.relationship !== (user.relationship || "")) changes.push({ field: "Relationship", from: user.relationship || "—", to: form.relationship });
   if (form.address !== (user.address || "")) changes.push({ field: "Address", from: user.address || "—", to: form.address });
-  if (form.status !== user.status) changes.push({ field: "Status", from: user.status, to: form.status });
+  if (studentEditSignature(editableStudents) !== studentEditSignature(user.studentDetails ?? [])) {
+    changes.push({ field: "Student records", from: "Current school record", to: "Updated" });
+  }
+  if (verificationRecordsSignature(editableStudents) !== verificationRecordsSignature(user.studentDetails ?? [])) {
+    changes.push({ field: "Verification records", from: "Current registration record", to: "Updated for the selected student" });
+  }
+  const sharedFamilyDetailsChanged = !isPendingImportedParent
+    && familyDetailsSignature(familyDetails) !== familyDetailsSignature(normalizeFamilyDetails(user.familyDetails ?? familyDetailsFromStudent(user.studentDetails?.[0])));
+  if (sharedFamilyDetailsChanged) {
+    changes.push({ field: "Shared family details", from: "Current family record", to: "Updated for linked students" });
+  }
   if (form.newPassword) changes.push({ field: "Password", from: "Current password", to: "Updated password" });
   const hasChanges = changes.length > 0;
 
   async function handleReview() {
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim()) {
+    if (!isPendingImportedParent && (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim())) {
       alert("First name, last name, and email are required."); return;
+    }
+    const missingVerificationRelationship = editableStudents.some((student) => {
+      const family = familyDetailsFromStudent(student);
+      return isMissingOtherGuardianRelationship(family.guardianRelationship, family.guardianRelationshipOther);
+    });
+    const missingSharedRelationship = sharedFamilyDetailsChanged && isMissingOtherGuardianRelationship(
+      familyDetails.guardianRelationship,
+      familyDetails.guardianRelationshipOther,
+    );
+    if (missingVerificationRelationship || missingSharedRelationship) {
+      alert("Specify the guardian's relationship when Others is selected."); return;
     }
     if (form.newPassword || form.confirmPassword || form.currentPassword) {
       const verifyRes = await fetch("/api/ict/verify-password", {
@@ -1162,6 +1270,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   async function handleSave() {
     setSaving(true);
     try {
+      const synchronizedStudents = editableStudents;
       const updatedUser: UserRow = {
         ...user,
         firstName: form.firstName,
@@ -1172,11 +1281,12 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
         phone: form.phone,
         relationship: form.relationship,
         address: form.address,
-        status: form.status,
         initials: `${form.firstName[0] || ""}${form.lastName[0] || ""}`.toUpperCase(),
         name: fullName,
-        studentDetails: editableStudents,
-        students: editableStudents.map(s =>
+        familyDetails,
+        sharedFamilyDetailsChanged,
+        studentDetails: synchronizedStudents,
+        students: synchronizedStudents.map(s =>
           [s.firstName, s.middleName, s.lastName].filter(Boolean).join(" ")
         ),
       };
@@ -1206,13 +1316,8 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
 
       onSave(updatedUser);
 
-      const action: AuditAction =
-        form.status !== user.status && form.status === "Inactive" ? "deactivated"
-          : form.status !== user.status ? "activated"
-            : "edited";
-
       await onAudit({
-        action,
+        action: "edited",
         targetUser: updatedUser.name,
         targetRole: "Parent",
         targetEmail: updatedUser.email,
@@ -1253,21 +1358,60 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
           <div className="overflow-y-auto flex-1">
             <div className="grid grid-cols-2 divide-x divide-gray-100">
               <div className="p-6 space-y-4">
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Parent / Guardian Information</p>
-                <FInput label="Email Address" required value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
-                <div>
-                  <FLabel required>Contact Number</FLabel>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-                    <input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value.replace(/\D/g, "").slice(0, 11) }))} placeholder="09XXXXXXXXX"
-                      className="w-full pl-9 pr-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
+                {isPendingImportedParent ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Pre-sign-up family record</p>
+                    <p className="mt-1 text-xs leading-5 text-amber-700">No parent account exists yet. Update the school family details below; the parent will provide their email and contact number when signing up.</p>
                   </div>
-                  <p className="mt-1 text-[11px] text-gray-400">{form.phone.length}/11 digits</p>
+                ) : <>
+                  <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Parent / Guardian Information</p>
+                  <FInput label="Email Address" required value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
+                  <div>
+                    <FLabel required>Contact Number</FLabel>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                      <input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value.replace(/\D/g, "").slice(0, 11) }))} placeholder="09XXXXXXXXX"
+                        className="w-full pl-9 pr-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-400">{form.phone.length}/11 digits</p>
+                  </div>
+                  <div>
+                    <FLabel required>Parent Account Holder</FLabel>
+                    <select value={form.relationship} onChange={e => {
+                      const role = e.target.value;
+                      if (role === "Father" || role === "Mother" || role === "Guardian") setAccountHolder(role);
+                      else setForm(p => ({ ...p, relationship: "" }));
+                    }} className="w-full px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900">
+                      <option value="">Select the account holder</option>
+                      <option value="Father">Father</option>
+                      <option value="Mother">Mother</option>
+                      <option value="Guardian">Guardian</option>
+                    </select>
+                    <p className="mt-1 text-[11px] text-gray-400">This chooses which current family record may claim the school-verified email and phone.</p>
+                  </div>
+                </>}
+                <div className="space-y-3 border-t border-gray-100 pt-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Shared Family Details</p>
+                  <FamilyInformationCard
+                    family={familyDetails}
+                    onChange={updateFamilyDetails}
+                    readOnly={isPendingImportedParent}
+                    description={isPendingImportedParent
+                      ? "A Parent account has not been created. Shared details become editable after signup; edit the verification records below for Parent signup."
+                      : "Saving a shared edit synchronizes the existing registration-verification records for every linked student."}
+                  />
                 </div>
                 <div className="space-y-3 border-t border-gray-100 pt-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mother / Father / Guardian Details</p>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Verification Records</p>
+                  <p className="text-xs leading-5 text-gray-500">These student registration records are the names Parent signup checks with each student&apos;s LRN. They are shared with the Adviser student edit page.</p>
                   {editableStudents.map((student, index) => (
-                    <FamilyInformationCard key={`${student.studentId}-${index}`} student={student} onChange={updated => updateStudent(index, updated)} />
+                    <FamilyInformationCard
+                      key={`${student.studentId}-verification-${index}`}
+                      family={familyDetailsFromStudent(student)}
+                      onChange={updated => updateStudent(index, applyFamilyDetailsToStudent(student, updated))}
+                      title={`Verification record · ${student.displayName || student.studentId}`}
+                      description={`Student LRN: ${student.studentId || "Not assigned"}`}
+                    />
                   ))}
                 </div>
                 <div className="space-y-3 border-t border-gray-100 pt-4">
@@ -1276,7 +1420,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                     <StudentAddressCard key={`${student.studentId}-address-${index}`} student={student} onChange={updated => updateStudent(index, updated)} />
                   ))}
                 </div>
-                <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
+                {!isPendingImportedParent && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
                   <div className="space-y-3">
                     <div>
@@ -1300,19 +1444,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                     </div>
                   </div>
                   {passwordError && <p className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Status</label>
-                  <div className="flex gap-3">
-                    {(["Active", "Inactive"] as Status[]).map(s => (
-                      <button key={s} type="button" onClick={() => setForm(p => ({ ...p, status: s }))}
-                        className="flex-1 py-2.5 rounded-xl border text-sm font-semibold transition"
-                        style={{ borderColor: form.status === s ? (s === "Active" ? "#10b981" : "#ef4444") : "#e5e7eb", background: form.status === s ? (s === "Active" ? "#f0fdf4" : "#fef2f2") : "white", color: form.status === s ? (s === "Active" ? "#059669" : "#dc2626") : "#374151" }}>
-                        {s === "Active" ? "● Active" : "● Inactive"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                </div>}
               </div>
               <div className="p-6 space-y-3 flex flex-col">
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Linked Students ({editableStudents.length})</p>
@@ -1406,10 +1538,10 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-5xl bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-4 border-b border-gray-100 shrink-0 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#274e13]/10">
               <FileCheck className="w-5 h-5 text-[#274e13]" />
             </div>
@@ -1418,17 +1550,17 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
               <p className="text-xs text-gray-400 mt-0.5">Review and approve or reject Adviser and Guidance profile update requests</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {pendingCount > 0 && (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
                 <Bell className="w-3 h-3" /> {pendingCount} pending
               </div>
             )}
-            <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"><X className="w-4 h-4" /></button>
+            <button onClick={onClose} aria-label="Close approval requests" className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
           </div>
         </div>
-        <div className="flex flex-1 overflow-hidden">
-          <div className="w-80 shrink-0 border-r border-gray-100 flex flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
+          <div className="flex w-full shrink-0 flex-col border-b border-gray-100 md:w-80 md:border-b-0 md:border-r md:overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100 flex gap-1.5 flex-wrap">
               {([{ key: "All", label: "All", count: requests.length }, { key: "Pending", label: "Pending", count: pendingCount }, { key: "Approved", label: "Approved", count: approvedCount }, { key: "Rejected", label: "Rejected", count: rejectedCount }] as { key: "All" | ApprovalStatus; label: string; count: number }[]).map(({ key, label, count }) => {
                 const m = key === "All" ? null : APPROVAL_STATUS_META[key as ApprovalStatus];
@@ -1443,7 +1575,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                 );
               })}
             </div>
-            <div className="overflow-y-auto flex-1">
+            <div className="max-h-64 flex-1 overflow-y-auto md:max-h-none">
               {filtered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center px-4">
                   <FileCheck className="w-8 h-8 text-gray-200 mb-2" />
@@ -1472,7 +1604,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
               })}
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-[16rem] flex-1 overflow-y-auto">
             {!selected ? (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 bg-[#274e13]/10">
@@ -1481,7 +1613,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                 <p className="text-sm font-semibold text-gray-400">Select a request from the left to review it</p>
               </div>
             ) : (
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 <div className="flex items-center gap-4 mb-5 pb-5 border-b border-gray-100">
                   <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-extrabold shrink-0 bg-[#274e13]/10 text-[#274e13]">{selected.adviserInitials}</div>
                   <div className="flex-1 min-w-0">
@@ -1490,8 +1622,8 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                       <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ROLE_BADGE.Adviser}`}>{selected.role === "guidance" ? "Guidance" : "Adviser"}</span>
                       {(() => { const m = APPROVAL_STATUS_META[selected.status]; return <span className="text-xs font-bold px-2.5 py-1 rounded-full border" style={{ color: m.color, background: m.bg, borderColor: m.border }}>{selected.status}</span>; })()}
                     </div>
-                    <div className="flex items-center gap-4 mt-1">
-                      <span className="flex items-center gap-1 text-xs text-gray-400"><Mail className="w-3 h-3" />{selected.adviserEmail}</span>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <span className="flex min-w-0 items-center gap-1 break-all text-xs text-gray-400"><Mail className="w-3 h-3 shrink-0" />{selected.adviserEmail}</span>
                       <span className="flex items-center gap-1 text-xs text-gray-400"><School className="w-3 h-3" />{selected.classGrade}</span>
                     </div>
                     <p className="text-[11px] text-gray-400 mt-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Requested on {selected.requestedAt}</p>
@@ -1529,7 +1661,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                 {selected.status === "Pending" && (
                   <div className="border-t border-gray-100 pt-5">
                     {!confirmAction ? (
-                      <div className="flex gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row">
                         <button onClick={() => setConfirmAction("reject")} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border-2 text-sm font-bold transition hover:bg-red-50 border-red-200 text-red-600"><XCircle className="w-4 h-4" /> Reject Request</button>
                         <button onClick={() => setConfirmAction("approve")} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white transition hover:opacity-90 bg-emerald-600"><CheckCheck className="w-4 h-4" /> Approve Request</button>
                       </div>
@@ -1537,7 +1669,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                       <div className="rounded-xl border p-4" style={confirmAction === "approve" ? { background: "#f0fdf4", borderColor: "#bbf7d0" } : { background: "#fef2f2", borderColor: "#fecaca" }}>
                         <p className="text-sm font-bold mb-1" style={{ color: confirmAction === "approve" ? "#059669" : "#dc2626" }}>{confirmAction === "approve" ? "✓ Confirm Approval" : "✗ Confirm Rejection"}</p>
                         <p className="text-xs mb-4" style={{ color: confirmAction === "approve" ? "#065f46" : "#991b1b" }}>{confirmAction === "approve" ? "This will apply all requested changes to the adviser's profile and notify them." : "This will reject the request and notify the adviser."}</p>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 sm:flex-row">
                           <button onClick={() => setConfirmAction(null)} className="flex-1 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">Cancel</button>
                           <button onClick={() => handleAction(confirmAction)} className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-bold text-white transition hover:opacity-90" style={{ background: confirmAction === "approve" ? "#059669" : "#dc2626" }}>
                             <CheckCircle className="w-4 h-4" /> Yes, {confirmAction === "approve" ? "Approve" : "Reject"}
@@ -1551,9 +1683,9 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
             )}
           </div>
         </div>
-        <div className="px-6 py-3 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between shrink-0">
+        <div className="flex shrink-0 flex-col gap-3 border-t border-gray-100 bg-gray-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="text-xs text-gray-400">{requests.length} total · {pendingCount} pending review</p>
-          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Close</button>
+          <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto">Close</button>
         </div>
       </div>
     </div>
@@ -1563,42 +1695,64 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
 // ─── Preview Modal ────────────────────────────────────────
 function PreviewModal({ user, onClose, onEdit }: { user: UserRow; onClose: () => void; onEdit: (u: UserRow) => void }) {
   const deleteCountdown = getDeleteCountdown(user.deleteSchedule);
+  const hasValue = (value?: string) => Boolean(value && value.trim() && value.trim() !== "—");
+  const accountFields = [
+    { label: "Email", value: user.email },
+    { label: "Role", value: user.role },
+    { label: user.role === "ICT" || user.role === "Guidance" ? "Department" : "Class / Grade", value: user.classGrade },
+    { label: "Account Status", value: user.status },
+    { label: "Employee ID", value: user.employeeId },
+    { label: "Contact Number", value: user.phone },
+    { label: "Relationship", value: user.relationship },
+    { label: "Address", value: user.address },
+  ].filter((field) => hasValue(field.value));
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="px-6 pt-6 pb-5 text-white relative" style={{ background: "linear-gradient(135deg,#1a3a0a 0%,#274e13 60%,#3a6b1e 100%)" }}>
-          <button onClick={onClose} className="absolute top-4 right-4 w-7 h-7 rounded-lg flex items-center justify-center bg-white/15 hover:bg-white/25 transition"><X className="w-3.5 h-3.5" /></button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="relative shrink-0 px-5 pb-5 pt-5 text-white sm:px-6 sm:pt-6" style={{ background: "linear-gradient(135deg,#1a3a0a 0%,#274e13 60%,#3a6b1e 100%)" }}>
+          <button onClick={onClose} aria-label="Close user details" className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 transition hover:bg-white/25"><X className="h-4 w-4" /></button>
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-extrabold mb-3 shadow-lg bg-white/20">{user.initials}</div>
-          <h2 className="text-lg font-extrabold">{user.name}</h2>
-          <p className="text-sm text-white/70 mt-0.5">{user.email}</p>
-          <div className="flex items-center gap-2 mt-3">
+          <h2 className="break-words pr-10 text-lg font-extrabold">{user.name}</h2>
+          {hasValue(user.email) && <p className="mt-0.5 break-all text-sm text-white/70">{user.email}</p>}
+          <div className="mt-3 flex flex-wrap gap-2">
             <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-white/20">{user.role}</span>
-            <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 ${user.status === "Active" ? "bg-emerald-400/20 text-emerald-200" : "bg-red-400/20 text-red-200"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${user.status === "Active" ? "bg-emerald-400" : "bg-red-400"}`} />{user.status}
-            </span>
+            {hasValue(user.status) && <span className="rounded-full bg-emerald-300/20 px-2.5 py-1 text-xs font-bold text-emerald-50">{user.status}</span>}
             {deleteCountdown && <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-red-400/20 text-red-100">Delete Queue</span>}
           </div>
         </div>
-        <div className="p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {deleteCountdown && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
               <p className="text-[11px] font-bold uppercase tracking-wider text-red-700">30-Day Grace Period</p>
-              <p className="mt-1 text-xs text-red-700">This adviser is already disabled and scheduled for permanent deletion on <strong>{deleteCountdown.deleteLabel}</strong>.</p>
+              <p className="mt-1 text-xs text-red-700">This adviser is already disabled and scheduled for archiving on <strong>{deleteCountdown.deleteLabel}</strong>.</p>
             </div>
+          )}
+          {accountFields.length > 0 && (
+            <section className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-3.5 text-gray-900">
+              <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-gray-400">Account Information</p>
+              <dl className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+                {accountFields.map((field) => (
+                  <div key={field.label} className="min-w-0">
+                    <dt className="text-gray-500">{field.label}</dt>
+                    <dd className="mt-0.5 break-words font-semibold text-gray-800">{field.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
           )}
           {user.role === "Parent" ? <div className="space-y-4 max-h-[48vh] overflow-y-auto pr-1 text-gray-900" style={{ color: "#1f2937" }}>
             <section className="rounded-xl border border-gray-100 bg-gray-50 p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Parent / Guardian Account</p><div className="space-y-1.5 text-xs"><p><span className="text-gray-500">Email:</span> <span className="font-semibold text-gray-800">{user.email || "Not registered"}</span></p><p><span className="text-gray-500">Contact:</span> <span className="font-semibold text-gray-800">{user.phone || "—"}</span></p></div></section>
-            {(user.studentDetails ?? []).map((student, index) => <section key={student.studentId || index} className="rounded-xl border border-gray-100 p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Linked Student {index + 1}</p><div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs"><p className="col-span-2 font-bold text-gray-800">{student.displayName}</p><p><span className="text-gray-500">LRN:</span> {student.studentId}</p><p><span className="text-gray-500">Sex:</span> {student.gender || "—"}</p><p><span className="text-gray-500">Birth Date:</span> {student.birthDate || "—"}</p><p><span className="text-gray-500">Age:</span> {getStudentAge(student.birthDate)}</p><p><span className="text-gray-500">Grade / Section:</span> {student.grade}{student.section ? ` – ${student.section}` : ""}</p><p><span className="text-gray-500">RFID:</span> {student.rfid || "Not assigned"}</p><p className="col-span-2"><span className="text-gray-500">Address:</span> {[student.houseStreetSitioPurok, student.barangay, student.municipalityCity, student.province].filter(Boolean).join(", ") || "—"}</p><p className="col-span-2"><span className="text-gray-500">Father:</span> {[student.fatherFirstName, student.fatherMiddleName, student.fatherLastName, student.fatherSuffix].filter(Boolean).join(" ") || "—"}</p><p className="col-span-2"><span className="text-gray-500">Mother:</span> {[student.motherFirstName, student.motherMiddleName, student.motherLastName].filter(Boolean).join(" ") || "—"}</p><p className="col-span-2"><span className="text-gray-500">Guardian:</span> {[student.guardianFirstName, student.guardianMiddleName, student.guardianLastName, student.guardianSuffix].filter(Boolean).join(" ") || "—"}{student.guardianRelationship ? ` (${student.guardianRelationship})` : ""}</p></div></section>)}
-          </div> : <div className="divide-y divide-gray-50"><div className="flex items-center justify-between py-2.5"><span className="text-xs text-gray-500">Class / Grade</span><span className="text-xs font-semibold text-gray-800">{user.classGrade}</span></div></div>}
-          <div className="flex gap-2 mt-5">
-            <button onClick={onClose} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Close</button>
-            <button onClick={() => onEdit(user)} className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition">
+            {(user.studentDetails ?? []).map((student, index) => <section key={student.studentId || index} className="rounded-xl border border-gray-100 p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Linked Student {index + 1}</p><div className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-xs sm:grid-cols-2"><p className="font-bold text-gray-800 sm:col-span-2">{student.displayName}</p><p><span className="text-gray-500">LRN:</span> {student.studentId}</p><p><span className="text-gray-500">Sex:</span> {student.gender || "—"}</p><p><span className="text-gray-500">Birth Date:</span> {student.birthDate || "—"}</p><p><span className="text-gray-500">Age:</span> {getStudentAge(student.birthDate)}</p><p><span className="text-gray-500">Grade / Section:</span> {student.grade}{student.section ? ` – ${student.section}` : ""}</p><p><span className="text-gray-500">RFID:</span> {student.rfid || "Not assigned"}</p><p className="break-words sm:col-span-2"><span className="text-gray-500">Address:</span> {[student.houseStreetSitioPurok, student.barangay, student.municipalityCity, student.province].filter(Boolean).join(", ") || "—"}</p><p className="break-words sm:col-span-2"><span className="text-gray-500">Father:</span> {[student.fatherFirstName, student.fatherMiddleName, student.fatherLastName, student.fatherSuffix].filter(Boolean).join(" ") || "—"}</p><p className="break-words sm:col-span-2"><span className="text-gray-500">Mother:</span> {[student.motherFirstName, student.motherMiddleName, student.motherLastName].filter(Boolean).join(" ") || "—"}</p><p className="break-words sm:col-span-2"><span className="text-gray-500">Guardian:</span> {[student.guardianFirstName, student.guardianMiddleName, student.guardianLastName, student.guardianSuffix].filter(Boolean).join(" ") || "—"}{student.guardianRelationship ? ` (${student.guardianRelationship})` : ""}</p></div></section>)}
+          </div> : <div className="divide-y divide-gray-50"><div className="flex flex-col gap-1 py-2.5 sm:flex-row sm:items-center sm:justify-between"><span className="text-xs text-gray-500">{user.role === "ICT" || user.role === "Guidance" ? "Department" : "Class / Grade"}</span><span className="break-words text-xs font-semibold text-gray-800">{user.classGrade}</span></div>{user.students && user.students.length > 0 && <div className="py-2.5"><span className="text-xs text-gray-500">Assigned Students</span><div className="mt-1 space-y-1">{user.students.map((student) => <p key={student} className="break-words text-xs font-semibold text-gray-800">{student}</p>)}</div></div>}</div>}
+        </div>
+          <div className="mt-5 flex shrink-0 flex-col gap-2 border-t border-gray-100 pt-4 sm:flex-row">
+            <button onClick={onClose} className="min-h-11 flex-1 rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">Close</button>
+            <button onClick={() => onEdit(user)} className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#274e13] py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
               <Pencil className="w-3.5 h-3.5" />Edit
             </button>
           </div>
         </div>
       </div>
-    </div>
   );
 }
 
@@ -1609,11 +1763,11 @@ export default function UserManagementPage() {
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
-  const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "parent" | "approval">("all");
-  const [statusFilter, setStatusFilter] = useState<"All Status" | Status>("All Status");
-  const [statusOpen, setStatusOpen] = useState(false);
+  const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent" | "approval">("all");
   const [showApprovals, setShowApprovals] = useState(false);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [previewUser, setPreviewUser] = useState<UserRow | null>(null);
@@ -1621,19 +1775,31 @@ export default function UserManagementPage() {
   const [sectionCatalog, setSectionCatalog] = useState<{ grade: string; name: string }[]>([]);
   const [showBulkDeletion, setShowBulkDeletion] = useState(false);
   const [deletionActionError, setDeletionActionError] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, total: 0, totalPages: 1 });
+  const [serverCounts, setServerCounts] = useState({ total: 0, advisers: 0, ict: 0, guidance: 0, parents: 0 });
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
-       const [usersRes, approvalsRes, auditRes, deletionsRes] = await Promise.all([
-        fetch("/api/ict/user-management"),
-        fetch("/api/ict/approvals"),
-        fetch("/api/ict/audit-log"),
-        fetch("/api/scheduled-deletions"),
+       const apiRole = filterMode === "approval" ? "adviser" : filterMode;
+       const approvalsPromise = fetch("/api/ict/approvals");
+       const auditPromise = fetch("/api/ict/audit-log");
+       const deletionsPromise = fetch("/api/scheduled-deletions");
+       const approvalsRes = await approvalsPromise;
+       const approvalsData = await approvalsRes.json();
+       const userParams = new URLSearchParams({ page: String(page), pageSize: String(PER_PAGE), role: apiRole, query: deferredQuery });
+       if (filterMode === "approval") {
+         const pendingEmails = (approvalsData.approvals ?? []).filter((approval: ApprovalRequest) => approval.status === "Pending").map((approval: ApprovalRequest) => approval.adviserEmail).filter(Boolean);
+         userParams.set("emails", pendingEmails.length ? pendingEmails.join(",") : "__no_pending_approval__");
+       }
+       const [usersRes, auditRes, deletionsRes] = await Promise.all([
+        fetch(`/api/ict/user-management?${userParams.toString()}`),
+        auditPromise,
+        deletionsPromise,
       ]);
 
       const usersData = await usersRes.json();
-      const approvalsData = await approvalsRes.json();
       const auditData = await auditRes.json();
       const deletionsData = await deletionsRes.json();
 
@@ -1645,24 +1811,27 @@ export default function UserManagementPage() {
         });
 
         const enriched = usersData.users.map((u: UserRow) => {
-          const type = u.role === "Parent" ? "parent" : u.role === "Adviser" ? "adviser" : "ict";
-          const id = u.accountIds?.[0] ?? Number(u.id.replace(/^(parent|adviser|ict)-/, ""));
+          const type = u.role === "Parent" ? "parent" : u.role === "Adviser" ? "adviser" : u.role === "Guidance" ? "guidance" : "ict";
+          const id = u.accountIds?.[0] ?? Number(u.id.replace(/^(parent|adviser|ict|guidance)-/, ""));
           const deletion = deletionMap.get(`${type}:${id}`);
           return deletion ? { ...u, deleteSchedule: { scheduledAtMs: new Date(deletion.approved_at || deletion.requested_at).getTime(), deleteAtMs: new Date(deletion.delete_after).getTime() } } : u;
         });
 
         setUsers(enriched);
-      }
+        setPagination(usersData.pagination ?? { page, total: enriched.length, totalPages: 1 });
+        setServerCounts(usersData.counts ?? { total: enriched.length, advisers: 0, ict: 0, guidance: 0, parents: 0 });
+      } else throw new Error(usersData.message || "Unable to load users.");
 
       if (approvalsData.success) setApprovals(approvalsData.approvals);
       if (auditData.success) setAuditLog(auditData.auditLog);
       if (deletionsData.success) setScheduledDeletions(deletionsData.deletions ?? []);
     } catch (err) {
       console.error("Failed to load user management data:", err);
+      setLoadError(err instanceof Error ? err.message : "Unable to load user management data. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [deferredQuery, filterMode, page]);
 
   useEffect(() => { loadData(); }, [loadData]);
   const pendingApprovalCount = approvals.filter(a => a.status === "Pending").length;
@@ -1729,7 +1898,7 @@ export default function UserManagementPage() {
   }
 
   async function updateScheduledDeletion(id: number, action: "approve" | "reject" | "restore" | "delete-now") {
-    if (action === "delete-now" && !window.confirm("Delete this account and all related data permanently now? This cannot be undone.")) return;
+    if (action === "delete-now" && !window.confirm("Archive this account now? Its related history will be preserved and ICT can restore it.")) return;
     const password = action === "approve" ? window.prompt("Enter your current ICT password to approve this deletion request:") : undefined;
     if (action === "approve" && !password) return;
     setDeletionActionError("");
@@ -1750,45 +1919,35 @@ export default function UserManagementPage() {
         targetRole: user.role,
         targetEmail: user.email,
         performedBy: "System",
-        details: `Account permanently deleted after the ${DELETE_GRACE_DAYS}-day grace period.`,
+        details: `Account archived after the ${DELETE_GRACE_DAYS}-day grace period; related history preserved.`,
       });
     });
 
     setUsers((prev) => prev.filter((u) => !u.deleteSchedule || u.deleteSchedule.deleteAtMs > Date.now()));
   }, [users]);
 
-  const filtered = useMemo(() => users.filter(u => {
-    const q = query.toLowerCase();
-    const matchQ = u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-    const matchS = statusFilter === "All Status" || u.status === statusFilter;
-    let matchF = true;
-    if (filterMode === "adviser") matchF = u.role === "Adviser";
-    else if (filterMode === "ict") matchF = u.role === "ICT";
-    else if (filterMode === "parent") matchF = u.role === "Parent";
-    else if (filterMode === "approval") matchF = u.role === "Adviser" && approvals.some(a => a.adviserEmail === u.email && a.status === "Pending");
-    return matchQ && matchS && matchF;
-  }), [query, filterMode, statusFilter, users, approvals]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-  const rows = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  const counts = { total: users.length, advisers: users.filter(u => u.role === "Adviser").length, ict: users.filter(u => u.role === "ICT").length, parents: users.filter(u => u.role === "Parent").length, inactive: users.filter(u => u.status === "Inactive").length };
+  const rows = useMemo(() => filterMode === "approval"
+    ? users.filter(u => approvals.some(a => a.adviserEmail === u.email && a.status === "Pending"))
+    : users, [approvals, filterMode, users]);
+  const totalPages = pagination.totalPages;
+  const counts = serverCounts;
   const scheduledDeletionCount = users.filter((u) => u.deleteSchedule).length;
   const pendingDeletionRequestCount = scheduledDeletions.filter((item) => item.status === "PendingICT").length;
 
   return (
-    <div className="p-6 min-h-screen bg-gray-100" onClick={() => setStatusOpen(false)}>
+    <div className="min-h-full min-w-0 overflow-x-clip bg-gray-100 p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-5 gap-4">
+      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
           <p className="text-sm text-gray-400 mt-0.5">Manage advisers, parents, and system accounts</p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button onClick={() => router.push("/dashboard/ict/user-management/create-user")} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition hover:bg-[#1e3d0f] bg-[#274e13]">
+        <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:items-center sm:gap-2">
+          <button onClick={() => router.push("/dashboard/ict/user-management/create-user")} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
             <UserPlus className="w-4 h-4" /> Create User
           </button>
-          <button onClick={() => setShowBulkDeletion(true)} className="flex items-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
-          <button onClick={() => setShowApprovals(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
+          <button onClick={() => setShowBulkDeletion(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
+          <button onClick={() => setShowApprovals(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
             <FileCheck className="w-4 h-4" /> Approvals
             {pendingApprovalCount > 0 && <span className="ml-0.5 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full text-white bg-amber-500">{pendingApprovalCount}</span>}
           </button>
@@ -1796,7 +1955,7 @@ export default function UserManagementPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-5 gap-4 mb-5">
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <div className="rounded-xl p-5 text-white bg-[#274e13]">
           <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center mb-3"><Users className="w-5 h-5 text-white" /></div>
           <p className="text-3xl font-black">{counts.total}</p>
@@ -1807,7 +1966,7 @@ export default function UserManagementPage() {
           <p className="text-3xl font-black text-gray-800">{counts.ict}</p>
           <p className="text-xs font-semibold text-gray-400 mt-1">ICT Admins</p>
         </div>
-        {[{ label: "Class Advisers", value: counts.advisers, icon: "👩‍🏫" }, { label: "Parents / Guardians", value: counts.parents, icon: "👨‍👩‍👧" }, { label: "Inactive / Disabled", value: counts.inactive, icon: "🚫" }].map(c => (
+        {[{ label: "Class Advisers", value: counts.advisers, icon: "👩‍🏫" }, { label: "Parents / Guardians", value: counts.parents, icon: "👨‍👩‍👧" }].map(c => (
           <div key={c.label} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
             <div className="text-2xl mb-2">{c.icon}</div>
             <p className="text-3xl font-black text-gray-800">{c.value}</p>
@@ -1834,44 +1993,30 @@ export default function UserManagementPage() {
           <div className="space-y-2">
             {scheduledDeletions.filter(item => item.status === "PendingICT" || item.status === "Scheduled").map(item => <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3">
               <div className="min-w-[190px] flex-1"><p className="text-sm font-bold text-gray-800">{item.target_name}</p><p className="text-xs text-gray-500">{item.target_type} · {item.reason}</p>{item.status === "Scheduled" && item.delete_after && <p className="mt-1 text-[11px] font-semibold text-red-600">Scheduled for {new Date(item.delete_after).toLocaleDateString()}</p>}</div>
-              {item.status === "PendingICT" ? <div className="flex gap-2"><button onClick={() => updateScheduledDeletion(item.id, "reject")} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-600 hover:bg-white">Reject</button><button onClick={() => updateScheduledDeletion(item.id, "approve")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700">Approve</button></div> : <div className="flex gap-2"><button onClick={() => updateScheduledDeletion(item.id, "restore")} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100">Revert</button><button onClick={() => updateScheduledDeletion(item.id, "delete-now")} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700">Delete Immediately</button></div>}
+              {item.status === "PendingICT" ? <div className="flex gap-2"><button onClick={() => updateScheduledDeletion(item.id, "reject")} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-600 hover:bg-white">Reject</button><button onClick={() => updateScheduledDeletion(item.id, "approve")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700">Approve</button></div> : <div className="flex gap-2"><button onClick={() => updateScheduledDeletion(item.id, "restore")} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100">Restore</button>{item.status === "Scheduled" && <button onClick={() => updateScheduledDeletion(item.id, "delete-now")} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700">Archive Immediately</button>}</div>}
             </div>)}
           </div>
         </section>
       )}
 
-      <div className="flex gap-4 items-start">
+      <div className="flex flex-col items-stretch gap-4 xl:flex-row xl:items-start">
         {/* Table */}
         <div className="flex-1 min-w-0 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="border-b border-gray-100" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-3 px-4 pt-4 pb-3">
+            <div className="flex items-center gap-3 px-4 pb-3 pt-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                <input value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Search users…"
+                <input value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Search users or students…"
                   className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 bg-gray-50 transition text-gray-900" />
-              </div>
-              <div className="relative">
-                <button onClick={e => { e.stopPropagation(); setStatusOpen(p => !p); }}
-                  className="flex items-center gap-2 pl-4 pr-3 py-2.5 text-sm font-medium border border-gray-200 rounded-xl bg-white hover:border-gray-300 transition min-w-[130px] justify-between">
-                  <span className="text-gray-700">{statusFilter}</span><ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-                </button>
-                {statusOpen && (
-                  <div className="absolute top-full mt-1.5 right-0 bg-white border border-gray-200 rounded-xl shadow-xl z-40 min-w-[140px] py-1">
-                    {(["All Status", "Active", "Inactive"] as const).map(s => (
-                      <button key={s} onClick={() => { setStatusFilter(s); setStatusOpen(false); setPage(1); }}
-                        className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition ${statusFilter === s ? "font-bold text-[#274e13]" : "text-gray-700"}`}>{s}</button>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
             <div className="px-4 pb-3 space-y-2">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                 <span className="text-xs font-bold text-gray-400 shrink-0">Filter by:</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "parent", label: "Parents & Students" }, { value: "approval", label: "Pending Approval", badge: pendingApprovalCount }] as { value: string; label: string; badge?: number }[]).map(({ value, label, badge }) => (
+                <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible">
+                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }, { value: "approval", label: "Pending Approval", badge: pendingApprovalCount }] as { value: string; label: string; badge?: number }[]).map(({ value, label, badge }) => (
                     <button key={value} onClick={() => { setFilterMode(value as typeof filterMode); setPage(1); }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition"
+                      className="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition sm:py-1.5"
                       style={{ background: filterMode === value ? (value === "approval" ? "#fffbeb" : PRIMARY) : "white", color: filterMode === value ? (value === "approval" ? "#d97706" : "white") : "#6b7280", borderColor: filterMode === value ? (value === "approval" ? "#fde68a" : PRIMARY) : "#e5e7eb" }}>
                       {value === "approval" && <Bell className="w-3 h-3" />}{label}
                       {badge !== undefined && badge > 0 && <span className="text-[10px] font-extrabold px-1 py-0.5 rounded-full text-white bg-amber-500 ml-0.5">{badge}</span>}
@@ -1888,10 +2033,12 @@ export default function UserManagementPage() {
             </div>
           </div>
 
-          <table className="w-full">
+          {loadError && <div className="m-4 flex flex-col items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between"><p>{loadError}</p><button onClick={loadData} className="min-h-10 rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold">Try again</button></div>}
+          {loading && users.length === 0 ? <div className="space-y-3 p-5" aria-live="polite"><p className="text-sm font-semibold text-gray-500">Loading users…</p><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /></div> : <>
+          <table className="hidden w-full md:table">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
-                {["User", "Role", "Class / Grade", "Student(s)", "Status", ""].map(h => (
+                {["User", "Role", "Class / Grade", "Student(s)", ""].map(h => (
                   <th key={h} className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3">{h}</th>
                 ))}
               </tr>
@@ -1922,16 +2069,9 @@ export default function UserManagementPage() {
                       {u.role === "Parent" && u.students?.length
                         ? <div className="flex flex-col gap-1">{u.students.map((s, i) => <span key={i} className="text-xs text-gray-700 truncate">{s}</span>)}</div>
                         : u.role === "Adviser" ? <span className="text-xs text-gray-400 italic">Class adviser</span>
-                          : u.role === "ICT" ? <span className="text-xs text-gray-400 italic">System administration</span>
+                        : u.role === "ICT" ? <span className="text-xs text-gray-400 italic">System administration</span>
+                          : u.role === "Guidance" ? <span className="text-xs text-gray-400 italic">Student support services</span>
                             : <span className="text-xs text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex flex-col gap-1.5">
-                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${u.status === "Active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-100 text-gray-500 border-gray-200"}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${u.status === "Active" ? "bg-emerald-500" : "bg-gray-400"}`} />{u.status}
-                        </span>
-                        {deleteCountdown && <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200"><Trash2 className="w-3 h-3" />Disabled for deletion queue</span>}
-                      </div>
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition">
@@ -1949,20 +2089,51 @@ export default function UserManagementPage() {
                 );
               })}
               {rows.length === 0 && (
-                <tr><td colSpan={6} className="py-14 text-center">
+                <tr><td colSpan={5} className="py-14 text-center">
                   {filterMode === "approval" ? (<div><CheckCircle2 className="w-10 h-10 text-emerald-300 mx-auto mb-3" /><p className="text-sm text-gray-400 font-semibold">No pending approval requests</p></div>) : (<div><Users className="w-10 h-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">No users match your filters.</p></div>)}
                 </td></tr>
               )}
             </tbody>
           </table>
 
-          <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50/50">
-            <p className="text-xs text-gray-400">{filtered.length === 0 ? "No results" : `Showing ${(page - 1) * PER_PAGE + 1}–${Math.min(page * PER_PAGE, filtered.length)} of ${filtered.length} users`}</p>
-            <div className="flex items-center gap-1">
+          <div className="divide-y divide-gray-100 md:hidden">
+            {rows.map((user) => {
+              const deleteCountdown = getDeleteCountdown(user.deleteSchedule);
+              const hasPendingApproval = approvals.some((approval) => approval.adviserEmail === user.email && approval.status === "Pending");
+              return (
+                <article key={user.id} className="p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#274e13]/10 text-xs font-extrabold text-[#274e13]">{user.initials}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0"><p className="break-words text-sm font-semibold text-gray-800">{user.name}</p><p className="break-all text-xs text-gray-400">{user.email}</p></div>
+                        <button onClick={() => setPreviewUser(user)} title="View details" aria-label={`View details for ${user.name}`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100"><MoreHorizontal className="h-4 w-4" /></button>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>
+                        {hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
+                        {deleteCountdown && <span className="rounded-full border border-red-200 bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">Delete in {deleteCountdown.remainingDays}d</span>}
+                      </div>
+                      <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                        <div><dt className="text-gray-400">{user.role === "ICT" ? "Department" : "Class / Grade"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{user.classGrade || "—"}</dd></div>
+                        <div><dt className="text-gray-400">Student(s)</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{user.students?.length ? user.students.join(", ") : user.role === "Adviser" ? "Class adviser" : user.role === "ICT" ? "System administration" : "—"}</dd></div>
+                      </dl>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+            {rows.length === 0 && <div className="p-8 text-center"><Users className="mx-auto mb-3 h-10 w-10 text-gray-200" /><p className="text-sm font-semibold text-gray-400">No users match your filters.</p></div>}
+          </div>
+          </>}
+
+          <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <p className="text-xs text-gray-400">{rows.length === 0 ? "No results" : `Showing ${(pagination.page - 1) * PER_PAGE + 1}–${Math.min(pagination.page * PER_PAGE, pagination.total)} of ${filterMode === "approval" ? rows.length : pagination.total} users`}</p>
+            <div className="flex max-w-full items-center gap-1 overflow-hidden">
               <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"><ChevronLeft className="w-4 h-4" /></button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
-                <button key={n} onClick={() => setPage(n)} className="w-8 h-8 rounded-lg text-xs font-bold transition border"
-                  style={{ background: page === n ? PRIMARY : "white", color: page === n ? "white" : "#6b7280", borderColor: page === n ? PRIMARY : "#e5e7eb" }}>{n}</button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 1).map((n, index, visiblePages) => (
+                <Fragment key={n}>{index > 0 && n - visiblePages[index - 1] > 1 && <span className="px-1 text-xs text-gray-400">…</span>}<button onClick={() => setPage(n)} className="w-8 h-8 rounded-lg text-xs font-bold transition border"
+                  style={{ background: page === n ? PRIMARY : "white", color: page === n ? "white" : "#6b7280", borderColor: page === n ? PRIMARY : "#e5e7eb" }}>{n}</button></Fragment>
               ))}
               <button onClick={() => setPage(p => Math.min(p + 1, totalPages))} disabled={page === totalPages} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"><ChevronRight className="w-4 h-4" /></button>
             </div>
@@ -1970,7 +2141,7 @@ export default function UserManagementPage() {
         </div>
 
         {/* Right sidebar */}
-        <div className="w-60 shrink-0 flex flex-col gap-4">
+        <div className="flex w-full shrink-0 flex-col gap-4 xl:w-60">
           <div className="bg-white rounded-2xl border shadow-sm p-4" style={{ borderColor: pendingApprovalCount > 0 ? "#fde68a" : "#e5e7eb" }}>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2"><FileCheck className="w-4 h-4" style={{ color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY }} /><h3 className="font-bold text-gray-800 text-sm">Approval Requests</h3></div>
@@ -1997,7 +2168,7 @@ export default function UserManagementPage() {
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
             <h3 className="font-bold text-gray-800 text-sm mb-4">Role Breakdown</h3>
             <div className="space-y-3">
-              {[{ label: "Advisers", count: counts.advisers, dot: "bg-violet-500" }, { label: "ICT", count: counts.ict, dot: "bg-emerald-500" }, { label: "Parents", count: counts.parents, dot: "bg-sky-400" }, { label: "Inactive", count: counts.inactive, dot: "bg-red-400" }].map(({ label, count, dot }) => (
+              {[{ label: "Advisers", count: counts.advisers, dot: "bg-violet-500" }, { label: "ICT", count: counts.ict, dot: "bg-emerald-500" }, { label: "Guidance", count: counts.guidance, dot: "bg-amber-500" }, { label: "Parents", count: counts.parents, dot: "bg-sky-400" }].map(({ label, count, dot }) => (
                 <div key={label}>
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2"><span className={`w-2.5 h-2.5 rounded-full ${dot}`} /><span className="text-xs text-gray-600">{label}</span></div>
@@ -2016,7 +2187,7 @@ export default function UserManagementPage() {
       {/* Modals */}
       {showApprovals && <ApprovalModal requests={approvals} onClose={() => setShowApprovals(false)} onApprove={handleApprove} onReject={handleReject} />}
       {previewUser && <PreviewModal user={previewUser} onClose={() => setPreviewUser(null)} onEdit={u => { setPreviewUser(null); setEditUser(u); }} />}
-      {editUser && (editUser.role === "Adviser" || editUser.role === "ICT") && (
+      {editUser && (editUser.role === "Adviser" || editUser.role === "ICT" || editUser.role === "Guidance") && (
         <EditAdviserModal user={editUser} onClose={() => setEditUser(null)} onAudit={addAudit}
           onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }} />
       )}

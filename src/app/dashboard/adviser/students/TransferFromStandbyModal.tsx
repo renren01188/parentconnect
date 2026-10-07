@@ -20,6 +20,7 @@ interface StandbyStudent {
   grade: string;
   section: string;
   gender: string;
+  rfid_card: string | null;
 }
 
 interface QueuedStudent extends StandbyStudent {
@@ -60,14 +61,27 @@ type Step = "filter" | "select" | "rfid" | "review" | "auth" | "success";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+export interface ReadyTransferSummary {
+  total: number;
+  grade: string | null;
+  sections: { section: string; count: number }[];
+}
+
 interface Props {
   onClose: () => void;
   onTransferred: () => void;
+  readyTransferSummary: ReadyTransferSummary | null;
+  onReadyTransfersChanged: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
+export function TransferFromStandbyModal({
+  onClose,
+  onTransferred,
+  readyTransferSummary,
+  onReadyTransfersChanged,
+}: Props) {
   const [step,            setStep]            = useState<Step>("filter");
 
   // Filter
@@ -79,6 +93,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
   // Select
   const [search,          setSearch]          = useState("");
   const [students,        setStudents]        = useState<StandbyStudent[]>([]);
+  const [selectedIds,     setSelectedIds]     = useState<Set<number>>(new Set());
   const [loadingList,     setLoadingList]     = useState(false);
   const [listError,       setListError]       = useState("");
 
@@ -133,7 +148,11 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
       const json = await res.json();
       if (!json.success) throw new Error(json.message || "Failed to load standby students.");
       // Exclude already-queued students
-      setStudents(json.data.filter((s: StandbyStudent) => !queue.some(q => q.id === s.id)));
+      const availableStudents = json.data.filter((s: StandbyStudent) => !queue.some(q => q.id === s.id));
+      setStudents(availableStudents);
+      setSelectedIds(previous => new Set(
+        [...previous].filter(id => availableStudents.some((student: StandbyStudent) => student.id === id))
+      ));
     } catch (e: unknown) {
       setListError(e instanceof Error ? e.message : "Failed to load standby students.");
     } finally {
@@ -143,7 +162,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
 
   useEffect(() => {
     if (step === "select") fetchStandby();
-  }, [fetchStandby, step]);
+  }, [fetchStandby, readyTransferSummary, step]);
 
   // ── Auto-focus RFID input ──
   useEffect(() => {
@@ -158,14 +177,62 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
     setStep("select");
   };
 
-  const handleSelectStudent = (s: StandbyStudent) => {
-    setQueue(prev => {
-      if (prev.some(q => q.id === s.id)) return prev;
-      return [...prev, s];
+  const toggleStudent = (id: number) => {
+    setSelectedIds(previous => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
-    setStudents(prev => prev.filter(student => student.id !== s.id));
+  };
+
+  const toggleAllStudents = () => {
+    setSelectedIds(previous => previous.size === students.length
+      ? new Set()
+      : new Set(students.map(student => student.id))
+    );
+  };
+
+  const handleTransferSelected = () => {
+    const selectedStudents = students.filter(student => selectedIds.has(student.id));
+    if (selectedStudents.length === 0) {
+      setListError("Select at least one student to transfer.");
+      return;
+    }
+    setQueue(previous => [...previous, ...selectedStudents.filter(student => !previous.some(queued => queued.id === student.id))]);
+    setStudents(previous => previous.filter(student => !selectedIds.has(student.id)));
+    setSelectedIds(new Set());
     setCurrent(null);
     setApiError("");
+    setStep("review");
+  };
+
+  const handleRejectSelected = async () => {
+    const studentIds = [...selectedIds];
+    if (studentIds.length === 0) {
+      setListError("Select at least one student to reject.");
+      return;
+    }
+
+    setSubmitting(true);
+    setListError("");
+    try {
+      const response = await fetch("/api/students/standby", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grade, section, studentIds }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.message || "Unable to reject the selected students.");
+
+      setStudents(previous => previous.filter(student => !selectedIds.has(student.id)));
+      setSelectedIds(new Set());
+      onReadyTransfersChanged();
+    } catch (error: unknown) {
+      setListError(error instanceof Error ? error.message : "Unable to reject the selected students.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const validateRfid = (val: string) => {
@@ -227,6 +294,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
       }
       if (!json.success) throw new Error(json.message || "Failed to transfer students.");
       setStep("success");
+      onReadyTransfersChanged();
     } catch (e: unknown) {
       setApiError(e instanceof Error ? e.message : "Failed to transfer students.");
     } finally {
@@ -238,12 +306,12 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 px-3 py-3 backdrop-blur-sm sm:px-4 sm:py-6"
       onClick={e => { if (e.target === e.currentTarget && step !== "success" && !submitting) onClose(); }}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-xl flex flex-col"
-        style={{ maxHeight: "92vh", animation: "sf-in .2s ease" }}
+        className="my-auto flex w-full max-w-xl flex-col rounded-2xl border border-slate-100 bg-white shadow-2xl"
+        style={{ maxHeight: "calc(100dvh - 24px)", animation: "sf-in .2s ease" }}
       >
         <style>{`
           @keyframes sf-in {
@@ -253,21 +321,21 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
         `}</style>
 
         {/* ── Header ── */}
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 pb-4 pt-5 sm:px-6 sm:pt-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
               <ArrowUpCircle className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
               <h2 className="font-extrabold text-slate-800 text-base leading-tight">Transfer from Standby</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Assign standby students to your class using their existing RFID</p>
+              <p className="text-xs text-slate-400 mt-0.5">Transfer standby students into your class</p>
             </div>
           </div>
           {step !== "success" && (
             <button
               onClick={onClose}
               disabled={submitting}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40"
             >
               <X className="w-4 h-4" />
             </button>
@@ -276,8 +344,8 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
 
         {/* ── Step indicator ── */}
         {step !== "success" && (
-          <div className="px-6 py-4 border-b border-slate-100 shrink-0">
-            <div className="flex items-center">
+          <div className="shrink-0 overflow-x-auto border-b border-slate-100 px-4 py-4 sm:px-6">
+            <div className="flex min-w-max items-center">
               {STEPS.map((s, i, arr) => {
                 const done   = stepIndex > i;
                 const active = stepIndex === i;
@@ -307,7 +375,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
         )}
 
         {/* ── Body ── */}
-        <div className="overflow-y-auto flex-1 px-6 py-5 flex flex-col gap-4">
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-5 sm:px-6">
 
           {/* ════ STEP 1 — Grade & Section ════ */}
           {step === "filter" && (
@@ -315,19 +383,25 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
               <div className="flex flex-col gap-3">
                 <p className="text-sm font-semibold text-slate-700">Select Grade Level:</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {GRADE_LEVELS.map(g => (
-                    <button
-                      key={g}
-                      onClick={() => { setGrade(g); setSection(""); }}
-                      className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all text-left flex items-center gap-2
-                        ${grade === g
-                          ? "bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm"
-                          : "border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
-                    >
-                      <GraduationCap className="w-4 h-4 opacity-60 shrink-0" />
-                      {g}
-                    </button>
-                  ))}
+                  {GRADE_LEVELS.map(g => {
+                    const permitted = !readyTransferSummary?.grade || readyTransferSummary.grade === g;
+                    const count = readyTransferSummary?.grade === g ? readyTransferSummary.total : 0;
+                    return (
+                      <button
+                        key={g}
+                        disabled={!permitted}
+                        onClick={() => { setGrade(g); setSection(""); }}
+                        className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all text-left flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-45
+                          ${grade === g
+                            ? "bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm"
+                            : "border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
+                      >
+                        <GraduationCap className="w-4 h-4 opacity-60 shrink-0" />
+                        <span className="flex-1">{g}</span>
+                        <span className={`min-w-9 rounded-full px-2 py-1 text-center text-xs font-extrabold ${count > 0 ? "bg-emerald-600 text-white shadow-sm shadow-emerald-200" : "bg-slate-100 text-slate-500"}`}>{count}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -347,18 +421,24 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2">
-                      {sections.map(sec => (
-                        <button
-                          key={sec}
-                          onClick={() => setSection(sec)}
-                          className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all text-left
-                            ${section === sec
-                              ? "bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm"
-                              : "border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
-                        >
-                          {sec}
-                        </button>
-                      ))}
+                      {sections.map(sec => {
+                        const sectionSummary = readyTransferSummary?.sections.find(item => item.section === sec);
+                        const permitted = !readyTransferSummary || Boolean(sectionSummary);
+                        return (
+                          <button
+                            key={sec}
+                            disabled={!permitted}
+                            onClick={() => setSection(sec)}
+                            className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all text-left flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-45
+                              ${section === sec
+                                ? "bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm"
+                                : "border-slate-200 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
+                          >
+                            <span className="flex-1">{sec}</span>
+                            <span className={`min-w-9 rounded-full px-2 py-1 text-center text-xs font-extrabold ${(sectionSummary?.count ?? 0) > 0 ? "bg-emerald-600 text-white shadow-sm shadow-emerald-200" : "bg-slate-100 text-slate-500"}`}>{sectionSummary?.count ?? 0}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -397,6 +477,20 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
                   </span>
                 )}
               </div>
+
+              {students.length > 0 && (
+                <label className="flex cursor-pointer items-center gap-2 self-start text-xs font-bold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.size === students.length}
+                    onChange={toggleAllStudents}
+                    disabled={submitting}
+                    className="h-4 w-4 accent-emerald-600"
+                  />
+                  Select all shown
+                  <span className="text-slate-400">({selectedIds.size} selected)</span>
+                </label>
+              )}
 
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -443,11 +537,17 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
               {!loadingList && !listError && students.length > 0 && (
                 <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
                   {students.map(s => (
-                    <button
+                    <label
                       key={s.id}
-                      onClick={() => handleSelectStudent(s)}
-                      className="flex items-center gap-3 px-3 py-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40 transition-all text-left w-full group"
+                      className={`flex cursor-pointer items-center gap-3 px-3 py-3 rounded-xl border transition-all text-left w-full ${selectedIds.has(s.id) ? "border-emerald-400 bg-emerald-50" : "border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
                     >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(s.id)}
+                        onChange={() => toggleStudent(s.id)}
+                        disabled={submitting}
+                        className="h-4 w-4 accent-emerald-600 shrink-0"
+                      />
                       <div className={`w-9 h-9 rounded-full ${avatarColor(s.full_name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>
                         {getInitials(s.full_name)}
                       </div>
@@ -458,8 +558,28 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
                       <span className="text-xs font-semibold text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         Select →
                       </span>
-                    </button>
+                    </label>
                   ))}
+                </div>
+              )}
+              {students.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleRejectSelected()}
+                    disabled={submitting || selectedIds.size === 0}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-bold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <X className="w-4 h-4" /> Reject All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTransferSelected}
+                    disabled={submitting || selectedIds.size === 0}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                  >
+                    {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <><ArrowUpCircle className="w-4 h-4" /> Transfer All</>}
+                  </button>
                 </div>
               )}
             </div>
@@ -652,7 +772,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
                 <p className="text-xs text-blue-700 font-medium leading-relaxed">
                   You are about to transfer{" "}
                   <span className="font-bold">{queue.length} student{queue.length !== 1 ? "s" : ""}</span>{" "}
-                  into your class. Their existing RFID cards will remain assigned. Enter your current password to authorize.
+                  into your class. Existing RFID cards will remain assigned; students marked No RFID can receive one later from the Students page. Enter your current password to authorize.
                 </p>
               </div>
 
@@ -668,7 +788,9 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
                         {getInitials(q.full_name)}
                       </div>
                       <p className="flex-1 text-xs font-bold text-slate-700 truncate">{q.full_name}</p>
-                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0">Existing RFID</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${q.rfid_card ? "text-emerald-600 bg-emerald-50" : "text-amber-700 bg-amber-50"}`}>
+                        {q.rfid_card ? "Existing RFID" : "No RFID"}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -724,7 +846,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
               <div>
                 <h3 className="font-extrabold text-slate-800 text-lg">Transfer Complete!</h3>
                 <p className="text-slate-400 text-sm mt-1">
-                  {queue.length} student{queue.length !== 1 ? "s have" : " has"} been transferred using their existing RFID.
+                  {queue.length} student{queue.length !== 1 ? "s have" : " has"} been transferred. Existing RFID cards were kept.
                 </p>
               </div>
               <div className="w-full flex flex-col gap-2">
@@ -748,7 +870,7 @@ export function TransferFromStandbyModal({ onClose, onTransferred }: Props) {
         </div>
 
         {/* ── Footer ── */}
-        <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50 rounded-b-2xl">
+        <div className="flex shrink-0 flex-col-reverse gap-3 rounded-b-2xl border-t border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:px-6">
           {step === "success" ? (
             <button
               onClick={onTransferred}

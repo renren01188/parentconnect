@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Search, Send, Upload, X } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 
 type Recipient = {
     id: string;
     role: "ICT";
     name: string;
-    email: string;
 };
 
 type MessageAttachment = {
@@ -23,7 +24,6 @@ type ThreadMessage = {
     id: number;
     senderRole: "Adviser" | "ICT";
     senderName: string;
-    senderEmail: string;
     isCurrentUser: boolean;
     body: string;
     attachments?: MessageAttachment[];
@@ -37,7 +37,6 @@ type Conversation = {
     recipientId: string;
     otherRole: "Adviser" | "ICT";
     otherName: string;
-    otherEmail: string;
     otherProfilePicture?: string | null;
     subject: string;
     body: string;
@@ -46,6 +45,14 @@ type Conversation = {
     status: "New" | "Read" | "Replied";
     isUnread: boolean;
     thread: ThreadMessage[];
+};
+
+type GuidanceIctMessagesResponse = {
+    success: boolean;
+    message?: string;
+    conversations?: Conversation[];
+    recipients?: Recipient[];
+    unreadCount?: number;
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -131,15 +138,19 @@ function ComposeModal({
     const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
     const [sending, setSending] = useState(false);
     const [sent, setSent] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
     const selected = recipients.find((recipient) => recipient.id === recipientId);
     const canSend = Boolean(recipientId && subject.trim() && (message.trim() || attachments.length > 0) && !sending);
 
     async function handleSend() {
         if (!canSend) return;
         setSending(true);
+        setSendError(null);
         try {
             await onSent({ recipientId, subject: subject.trim(), message: message.trim(), attachments });
             setSent(true);
+        } catch (error) {
+            setSendError(error instanceof Error ? error.message : "Unable to send message.");
         } finally {
             setSending(false);
         }
@@ -188,10 +199,11 @@ function ComposeModal({
                             >
                                 {recipients.map((recipient) => (
                                     <option key={recipient.id} value={recipient.id}>
-                                        {recipient.name} {recipient.email ? `- ${recipient.email}` : ""}
+                                        {recipient.name}
                                     </option>
                                 ))}
                             </select>
+                            {sendError && <p role="alert" className="mt-2 text-xs font-semibold text-red-600">{sendError}</p>}
                         </div>
 
                         <div>
@@ -280,6 +292,7 @@ export default function ContactICTPage() {
     const [replyAttachments, setReplyAttachments] = useState<MessageAttachment[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [liveUpdateError, setLiveUpdateError] = useState<string | null>(null);
     const [sendingReply, setSendingReply] = useState(false);
     const [showCompose, setShowCompose] = useState(false);
     const threadEndRef = useRef<HTMLDivElement>(null);
@@ -289,37 +302,95 @@ export default function ContactICTPage() {
         const query = search.trim().toLowerCase();
         if (!query) return conversations;
         return conversations.filter((conversation) =>
-            [conversation.otherName, conversation.otherEmail, conversation.subject, conversation.body]
+            [conversation.otherName, conversation.subject, conversation.body]
                 .join(" ")
                 .toLowerCase()
                 .includes(query)
         );
     }, [conversations, search]);
 
-    const loadMessages = useCallback(async () => {
-        setLoading(true);
-        setError(null);
+    const loadMessages = useCallback(async (background = false): Promise<boolean> => {
+        if (!background) setLoading(true);
+        if (!background) setError(null);
         try {
-            const res = await fetch("/api/guidance-ict/messages", { cache: "no-store" });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || "Unable to load ICT messages.");
+            const { response: res, data } = await fetchJsonWithRetry<GuidanceIctMessagesResponse>("/api/guidance-ict/messages", { cache: "no-store" });
+            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load ICT messages.");
 
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
             setConversations(nextConversations);
             setIctUnreadCount(Number(data.unreadCount ?? 0));
             setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
+            setError(null);
+            return true;
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Unable to load ICT messages.");
-            setConversations([]);
-            setIctUnreadCount(0);
+            if (!background) setError(err instanceof Error ? err.message : "Unable to load ICT messages.");
+            if (!background) {
+                setConversations([]);
+                setIctUnreadCount(0);
+            }
+            return false;
         } finally {
-            setLoading(false);
+            if (!background) setLoading(false);
         }
     }, [setIctUnreadCount]);
 
     useEffect(() => {
-        loadMessages();
+        void loadMessages();
+    }, [loadMessages]);
+
+    useEffect(() => {
+        const client = supabaseBrowser;
+        if (!client) {
+            setLiveUpdateError("Live updates are unavailable in this browser. Messages can still be refreshed manually.");
+            return;
+        }
+
+        let disposed = false;
+        let retrying = false;
+        let retryTimer: number | undefined;
+        const retryLiveRefresh = async () => {
+            if (retrying || disposed) return;
+            retrying = true;
+            const firstAttempt = await loadMessages(true);
+            if (disposed) return;
+            if (firstAttempt) {
+                setLiveUpdateError(null);
+                retrying = false;
+                return;
+            }
+            retryTimer = window.setTimeout(async () => {
+                const secondAttempt = await loadMessages(true);
+                if (!disposed && !secondAttempt) {
+                    setLiveUpdateError("Live updates are reconnecting. Your existing messages remain available and will refresh automatically.");
+                }
+                if (!disposed && secondAttempt) setLiveUpdateError(null);
+                retrying = false;
+            }, 1_200);
+        };
+
+        const channel = client
+            .channel("guidance-ict-messages")
+            .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
+                void loadMessages(true);
+            })
+            .subscribe((status) => {
+                if (status === "SUBSCRIBED") {
+                    setLiveUpdateError(null);
+                    return;
+                }
+                if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+                    void retryLiveRefresh();
+                }
+            });
+
+        const fallbackRefresh = window.setInterval(() => { void loadMessages(true); }, 15_000);
+        return () => {
+            disposed = true;
+            if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+            window.clearInterval(fallbackRefresh);
+            void client.removeChannel(channel);
+        };
     }, [loadMessages]);
 
     useEffect(() => {
@@ -340,7 +411,7 @@ export default function ContactICTPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
         }).catch(() => null);
-        loadMessages();
+        void loadMessages(true);
     }
 
     async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -351,7 +422,7 @@ export default function ContactICTPage() {
         });
         const data = await res.json().catch(() => null);
         if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
-        await loadMessages();
+        void loadMessages(true);
     }
 
     async function sendReply() {
@@ -372,7 +443,7 @@ export default function ContactICTPage() {
             if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
             setReply("");
             setReplyAttachments([]);
-            await loadMessages();
+            void loadMessages(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to send reply.");
         } finally {
@@ -399,6 +470,12 @@ export default function ContactICTPage() {
                     <Send className="h-3.5 w-3.5" /> New Message
                 </button>
             </div>
+
+            {liveUpdateError && (
+                <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs font-semibold text-amber-800">
+                    {liveUpdateError}
+                </div>
+            )}
 
             <div className="flex flex-1 overflow-hidden">
                 <div className="flex w-full max-w-[400px] shrink-0 flex-col border-r border-slate-100 bg-white">
@@ -432,7 +509,7 @@ export default function ContactICTPage() {
                                 >
                                     <div className="mb-1 flex items-center gap-2">
                                         <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-sky-500">
-                                            {conversation.otherProfilePicture ? <img src={conversation.otherProfilePicture} alt="ICT profile" className="h-full w-full object-cover" /> : <Monitor className="h-3.5 w-3.5 text-white" />}
+                                            <Monitor className="h-3.5 w-3.5 text-white" />
                                         </div>
                                         <p className="flex-1 truncate text-[11px] font-bold text-slate-700">{conversation.subject}</p>
                                         {conversation.isUnread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" />}
@@ -461,11 +538,10 @@ export default function ContactICTPage() {
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex items-center gap-3">
                                         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-sky-500 text-xs font-bold text-white">
-                                            {selected.otherProfilePicture ? <img src={selected.otherProfilePicture} alt={`${selected.otherName} profile`} className="h-full w-full object-cover" /> : initials(selected.otherName)}
+                                            {initials(selected.otherName)}
                                         </div>
                                         <div>
                                             <p className="text-sm font-extrabold text-slate-900">{selected.otherName}</p>
-                                            <p className="text-xs text-slate-400">{selected.otherEmail}</p>
                                         </div>
                                     </div>
                                     <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>
@@ -477,7 +553,9 @@ export default function ContactICTPage() {
                             <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
                                 {selected.thread.map((message) => (
                                     <div key={message.id} className={`flex items-start gap-2.5 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
-                                        <UserAvatar name={message.isCurrentUser ? "You" : message.senderName} src={message.isCurrentUser ? null : selected.otherProfilePicture} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName={message.isCurrentUser ? "bg-sky-500" : "bg-slate-500"} />
+                                        {!message.isCurrentUser && (
+                                            <UserAvatar name={message.senderName} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName="bg-slate-500" />
+                                        )}
                                         <div className={`flex flex-1 flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
                                         {message.body && (
                                             <div className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.isCurrentUser

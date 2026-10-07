@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getActiveAdviser, getActiveIct } from "@/lib/apiAuthorization";
 
 export async function GET(req: NextRequest) {
   try {
+    const [adviser, ict] = await Promise.all([getActiveAdviser(), getActiveIct()]);
+    if (!adviser && !ict) {
+      return NextResponse.json({ success: false, message: "Staff access is required." }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const email = searchParams.get("email")?.trim().toLowerCase();
 

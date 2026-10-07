@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { normalizeRfidCard } from "@/lib/rfid";
 
 type Body = {
   studentId: number;
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Normalize RFID — same as register-rfid route
-    const normalizedRfid = rfidCard.trim().toUpperCase();
+    const normalizedRfid = normalizeRfidCard(rfidCard);
 
     // ── 1. Fetch the student and confirm they are on standby ─────────────────
 
@@ -170,10 +171,10 @@ export async function POST(req: NextRequest) {
       },
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("POST /api/students/transfer-assign-rfid error:", error);
     return NextResponse.json(
-      { success: false, message: error.message || "Server error." },
+      { success: false, message: error instanceof Error ? error.message : "Server error." },
       { status: 500 }
     );
   }

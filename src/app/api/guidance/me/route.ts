@@ -16,7 +16,7 @@ export async function GET() {
 
     const { data: guidance, error } = await supabase
       .from("guidance_counselors")
-      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, profile_picture, status")
+      .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status")
       .eq("id", session.id).single();
     if (error) throw error;
 
@@ -33,7 +33,6 @@ export async function GET() {
       middleName: guidance.middle_name ?? "", lastName: guidance.last_name ?? "", suffix: guidance.suffix ?? "",
       email: guidance.email ?? "", contactNumber: guidance.phone ?? "", school: "Santiago Elementary",
       role: "Guidance Counselor", status: guidance.status ?? "active", name: fullName(guidance),
-      profilePicture: guidance.profile_picture ?? "",
       latest_change_request: latestRequest ?? null,
     }});
   } catch (error: unknown) {

@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendStudentReportAdviserEmail } from "@/lib/mailer";
+import { verifyGoogleRecaptcha } from "@/lib/googleRecaptcha";
+import { consumePublicRateLimit } from "@/lib/publicRateLimit";
+import { logAudit } from "@/lib/audit";
+import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { getPrincipalSession } from "../reports/parent-adviser/_lib";
 import {
   findAssignedAdviser,
@@ -10,27 +14,6 @@ import {
   toAdviserStudentReport,
   type StudentReportRow,
 } from "./_lib";
-
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-const requestCounts = new Map<string, { count: number; startedAt: number }>();
-
-function isRateLimited(request: NextRequest) {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  const clientId = forwardedFor?.split(",")[0]?.trim()
-    ?? request.headers.get("x-real-ip")
-    ?? "unknown";
-  const now = Date.now();
-  const entry = requestCounts.get(clientId);
-
-  if (!entry || now - entry.startedAt >= RATE_LIMIT_WINDOW_MS) {
-    requestCounts.set(clientId, { count: 1, startedAt: now });
-    return false;
-  }
-
-  entry.count += 1;
-  return entry.count > RATE_LIMIT_MAX_REQUESTS;
-}
 
 function errorMessage(error: unknown) {
   if (error instanceof TypeError && /fetch failed/i.test(error.message)) {
@@ -41,6 +24,15 @@ function errorMessage(error: unknown) {
 
 function isUpstreamUnavailable(error: unknown) {
   return error instanceof TypeError && /fetch failed/i.test(error.message);
+}
+
+function manilaDayBounds() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts();
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const start = new Date(`${values.year}-${values.month}-${values.day}T00:00:00+08:00`);
+  return { start: start.toISOString(), end: new Date(start.getTime() + 86_400_000).toISOString() };
 }
 
 export async function GET(req: NextRequest) {
@@ -134,13 +126,6 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    if (isRateLimited(req)) {
-      return NextResponse.json(
-        { success: false, message: "Too many report attempts. Please try again in a few minutes." },
-        { status: 429, headers: { "Retry-After": String(RATE_LIMIT_WINDOW_MS / 1000) } }
-      );
-    }
-
     const {
       firstName,
       middleName,
@@ -148,9 +133,9 @@ export async function POST(req: NextRequest) {
       suffix,
       gradeLevel,
       section,
-      contact,
       concern,
       website,
+      recaptchaToken,
     } = await req.json();
 
     // Invisible to genuine users; blocks simple automated form submissions.
@@ -165,8 +150,6 @@ export async function POST(req: NextRequest) {
     const trimmedGradeLevel = String(gradeLevel ?? "").trim();
     const trimmedSection = String(section ?? "").trim();
     const trimmedConcern = String(concern ?? "").trim();
-    const trimmedContact = String(contact ?? "").trim();
-
     if (!trimmedFirstName || !trimmedLastName || !trimmedGradeLevel || !trimmedSection || !trimmedConcern) {
       return NextResponse.json(
         { success: false, message: "Enter the student's first name, last name, grade level, section, and report details." },
@@ -181,11 +164,17 @@ export async function POST(req: NextRequest) {
       || trimmedSuffix.length > 20
       || trimmedGradeLevel.length > 50
       || trimmedSection.length > 100
-      || trimmedContact.length > 254
       || trimmedConcern.length > 5_000
     ) {
       return NextResponse.json(
         { success: false, message: "Some fields are too long. Please shorten them and try again." },
+        { status: 400 }
+      );
+    }
+
+    if (!await verifyGoogleRecaptcha(recaptchaToken)) {
+      return NextResponse.json(
+        { success: false, message: "The reCAPTCHA verification is invalid, expired, or incomplete. Please try again." },
         { status: 400 }
       );
     }
@@ -211,6 +200,7 @@ export async function POST(req: NextRequest) {
     const { data: students, error: studentError } = await supabase
       .from("students")
       .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section")
+      .eq("archive_status", "active")
       .eq("grade", trimmedGradeLevel)
       .eq("section", trimmedSection);
 
@@ -259,7 +249,8 @@ export async function POST(req: NextRequest) {
           parent_middle_name,
           parent_last_name,
           parent_suffix,
-          status
+          status,
+          archive_status
         )
       `)
       .eq("student_id", matchingStudent.student_id)
@@ -273,8 +264,9 @@ export async function POST(req: NextRequest) {
       parent_last_name: string | null;
       parent_suffix: string | null;
       status: string | null;
+      archive_status: string | null;
     });
-    const parent = parents.find((row) => row.status === "approved") ?? parents[0];
+    const parent = parents.find(parentAccountCanAccess);
 
     const studentName = fullName(matchingStudent);
     const parentName = parent ? fullName({
@@ -284,25 +276,32 @@ export async function POST(req: NextRequest) {
       suffix: parent.parent_suffix,
     }) : null;
 
-    const title = trimmedConcern.split("\n")[0].slice(0, 90) || "Student concern";
-    const duplicateSince = new Date(Date.now() - 60_000).toISOString();
-    const { data: duplicateRows, error: duplicateError } = await supabase
+    const { start: dayStart, end: dayEnd } = manilaDayBounds();
+    const { data: existingToday, error: existingTodayError } = await supabase
       .from("student_reports")
       .select("id")
       .eq("student_id", matchingStudent.student_id)
-      .eq("adviser_id", adviser.id)
-      .eq("description", trimmedConcern)
-      .gte("created_at", duplicateSince)
+      .gte("created_at", dayStart)
+      .lt("created_at", dayEnd)
       .limit(1);
 
-    if (duplicateError) throw duplicateError;
-    if ((duplicateRows ?? []).length > 0) {
-      return NextResponse.json({
-        success: true,
-        duplicate: true,
-        message: "Report submitted successfully.",
-      });
+    if (existingTodayError) throw existingTodayError;
+    if ((existingToday ?? []).length > 0) {
+      return NextResponse.json(
+        { success: false, message: "A Student Report was already submitted for this student today. Please try again tomorrow." },
+        { status: 429 }
+      );
     }
+
+    const rateLimit = await consumePublicRateLimit("student-report", matchingStudent.student_id, 3, 15 * 60);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { success: false, message: "Too many report attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+      );
+    }
+
+    const title = trimmedConcern.split("\n")[0].slice(0, 90) || "Student concern";
 
     const { data: insertedReport, error: insertError } = await supabase
       .from("student_reports")
@@ -315,7 +314,6 @@ export async function POST(req: NextRequest) {
         adviser_id: adviser.id,
         parent_email: parent?.email ?? null,
         parent_name: parentName,
-        contact: trimmedContact || null,
         category: "Other",
         title,
         description: trimmedConcern,
@@ -324,7 +322,15 @@ export async function POST(req: NextRequest) {
       .select("id")
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (insertError.code === "23505" && insertError.message.includes("student_reports_one_per_manila_day_idx")) {
+        return NextResponse.json(
+          { success: false, message: "A Student Report was already submitted for this student today. Please try again tomorrow." },
+          { status: 429 }
+        );
+      }
+      throw insertError;
+    }
 
     if (insertedReport && adviser.email) {
       try {
@@ -335,12 +341,13 @@ export async function POST(req: NextRequest) {
           grade: matchingStudent.grade,
           section: matchingStudent.section,
           description: trimmedConcern,
-          contact: trimmedContact || null,
         });
       } catch (emailError) {
         console.error("Unable to send student report adviser email:", emailError);
       }
     }
+
+    await logAudit({ action: "Report Submitted", performedBy: "Subject Teacher", performedByRole: "Subject Teacher", targetUser: studentName, targetRole: "Student", targetType: "Student Report", targetId: insertedReport?.id, relatedReportId: insertedReport?.id, relatedStudentId: matchingStudent.student_id, newStatus: "new", module: "Student Reports", details: `Submitted a student report for ${studentName} (${matchingStudent.student_id}) to ${fullName(adviser)}.` });
 
     return NextResponse.json({
       success: true,

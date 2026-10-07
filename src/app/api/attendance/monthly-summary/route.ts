@@ -1,26 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 
 type LogRow = {
+    id: number;
     student_db_id: number;
     attendance_date: string;
-    type: "Time In" | "Time Out";
+    time_logged: string;
+    type: "Time In" | "Time Out" | null;
     status: string | null;
 };
 
-type AttendanceStatus = "On Time" | "Late" | "Absent" | "Excused";
-
-const STATUS_PRIORITY: Record<AttendanceStatus, number> = {
-    // An auto-generated absent row can remain after a later successful scan,
-    // so a recorded arrival must supersede that provisional absent status.
-    "Absent": 1,
-    "On Time": 2,
-    "Late": 3,
-    "Excused": 4,
-};
+type AttendanceStatus = "Present" | "On Time" | "Late" | "Absent" | "Excused";
 
 function toAttendanceStatus(status: string | null): AttendanceStatus | null {
-    return status === "On Time" || status === "Late" || status === "Absent" || status === "Excused"
+    return status === "Present" || status === "On Time" || status === "Late" || status === "Absent" || status === "Excused"
         ? status
         : null;
 }
@@ -41,6 +35,39 @@ function getWeekdaysInMonth(year: number, month: number): string[] {
     return days;
 }
 
+type DayRecord = { status: AttendanceStatus; id: number; timeLogged: string };
+
+function shouldReplaceDayRecord(current: DayRecord | undefined, next: DayRecord) {
+    if (!current) return true;
+    // RFID/adviser Time In records supersede a provisional automatic absence.
+    if (current.status === "Absent" && next.status !== "Absent") return true;
+    if (next.status === "Absent" && current.status !== "Absent") return false;
+    if (next.status === "Excused" && current.status !== "Excused") return true;
+    if (current.status === "Excused" && next.status !== "Excused") return false;
+    return next.timeLogged > current.timeLogged || (next.timeLogged === current.timeLogged && next.id > current.id);
+}
+
+function getToday() {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date());
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    return `${year}-${month}-${day}`;
+}
+
+function registrationDate(createdAt?: string | null) {
+    if (!createdAt) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date(createdAt));
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
 function buildFullName(row: {
     first_name?: string | null;
     middle_name?: string | null;
@@ -57,10 +84,15 @@ function buildFullName(row: {
 
 export async function GET(req: NextRequest) {
     try {
+        if (!(await getPrincipalFromToken())) {
+            return NextResponse.json({ success: false, message: "Principal access is required." }, { status: 403 });
+        }
+
         const { searchParams } = new URL(req.url);
 
-        const year = parseInt(searchParams.get("year") || String(new Date().getFullYear()), 10);
-        const month = parseInt(searchParams.get("month") || String(new Date().getMonth() + 1), 10);
+        const [currentYear, currentMonth] = getToday().split("-").map(Number);
+        const year = parseInt(searchParams.get("year") || String(currentYear), 10);
+        const month = parseInt(searchParams.get("month") || String(currentMonth), 10);
 
         if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
             return NextResponse.json(
@@ -69,13 +101,38 @@ export async function GET(req: NextRequest) {
             );
         }
 
+        const { data: activeSY, error: schoolYearError } = await supabase
+            .from("school_year_config")
+            .select("id, start_date, end_date")
+            .eq("is_active", true)
+            .limit(1)
+            .maybeSingle();
+        if (schoolYearError) throw schoolYearError;
+
         const allSchoolDays = getWeekdaysInMonth(year, month);
-        const today = new Date().toISOString().slice(0, 10);
+        const today = getToday();
+
+        let holidayDates = new Set<string>();
+        if (activeSY) {
+            const { data: holidays, error: holidayError } = await supabase
+                .from("school_holidays")
+                .select("holiday_date")
+                .eq("school_year_config_id", activeSY.id)
+                .gte("holiday_date", allSchoolDays[0] ?? `${year}-${String(month).padStart(2, "0")}-01`)
+                .lte("holiday_date", allSchoolDays[allSchoolDays.length - 1] ?? `${year}-${String(month).padStart(2, "0")}-31`);
+            // school_holidays is optional until its migration has been applied.
+            if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+            holidayDates = new Set((holidays ?? []).map((holiday) => String(holiday.holiday_date)));
+        }
 
 
 
         // Exclude weekends, future dates, and holidays
-        const validDays = allSchoolDays.filter((d) => d <= today);
+        const validDays = allSchoolDays.filter((date) =>
+            !!activeSY && date <= today &&
+            date >= activeSY.start_date && date <= activeSY.end_date &&
+            !holidayDates.has(date)
+        );
 
         // ── 2. Fetch all sections (all grades) ───────────────────────────────────
         const { data: sectionRows, error: sectionError } = await supabase
@@ -88,28 +145,63 @@ export async function GET(req: NextRequest) {
         const sections = sectionRows ?? [];
 
         // ── 3. Fetch all students ────────────────────────────────────────────────
-        const { data: studentRows, error: studentError } = await supabase
-            .from("students")
-            .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section")
-
-            .order("last_name", { ascending: true })
-            .order("first_name", { ascending: true });
-
-        if (studentError) throw studentError;
-        const students = studentRows ?? [];
+        const studentRows: {
+            id: number; student_id: string; first_name: string | null; middle_name: string | null;
+            last_name: string | null; suffix: string | null; gender: string | null; grade: string;
+            section: string | null; created_at: string | null;
+        }[] = [];
+        const pageSize = 1000;
+        for (let from = 0; ; from += pageSize) {
+            const { data, error: studentError } = await supabase
+                .from("students")
+                .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at")
+                .eq("archive_status", "active")
+                .order("last_name", { ascending: true })
+                .order("first_name", { ascending: true })
+                .range(from, from + pageSize - 1);
+            if (studentError) throw studentError;
+            const page = data ?? [];
+            studentRows.push(...page);
+            if (page.length < pageSize) break;
+        }
+        const students = (studentRows ?? []).flatMap((student) => {
+            const registeredOn = registrationDate(student.created_at);
+            const activeFrom = registeredOn && activeSY
+                ? (registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
+                : null;
+            return activeFrom && validDays.some((date) => date >= activeFrom)
+                ? [{ ...student, active_from: activeFrom }]
+                : [];
+        });
 
         // ── 4. Fetch attendance logs for the month (only valid days) ─────────────
         let logs: LogRow[] = [];
         if (validDays.length > 0) {
-            const { data: logRows, error: logError } = await supabase
-                .from("attendance_logs")
-                .select("student_db_id, attendance_date, type, status")
-                .gte("attendance_date", validDays[0])
-                .lte("attendance_date", validDays[validDays.length - 1])
-                .eq("type", "Time In");
+            // PostgREST caps a response at the project's max row limit (1,000
+            // rows here). A school-wide month can exceed that limit, so fetch
+            // every page before calculating totals. Without this, the summary
+            // could look internally consistent while silently omitting records.
+            const pageSize = 1000;
+            let from = 0;
 
-            if (logError) throw logError;
-            logs = (logRows ?? []) as LogRow[];
+            while (true) {
+                const { data: logRows, error: logError } = await supabase
+                    .from("attendance_logs")
+                    .select("id, student_db_id, attendance_date, time_logged, type, status")
+                    .gte("attendance_date", validDays[0])
+                    .lte("attendance_date", validDays[validDays.length - 1])
+                    .order("attendance_date", { ascending: true })
+                    .order("student_db_id", { ascending: true })
+                    .order("id", { ascending: true })
+                    .range(from, from + pageSize - 1);
+
+                if (logError) throw logError;
+
+                const page = (logRows ?? []) as LogRow[];
+                logs.push(...page);
+                if (page.length < pageSize) break;
+                from += pageSize;
+            }
         }
 
         // ── 5. Build lookup: studentDbId → date → { hasTimeIn, status } ──────────
@@ -117,19 +209,18 @@ export async function GET(req: NextRequest) {
         // One student/day has one final attendance status. Duplicate Time In
         // rows can exist after corrections, so retain the status with the
         // strongest final classification rather than counting the day twice.
-        type DayRecord = { status: AttendanceStatus };
         const logMap: Record<number, Record<string, DayRecord>> = {};
 
         for (const log of logs) {
+            if (log.type && log.type !== "Time In") continue;
             const dbId = log.student_db_id as number;
             const date = log.attendance_date as string;
             const status = toAttendanceStatus(log.status);
             if (!status) continue;
             if (!logMap[dbId]) logMap[dbId] = {};
             const existing = logMap[dbId][date];
-            if (!existing || STATUS_PRIORITY[status] > STATUS_PRIORITY[existing.status]) {
-                logMap[dbId][date] = { status };
-            }
+            const next = { status, id: log.id, timeLogged: log.time_logged };
+            if (shouldReplaceDayRecord(existing, next)) logMap[dbId][date] = next;
         }
 
         // ── 6. Build per-student summary ─────────────────────────────────────────
@@ -142,6 +233,7 @@ export async function GET(req: NextRequest) {
             absent: number;
             late: number;
             excused: number;
+            active_from: string;
             dailyAbsences: Record<number, boolean>;  // day-of-month → true if absent
             dailyExcused: Record<number, boolean>;   // day-of-month → true if excused
         };
@@ -151,14 +243,14 @@ export async function GET(req: NextRequest) {
             const dailyAbsences: Record<number, boolean> = {};
             const dailyExcused: Record<number, boolean> = {};
 
-            for (const dateStr of validDays) {
+            for (const dateStr of validDays.filter((date) => date >= s.active_from)) {
                 const dayRecord = logMap[s.id]?.[dateStr];
                 const dayOfMonth = parseInt(dateStr.split("-")[2], 10);
 
                 if (dayRecord?.status === "Excused") {
                     excused++;
                     dailyExcused[dayOfMonth] = true;
-                } else if (dayRecord?.status === "On Time") {
+            } else if (dayRecord?.status === "Present" || dayRecord?.status === "On Time") {
                     present++;
                 } else if (dayRecord?.status === "Late") {
                     late++;
@@ -179,6 +271,7 @@ export async function GET(req: NextRequest) {
                 excused,
                 dailyAbsences,
                 dailyExcused,
+                active_from: s.active_from,
             };
         });
 

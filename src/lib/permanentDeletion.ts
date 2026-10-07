@@ -1,31 +1,41 @@
 import { supabase } from "@/lib/supabase";
 
-export async function permanentlyDeleteTarget(item: { target_type: string; target_id: string }) {
-  if (item.target_type === "student") {
-    const { data: student, error } = await supabase.from("students").select("id, student_id").eq("id", Number(item.target_id)).single();
-    if (error || !student) throw new Error("Student record no longer exists.");
-    await supabase.from("student_family_members").delete().eq("student_db_id", student.id);
-    await supabase.from("attendance_logs").delete().eq("student_db_id", student.id);
-    await supabase.from("parent_student_links").delete().eq("student_id", student.student_id);
-    const { error: deleteError } = await supabase.from("students").delete().eq("id", student.id);
-    if (deleteError) throw deleteError;
-    return;
-  }
-  if (item.target_type === "parent") {
-    const parentId = Number(item.target_id);
-    const { data: links, error: linksError } = await supabase.from("parent_student_links").select("student_id").eq("parent_id", parentId);
-    if (linksError) throw linksError;
-    for (const link of links ?? []) {
-      const { data: student } = await supabase.from("students").select("id").eq("student_id", link.student_id).maybeSingle();
-      if (student) await permanentlyDeleteTarget({ target_type: "student", target_id: String(student.id) });
-    }
-    await supabase.from("parent_student_links").delete().eq("parent_id", parentId);
-    const { error } = await supabase.from("parents").delete().eq("id", parentId);
-    if (error) throw error;
-    return;
-  }
-  const table = item.target_type === "adviser" ? "advisers" : item.target_type === "ict" ? "ict_admins" : null;
-  if (!table) throw new Error("Unsupported deletion target.");
-  const { error } = await supabase.from(table).delete().eq("id", Number(item.target_id));
+export type ArchiveTarget = { target_type: string; target_id: string; target_name?: string; reason?: string | null };
+type ArchiveActor = { id?: string | number; name: string; role: string };
+
+const ARCHIVABLE_TABLES: Record<string, string> = {
+  student: "students", parent: "parents", adviser: "advisers", ict: "ict_admins",
+  guidance: "guidance_counselors", principal: "principals",
+};
+
+/** Archives only the selected root record; evidence/history stays intact. */
+export async function archiveTarget(item: ArchiveTarget, actor: ArchiveActor) {
+  const table = ARCHIVABLE_TABLES[item.target_type];
+  const id = Number(item.target_id);
+  if (!table || !Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid archive target.");
+  const fields = item.target_type === "student" ? "id, archive_status" : "id, status, archive_status";
+  const { data: currentData, error: currentError } = await supabase.from(table).select(fields).eq("id", id).maybeSingle();
+  if (currentError) throw currentError;
+  const current = currentData as { id: number; archive_status?: string | null; status?: string | null } | null;
+  if (!current) throw new Error("Selected record no longer exists.");
+  if (current.archive_status === "archived") return current;
+  const { data, error } = await supabase.from(table).update({
+    archived_at: new Date().toISOString(), archived_by: String(actor.id ?? "system"),
+    archive_reason: item.reason?.trim() || "No reason provided", archive_status: "archived",
+    archive_previous_status: (current as { status?: string | null }).status ?? null,
+  }).eq("id", id).eq("archive_status", "active").select("id").maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Archive request was already processed or selected record changed.");
+  return data;
+}
+
+/** Restores only the selected archived root record; history never changes. */
+export async function restoreArchivedTarget(item: ArchiveTarget) {
+  const table = ARCHIVABLE_TABLES[item.target_type];
+  const id = Number(item.target_id);
+  if (!table || !Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid archive target.");
+  const { error } = await supabase.from(table).update({
+    archived_at: null, archived_by: null, archive_reason: null, archive_status: "active",
+  }).eq("id", id).eq("archive_status", "archived");
   if (error) throw error;
 }

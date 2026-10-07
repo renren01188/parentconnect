@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Search, CreditCard, ChevronLeft, ChevronRight,
@@ -10,7 +10,8 @@ import {
   ChevronDown, CheckCircle2, ArrowDownCircle, Upload,
 } from "lucide-react";
 import Link from "next/link";
-import { TransferFromStandbyModal } from "./TransferFromStandbyModal";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { TransferFromStandbyModal, type ReadyTransferSummary } from "./TransferFromStandbyModal";
 import { ImportRegistrationModal } from "./ImportRegistrationModal";
 import { RfidCardModal } from "./RfidCardModal";
 import { BulkDeleteModal } from "./BulkDeleteModal";
@@ -27,8 +28,8 @@ interface Student {
   grade: string;
   section: string;
   rfid_card: string | null;
-  today_status: "Present" | "Absent" | "Late" | "Excused";
-  attendance_rate: number;
+  today_status: "Present" | "Absent" | "Late" | "Excused" | "No Classes" | "—";
+  attendance_rate: number | null;
   parent_first_name?: string;
   parent_last_name?: string;
   relationship?: string;
@@ -54,7 +55,17 @@ function normalizeTodayStatus(value: unknown): Student["today_status"] {
   if (status === "present" || status === "on time") return "Present";
   if (status === "late") return "Late";
   if (status === "excused") return "Excused";
+  if (status === "no classes") return "No Classes";
+  if (!status || status === "—" || status === "-") return "—";
   return "Absent";
+}
+
+function isWeekendInApplicationTimezone() {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    weekday: "short",
+  }).format(new Date());
+  return weekday === "Sat" || weekday === "Sun";
 }
 
 interface AdviserInfo {
@@ -90,6 +101,7 @@ function StatusBadge({ status }: { status: string }) {
     Late: "bg-amber-100 text-amber-700",
     Absent: "bg-red-100 text-red-600",
     Excused: "bg-sky-100 text-sky-700",
+    "No Classes": "bg-slate-100 text-slate-600",
   };
   return (
     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${map[status] ?? "bg-slate-100 text-slate-500"}`}>
@@ -98,12 +110,10 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ─── AttendanceRate ───────────────────────────────────────────────────────────
-
-function AttendanceRate({ rate }: { rate: number }) {
-  if (!rate) return <span className="text-slate-300 text-sm">—</span>;
-  const color = rate >= 95 ? "text-emerald-600" : rate >= 85 ? "text-amber-500" : "text-red-500";
-  return <span className={`text-sm font-bold ${color}`}>{rate}%</span>;
+function AttendanceRate({ rate }: { rate: Student["attendance_rate"] }) {
+  return rate === null
+    ? <span className="text-sm text-slate-300">—</span>
+    : <span className={`text-sm font-bold ${rate >= 95 ? "text-emerald-600" : rate >= 85 ? "text-amber-500" : "text-red-500"}`}>{rate}%</span>;
 }
 
 // ─── InfoRow ──────────────────────────────────────────────────────────────────
@@ -170,12 +180,12 @@ function DeleteStudentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 px-3 py-3 backdrop-blur-sm sm:px-4 sm:py-6"
       onClick={e => { if (e.target === e.currentTarget && !deleting) onClose(); }}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg flex flex-col"
-        style={{ maxHeight: "90vh", animation: "dsm-in .2s ease" }}
+        className="my-auto flex w-full max-w-lg flex-col rounded-2xl border border-slate-100 bg-white shadow-2xl"
+        style={{ maxHeight: "calc(100dvh - 24px)", animation: "dsm-in .2s ease" }}
       >
         <style>{`
           @keyframes dsm-in {
@@ -184,8 +194,8 @@ function DeleteStudentModal({
           }
         `}</style>
 
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 pb-4 pt-5 sm:px-6 sm:pt-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
               <Trash2 className="w-5 h-5 text-red-500" />
             </div>
@@ -194,16 +204,16 @@ function DeleteStudentModal({
               <p className="text-xs text-slate-400 mt-0.5">Requires ICT approval, then has a 30-day restore period.</p>
             </div>
           </div>
-          <button onClick={onClose} disabled={deleting} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40">
+          <button onClick={onClose} disabled={deleting} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 px-6 py-5 flex flex-col gap-5">
+        <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-6">
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
             <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
             <p className="text-xs text-red-600 font-medium leading-relaxed">
-              This sends a deletion request to ICT. Once approved, the student remains recoverable for 30 days before permanent deletion. The parent can be notified by email.
+              This sends an archive request to ICT. Once approved, the student remains recoverable for 30 days before being archived. The parent can be notified by email.
             </p>
           </div>
 
@@ -219,7 +229,7 @@ function DeleteStudentModal({
               <StatusBadge status={student.today_status} />
             </div>
 
-            <div className="grid grid-cols-2 divide-x divide-slate-100 bg-slate-50">
+            <div className="grid grid-cols-1 divide-y divide-slate-100 bg-slate-50 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
               <div className="px-4 py-3">
                 <div className="flex items-center gap-1.5 mb-2">
                   <GraduationCap className="w-3.5 h-3.5 text-slate-400" />
@@ -229,7 +239,7 @@ function DeleteStudentModal({
                 <InfoRow label="Grade" value={student.grade} />
                 <InfoRow label="Section" value={student.section} />
                 <InfoRow label="RFID" value={student.rfid_card || "Not assigned"} />
-                <InfoRow label="Attendance" value={student.attendance_rate ? `${student.attendance_rate}%` : "—"} />
+                <InfoRow label="Attendance" value={student.attendance_rate === null ? "—" : `${student.attendance_rate}%`} />
               </div>
               <div className="px-4 py-3">
                 <div className="flex items-center gap-1.5 mb-2">
@@ -314,11 +324,11 @@ function DeleteStudentModal({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50 rounded-b-2xl">
-          <button onClick={onClose} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 font-bold text-sm rounded-xl transition-colors disabled:opacity-50">
+        <div className="flex shrink-0 flex-col-reverse gap-3 rounded-b-2xl border-t border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:px-6">
+          <button onClick={onClose} disabled={deleting} className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50">
             <XCircle className="w-4 h-4" /> Cancel
           </button>
-          <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-red-200">
+          <button onClick={handleDelete} disabled={deleting} className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-red-200 transition-colors hover:bg-red-600 disabled:bg-red-300">
             {deleting ? (
               <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Deleting…</>
             ) : (
@@ -333,7 +343,7 @@ function DeleteStudentModal({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function AdviserStudentsPage() {
+function AdviserStudentsPageContent() {
   const searchParams = useSearchParams();
   const [students, setStudents] = useState<Student[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ total: 0, page: 1, limit: 5, totalPages: 1 });
@@ -375,6 +385,8 @@ export default function AdviserStudentsPage() {
 
   // ── Receive Transfer modal (incoming) ──
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [readyTransferSummary, setReadyTransferSummary] = useState<ReadyTransferSummary | null>(null);
+  const readyTransferRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [rfidTarget, setRfidTarget] = useState<Student | null>(null);
@@ -399,9 +411,10 @@ export default function AdviserStudentsPage() {
       const res = await fetch(`/api/students?${qs}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || json.message || "Unknown error");
+      const isWeekend = isWeekendInApplicationTimezone();
       setStudents((json.data ?? []).map((student: Student) => ({
         ...student,
-        today_status: normalizeTodayStatus(student.today_status),
+        today_status: isWeekend ? "No Classes" : normalizeTodayStatus(student.today_status),
       })));
       setPagination(json.pagination);
       if (json.adviser) {
@@ -418,6 +431,45 @@ export default function AdviserStudentsPage() {
   }, [debSearch, filter, activeSection, includePendingAbsences]);
 
   useEffect(() => { fetchStudents(page); }, [fetchStudents, page]);
+
+  const refreshReadyTransferSummary = useCallback(async () => {
+    try {
+      const response = await fetch("/api/students/standby-summary", { cache: "no-store" });
+      const json = await response.json();
+      if (response.ok && json.success) {
+        setReadyTransferSummary({
+          total: Number(json.total) || 0,
+          grade: typeof json.grade === "string" ? json.grade : null,
+          sections: Array.isArray(json.sections) ? json.sections : [],
+        });
+      }
+    } catch {
+      // The existing transfer modal remains available if the optional count cannot load.
+    }
+  }, []);
+
+  useEffect(() => { void refreshReadyTransferSummary(); }, [refreshReadyTransferSummary]);
+
+  useEffect(() => {
+    const realtimeClient = supabaseBrowser;
+    if (!realtimeClient) return;
+
+    const scheduleRefresh = () => {
+      if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
+      readyTransferRefreshTimer.current = setTimeout(() => {
+        void refreshReadyTransferSummary();
+      }, 150);
+    };
+    const channel = realtimeClient
+      .channel("adviser-ready-transfer-count")
+      .on("postgres_changes", { event: "*", schema: "public", table: "students" }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
+      void realtimeClient.removeChannel(channel);
+    };
+  }, [refreshReadyTransferSummary]);
 
   const handleOpenDelete = async (s: Student) => {
     if (s.parent_email !== undefined) { setDeleteTarget(s); return; }
@@ -453,6 +505,7 @@ export default function AdviserStudentsPage() {
   const handleReceived = () => {
     setShowReceiveModal(false);
     fetchStudents(page);
+    void refreshReadyTransferSummary();
   };
 
   const sectionLabel =
@@ -461,7 +514,7 @@ export default function AdviserStudentsPage() {
       : "Your Section";
 
   return (
-    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50 font-sans">
+    <main className="min-w-0 flex-1 overflow-y-auto bg-slate-50 px-3 py-5 font-sans sm:px-4 md:px-6 md:py-6">
 
       {deleteTarget && (
         <DeleteStudentModal
@@ -475,6 +528,8 @@ export default function AdviserStudentsPage() {
         <TransferFromStandbyModal
           onClose={() => setShowReceiveModal(false)}
           onTransferred={handleReceived}
+          readyTransferSummary={readyTransferSummary}
+          onReadyTransfersChanged={refreshReadyTransferSummary}
         />
       )}
       {showBulkDeleteModal && adviser && (
@@ -492,31 +547,34 @@ export default function AdviserStudentsPage() {
       )}
 
       {/* Page header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Students</h1>
+      <div className="mb-5 flex flex-col gap-3 lg:mb-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl font-extrabold tracking-tight text-slate-800 sm:text-2xl">Students</h1>
           <p className="text-slate-400 text-sm mt-0.5">
             {loading ? "Loading…" : `${pagination.total} student${pagination.total !== 1 ? "s" : ""} · ${sectionLabel}`}
           </p>
         </div>
 
         {/* ── Action buttons ── */}
-        <div className="flex items-center gap-2">
+        <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:w-auto">
           {/* Receive Transfer button */}
           <button
             onClick={() => setShowReceiveModal(true)}
-            className="flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl transition-all bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-400"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 py-2.5 text-sm font-bold text-emerald-700 transition-all hover:border-emerald-400 hover:bg-emerald-50"
           >
             <ArrowDownCircle className="w-4 h-4" />
             Receive Transfer
+            <span className="flex min-w-9 items-center justify-center rounded-full bg-emerald-600 px-2.5 py-1 text-sm font-extrabold leading-none text-white shadow-md shadow-emerald-200 ring-2 ring-emerald-100" aria-label={`${readyTransferSummary?.total ?? 0} ready transfers`}>
+              {readyTransferSummary?.total ?? 0}
+            </span>
           </button>
-          <button onClick={() => setShowBulkDeleteModal(true)} className="flex items-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 transition-all hover:border-red-400 hover:bg-red-50">
+          <button onClick={() => setShowBulkDeleteModal(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 transition-all hover:border-red-400 hover:bg-red-50">
             <Trash2 className="w-4 h-4" /> Bulk Delete
           </button>
 
           <button
             onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl transition-all bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 hover:border-blue-400"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-blue-300 bg-white px-4 py-2.5 text-sm font-bold text-blue-700 transition-all hover:border-blue-400 hover:bg-blue-50"
           >
             <Upload className="w-4 h-4" />
             Import Registration
@@ -524,7 +582,7 @@ export default function AdviserStudentsPage() {
 
           <Link
             href="/dashboard/adviser/students/add"
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-colors shadow-sm shadow-emerald-200"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600"
           >
             <UserPlus className="w-4 h-4" /> Add Student
           </Link>
@@ -533,15 +591,15 @@ export default function AdviserStudentsPage() {
 
       {/* Section switcher */}
       {adviser && (adviser.sections?.length > 0 || adviser.section) && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="mb-4 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1">
           {adviser.sections?.length > 1 ? (
             <>
-              <span className="text-xs font-semibold text-slate-400 mr-1">Section:</span>
+              <span className="mr-1 shrink-0 text-xs font-semibold text-slate-400">Section:</span>
               {adviser.sections.map(sec => (
                 <button
                   key={sec}
                   onClick={() => { setActiveSection(sec); setPage(1); }}
-                  className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
+                  className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
                       ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
                       : "bg-slate-100 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200"
                     }`}
@@ -561,10 +619,10 @@ export default function AdviserStudentsPage() {
       )}
 
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5">
 
         {/* Search + filter */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-5">
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
@@ -572,15 +630,15 @@ export default function AdviserStudentsPage() {
               placeholder="Search by name or student ID..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }}
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition"
+              className="min-h-11 w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-4 text-sm text-slate-700 transition placeholder-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-emerald-400"
             />
           </div>
-          <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+          <div className="flex items-center gap-1 overflow-x-auto overscroll-x-contain rounded-xl bg-slate-100 p-1">
             {["All", "Present", "Absent", "Late", "Excused"].map(f => (
               <button
                 key={f}
                 onClick={() => { setFilter(f); setIncludePendingAbsences(false); setPage(1); }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filter === f ? "bg-emerald-500 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+                className={`min-h-10 shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${filter === f ? "bg-emerald-500 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
                   }`}
               >
                 {f}
@@ -589,7 +647,7 @@ export default function AdviserStudentsPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
@@ -650,9 +708,9 @@ export default function AdviserStudentsPage() {
 
                     <td className="py-3 pr-4">
                       {s.rfid_card ? (
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                        <button onClick={() => setRfidTarget(s)} className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-emerald-700" title="Manage RFID card">
                           <CreditCard className="w-3.5 h-3.5 text-emerald-500" />{s.rfid_card}
-                        </div>
+                        </button>
                       ) : (
                         <button onClick={() => setRfidTarget(s)} className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1">
                           <RfidIcon className="w-3 h-3" /> Assign RFID
@@ -682,13 +740,52 @@ export default function AdviserStudentsPage() {
           </table>
         </div>
 
+        <div className="space-y-3 md:hidden">
+          {loading && (
+            <div className="flex justify-center py-12 text-sm text-slate-400">
+              <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Loading students…
+            </div>
+          )}
+          {!loading && error && (
+            <div className="py-12 text-center">
+              <p className="mb-1 text-sm font-semibold text-red-500">Failed to load students</p>
+              <p className="mb-3 text-xs text-slate-400">{error}</p>
+              <button onClick={() => fetchStudents(page)} className="min-h-10 rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-emerald-600">Retry</button>
+            </div>
+          )}
+          {!loading && !error && students.length === 0 && (
+            <p className="py-12 text-center text-sm text-slate-400">No students found in your section.</p>
+          )}
+          {!loading && !error && students.map(s => (
+            <article key={s.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${avatarColor(s.full_name)} text-xs font-bold text-white`}>
+                  {getInitials(s.full_name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-sm font-bold text-slate-800">{s.full_name}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">{s.gender}</p>
+                </div>
+                <StatusBadge status={s.today_status} />
+              </div>
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-slate-100 pt-3">
+                <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Student ID</dt><dd className="mt-1 break-all text-xs font-semibold text-slate-700">{s.student_id}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Attendance</dt><dd className="mt-1"><AttendanceRate rate={s.attendance_rate} /></dd></div>
+                <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">RFID Card</dt><dd className="mt-1">{s.rfid_card ? <button onClick={() => setRfidTarget(s)} className="flex min-h-9 items-center gap-1.5 break-all text-left text-xs text-slate-600 hover:text-emerald-700"><CreditCard className="h-3.5 w-3.5 shrink-0 text-emerald-500" />{s.rfid_card}</button> : <button onClick={() => setRfidTarget(s)} className="flex min-h-10 items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-500"><RfidIcon className="h-3 w-3" />Assign RFID</button>}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Today</dt><dd className="mt-1"><StatusBadge status={s.today_status} /></dd></div>
+              </dl>
+              <Link href={`/dashboard/adviser/students/${s.id}`} className="mt-4 flex min-h-11 w-full items-center justify-center rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</Link>
+            </article>
+          ))}
+        </div>
+
         {/* Pagination */}
         {!loading && !error && pagination.total > 0 && (
-          <div className="flex items-center justify-between mt-5 pt-4 border-t border-slate-100">
+          <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-slate-400">
               Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} students
             </p>
-            <div className="flex items-center gap-1">
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto">
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page === 1}
@@ -719,4 +816,8 @@ export default function AdviserStudentsPage() {
       </div>
     </main>
   );
+}
+
+export default function AdviserStudentsPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><AdviserStudentsPageContent /></Suspense>;
 }

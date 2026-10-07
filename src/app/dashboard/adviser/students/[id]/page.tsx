@@ -4,11 +4,17 @@ import { useState, useEffect } from "react";
 import {
   ArrowLeft, CheckCircle, AlertCircle,
   CreditCard, Phone, Mail, GraduationCap, Edit2,
-  Save, XCircle, ChevronDown, Plus, Users, MapPin,
+  Save, XCircle, ChevronDown, Plus, Users,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getStudentAge } from "@/lib/studentAge";
+import {
+  GUARDIAN_RELATIONSHIP_OPTIONS,
+  guardianRelationshipForStorage,
+  isMissingOtherGuardianRelationship,
+  splitGuardianRelationship,
+} from "@/lib/guardianRelationship";
 
 const inputBase = "w-full px-4 py-3 rounded-xl border text-slate-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-slate-400";
 const inputOk   = `${inputBase} border-slate-200 focus:ring-emerald-400`;
@@ -66,6 +72,7 @@ interface StudentData {
   contact_number: string;
   parent_email: string;
   parent_address: string;   // ← new
+  parent_account_linked: boolean;
   password_set: number;
   parent_status: string;
   birth_date?: string | null;
@@ -80,21 +87,46 @@ interface StudentData {
   family_members?: { role: string; first_name: string | null; middle_name: string | null; last_name: string | null; relationship: string | null; contact_number: string | null }[];
 }
 
-type FamilyMemberForm = { role: "Father" | "Mother" | "Guardian"; firstName: string; middleName: string; lastName: string; suffix: string; relationship: string };
+type FamilyMemberForm = {
+  role: "Father" | "Mother" | "Guardian";
+  firstName: string; middleName: string; lastName: string; suffix: string;
+  relationship: string; guardianRelationshipOther: string;
+};
+type StudentForm = {
+  firstName: string; middleName: string; lastName: string; suffix: string; gender: string; studentId: string;
+  grade: string; section: string;
+  parentFirstName: string; parentMiddleName: string; parentLastName: string; parentSuffix: string;
+  relationship: string; contactNumber: string; email: string; address: string;
+  familyMembers: FamilyMemberForm[];
+};
 const blankFamilyMembers = (): FamilyMemberForm[] => [
-  { role: "Father", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Father" },
-  { role: "Mother", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Mother" },
-  { role: "Guardian", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Guardian" },
+  { role: "Father", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Father", guardianRelationshipOther: "" },
+  { role: "Mother", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "Mother", guardianRelationshipOther: "" },
+  { role: "Guardian", firstName: "", middleName: "", lastName: "", suffix: "", relationship: "", guardianRelationshipOther: "" },
 ];
-const familyFormFrom = (members: StudentData["family_members"]): FamilyMemberForm[] => blankFamilyMembers().map(item => {
+const familyFormFrom = (members: Array<{ role: string; first_name: string | null; middle_name: string | null; last_name: string | null; relationship: string | null }> | undefined): FamilyMemberForm[] => blankFamilyMembers().map(item => {
   const found = members?.find(member => member.role === item.role);
-  return found ? { ...item, firstName: found.first_name || "", middleName: found.middle_name || "", lastName: found.last_name || "", relationship: found.relationship || item.relationship } : item;
+  if (!found) return item;
+  const hasName = Boolean(found.first_name || found.middle_name || found.last_name);
+  const guardianRelationship = item.role === "Guardian"
+    ? splitGuardianRelationship(found.relationship)
+    : { selection: found.relationship || item.relationship, other: "" };
+  return {
+    ...item,
+    firstName: found.first_name || "",
+    middleName: found.middle_name || "",
+    lastName: found.last_name || "",
+    // A legacy empty guardian row may contain the fallback word "Guardian".
+    // Do not present that as a person or a required relationship selection.
+    relationship: hasName ? guardianRelationship.selection : "",
+    guardianRelationshipOther: hasName ? guardianRelationship.other : "",
+  };
 });
 
 function ConfirmModal({
-  student, form, originalGrade, originalSection, onConfirm, onCancel, saving,
+  student, form, originalGrade, originalSection, parentAccountLinked, onConfirm, onCancel, saving,
 }: {
-  student: StudentData; form: any; originalGrade: string; originalSection: string;
+  student: StudentData; form: StudentForm; originalGrade: string; originalSection: string; parentAccountLinked: boolean;
   onConfirm: () => void; onCancel: () => void; saving: boolean;
 }) {
   const sectionChanged = form.grade !== originalGrade || form.section !== originalSection;
@@ -134,13 +166,13 @@ function ConfirmModal({
           {form.lastName    !== student.last_name      && <p>• Last name: <span className="font-semibold text-slate-700">{form.lastName}</span></p>}
           {form.gender      !== student.gender         && <p>• Gender: <span className="font-semibold text-slate-700">{form.gender}</span></p>}
           {form.studentId   !== student.student_id     && <p>• Student ID: <span className="font-semibold text-slate-700">{form.studentId}</span></p>}
-          {form.contactNumber !== student.contact_number && <p>• Contact: <span className="font-semibold text-slate-700">{form.contactNumber}</span></p>}
-          {form.email       !== student.parent_email   && <p>• Email: <span className="font-semibold text-slate-700">{form.email}</span></p>}
-          {form.address     !== student.parent_address && <p>• Address: <span className="font-semibold text-slate-700">{form.address || "—"}</span></p>}
-          {(form.parentFirstName !== student.parent_first_name || form.parentLastName !== student.parent_last_name) && (
+          {parentAccountLinked && form.contactNumber !== student.contact_number && <p>• Contact: <span className="font-semibold text-slate-700">{form.contactNumber}</span></p>}
+          {parentAccountLinked && form.email       !== student.parent_email   && <p>• Email: <span className="font-semibold text-slate-700">{form.email}</span></p>}
+          {parentAccountLinked && form.address     !== student.parent_address && <p>• Address: <span className="font-semibold text-slate-700">{form.address || "—"}</span></p>}
+          {parentAccountLinked && (form.parentFirstName !== student.parent_first_name || form.parentLastName !== student.parent_last_name) && (
             <p>• Parent name: <span className="font-semibold text-slate-700">{form.parentFirstName} {form.parentLastName}</span></p>
           )}
-          {form.relationship !== student.relationship  && <p>• Relationship: <span className="font-semibold text-slate-700">{form.relationship}</span></p>}
+          {parentAccountLinked && form.relationship !== student.relationship  && <p>• Relationship: <span className="font-semibold text-slate-700">{form.relationship}</span></p>}
         </div>
         <div className="flex gap-3">
           <button onClick={onCancel} disabled={saving}
@@ -182,7 +214,7 @@ export default function StudentViewPage() {
   const [addingNew,       setAddingNew]       = useState(false);
   const [newSectionInput, setNewSectionInput] = useState("");
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<StudentForm>({
     firstName: "", middleName: "", lastName: "", suffix: "", gender: "", studentId: "",
     grade: "", section: "",
     parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
@@ -193,6 +225,7 @@ export default function StudentViewPage() {
   const [originalGrade,   setOriginalGrade]   = useState("");
   const [originalSection, setOriginalSection] = useState("");
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const parentAccountLinked = student?.parent_account_linked === true;
 
   useEffect(() => {
     if (!id) return;
@@ -225,8 +258,8 @@ export default function StudentViewPage() {
         setForm({ ...f, familyMembers: familyFormFrom(d.family_members) });
         setOriginalGrade(d.grade   || "");
         setOriginalSection(d.section || "");
-      } catch (e: any) {
-        setFetchError(e.message);
+      } catch (error: unknown) {
+        setFetchError(error instanceof Error ? error.message : "Failed to load student.");
       } finally { setLoading(false); }
     }
     load();
@@ -263,23 +296,33 @@ export default function StudentViewPage() {
   if (touched.studentId       && !form.studentId.trim())       E.studentId       = "Student ID is required.";
   if (touched.grade           && !form.grade)                  E.grade           = "Grade is required.";
   if (touched.section         && !form.section.trim())         E.section         = "Section is required.";
-  if (touched.parentFirstName && !form.parentFirstName.trim()) E.parentFirstName = "First name is required.";
-  if (touched.parentLastName  && !form.parentLastName.trim())  E.parentLastName  = "Last name is required.";
-  if (touched.relationship    && !form.relationship)           E.relationship    = "Relationship is required.";
-  if (touched.contactNumber) {
+  if (parentAccountLinked && touched.parentFirstName && !form.parentFirstName.trim()) E.parentFirstName = "First name is required.";
+  if (parentAccountLinked && touched.parentLastName  && !form.parentLastName.trim())  E.parentLastName  = "Last name is required.";
+  if (parentAccountLinked && touched.relationship    && !form.relationship)           E.relationship    = "Relationship is required.";
+  if (parentAccountLinked && touched.contactNumber) {
     if (!form.contactNumber.trim())               E.contactNumber = "Contact number is required.";
     else if (!isValidContact(form.contactNumber)) E.contactNumber = "Must be exactly 11 digits.";
   }
-  if (touched.email) {
+  if (parentAccountLinked && touched.email) {
     if (!form.email.trim())             E.email = "Email is required.";
     else if (!isValidEmail(form.email)) E.email = "Enter a valid email address.";
+  }
+  const guardianVerification = form.familyMembers.find(member => member.role === "Guardian");
+  if (guardianVerification && isMissingOtherGuardianRelationship(
+    guardianVerification.relationship,
+    guardianVerification.guardianRelationshipOther,
+  )) {
+    E.guardianRelationshipOther = "Specify the guardian's relationship when Others is selected.";
   }
 
   const handleSaveClick = () => {
     setTouched({
       firstName: true, lastName: true, gender: true, studentId: true,
-      grade: true, section: true, parentFirstName: true, parentLastName: true,
-      relationship: true, contactNumber: true, email: true,
+      grade: true, section: true,
+      ...(parentAccountLinked ? {
+        parentFirstName: true, parentLastName: true,
+        relationship: true, contactNumber: true, email: true,
+      } : {}),
     });
     if (Object.keys(E).length > 0) return;
     setShowConfirm(true);
@@ -304,14 +347,23 @@ export default function StudentViewPage() {
         parent_last_name: form.parentLastName, parent_suffix: form.parentSuffix,
         relationship: form.relationship, contact_number: form.contactNumber,
         parent_email: form.email, parent_address: form.address,   // ← new
-        family_members: form.familyMembers.map(member => ({ role: member.role, first_name: member.firstName || null, middle_name: member.middleName || null, last_name: member.lastName || null, relationship: member.relationship || member.role, contact_number: form.contactNumber || null })),
+        family_members: form.familyMembers.map(member => ({
+          role: member.role, first_name: member.firstName || null, middle_name: member.middleName || null,
+          last_name: member.lastName || null,
+          relationship: member.role === "Guardian"
+            ? guardianRelationshipForStorage(member.relationship, member.guardianRelationshipOther)
+            : member.relationship || member.role,
+          contact_number: parentAccountLinked
+            ? form.contactNumber || null
+            : prev.family_members?.find(current => current.role === member.role)?.contact_number || null,
+        })),
       } : prev);
       setOriginalGrade(form.grade);
       setOriginalSection(form.section);
       setSaveSuccess(true); setEditing(false); setTouched({}); setShowConfirm(false);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (e: any) {
-      setSaveError(e.message); setShowConfirm(false);
+    } catch (error: unknown) {
+      setSaveError(error instanceof Error ? error.message : "Failed to save."); setShowConfirm(false);
     } finally { setSaving(false); }
   };
 
@@ -346,6 +398,7 @@ export default function StudentViewPage() {
         <ConfirmModal
           student={student} form={form}
           originalGrade={originalGrade} originalSection={originalSection}
+          parentAccountLinked={parentAccountLinked}
           onConfirm={handleConfirmedSave} onCancel={() => setShowConfirm(false)} saving={saving}
         />
       )}
@@ -590,70 +643,68 @@ export default function StudentViewPage() {
                   <Users className="w-4 h-4 text-emerald-600" />
                 </div>
                 <h2 className="font-bold text-slate-800">Parent / Guardian</h2>
-                {editing && <span className="ml-auto text-[11px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-semibold">Editable</span>}
+                {editing && (
+                  <span className={`ml-auto text-[11px] border px-2 py-0.5 rounded-lg font-semibold ${parentAccountLinked
+                    ? "text-emerald-600 bg-emerald-50 border-emerald-200"
+                    : "text-slate-500 bg-slate-50 border-slate-200"}`}>
+                    {parentAccountLinked ? "Editable" : "Read-only until Parent signup"}
+                  </span>
+                )}
               </div>
 
               {editing ? (
                 <div className="flex flex-col gap-4">
                   <div className="grid grid-cols-2 gap-4">
-                    <Field label="First Name" required error={E.parentFirstName}>
-                      <input className={E.parentFirstName ? inputErr : inputOk} value={form.parentFirstName}
+                    <Field label="First Name" required={parentAccountLinked} error={E.parentFirstName}>
+                      <input className={parentAccountLinked ? (E.parentFirstName ? inputErr : inputOk) : inputView} value={form.parentFirstName}
                         onChange={e => set("parentFirstName", e.target.value)}
-                        onBlur={() => setTouched(p => ({ ...p, parentFirstName: true }))} placeholder="e.g. Juan" />
+                        onBlur={() => setTouched(p => ({ ...p, parentFirstName: true }))} placeholder="e.g. Juan" readOnly={!parentAccountLinked} />
                     </Field>
-                    <Field label="Last Name" required error={E.parentLastName}>
-                      <input className={E.parentLastName ? inputErr : inputOk} value={form.parentLastName}
+                    <Field label="Last Name" required={parentAccountLinked} error={E.parentLastName}>
+                      <input className={parentAccountLinked ? (E.parentLastName ? inputErr : inputOk) : inputView} value={form.parentLastName}
                         onChange={e => set("parentLastName", e.target.value)}
-                        onBlur={() => setTouched(p => ({ ...p, parentLastName: true }))} placeholder="e.g. Dela Cruz" />
+                        onBlur={() => setTouched(p => ({ ...p, parentLastName: true }))} placeholder="e.g. Dela Cruz" readOnly={!parentAccountLinked} />
                     </Field>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Middle Name">
-                      <input className={inputOk} value={form.parentMiddleName}
-                        onChange={e => set("parentMiddleName", e.target.value)} placeholder="e.g. Santos or N/A" />
+                      <input className={parentAccountLinked ? inputOk : inputView} value={form.parentMiddleName}
+                        onChange={e => set("parentMiddleName", e.target.value)} placeholder="e.g. Santos or N/A" readOnly={!parentAccountLinked} />
                     </Field>
                     <Field label="Suffix">
-                      <select className={inputOk} value={form.parentSuffix} onChange={e => set("parentSuffix", e.target.value)}>
+                      <select className={parentAccountLinked ? inputOk : inputView} value={form.parentSuffix} onChange={e => set("parentSuffix", e.target.value)} disabled={!parentAccountLinked}>
                         <option value="">None</option>
                         {["Jr.","Sr.","II","III","IV"].map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </Field>
                   </div>
-                  <Field label="Relationship" required error={E.relationship}>
-                    <select className={E.relationship ? inputErr : inputOk} value={form.relationship}
+                  <Field label="Relationship" required={parentAccountLinked} error={E.relationship}>
+                    <select className={parentAccountLinked ? (E.relationship ? inputErr : inputOk) : inputView} value={form.relationship}
                       onChange={e => set("relationship", e.target.value)}
-                      onBlur={() => setTouched(p => ({ ...p, relationship: true }))}>
+                      onBlur={() => setTouched(p => ({ ...p, relationship: true }))} disabled={!parentAccountLinked}>
                       <option value="">Select relationship</option>
                       {["Father","Mother","Guardian","Grandparent","Sibling","Other"].map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </Field>
-                  <Field label="Contact Number" required error={E.contactNumber}>
+                  <Field label="Contact Number" required={parentAccountLinked} error={E.contactNumber}>
                     <div className="relative">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input className={`${E.contactNumber ? inputErr : inputOk} pl-9`} placeholder="09171234567" maxLength={11} value={form.contactNumber}
+                      <input className={`${parentAccountLinked ? (E.contactNumber ? inputErr : inputOk) : inputView} pl-9`} placeholder="09171234567" maxLength={11} value={form.contactNumber}
                         onChange={e => { const v = e.target.value.replace(/\D/g, ""); setForm(p => ({ ...p, contactNumber: v })); setTouched(p => ({ ...p, contactNumber: true })); }}
-                        onBlur={() => setTouched(p => ({ ...p, contactNumber: true }))} />
+                        onBlur={() => setTouched(p => ({ ...p, contactNumber: true }))} readOnly={!parentAccountLinked} />
                     </div>
                   </Field>
-                  <Field label="Email Address" required error={E.email}>
+                  <Field label="Email Address" required={parentAccountLinked} error={E.email}>
                     <div className="relative">
                       <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input type="email" className={`${E.email ? inputErr : inputOk} pl-9`} placeholder="parent@email.com" value={form.email}
+                      <input type="email" className={`${parentAccountLinked ? (E.email ? inputErr : inputOk) : inputView} pl-9`} placeholder="parent@email.com" value={form.email}
                         onChange={e => { setForm(p => ({ ...p, email: e.target.value })); setTouched(p => ({ ...p, email: true })); }}
-                        onBlur={() => setTouched(p => ({ ...p, email: true }))} />
-                    </div>
-                  </Field>
-                  {/* ── Address (new) ── */}
-                  <Field label="Home Address">
-                    <div className="relative">
-                      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input className={`${inputOk} pl-9`} placeholder="e.g. 123 Rizal St., Brgy. Poblacion, Manila" value={form.address}
-                        onChange={e => setForm(p => ({ ...p, address: e.target.value }))} />
+                        onBlur={() => setTouched(p => ({ ...p, email: true }))} readOnly={!parentAccountLinked} />
                     </div>
                   </Field>
                   <div className="border-t border-slate-100 pt-4">
                     <p className="mb-1 text-sm font-bold text-slate-800">Registration verification records</p>
-                    <p className="mb-3 text-xs text-slate-500">These names must match the information used by a Father, Mother, or Guardian when creating a Parent account.</p>
+                    <p className="mb-3 text-xs text-slate-500">These names are saved in the registration record and must match the information used with this student&apos;s LRN when a Father, Mother, or Guardian creates a Parent account.</p>
                     <div className="space-y-4">
                       {form.familyMembers.map(member => <div key={member.role} className="rounded-xl border border-slate-200 p-3">
                         <p className="mb-2 text-xs font-bold text-slate-700">{member.role}</p>
@@ -662,7 +713,36 @@ export default function StudentViewPage() {
                           <input className={inputOk} placeholder="Middle name" value={member.middleName} onChange={e => setFamilyMember(member.role, "middleName", e.target.value)} />
                           <input className={inputOk} placeholder="Last name" value={member.lastName} onChange={e => setFamilyMember(member.role, "lastName", e.target.value)} />
                         </div>
-                        {member.role === "Guardian" && <input className={`${inputOk} mt-3`} placeholder="Guardian relationship" value={member.relationship} onChange={e => setFamilyMember(member.role, "relationship", e.target.value)} />}
+                        {member.role === "Guardian" && (
+                          <div>
+                          <select
+                            className={inputOk + " mt-3"}
+                            aria-label="Guardian relationship"
+                            value={member.relationship}
+                            onChange={e => setFamilyMember(member.role, "relationship", e.target.value)}
+                          >
+                            <option value="">Select guardian relationship</option>
+                            {GUARDIAN_RELATIONSHIP_OPTIONS.map(option => (
+                              <option key={option} value={option}>{option === "Other" ? "Others" : option}</option>
+                            ))}
+                          </select>
+                          {member.relationship === "Other" && (
+                            <div className="mt-3">
+                              <label className="mb-1.5 block text-xs font-semibold text-slate-700">
+                                Specify the guardian&apos;s relationship <span className="text-red-500">*</span>
+                              </label>
+                              <textarea
+                                className={E.guardianRelationshipOther ? inputErr : inputOk}
+                                rows={2}
+                                placeholder="e.g. Aunt, Uncle, Foster parent"
+                                value={member.guardianRelationshipOther}
+                                onChange={e => setFamilyMember(member.role, "guardianRelationshipOther", e.target.value)}
+                              />
+                              {E.guardianRelationshipOther && <p className="mt-1 text-xs font-medium text-red-500">{E.guardianRelationshipOther}</p>}
+                            </div>
+                          )}
+                          </div>
+                        )}
                       </div>)}
                     </div>
                   </div>
@@ -676,7 +756,6 @@ export default function StudentViewPage() {
                   <ReviewRow label="Relationship" value={student.relationship} />
                   <ReviewRow label="Contact"      value={student.contact_number} />
                   <ReviewRow label="Email"        value={student.parent_email} />
-                  <ReviewRow label="Address"      value={student.parent_address || "—"} />
                   <ReviewRow label="Account"      value={student.password_set ? "Password created ✓" : "Password setup pending"} />
                 </div>
               )}

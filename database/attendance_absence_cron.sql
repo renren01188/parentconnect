@@ -72,6 +72,9 @@ begin
     on session.session_date = today_date
    and session.session_type = section.class_session
   where manila_now::time >= coalesce(session.absent_after, session.scheduled_end)
+    -- A student becomes eligible on the Manila calendar date their profile was
+    -- created/activated. Never create a retroactive absence before enrollment.
+    and timezone('Asia/Manila', student.created_at)::date <= today_date
     and not exists (
       select 1 from public.attendance_logs log
       where log.student_db_id = student.id

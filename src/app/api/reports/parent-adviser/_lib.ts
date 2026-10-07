@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -26,7 +27,6 @@ export type ReportRow = {
   parent_id: number | null;
   parent_email: string;
   parent_name: string;
-  parent_profile_picture?: string | null;
   adviser_id: number | null;
   adviser_name: string;
   student_id: string;
@@ -51,7 +51,7 @@ export type ReportRow = {
 export type MessageRow = {
   id: number;
   report_id: number;
-  sender_role: "parent" | "adviser" | "principal" | "guidance";
+  sender_role: "parent" | "adviser" | "principal" | "guidance" | "subject_teacher";
   sender_name: string;
   body: string;
   thread_type?: "adviser" | "guidance" | "principal" | null;
@@ -59,7 +59,6 @@ export type MessageRow = {
   created_at: string;
   read_by_parent: boolean;
   read_by_adviser: boolean;
-  sender_profile_picture?: string | null;
 };
 
 export type MessageAttachment = {
@@ -67,6 +66,22 @@ export type MessageAttachment = {
   type: string;
   size: number;
   dataUrl: string;
+};
+
+export type GuidanceTicketRow = {
+  id: number;
+  report_id: number;
+  parent_id: number;
+  student_id: string;
+  adviser_id: number | null;
+  concern: string;
+  message: string;
+  attachments?: MessageAttachment[] | null;
+  status: "pending" | "accepted" | "rejected";
+  rejection_reason?: string | null;
+  assigned_guidance_id?: number | null;
+  created_at: string;
+  decided_at?: string | null;
 };
 
 function attachmentsFromRow(value: unknown): MessageAttachment[] {
@@ -90,30 +105,56 @@ export async function getParentSession() {
   try {
     const verified = await jwtVerify(token, SECRET);
     const payload = verified.payload;
-    const email = typeof payload.email === "string" ? payload.email : "";
-    if (!email) return null;
+    if (payload.role !== "parent") return null;
 
+    const id = Number(payload.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    const { data: parent } = await supabase
+      .from("parents")
+      .select("email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, status, archive_status")
+      .eq("id", id)
+      .maybeSingle();
+    if (!parent || !parentAccountCanAccess(parent)) return null;
+    const currentName = [
+      parent.parent_first_name,
+      parent.parent_middle_name,
+      parent.parent_last_name,
+      parent.parent_suffix,
+    ].filter(Boolean).join(" ").trim();
     return {
-      id: Number(payload.id),
-      email,
-      name: typeof payload.parentName === "string" ? payload.parentName : "Parent",
+      id,
+      email: parent.email ?? "",
+      name: currentName || "Parent",
     };
   } catch {
     return null;
   }
 }
 
-export async function getReportForParent(id: number, parentEmail: string) {
+export async function getReportForParent(id: number, parentId: number) {
+  const linkedStudentIds = await getLinkedStudentIds(parentId);
+  if (linkedStudentIds.length === 0) return null;
+
   const { data, error } = await supabase
     .from("parent_adviser_reports")
     .select("*")
     .eq("id", id)
-    .eq("parent_email", parentEmail)
+    .eq("parent_id", parentId)
+    .in("student_id", linkedStudentIds)
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
   return data as ReportRow | null;
+}
+
+export async function getLinkedStudentIds(parentId: number) {
+  const { data, error } = await supabase
+    .from("parent_student_links")
+    .select("student_id")
+    .eq("parent_id", parentId);
+  if (error) throw error;
+  return [...new Set((data ?? []).map((link) => String(link.student_id)).filter(Boolean))];
 }
 
 export async function getReportForAdviser(id: number, adviserId: number) {
@@ -174,21 +215,28 @@ function timeAgo(value: string) {
   return `${days}d ago`;
 }
 
-export function toParentReport(row: ReportRow, messages: MessageRow[]) {
+export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   const isResolved = row.status === "resolved";
   const isPrincipalConversation = Boolean(row.escalated_to_principal) || messages.some((msg) => msg.sender_role === "principal");
   const hasOriginalReportStatus = row.adviser_id !== null && row.adviser_id !== 0;
-  const isGuidanceConversation = row.escalated_to_guidance || messages.some((msg) => msg.sender_role === "guidance");
+  const isGuidanceConversation = ticket?.status === "accepted" || row.escalated_to_guidance || messages.some((msg) => msg.sender_role === "guidance");
   const visibleMessages = messages;
   const lastMessage = visibleMessages.at(-1) ?? messages.at(-1);
   const hasUnreadStaffMessage = visibleMessages.some((msg) =>
-    (msg.sender_role === "adviser" || msg.sender_role === "principal" || msg.sender_role === "guidance") && !msg.read_by_parent
+    (msg.sender_role === "adviser" || msg.sender_role === "principal" || msg.sender_role === "guidance" || msg.sender_role === "subject_teacher") && !msg.read_by_parent
   );
   const unread = !isResolved && hasUnreadStaffMessage;
   const guidanceName = visibleMessages.find((msg) => msg.sender_role === "guidance")?.sender_name || "Guidance Counselor";
   const principalName = visibleMessages.find((msg) => msg.sender_role === "principal")?.sender_name || "Principal";
   const guidanceHasReplied = visibleMessages.some((msg) => msg.sender_role === "guidance");
+  const hasParentReplyAfter = (timestamp?: string | null) => {
+    const handoffTime = Date.parse(timestamp ?? "");
+    return Number.isFinite(handoffTime) && visibleMessages.some((msg) =>
+      msg.sender_role === "parent" && Date.parse(msg.created_at) > handoffTime
+    );
+  };
   const recipientName = isPrincipalConversation ? principalName : isGuidanceConversation ? guidanceName : row.adviser_name;
+  const subjectTeacherOpeningMessage = messages.find((msg) => msg.sender_role === "subject_teacher");
 
   return {
     id: row.id,
@@ -205,15 +253,18 @@ export function toParentReport(row: ReportRow, messages: MessageRow[]) {
     unread,
     grade: row.grade ?? "",
     section: row.section ?? "",
+    studentName: row.student_name,
+    submittedByName: subjectTeacherOpeningMessage?.sender_name,
+    submittedByRole: subjectTeacherOpeningMessage ? "Subject Teacher" : undefined,
+    submittedAt: subjectTeacherOpeningMessage ? formatDate(subjectTeacherOpeningMessage.created_at) : undefined,
     messages: visibleMessages.map((msg) => {
       const senderRole = String(msg.sender_role).trim().toLowerCase();
-      const isStaffMessage = senderRole === "adviser" || senderRole === "principal" || senderRole === "guidance";
+      const isStaffMessage = senderRole === "adviser" || senderRole === "principal" || senderRole === "guidance" || senderRole === "subject_teacher";
 
       return {
         id: msg.id,
         sender: isStaffMessage ? "staff" : "parent",
         senderName: isStaffMessage ? msg.sender_name || recipientName : "You",
-        profilePicture: msg.sender_profile_picture ?? (senderRole === "parent" ? row.parent_profile_picture ?? null : null),
         timestamp: formatDate(msg.created_at),
         text: msg.body,
         threadType: messageThreadType(row, messages, msg),
@@ -225,20 +276,25 @@ export function toParentReport(row: ReportRow, messages: MessageRow[]) {
     escalatedToGuidance: row.escalated_to_guidance,
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     guidanceHasReplied,
+    parentRepliedAfterPrincipalEscalation: Boolean(row.escalated_to_principal) && hasParentReplyAfter(row.status_updated_at),
+    parentRepliedAfterAcceptedGuidanceTicket: ticket?.status === "accepted" && hasParentReplyAfter(ticket.decided_at),
     allowHistoryAccess: row.allow_history_access,
+    ticketId: ticket?.id ?? null,
+    ticketStatus: ticket?.status ?? null,
+    ticketRejectionReason: ticket?.rejection_reason ?? null,
   };
 }
 
-export function toAdviserReport(row: ReportRow, messages: MessageRow[]) {
+export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   // Parent-created reports begin with a parent message, which is rendered as
   // the report body instead of a chat reply. Student Reports begin with an
   // adviser message, so the parent's first message is a real reply and must
   // remain in the Adviser ↔ Parent conversation.
-  const initialParentMessage = messages[0]?.sender_role === "parent" ? messages[0] : undefined;
+  const openingMessage = messages[0] && (messages[0].sender_role === "parent" || messages[0].sender_role === "subject_teacher") ? messages[0] : undefined;
   const isResolved = row.status === "resolved";
   const adviserMessages = adviserThreadMessages(row, messages, { includeInitialParent: false });
   const hasUnreadForAdviser = !isResolved && row.status !== "ongoing" && messages.some((msg) =>
-    msg.sender_role === "parent" &&
+    (msg.sender_role === "parent" || msg.sender_role === "subject_teacher") &&
     !msg.read_by_adviser &&
     // Don't count parent messages after Guidance entered — those are Guidance-thread messages
     messageThreadType(row, messages, msg) === "adviser"
@@ -254,7 +310,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[]) {
     // Always exclude Guidance messages from the adviser thread
     if (msg.sender_role === "guidance") return false;
     // Exclude the opening parent message (shown separately as report.message)
-    if (initialParentMessage && msg.id === initialParentMessage.id) return false;
+    if (openingMessage && msg.id === openingMessage.id) return false;
     // If Guidance has entered the thread, exclude any parent messages
     // that came AFTER the first Guidance message — those belong to
     // the Guidance↔Parent thread, not the Adviser↔Parent thread.
@@ -264,22 +320,24 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[]) {
 
   void legacyAdviserThreadMessages;
   const replies = adviserMessages.map((msg) => ({
-    sender: msg.sender_role === "adviser" ? "Adviser" : msg.sender_role === "principal" ? "Principal" : row.parent_name,
+    sender: msg.sender_role === "adviser" ? "Adviser" : msg.sender_role === "principal" ? "Principal" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
     message: msg.body,
     sent_at: formatDate(msg.created_at),
     attachments: attachmentsFromRow(msg.attachments),
-    profilePicture: msg.sender_profile_picture ?? (msg.sender_role === "parent" ? row.parent_profile_picture ?? null : null),
   }));
 
   return {
     id: row.id,
     parent_name: row.parent_name,
-    parent_profile_picture: row.parent_profile_picture ?? null,
     student_name: row.student_name,
+    grade: row.grade ?? "",
+    section: row.section ?? "",
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
-    message: initialParentMessage?.body ?? "",
-    attachments: attachmentsFromRow(initialParentMessage?.attachments),
+    message: openingMessage?.body ?? "",
+    attachments: attachmentsFromRow(openingMessage?.attachments),
+    submitted_by_name: openingMessage?.sender_role === "subject_teacher" ? openingMessage.sender_name : undefined,
+    submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     submitted_at: formatDate(row.created_at),
     status: adviserReportStatus(row.status),
     resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance && !row.escalated_to_principal,
@@ -291,6 +349,9 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[]) {
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     hasUnreadForAdviser,
     replies,
+    ticketId: ticket?.id ?? null,
+    ticketStatus: ticket?.status ?? null,
+    ticketRejectionReason: ticket?.rejection_reason ?? null,
   };
 }
 
@@ -318,7 +379,7 @@ function messageThreadType(row: ReportRow, messages: MessageRow[], message: Mess
 }
 
 function adviserThreadMessages(row: ReportRow, messages: MessageRow[], options: { includeInitialParent: boolean }) {
-  const initialParentMessage = messages[0]?.sender_role === "parent" ? messages[0] : undefined;
+  const initialParentMessage = messages[0] && (messages[0].sender_role === "parent" || messages[0].sender_role === "subject_teacher") ? messages[0] : undefined;
   return messages.filter((msg) => {
     if (!options.includeInitialParent && initialParentMessage && msg.id === initialParentMessage.id) return false;
     return messageThreadType(row, messages, msg) === "adviser";
@@ -345,17 +406,10 @@ function guidanceThreadMessages(row: ReportRow, messages: MessageRow[]) {
 }
 
 function principalThreadMessages(row: ReportRow, messages: MessageRow[]) {
-  if (row.allow_history_access === true) return messages;
-  const firstPrincipalMessage = messages.find((msg) => msg.sender_role === "principal");
-  return messages.filter((msg) => {
-    const explicit = explicitThreadType(msg.thread_type);
-    if (explicit) return explicit === "principal";
-    if (msg.sender_role === "principal") return true;
-    if (msg.sender_role !== "parent") return false;
-    if (!firstPrincipalMessage) return false;
-    void row;
-    return msg.id > firstPrincipalMessage.id;
-  });
+  // Principal monitoring is read-only until Guidance escalates the report;
+  // the report confirmation now records consent for the complete history.
+  void row;
+  return messages;
 }
 
 export function unreadGuidanceMessageIds(row: ReportRow, messages: MessageRow[]) {
@@ -365,7 +419,7 @@ export function unreadGuidanceMessageIds(row: ReportRow, messages: MessageRow[])
     .map((msg) => msg.id);
 }
 
-export function toGuidanceReport(row: ReportRow, messages: MessageRow[]) {
+export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
   const firstGuidanceMessage = messages.find((msg) => msg.sender_role === "guidance");
   const threadMessages = guidanceThreadMessages(row, messages);
@@ -375,7 +429,6 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[]) {
   return {
     id: row.id,
     parent_name: row.parent_name,
-    parent_profile_picture: row.parent_profile_picture ?? null,
     student_name: row.student_name,
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
@@ -395,21 +448,22 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[]) {
       message: msg.body,
       sent_at: formatDate(msg.created_at),
       attachments: attachmentsFromRow(msg.attachments),
-      profilePicture: msg.sender_profile_picture ?? (msg.sender_role === "parent" ? row.parent_profile_picture ?? null : null),
     })),
+    ticketId: ticket?.id ?? null,
+    ticketStatus: ticket?.status ?? null,
+    ticketRejectionReason: ticket?.rejection_reason ?? null,
   };
 }
 
-export function toPrincipalReport(row: ReportRow, messages: MessageRow[]) {
+export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null, principalHasRead = false) {
   const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
   const threadMessages = principalThreadMessages(row, messages);
   const isResolved = row.status === "resolved";
-  const hasUnreadForPrincipal = !isResolved && threadMessages.some((msg) => msg.sender_role === "parent" && !msg.read_by_adviser);
+  const hasUnreadForPrincipal = !isResolved && !principalHasRead && threadMessages.some((msg) => msg.sender_role === "parent" && !msg.read_by_adviser);
 
   return {
     id: row.id,
     parent_name: row.parent_name,
-    parent_profile_picture: row.parent_profile_picture ?? null,
     student_name: row.student_name,
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
@@ -426,6 +480,14 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[]) {
     hasUnreadForAdviser: false,
     hasUnreadForGuidance: false,
     hasUnreadForPrincipal,
+    // This is Principal-specific and comes from principal_notification_reads.
+    // It survives page refreshes and distinguishes a new handoff from an
+    // already viewed Principal report.
+    principalHasRead,
+    canReply: Boolean(row.escalated_to_principal),
+    ticketId: ticket?.id ?? null,
+    ticketStatus: ticket?.status ?? null,
+    ticketRejectionReason: ticket?.rejection_reason ?? null,
     replies: threadMessages.map((msg) => ({
       sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : row.parent_name,
       senderName: msg.sender_role === "parent" ? row.parent_name : (msg.sender_name || "Staff Member"),
@@ -433,9 +495,19 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[]) {
       message: msg.body,
       sent_at: formatDate(msg.created_at),
       attachments: attachmentsFromRow(msg.attachments),
-      profilePicture: msg.sender_profile_picture ?? (msg.sender_role === "parent" ? row.parent_profile_picture ?? null : null),
     })),
   };
+}
+
+export async function listGuidanceTickets(reportIds: number[]) {
+  const ids = [...new Set(reportIds.filter((id) => Number.isFinite(id)))];
+  if (!ids.length) return new Map<number, GuidanceTicketRow>();
+  const { data, error } = await supabase
+    .from("parent_report_guidance_tickets")
+    .select("id, report_id, parent_id, student_id, adviser_id, concern, message, attachments, status, rejection_reason, assigned_guidance_id, created_at, decided_at")
+    .in("report_id", ids);
+  if (error) throw error;
+  return new Map(((data ?? []) as GuidanceTicketRow[]).map((ticket) => [ticket.report_id, ticket]));
 }
 
 export function initials(name: string) {
@@ -494,8 +566,12 @@ export async function getPrincipalSession() {
   try {
     const verified = await jwtVerify(token, SECRET);
     if (verified.payload.role !== "principal") return null;
+    const principalId = Number(verified.payload.id);
+    const { data: principal } = await supabase.from("principals").select("status, archive_status, is_active, auth_version").eq("id", principalId).maybeSingle();
+    if (!principal || principal.archive_status === "archived" || principal.status !== "active" || !principal.is_active
+      || principal.auth_version !== verified.payload.authVersion) return null;
     return {
-      id: Number(verified.payload.id),
+      id: principalId,
       name: [
         typeof verified.payload.first_name === "string" ? verified.payload.first_name : "",
         typeof verified.payload.middle_name === "string" ? verified.payload.middle_name : "",
@@ -519,10 +595,10 @@ export async function getGuidanceSession() {
     const id = Number(verified.payload.id);
     const { data } = await supabase
       .from("guidance_counselors")
-      .select("first_name, middle_name, last_name, suffix, email, status")
+      .select("first_name, middle_name, last_name, suffix, email, status, archive_status")
       .eq("id", id)
       .maybeSingle();
-    if (!data || data.status !== "active") return null;
+    if (!data || data.status !== "active" || data.archive_status === "archived") return null;
     return {
       id,
       name: [data.first_name, data.middle_name, data.last_name, data.suffix].filter(Boolean).join(" ") || "Guidance Counselor",

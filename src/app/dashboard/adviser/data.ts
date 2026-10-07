@@ -21,8 +21,12 @@ export function getPriorityLabel(level: number): "Urgent" | "High" | "Medium" | 
 export interface Report {
   id: number;
   parent_name: string;
+  submitted_by_name?: string;
+  submitted_by_role?: "Subject Teacher";
   parent_profile_picture?: string | null;
   student_name: string;
+  grade?: string;
+  section?: string;
   category: ReportCategory;
   subject: string;
   message: string;
@@ -46,8 +50,14 @@ export interface Report {
   hasUnreadForAdviser?: boolean;
   /** True when the parent has a new Guidance-thread message not yet read by Guidance */
   hasUnreadForGuidance?: boolean;
+  /** Principal-specific persisted viewed state for an escalated report */
+  principalHasRead?: boolean;
   attachments?: MessageAttachment[];
   replies?: { sender: string; message: string; sent_at: string; attachments?: MessageAttachment[]; profilePicture?: string | null }[];
+  ticketId?: number | null;
+  ticketStatus?: "pending" | "accepted" | "rejected" | null;
+  ticketRejectionReason?: string | null;
+  canReply?: boolean;
 }
 
 export interface MessageAttachment {
