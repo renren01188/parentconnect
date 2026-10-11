@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
   Users, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle,
   CheckCircle, FileText, X,
@@ -14,6 +14,16 @@ import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import {
+  acceptGuardianTerms,
+  canAcceptGuardianTerms,
+  canSubmitGuardianSignup,
+  closeGuardianTerms,
+  createGuardianTermsState,
+  openGuardianTerms,
+  setGuardianTermsCheckbox,
+  updateGuardianTermsScroll,
+} from "./termsAgreement";
 
 type Mode = "login" | "signup";
 
@@ -35,7 +45,11 @@ function GuardianLoginPageContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [showTerms, setShowTerms] = useState(false);
+  const [terms, setTerms] = useState(() => createGuardianTermsState());
+  const termsDialogRef = useRef<HTMLDivElement>(null);
+  const termsContentRef = useRef<HTMLDivElement>(null);
+  const termsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const termsOpenerRef = useRef<HTMLElement | null>(null);
   const {
     applyServerResult,
     captchaRequired,
@@ -59,7 +73,6 @@ function GuardianLoginPageContent() {
     relationship: "Father",
     guardianRelationship: "Guardian",
     guardianRelationshipOther: "",
-    termsAccepted: false,
   });
 
   useEffect(() => {
@@ -68,7 +81,11 @@ function GuardianLoginPageContent() {
     setMode("signup");
     try {
       const savedSignup = window.sessionStorage.getItem("guardian-signup");
-      if (savedSignup) setSignup((previous) => ({ ...previous, ...JSON.parse(savedSignup) }));
+      if (savedSignup) {
+        const { termsAccepted, ...savedFields } = JSON.parse(savedSignup);
+        setSignup((previous) => ({ ...previous, ...savedFields }));
+        if (termsAccepted === true) setTerms(createGuardianTermsState(true));
+      }
     } catch {
       // The form remains usable if browser storage is unavailable.
     }
@@ -76,6 +93,34 @@ function GuardianLoginPageContent() {
       setError(TEMPORARY_PASSWORD_EXPIRED_MESSAGE);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!terms.isOpen) return;
+
+    termsOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => termsCloseButtonRef.current?.focus());
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      termsOpenerRef.current?.focus();
+    };
+  }, [terms.isOpen]);
+
+  useEffect(() => {
+    if (!terms.isOpen) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const content = termsContentRef.current;
+      if (!content) return;
+      setTerms((current) => updateGuardianTermsScroll(current, {
+        scrollTop: content.scrollTop,
+        clientHeight: content.clientHeight,
+        scrollHeight: content.scrollHeight,
+      }));
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [terms.isOpen]);
 
   function switchMode(next: Mode) {
     // Widgets are intentionally independent. A reCAPTCHA token belongs to
@@ -93,6 +138,47 @@ function GuardianLoginPageContent() {
   function setSignupText(field: keyof typeof signup, value: string) {
     const shouldUppercase = ["firstName", "middleName", "lastName"].includes(field);
     setSignup((prev) => ({ ...prev, [field]: shouldUppercase ? formatName(value) : value }));
+  }
+
+  function openTermsModal() {
+    setTerms((current) => openGuardianTerms(current));
+  }
+
+  function closeTermsModal() {
+    setTerms((current) => closeGuardianTerms(current));
+  }
+
+  function handleTermsScroll(event: React.UIEvent<HTMLDivElement>) {
+    const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+    setTerms((current) => updateGuardianTermsScroll(current, { scrollTop, clientHeight, scrollHeight }));
+  }
+
+  function handleTermsKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeTermsModal();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusable = Array.from(termsDialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function acceptTerms() {
+    setTerms((current) => acceptGuardianTerms(current));
   }
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -147,7 +233,7 @@ function GuardianLoginPageContent() {
     setError("");
     setSuccess("");
 
-    if (!signup.termsAccepted) {
+    if (!canSubmitGuardianSignup(terms)) {
       setError("Please accept the Terms and Agreement before signing up.");
       return;
     }
@@ -174,14 +260,14 @@ function GuardianLoginPageContent() {
       // Retain this draft for warnings, a page refresh, or the temporary
       // password expiry return path. It is removed only after completion.
       try {
-        window.sessionStorage.setItem("guardian-signup", JSON.stringify(signup));
+        window.sessionStorage.setItem("guardian-signup", JSON.stringify({ ...signup, termsAccepted: terms.termsAccepted }));
       } catch {
         // The in-memory form state remains intact if storage is unavailable.
       }
       const res = await fetch("/api/parents/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...signup, recaptchaToken: signupCaptchaToken }),
+        body: JSON.stringify({ ...signup, termsAccepted: terms.termsAccepted, recaptchaToken: signupCaptchaToken }),
         signal: controller.signal,
       });
       const data = await res.json();
@@ -193,7 +279,7 @@ function GuardianLoginPageContent() {
       }
 
       try {
-        window.sessionStorage.setItem("guardian-signup", JSON.stringify(signup));
+        window.sessionStorage.setItem("guardian-signup", JSON.stringify({ ...signup, termsAccepted: terms.termsAccepted }));
       } catch {
         // The parent can still use Back and enter the form again manually.
       }
@@ -453,25 +539,24 @@ function GuardianLoginPageContent() {
                 Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional and will be saved only when provided. Your email address and mobile number will be saved for your new account. After verification, you will create your own password.
               </p>
 
-              <label className="flex items-start gap-2 text-xs text-slate-600 leading-relaxed">
-                <input
-                  type="checkbox"
-                  checked={signup.termsAccepted}
-                  onChange={(e) => setSignup((prev) => ({ ...prev, termsAccepted: e.target.checked }))}
-                  className="mt-0.5"
-                />
-                <span>
-                  I accept the{" "}
-                  <button type="button" onClick={() => setShowTerms(true)} className="font-bold text-indigo-600 hover:underline">
-                    Terms and Agreement
-                  </button>
-                  .
-                </span>
-              </label>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
+                <button
+                  type="button"
+                  onClick={openTermsModal}
+                  className="font-bold text-indigo-700 underline decoration-2 underline-offset-2 hover:text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 rounded"
+                >
+                  {terms.termsAccepted ? "Review Terms and Agreement" : "View Terms and Agreement"}
+                </button>
+                <p className={`mt-1 text-xs ${terms.termsAccepted ? "text-emerald-700" : "text-slate-600"}`}>
+                  {terms.termsAccepted
+                    ? "Terms and Agreement accepted."
+                    : "You must review and accept the Terms and Agreement before creating an account."}
+                </p>
+              </div>
 
               <ContactRecaptcha resetSignal={signupCaptchaResetSignal} onTokenChange={setSignupCaptchaToken} />
 
-              <button type="submit" disabled={loading || !signup.termsAccepted || !signupCaptchaToken}
+              <button type="submit" disabled={loading || !canSubmitGuardianSignup(terms) || !signupCaptchaToken}
                 className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 mt-1 text-sm disabled:opacity-50"
                 style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
                 {loading ? "Signing up..." : <>Create Parent Account <ArrowRight className="w-4 h-4" /></>}
@@ -485,38 +570,155 @@ function GuardianLoginPageContent() {
         </div>
       </main>
 
-      {showTerms && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center px-4">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl w-full max-w-md p-6">
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
-                  <FileText className="w-4 h-4 text-indigo-600" />
+      {terms.isOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-6"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeTermsModal();
+          }}
+        >
+          <div
+            ref={termsDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="terms-agreement-title"
+            aria-describedby="terms-agreement-instructions"
+            aria-label="ParentConnect Sign Up Terms and Conditions"
+            onKeyDown={handleTermsKeyDown}
+            className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 sm:px-6">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50">
+                  <FileText className="h-5 w-5 text-indigo-700" aria-hidden="true" />
                 </div>
-                <h3 className="font-extrabold text-slate-800">Terms and Agreement</h3>
+                <div>
+                  <h2 id="terms-agreement-title" className="font-extrabold text-slate-900">Terms and Agreement</h2>
+                  <p id="terms-agreement-instructions" className="mt-0.5 text-xs text-slate-600">
+                    Read to the end to enable acceptance.
+                  </p>
+                </div>
               </div>
-              <button type="button" onClick={() => setShowTerms(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
+              <button
+                ref={termsCloseButtonRef}
+                type="button"
+                onClick={closeTermsModal}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Close Terms and Agreement"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
-            <div className="text-sm text-slate-600 leading-relaxed space-y-3">
-              <p>
-                By signing up, you confirm that the information you provide is true and connected to the student LRN you entered.
-              </p>
-              <p>
-                You agree that authorized school personnel may access the submitted data for student verification, attendance monitoring, parent communication, and account support.
-              </p>
-              <p>
-                Your active email address and mobile number may be used by the school for ParentConnect-related notices and account assistance.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowTerms(false)}
-              className="w-full mt-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold transition"
+
+            <div
+              ref={termsContentRef}
+              onScroll={handleTermsScroll}
+              className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm leading-6 text-slate-700 sm:px-6"
             >
-              I Understand
-            </button>
+              <article className="space-y-5">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">PARENTCONNECT SIGN UP TERMS AND CONDITIONS</h3>
+                  <p className="mt-3">
+                    By creating an account in PARENTCONNECT, the registrant acknowledges having read, understood, and agreed to the following Terms and Conditions.
+                  </p>
+                </div>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">1. Account Registration</h3>
+                  <p className="mt-2">PARENTCONNECT requires the submission of necessary information for account creation and verification. All information provided during registration shall be accurate, complete, and consistent with the information required by the school.</p>
+                  <p className="mt-2">Account registration may require verification of the registrant&apos;s identity and relationship to the student associated with the account. Information submitted during registration may be checked against available school records to ensure proper account verification and authorized access.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">2. Accuracy of Information</h3>
+                  <p className="mt-2">All information submitted during registration shall be accurate and current. This may include the registrant&apos;s name, email address, contact information, student information, and other details required by the system.</p>
+                  <p className="mt-2">Any incorrect or outdated information should be corrected through the available system functions or reported to the appropriate school personnel for verification and updating.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">3. Account Security</h3>
+                  <p className="mt-2">Account credentials, including passwords and verification information, shall be kept confidential and protected from unauthorized access.</p>
+                  <p className="mt-2">Account credentials shall not be shared with other individuals. Any suspected unauthorized access, loss of account credentials, or unusual account activity should be reported promptly to the appropriate school personnel.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">4. Authorized Use of the Account</h3>
+                  <p className="mt-2">A PARENTCONNECT account shall be used only for authorized school-related purposes. Access to system features and information shall be limited according to the user&apos;s assigned account and authorized role.</p>
+                  <p className="mt-2">Unauthorized access to another user&apos;s account or information, unauthorized modification of system data, and any activity that interferes with the normal operation of PARENTCONNECT are not permitted.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">5. Student Information</h3>
+                  <p className="mt-2">Registration of an account associated with a student requires accurate student information and appropriate authorization to access the student&apos;s school-related information.</p>
+                  <p className="mt-2">Student information accessed through PARENTCONNECT shall be treated as confidential and used only for legitimate and authorized school-related purposes.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">6. Account Verification and Access</h3>
+                  <p className="mt-2">PARENTCONNECT may require account verification before registration is completed or access to certain system features is granted.</p>
+                  <p className="mt-2">Verification may involve information contained in school records or other verification procedures established by the school.</p>
+                  <p className="mt-2">Successful registration or verification does not grant access to information or system functions beyond those authorized for the registered account.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">7. Privacy and Use of Information</h3>
+                  <p className="mt-2">Information collected during registration may be processed for purposes related to account creation, verification, account management, authentication, and the proper operation of PARENTCONNECT.</p>
+                  <p className="mt-2">Only information necessary for these purposes should be submitted during registration process.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">8. Maintenance of Account Information</h3>
+                  <p className="mt-2">Registered account information should remain accurate and current. Changes to personal, contact, or student-related information should be made through available system functions or coordinated with the appropriate school personnel when system-based updating is unavailable.</p>
+                </section>
+
+                <section>
+                  <h3 className="font-bold text-slate-900">9. Acceptance of Terms</h3>
+                  <p className="mt-2">By selecting <strong>&quot;I Agree,&quot;</strong> the registrant confirms that:</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    <li>The Terms and Conditions have been read and understood.</li>
+                    <li>The information submitted during registration is accurate to the best of the registrant&apos;s knowledge.</li>
+                    <li>The account will be used responsibly and only for authorized school-related purposes.</li>
+                    <li>Account credentials will be kept confidential.</li>
+                    <li>Information accessed through the system will be treated with appropriate confidentiality.</li>
+                    <li>The account is subject to the school&apos;s verification and authorization procedures.</li>
+                  </ul>
+                  <p className="mt-3 font-semibold text-slate-900">Selection of &quot;I Agree&quot; constitutes acceptance of these Terms and Conditions and permits the registration process to proceed.</p>
+                </section>
+              </article>
+            </div>
+
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-4 sm:px-6">
+              {!terms.hasReachedEnd && (
+                <p role="status" className="mb-3 text-xs font-medium text-amber-700">Scroll to the bottom of the terms to enable the agreement checkbox.</p>
+              )}
+              <label className={`flex items-start gap-3 rounded-xl border p-3 text-sm ${terms.hasReachedEnd ? "border-indigo-200 bg-indigo-50/60 text-slate-800" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+                <input
+                  type="checkbox"
+                  checked={terms.checkboxChecked}
+                  disabled={!terms.hasReachedEnd}
+                  onChange={(event) => setTerms((current) => setGuardianTermsCheckbox(current, event.target.checked))}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-700 disabled:cursor-not-allowed"
+                />
+                <span>I have read and agree to the ParentConnect Sign Up Terms and Conditions.</span>
+              </label>
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeTermsModal}
+                  className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={acceptTerms}
+                  disabled={!canAcceptGuardianTerms(terms)}
+                  className="rounded-xl bg-indigo-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Accept
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

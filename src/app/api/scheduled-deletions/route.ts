@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { archiveTarget, restoreArchivedTarget } from "@/lib/permanentDeletion";
 import { restoreDeletionTarget, suspendDeletionTarget } from "@/lib/deletionAccess";
-import { sendAccountDeletionRevertedEmail, sendAccountDeletionScheduledEmail, sendIctDeletionRequestEmail, sendParentDeletionScheduledEmail, sendStudentDeletionRevertedEmail, sendStudentDeletionScheduledEmail } from "@/lib/mailer";
+import { sendAccountDeletionRevertedEmail, sendAccountDeletionScheduledEmail, sendIctDeletionRequestEmail, sendStudentDeletionRevertedEmail, sendStudentDeletionScheduledEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { groupParentDeletionEmails, isValidEmail, normalizeEmail } from "@/lib/deletionEmailQueue";
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -37,7 +35,6 @@ function parentName(parent: {
 
 type RegisteredParent = {
   id: number;
-  email: string | null;
   parent_first_name: string | null;
   parent_middle_name: string | null;
   parent_last_name: string | null;
@@ -126,26 +123,109 @@ export async function POST(req: NextRequest) {
     const ict = actorRole === "adviser" ? null : await getIctFromToken();
     const adviser = actorRole === "ict" ? null : await getAdviserFromToken();
     if (!adviser && !ict) return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
-    if (adviser && targetType && targetType !== "student") return NextResponse.json({ success: false, message: "Advisers can request deletion only for students." }, { status: 403 });
+    if (adviser && requestedTargets.some((target: { type: string }) => !["student", "parent"].includes(target.type))) {
+      return NextResponse.json({ success: false, message: "Advisers can request deletion only for students or parents linked to their advisory section." }, { status: 403 });
+    }
     const authTable = adviser ? "advisers" : "ict_admins";
     const authId = adviser?.id ?? ict!.id;
     const { data: actor, error: actorError } = await supabase.from(authTable).select("password_hash").eq("id", authId).single();
     if (actorError || !actor || !(await bcrypt.compare(password, actor.password_hash))) return NextResponse.json({ success: false, message: "Incorrect password." }, { status: 401 });
     if (adviser) {
       const allowedSections = adviser.sections?.length ? adviser.sections : adviser.section ? [adviser.section] : [];
-      const ids = requestedTargets.map((target: { id: number }) => target.id);
-      const { data: students } = await supabase.from("students").select("id, student_id, first_name, last_name, grade, section").in("id", ids);
-      if (!students || students.length !== ids.length || students.some(student => student.grade !== adviser.grade || (allowedSections.length && !allowedSections.includes(student.section)))) return NextResponse.json({ success: false, message: "One or more students are not in your assigned section." }, { status: 403 });
-      const { data: active } = await supabase.from("scheduled_deletions").select("target_id").eq("target_type", "student").in("target_id", ids.map(String)).in("status", ["PendingICT", "Scheduled"]);
-      if (active?.length) return NextResponse.json({ success: false, message: "One or more selected students already have an active deletion request." }, { status: 409 });
-      const studentById = new Map(students.map(student => [student.id, student]));
-      const studentIds = students.map(student => student.student_id);
-      const { data: links } = await supabase.from("parent_student_links").select("student_id, parents!inner(parent_first_name, parent_last_name, email)").in("student_id", studentIds);
-      const parentByStudentId = new Map((links ?? []).map(link => [link.student_id as string, link.parents as unknown as { parent_first_name?: string; parent_last_name?: string; email?: string }]));
-      const rows = requestedTargets.map((target: { id: number }) => {
-        const student = studentById.get(target.id)!; const parent = parentByStudentId.get(student.student_id);
-        return { target_type: "student", target_id: String(student.id), target_name: `${student.first_name} ${student.last_name}`.trim(), target_email: parent?.email || null, requested_by_role: "Adviser", requested_by_id: authId, reason: reason.trim(), status: "PendingICT" };
-      });
+      const studentTargets = requestedTargets.filter((target: { type: string }) => target.type === "student");
+      const parentTargets = requestedTargets.filter((target: { type: string }) => target.type === "parent");
+      const rows: Array<Record<string, string | number | null>> = [];
+
+      if (studentTargets.length) {
+        const studentIds = studentTargets.map((target: { id: number }) => target.id);
+        const { data: students } = await supabase
+          .from("students")
+          .select("id, student_id, first_name, last_name, grade, section")
+          .in("id", studentIds);
+        if (!students || students.length !== studentIds.length || students.some(student => student.grade !== adviser.grade || (allowedSections.length && !allowedSections.includes(student.section)))) {
+          return NextResponse.json({ success: false, message: "One or more students are not in your assigned section." }, { status: 403 });
+        }
+        const { data: activeStudentRequests } = await supabase
+          .from("scheduled_deletions")
+          .select("target_id")
+          .eq("target_type", "student")
+          .in("target_id", studentIds.map(String))
+          .in("status", ["PendingICT", "Scheduled"]);
+        if (activeStudentRequests?.length) {
+          return NextResponse.json({ success: false, message: "One or more selected students already have an active deletion request." }, { status: 409 });
+        }
+        const studentById = new Map(students.map(student => [student.id, student]));
+        const studentLrns = students.map(student => student.student_id);
+        const { data: links } = await supabase
+          .from("parent_student_links")
+          .select("student_id, parents!inner(email)")
+          .in("student_id", studentLrns);
+        const parentByStudentId = new Map((links ?? []).map(link => [link.student_id as string, link.parents as unknown as { email?: string }]));
+        rows.push(...studentTargets.map((target: { id: number }) => {
+          const student = studentById.get(target.id)!;
+          const parent = parentByStudentId.get(student.student_id);
+          return {
+            target_type: "student",
+            target_id: String(student.id),
+            target_name: `${student.first_name} ${student.last_name}`.trim(),
+            target_email: parent?.email || null,
+            requested_by_role: "Adviser",
+            requested_by_id: authId,
+            reason: reason.trim(),
+            status: "PendingICT",
+          };
+        }));
+      }
+
+      if (parentTargets.length) {
+        const parentIds: number[] = parentTargets.map((target: { id: number }) => target.id);
+        const { data: parentLinks, error: parentLinksError } = await supabase
+          .from("parent_student_links")
+          .select("parent_id, students!inner(grade, section)")
+          .in("parent_id", parentIds);
+        if (parentLinksError) throw parentLinksError;
+        const permittedParentIds = new Set((parentLinks ?? [])
+          .filter((link) => {
+            const student = link.students as unknown as { grade?: string | null; section?: string | null };
+            return student.grade === adviser.grade && (!allowedSections.length || allowedSections.includes(student.section ?? ""));
+          })
+          .map((link) => Number(link.parent_id)));
+        if (parentIds.some((parentId) => !permittedParentIds.has(parentId))) {
+          return NextResponse.json({ success: false, message: "One or more parents are not linked to your assigned section." }, { status: 403 });
+        }
+        const { data: activeParentRequests } = await supabase
+          .from("scheduled_deletions")
+          .select("target_id")
+          .eq("target_type", "parent")
+          .in("target_id", parentIds.map(String))
+          .in("status", ["PendingICT", "Scheduled"]);
+        if (activeParentRequests?.length) {
+          return NextResponse.json({ success: false, message: "One or more selected parents already have an active deletion request." }, { status: 409 });
+        }
+        const { data: parents, error: parentsError } = await supabase
+          .from("parents")
+          .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix")
+          .in("id", parentIds);
+        if (parentsError) throw parentsError;
+        const parentById = new Map((parents ?? []).map((parent) => [Number(parent.id), parent as RegisteredParent]));
+        if (parentIds.some((parentId) => !parentById.has(parentId))) {
+          return NextResponse.json({ success: false, message: "One or more selected parent accounts could not be found." }, { status: 404 });
+        }
+        rows.push(...parentTargets.map((target: { id: number }) => {
+          const parent = parentById.get(target.id)!;
+          return {
+            target_type: "parent",
+            target_id: String(parent.id),
+            target_name: parentName(parent),
+            // A parent-account deletion never carries an email delivery address.
+            target_email: null,
+            requested_by_role: "Adviser",
+            requested_by_id: authId,
+            reason: reason.trim(),
+            status: "PendingICT",
+          };
+        }));
+      }
       const { data, error } = await supabase.from("scheduled_deletions").insert(rows).select("*");
       if (error) throw error;
       const { data: ictAdmins } = await supabase.from("ict_admins").select("email").not("email", "is", null);
@@ -155,10 +235,10 @@ export async function POST(req: NextRequest) {
         performedBy: adviserName,
         performedByRole: "Adviser",
         performedByEmail: adviser.email,
-        targetUser: `${rows.length} student${rows.length === 1 ? "" : "s"}`,
-        targetRole: "Student",
+        targetUser: `${rows.length} account${rows.length === 1 ? "" : "s"}`,
+        targetRole: "Multiple Users",
         module: "User Management",
-        details: `Submitted a bulk deletion request for ${rows.length} student${rows.length === 1 ? "" : "s"}. Reason: ${reason.trim()}`,
+        details: `Submitted a deletion request for ${rows.length} account${rows.length === 1 ? "" : "s"}. Reason: ${reason.trim()}`,
       });
       await Promise.all((ictAdmins ?? []).filter(admin => admin.email).map(async admin => {
         try { await sendIctDeletionRequestEmail({ recipientEmail: admin.email, adviserName, requestCount: rows.length }); }
@@ -178,7 +258,7 @@ export async function POST(req: NextRequest) {
       const { data: registeredParents, error: parentLookupError } = requestedParentIds.length
         ? await supabase
           .from("parents")
-          .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix")
+          .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix")
           .in("id", requestedParentIds)
         : { data: [], error: null };
       if (parentLookupError) throw parentLookupError;
@@ -192,13 +272,13 @@ export async function POST(req: NextRequest) {
       const deleteAfter = new Date(Date.now() + THIRTY_DAYS).toISOString();
       const rows = validTargets.map((target: { id: number; name: string; type: string; email: string | null }) => {
         const parent = target.type === "parent" ? parentById.get(target.id) : undefined;
-        // Parent contact data comes only from the registered parent account.
-        // Never send mail to an address supplied by the browser request.
+        // Parent deletion notices are in-app only. Do not carry a delivery
+        // address from either the browser or the Parent record into this flow.
         return {
           target_type: target.type,
           target_id: String(target.id),
           target_name: parent ? parentName(parent) : target.name,
-          target_email: parent ? normalizeEmail(parent.email) || null : null,
+          target_email: parent ? null : target.email,
           requested_by_role: "ICT",
           requested_by_id: authId,
           reason: reason.trim(),
@@ -213,7 +293,6 @@ export async function POST(req: NextRequest) {
           success: false,
           message: "None of the selected parent accounts could be found.",
           deletion: { successful: 0, failed: rejectedRequestedParents.length },
-          emails: { sent: 0, pending: 0, failed: 0 },
         }, { status: 400 });
       }
       const { data, error } = await supabase.from("scheduled_deletions").insert(rows).select("*");
@@ -247,47 +326,6 @@ export async function POST(req: NextRequest) {
         deletion.target_type !== "parent" || suspendedParentIds.has(Number(deletion.target_id)),
       );
 
-      const batchId = randomUUID();
-      const successfulParentRecipients = successfulRows
-        .filter((item) => item.target_type === "parent")
-        .flatMap((deletion) => {
-        const parent = parentById.get(Number(deletion.target_id));
-        return parent ? [{
-          parentId: Number(parent.id),
-          recipientEmail: parent.email,
-          recipientName: parentName(parent),
-          targetName: deletion.target_name,
-          scheduledDeletionId: Number(deletion.id),
-        }] : [];
-      });
-      const recipientGroups = groupParentDeletionEmails(successfulParentRecipients);
-
-      const emailSummary = { sent: 0, pending: 0, failed: 0, batchId: recipientGroups.length ? batchId : null };
-      if (recipientGroups.length) {
-        const queuedJobs = recipientGroups.map((recipient) => {
-          const valid = isValidEmail(recipient.recipientEmail);
-          if (valid) emailSummary.pending += 1;
-          else emailSummary.failed += 1;
-          return {
-            batch_id: batchId,
-            recipient_email: recipient.recipientEmail || `invalid-parent-${randomUUID()}@invalid.local`,
-            recipient_name: recipient.recipientName,
-            target_names: [...new Set(recipient.targetNames)],
-            scheduled_deletion_ids: recipient.scheduledDeletionIds,
-            reason: reason.trim(),
-            delete_after: deleteAfter,
-            status: valid ? "pending" : "failed",
-            available_at: new Date().toISOString(),
-            last_error: valid ? null : "The registered parent email address is invalid.",
-          };
-        });
-        const { error: queueError } = await supabase.from("deletion_email_jobs").insert(queuedJobs);
-        if (queueError) {
-          console.error("Could not queue parent deletion emails:", queueError);
-          emailSummary.failed += emailSummary.pending;
-          emailSummary.pending = 0;
-        }
-      }
       const ictName = getIctName(ict);
       await logAudit({
         action: "Schedule Bulk Deletion",
@@ -297,27 +335,21 @@ export async function POST(req: NextRequest) {
         targetUser: `${successfulRows.length} account${successfulRows.length === 1 ? "" : "s"}`,
         targetRole: "Multiple Users",
         module: "User Management",
-        details: `Scheduled bulk deletion for ${successfulRows.length} account${successfulRows.length === 1 ? "" : "s"}; ${rejectedRequestedParents.length + failedScheduledRows.length} selected parent account(s) failed. Parent emails: ${emailSummary.pending} pending, ${emailSummary.failed} failed, ${emailSummary.sent} sent. Reason: ${reason.trim()}`,
+        details: `Scheduled bulk deletion for ${successfulRows.length} account${successfulRows.length === 1 ? "" : "s"}; ${rejectedRequestedParents.length + failedScheduledRows.length} selected parent account(s) failed. Parent accounts receive an in-app notification only after scheduling. Reason: ${reason.trim()}`,
       });
       return NextResponse.json({
         success: true,
         deletions: successfulRows,
         deletion: { successful: successfulRows.length, failed: rejectedRequestedParents.length + failedScheduledRows.length },
-        emails: emailSummary,
-        message: "Selected accounts are scheduled for deletion in 30 days. Parent notifications are queued for background delivery.",
+        message: "Selected accounts are scheduled for deletion in 30 days. Scheduled parent accounts receive an in-app notification.",
       });
     }
     const status = "Scheduled";
     const scheduledAt = ict ? new Date(Date.now() + THIRTY_DAYS).toISOString() : null;
-    const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetEmail || null, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
+    const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetType === "parent" ? null : targetEmail || null, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
     if (error) throw error;
     if (ict) await suspendDeletionTarget(data);
-    if (ict && targetType === "parent" && targetEmail && scheduledAt) {
-      try {
-        await sendParentDeletionScheduledEmail({ parentEmail: targetEmail, parentName: targetName, reason: reason.trim(), deleteAfter: new Date(scheduledAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
-        await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", data.id);
-      } catch (mailError) { console.error("Deletion-schedule email failed:", mailError); }
-    } else if (ict && ["adviser", "ict"].includes(targetType) && targetEmail && scheduledAt) {
+    if (ict && ["adviser", "ict"].includes(targetType) && targetEmail && scheduledAt) {
       try {
         await sendAccountDeletionScheduledEmail({ recipientEmail: targetEmail, recipientName: targetName, accountType: targetType === "adviser" ? "adviser" : "ICT", reason: reason.trim(), deleteAfter: new Date(scheduledAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", data.id);
@@ -371,7 +403,6 @@ export async function PATCH(req: NextRequest) {
       if (item.target_email) {
         try {
           if (item.target_type === "student") await sendStudentDeletionRevertedEmail({ parentEmail: item.target_email, studentName: item.target_name });
-          else if (item.target_type === "parent") await sendAccountDeletionRevertedEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: "parent" });
           else if (["adviser", "ict"].includes(item.target_type)) await sendAccountDeletionRevertedEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: item.target_type === "adviser" ? "adviser" : "ICT" });
         }
         catch (mailError) { console.error("Deletion-revert email failed:", mailError); }
@@ -420,11 +451,10 @@ export async function PATCH(req: NextRequest) {
         await sendStudentDeletionScheduledEmail({ parentEmail: item.target_email, studentName: item.target_name, reason: item.reason, deleteAfter: new Date((update as { delete_after: string }).delete_after).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", deletionId);
       } catch (mailError) { console.error("Student deletion approval email failed:", mailError); }
-    } else if (action === "approve" && item.target_email && ["parent", "adviser", "ict"].includes(item.target_type)) {
+    } else if (action === "approve" && item.target_email && ["adviser", "ict"].includes(item.target_type)) {
       try {
         const deleteAfter = new Date((update as { delete_after: string }).delete_after).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
-        if (item.target_type === "parent") await sendParentDeletionScheduledEmail({ parentEmail: item.target_email, parentName: item.target_name, reason: item.reason, deleteAfter });
-        else await sendAccountDeletionScheduledEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: item.target_type === "adviser" ? "adviser" : "ICT", reason: item.reason, deleteAfter });
+        await sendAccountDeletionScheduledEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: item.target_type === "adviser" ? "adviser" : "ICT", reason: item.reason, deleteAfter });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", deletionId);
       } catch (mailError) { console.error("Account deletion approval email failed:", mailError); }
     }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import { sendParentReportAdviserEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import {
@@ -223,7 +224,7 @@ export async function GET(req: NextRequest) {
           row,
           messages.get(row.id) ?? [],
           tickets.get(row.id),
-          principalReadKeys.has(`principal-report-read-${row.id}`),
+          principalReadKeys.has(principalReportReadKey(row.id)),
         )),
       });
     }
@@ -292,11 +293,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    const { adviserId, studentId, subject, categories, concernLevel, message, attachments, allowHistoryAccess } = await req.json();
+    const { adviserId, studentId, subject, categories, concernLevel, message, attachments, allowHistoryAccess, termsAccepted } = await req.json();
     const cleanedAttachments = cleanAttachments(attachments);
-    if (!adviserId || !studentId || !subject || (!String(message ?? "").trim() && cleanedAttachments.length === 0) || !Array.isArray(categories) || categories.length === 0) {
+    if (!adviserId || !studentId || !subject || (!String(message ?? "").trim() && cleanedAttachments.length === 0) || !Array.isArray(categories) || categories.length === 0 || termsAccepted !== true) {
       return NextResponse.json(
-        { success: false, message: "Adviser, student, subject, category, and message or attachment are required." },
+        { success: false, message: "Adviser, student, subject, category, message or attachment, and report terms acceptance are required." },
         { status: 400 }
       );
     }

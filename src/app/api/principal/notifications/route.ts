@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
+import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 
 export async function GET() {
     try {
@@ -93,7 +94,7 @@ export async function GET() {
         // incorrectly clearing the Reports badge.
         const reportUnreadCount = reports.filter((report) =>
             String(report.status ?? "").toLowerCase() !== "resolved" &&
-            !readKeys.has(`principal-report-read-${report.id}`)
+            !readKeys.has(principalReportReadKey(report.id))
         ).length;
         const unreadCount = reportUnreadCount;
 

@@ -6,6 +6,7 @@ import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
+import { keyForSubmission, type IdempotencyAttempt } from "@/lib/clientIdempotency";
 
 type Recipient = {
     id: string;
@@ -296,6 +297,8 @@ export default function ContactICTPage() {
     const [sendingReply, setSendingReply] = useState(false);
     const [showCompose, setShowCompose] = useState(false);
     const threadEndRef = useRef<HTMLDivElement>(null);
+    const newMessageAttemptRef = useRef<IdempotencyAttempt | null>(null);
+    const replyAttemptRef = useRef<IdempotencyAttempt | null>(null);
 
     const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
     const filteredConversations = useMemo(() => {
@@ -364,13 +367,15 @@ export default function ContactICTPage() {
     }
 
     async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
+        const idempotencyKey = keyForSubmission(newMessageAttemptRef, payload);
         const res = await fetch("/api/principal-ict/messages", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
             body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => null);
         if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
+        newMessageAttemptRef.current = null;
         // Keep Panel 1 and the selected thread in place after a successful
         // send. The background refresh reconciles the new database row without
         // showing the initial "Loading messages..." state again.
@@ -381,18 +386,21 @@ export default function ContactICTPage() {
         if (!selected || (!reply.trim() && replyAttachments.length === 0) || sendingReply) return;
         setSendingReply(true);
         try {
+            const payload = {
+                conversationId: selected.conversationId,
+                recipientId: selected.recipientId,
+                message: reply.trim(),
+                attachments: replyAttachments,
+            };
+            const idempotencyKey = keyForSubmission(replyAttemptRef, payload);
             const res = await fetch("/api/principal-ict/messages", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    conversationId: selected.conversationId,
-                    recipientId: selected.recipientId,
-                    message: reply.trim(),
-                    attachments: replyAttachments,
-                }),
+                headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+                body: JSON.stringify(payload),
             });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
+            replyAttemptRef.current = null;
             setReply("");
             setReplyAttachments([]);
             void loadMessages(true);

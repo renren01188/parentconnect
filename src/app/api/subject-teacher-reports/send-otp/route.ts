@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { sendWithEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { verifyGoogleRecaptcha } from "@/lib/googleRecaptcha";
-import { consumePublicRateLimit } from "@/lib/publicRateLimit";
+import { consumePublicRateLimit, isPublicRateLimitUnavailableError } from "@/lib/publicRateLimit";
 import { isAllowedSubjectTeacherEmail, normalizeDepEdEmail, otpHash, SUBJECT_TEACHER_OTP_EXPIRY_MINUTES, SUBJECT_TEACHER_OTP_RESEND_COOLDOWN_MS } from "@/lib/subjectTeacherReportAuth";
 
 export async function POST(req: NextRequest) {
@@ -77,6 +77,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, message: "Verification code sent. Check your DepEd email." });
   } catch (error: unknown) {
     console.error("POST /api/subject-teacher-reports/send-otp error:", error);
-    return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Unable to send the verification code." }, { status: 500 });
+    return NextResponse.json(
+      { success: false, message: error instanceof Error ? error.message : "Unable to send the verification code." },
+      { status: isPublicRateLimitUnavailableError(error) ? 503 : 500 },
+    );
   }
 }

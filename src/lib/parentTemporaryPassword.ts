@@ -8,23 +8,58 @@ type TemporaryPassword = {
   expiresAt: Date;
 };
 
-/**
- * The timestamp is part of the high-entropy temporary password and therefore
- * covered by the bcrypt hash stored for the pending Parent account. This
- * gives the server a durable expiry check without using a browser-only timer.
- */
+const LEGACY_TEMPORARY_PASSWORD_PATTERN = /^PC-([0-9a-z]+)-([a-f0-9]{24})$/i;
+
+function secureShuffle<T>(items: T[]) {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.randomInt(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+/** Creates exactly three digits and three uppercase letters in random order. */
 export function createTemporaryPassword(now = Date.now()): TemporaryPassword {
-  const expiresAtSeconds = Math.floor((now / 1_000) + PARENT_TEMPORARY_PASSWORD_TTL_SECONDS);
+  const expiresAt = new Date(now + PARENT_TEMPORARY_PASSWORD_TTL_SECONDS * 1_000);
+  const parts = [
+    ...Array.from({ length: 3 }, () => String(crypto.randomInt(10))),
+    ...Array.from({ length: 3 }, () => String.fromCharCode(65 + crypto.randomInt(26))),
+  ];
+
   return {
-    password: `PC-${expiresAtSeconds.toString(36)}-${crypto.randomBytes(12).toString("hex")}`,
-    expiresAt: new Date(expiresAtSeconds * 1_000),
+    password: secureShuffle(parts).join(""),
+    expiresAt,
   };
 }
 
-/** Invalid or legacy temporary-password formats are never treated as valid. */
-export function temporaryPasswordExpiryEpochSeconds(password: unknown) {
+/** Validates the printable format without logging or otherwise exposing it. */
+export function isTemporaryPasswordFormat(password: unknown) {
+  if (typeof password !== "string") return false;
+  if (!/^[A-Z0-9]{6}$/.test(password)) return false;
+  const characters = [...password];
+  return characters.filter((character) => /\d/.test(character)).length === 3
+    && characters.filter((character) => /[A-Z]/.test(character)).length === 3;
+}
+
+/** Reads the persisted expiry timestamp for newly issued temporary passwords. */
+export function temporaryPasswordExpiryEpochSeconds(expiresAt: unknown) {
+  const milliseconds = expiresAt instanceof Date
+    ? expiresAt.getTime()
+    : typeof expiresAt === "string"
+    ? Date.parse(expiresAt)
+    : Number.NaN;
+  const seconds = Math.floor(milliseconds / 1_000);
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
+/**
+ * Passwords issued before the expiry column is migrated retain their original
+ * short-lived behaviour. New passwords never encode their expiry in the text.
+ */
+export function legacyTemporaryPasswordExpiryEpochSeconds(password: unknown) {
   if (typeof password !== "string") return null;
-  const match = /^PC-([0-9a-z]+)-([a-f0-9]{24})$/i.exec(password.trim());
+  const match = LEGACY_TEMPORARY_PASSWORD_PATTERN.exec(password.trim());
   if (!match) return null;
 
   const expiresAtSeconds = Number.parseInt(match[1], 36);
@@ -33,7 +68,7 @@ export function temporaryPasswordExpiryEpochSeconds(password: unknown) {
     : null;
 }
 
-export function isTemporaryPasswordExpired(password: unknown, now = Date.now()) {
-  const expiresAtSeconds = temporaryPasswordExpiryEpochSeconds(password);
+export function isTemporaryPasswordExpired(expiresAt: unknown, now = Date.now()) {
+  const expiresAtSeconds = temporaryPasswordExpiryEpochSeconds(expiresAt);
   return !expiresAtSeconds || expiresAtSeconds * 1_000 <= now;
 }

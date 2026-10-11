@@ -7,8 +7,10 @@ type DeletionTarget = {
 };
 
 /**
- * Only a selected parent account may be suspended during its waiting period.
- * A selected student must never change a linked parent's access.
+ * Only a selected parent account receives the deletion-suspended status marker
+ * during its waiting period. A selected student must never change a linked
+ * parent's status. The marker does not block the Parent from signing in: the
+ * Parent needs access to see the in-app deletion notice and recovery period.
  */
 export async function getAffectedParentIds(item: DeletionTarget): Promise<number[]> {
   if (item.target_type === "parent") {

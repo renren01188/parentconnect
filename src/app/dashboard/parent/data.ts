@@ -195,7 +195,7 @@ export const INITIAL_REPORTS: Report[] = [
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 export type NotifType = "alert" | "message" | "event";
-export type FilterTab = "All" | "Unread" | "Principal" | "Teacher" | "Guidance" | "Attendance";
+export type FilterTab = "All" | "Unread" | "Principal" | "Teacher" | "Guidance" | "Attendance" | "Account";
 
 export interface Notification {
   id: number;

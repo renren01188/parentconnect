@@ -25,6 +25,7 @@ import {
   PARENT_TEMPORARY_PASSWORD_TTL_SECONDS,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
+import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
 
 const SECRET = getJwtSecret();
 const ENROLLMENT_ERROR = "We could not verify this enrollment request. Please contact the school office for assistance.";
@@ -41,6 +42,7 @@ type MatchedParent = {
   relationship: string | null;
   password: string;
   temp_password: string | null;
+  temporary_password_expires_at: string | null;
   password_set: number | boolean | null;
   status: string | null;
   archive_status: string | null;
@@ -115,7 +117,7 @@ export async function POST(req: NextRequest) {
     );
 
     if (
-      !firstName || !lastName || !/^\d{12}$/.test(studentLrn) || !relationship || !body?.termsAccepted
+      !firstName || !lastName || !/^\d{12}$/.test(studentLrn) || !relationship || body?.termsAccepted !== true
       || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || contactNumber.length !== 11
     ) return genericEnrollmentError();
     if (relationship === "Guardian" && (
@@ -178,7 +180,7 @@ export async function POST(req: NextRequest) {
         parents!inner (
           id, email, contact_number,
           parent_first_name, parent_middle_name, parent_last_name, parent_suffix,
-          relationship, password, temp_password, password_set, status, archive_status
+          relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status
         )
       `)
       .eq("student_id", student.student_id);
@@ -190,10 +192,10 @@ export async function POST(req: NextRequest) {
     });
 
     const { password: temporaryPassword, expiresAt: temporaryPasswordExpiresAt } = createTemporaryPassword();
-    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPassword);
+    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt);
     if (!temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
     const temporaryPasswordHash = await bcrypt.hash(temporaryPassword, 12);
-    const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, password_set, status, archive_status";
+    const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
     const [{ data: emailRows, error: emailError }, { data: roleRows, error: roleError }] = await Promise.all([
       supabase.from("parents").select(parentColumns).ilike("email", email),
       supabase.from("parents").select(parentColumns).eq("relationship", relationship),
@@ -310,6 +312,7 @@ export async function POST(req: NextRequest) {
           contact_number: contactNumber,
           password: temporaryPasswordHash,
           temp_password: null,
+          temporary_password_expires_at: temporaryPasswordExpiresAt.toISOString(),
           password_set: 0,
         })
         .eq("id", matchedParent.id)
@@ -334,6 +337,7 @@ export async function POST(req: NextRequest) {
           contact_number: contactNumber,
           password: temporaryPasswordHash,
           temp_password: null,
+          temporary_password_expires_at: temporaryPasswordExpiresAt.toISOString(),
           password_set: 0,
           status: "active",
         })
@@ -388,6 +392,7 @@ export async function POST(req: NextRequest) {
             contact_number: matchedParent.contact_number,
             password: matchedParent.password,
             temp_password: matchedParent.temp_password,
+            temporary_password_expires_at: matchedParent.temporary_password_expires_at,
             password_set: matchedParent.password_set,
           })
           .eq("id", matchedParent.id)
@@ -430,7 +435,7 @@ export async function POST(req: NextRequest) {
       success: true,
       redirectTo: "/login/guardian/verify-temp-password",
       expiresAt: temporaryPasswordExpiresAt.toISOString(),
-      message: "A temporary password has been sent to your verified email address.",
+      message: PARENT_SIGNUP_CONFIRMATION_MESSAGE,
     });
   } catch (error) {
     console.error("POST /api/parents/signup error:", error instanceof Error ? error.name : "Unknown error");

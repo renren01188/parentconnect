@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getIctFromToken } from "@/lib/getIctFromToken";
+import { idempotencyKeyFrom, isUniqueViolation } from "@/lib/serverIdempotency";
 
 type Role = "adviser" | "ict";
 type Session = {
@@ -299,6 +300,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
+    const idempotencyKey = idempotencyKeyFrom(req);
+    if (!idempotencyKey) {
+      return NextResponse.json({ success: false, message: "A valid idempotency key is required." }, { status: 400 });
+    }
     const body = await req.json();
     const trimmedSubject = String(body.subject ?? "").trim();
     const trimmedMessage = String(body.message ?? "").trim();
@@ -349,6 +354,14 @@ export async function POST(req: NextRequest) {
     }
 
     const [recipientType, rawRecipientId] = recipient.id.split(":") as [Role, string];
+    const { data: existing, error: existingError } = await supabase
+      .from("staff_messages")
+      .select("id")
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) return NextResponse.json({ success: true, idempotent: true }, { status: 200 });
+
     const { error } = await supabase.from("staff_messages").insert({
       sender_type: session.type,
       sender_id: session.id,
@@ -364,9 +377,13 @@ export async function POST(req: NextRequest) {
       attachments: cleanedAttachments,
       source_message_id: rootId,
       status: "unread",
+      idempotency_key: idempotencyKey,
     });
 
-    if (error) throw error;
+    if (error) {
+      if (isUniqueViolation(error)) return NextResponse.json({ success: true, idempotent: true }, { status: 200 });
+      throw error;
+    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (error) {

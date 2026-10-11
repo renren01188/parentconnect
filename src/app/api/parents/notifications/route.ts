@@ -54,6 +54,21 @@ type SubjectTeacherReportNotification = {
   parent_seen_at: string | null;
 };
 
+type ParentDeletionNotification = {
+  id: number;
+  parent_id: number;
+  scheduled_deletion_id: number;
+  read_at: string | null;
+  created_at: string;
+};
+
+type ScheduledParentDeletion = {
+  id: number;
+  delete_after: string | null;
+  approved_at: string | null;
+  requested_at: string;
+};
+
 function notificationSource(value: string | null): AnnouncementSource {
   const source = String(value ?? "").trim().toLowerCase();
   if (source === "guidance" || source === "principal" || source === "ict") return source;
@@ -118,6 +133,14 @@ function timeLabel(value: string) {
   });
 }
 
+function scheduledDeletionMessage(deleteAfter: string | null) {
+  const deletionDate = deleteAfter ? new Date(deleteAfter) : null;
+  const dateLabel = deletionDate && !Number.isNaN(deletionDate.getTime())
+    ? deletionDate.toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })
+    : "the scheduled date shown by the school";
+  return `Your ParentConnect account is scheduled for deletion on ${dateLabel}. Contact the ICT office immediately if this is unexpected.`;
+}
+
 async function getParentSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get("parent_token")?.value;
@@ -169,6 +192,31 @@ export async function GET() {
     ]);
     if (announcementCleanup.error) throw announcementCleanup.error;
     if (attendanceReadCleanup.error) throw attendanceReadCleanup.error;
+
+    // The scheduled_deletions record is the source of truth for both the
+    // banner and the date. The dedicated notification row controls only its
+    // read state and is linked to this exact Parent account by a foreign key.
+    const { data: scheduledParentDeletionRows, error: scheduledParentDeletionError } = await supabase
+      .from("scheduled_deletions")
+      .select("id, delete_after, approved_at, requested_at")
+      .eq("target_type", "parent")
+      .eq("target_id", String(session.id))
+      .eq("status", "Scheduled")
+      .order("delete_after", { ascending: true })
+      .limit(1);
+    if (scheduledParentDeletionError) throw scheduledParentDeletionError;
+    const scheduledParentDeletion = ((scheduledParentDeletionRows ?? [])[0] ?? null) as ScheduledParentDeletion | null;
+
+    const parentDeletionNotificationResult = scheduledParentDeletion
+      ? await supabase
+        .from("parent_deletion_notifications")
+        .select("id, parent_id, scheduled_deletion_id, read_at, created_at")
+        .eq("parent_id", session.id)
+        .eq("scheduled_deletion_id", scheduledParentDeletion.id)
+        .maybeSingle()
+      : { data: null as ParentDeletionNotification | null, error: null };
+    if (parentDeletionNotificationResult.error) throw parentDeletionNotificationResult.error;
+    const parentDeletionNotification = parentDeletionNotificationResult.data as ParentDeletionNotification | null;
 
     const { data: linkedStudents, error: linkedStudentsError } = await supabase
       .from("parent_student_links")
@@ -418,7 +466,25 @@ export async function GET() {
       });
     }
 
-    const rows = [...announcementRows, ...attendanceRows]
+    const parentDeletionRows = scheduledParentDeletion && parentDeletionNotification
+      ? [{
+        // Keep the UI numeric-ID contract while retaining the real persisted
+        // ID separately for the authenticated mark-as-read update.
+        id: 2_000_000_000 + Number(parentDeletionNotification.id),
+        parentDeletionNotificationId: Number(parentDeletionNotification.id),
+        type: "alert" as const,
+        title: "Account scheduled for deletion",
+        msg: scheduledDeletionMessage(scheduledParentDeletion.delete_after),
+        time: timeLabel(parentDeletionNotification.created_at),
+        category: "Account",
+        unread: !parentDeletionNotification.read_at,
+        tab: ["All", ...(!parentDeletionNotification.read_at ? ["Unread"] : []), "Account"],
+        createdAt: parentDeletionNotification.created_at,
+        deleteAfter: scheduledParentDeletion.delete_after,
+      }]
+      : [];
+
+    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows]
       .concat(((subjectTeacherReportRows ?? []) as SubjectTeacherReportNotification[]).map((report) => {
         const unread = !report.parent_seen_at;
         return {
@@ -448,6 +514,13 @@ export async function GET() {
       success: true,
       notifications: rows,
       unreadCount: rows.filter((row) => row?.unread).length,
+      scheduledDeletionNotice: scheduledParentDeletion
+        ? {
+          scheduledDeletionId: Number(scheduledParentDeletion.id),
+          deleteAfter: scheduledParentDeletion.delete_after,
+          approvedAt: scheduledParentDeletion.approved_at,
+        }
+        : null,
     });
   } catch (error) {
     console.error("GET /api/parents/notifications error:", error);
@@ -478,6 +551,13 @@ export async function PATCH(req: NextRequest) {
     const notificationIds = Array.isArray(body.notificationIds)
       ? body.notificationIds.map(Number).filter(Number.isFinite)
       : [];
+    const parentDeletionNotificationId = Number(body.parentDeletionNotificationId);
+    const parentDeletionNotificationIds = [
+      ...(Number.isSafeInteger(parentDeletionNotificationId) && parentDeletionNotificationId > 0 ? [parentDeletionNotificationId] : []),
+      ...(Array.isArray(body.parentDeletionNotificationIds)
+        ? body.parentDeletionNotificationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
+        : []),
+    ];
     const reportId = Number(body.reportId);
     const reportIds = [
       ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
@@ -493,6 +573,16 @@ export async function PATCH(req: NextRequest) {
         ? query.eq("id", notificationId)
         : query.in("id", notificationIds).is("read_at", null);
       const { error } = await query;
+      if (error) throw error;
+    }
+
+    if (parentDeletionNotificationIds.length > 0) {
+      const { error } = await supabase
+        .from("parent_deletion_notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("parent_id", session.id)
+        .in("id", [...new Set(parentDeletionNotificationIds)])
+        .is("read_at", null);
       if (error) throw error;
     }
 

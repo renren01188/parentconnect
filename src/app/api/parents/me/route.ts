@@ -405,7 +405,7 @@ export async function PUT(req: NextRequest) {
     const password = await bcrypt.hash(newPassword, 10);
     const { error: updateError } = await supabase
       .from("parents")
-      .update({ password, password_set: 1, temp_password: null })
+      .update({ password, password_set: 1, temp_password: null, temporary_password_expires_at: null })
       .eq("id", parentId);
 
     if (updateError) throw updateError;

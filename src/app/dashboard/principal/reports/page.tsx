@@ -21,7 +21,15 @@ import { type Report, type ReportStatus } from "../../adviser/data";
 import { UserAvatar } from "@/components/UserAvatar";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { isPrincipalReportUnread, markPrincipalReportRead } from "@/lib/principalReportReadState.cjs";
 import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
+import {
+  detailPanelLayout,
+  findSelectedParentGroup,
+  isReportsPanelVisible,
+  principalReportStatusLabel,
+  reportGroupKey,
+} from "./layoutState.cjs";
 
 type MainTab = "Escalated" | "Monitoring" | "Messages";
 type FilterTab = "All" | "Pending" | "Ongoing" | "Escalated" | "Resolved";
@@ -249,14 +257,6 @@ function getStatusStyle(status: ReportStatus) {
     case "Resolved": return "bg-emerald-100 text-emerald-700";
     case "Escalated": return "bg-red-100 text-red-600";
   }
-}
-
-function principalReportStatusLabel(report: Report) {
-  if (report.status === "Resolved") return "Resolved";
-  if (report.escalatedToPrincipal) return "Escalated to Principal";
-  if (report.escalatedToGuidance) return "Escalated from Guidance";
-  if (report.ticketStatus === "accepted" && !report.escalatedToPrincipal) return "Accepted Ticket";
-  return report.status === "Ongoing" ? "On Going" : report.status;
 }
 
 function principalReportStatusClass(report: Report) {
@@ -1103,9 +1103,10 @@ function groupByStudentParent(reports: Report[]): ParentGroup[] {
   const map: Record<string, ParentGroup> = {};
   reports.forEach((report) => {
     const displayName = parentDisplayName(report);
-    if (!map[report.student_name]) {
-      map[report.student_name] = {
-        key: `${report.parent_name ?? report.student_name}:${report.student_name}`,
+    const key = reportGroupKey(report);
+    if (!map[key]) {
+      map[key] = {
+        key,
         displayName,
         profilePicture: report.parent_profile_picture,
         studentName: report.student_name,
@@ -1115,9 +1116,11 @@ function groupByStudentParent(reports: Report[]): ParentGroup[] {
         maxConcernLevel: 0,
       };
     }
-    map[report.student_name].reports.push(report);
-    if (report.status === "New" || report.status === "Escalated") map[report.student_name].unread++;
-    map[report.student_name].maxConcernLevel = Math.max(map[report.student_name].maxConcernLevel, report.concernLevel);
+    map[key].reports.push(report);
+    // Workflow labels such as "Escalated" are shared state. Only the
+    // Principal-specific read receipt may drive this Principal's red badge.
+    if (isPrincipalReportUnread(report)) map[key].unread++;
+    map[key].maxConcernLevel = Math.max(map[key].maxConcernLevel, report.concernLevel);
   });
 
   return Object.values(map).map((group) => ({
@@ -1134,7 +1137,10 @@ function PrincipalReportsPageContent() {
   const [filterTab, setFilterTab] = useState<FilterTab>("All");
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const [selectedParent, setSelectedParent] = useState<ParentGroup | null>(null);
+  // Store only a durable selection token. ParentGroup is derived from the
+  // latest report snapshot so a poll or realtime update cannot clear the
+  // middle column by replacing a stale object.
+  const [selectedParentKey, setSelectedParentKey] = useState<string | null>(null);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [viewStep, setViewStep] = useState<"list" | "reports" | "detail">("list");
   const [reports, setReports] = useState<Report[]>([]);
@@ -1166,6 +1172,11 @@ function PrincipalReportsPageContent() {
   // The Principal's report list is a monitoring inbox, not an escalation-only
   // queue. Every report visible to its parent remains available here.
   const currentReports = reports;
+  const parentGroups = useMemo(() => groupByStudentParent(currentReports), [currentReports]);
+  const selectedParent = useMemo(
+    () => findSelectedParentGroup(parentGroups, selectedParentKey, selectedReport?.id ?? null) as ParentGroup | null,
+    [parentGroups, selectedParentKey, selectedReport?.id]
+  );
   const allCategories = Array.from(new Set(currentReports.flatMap((report) => report.categories))).sort();
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
   const unreadMessageCount = conversations.filter((conversation) => conversation.status === "New Message" || conversation.status === "Unread").length;
@@ -1208,8 +1219,6 @@ function PrincipalReportsPageContent() {
     count: monitoringEntries.filter((entry) => entry.category === category.name).length,
   })).filter((category) => category.count > 0);
 
-  const reportsForActiveTab = useCallback((items: Report[]) => items, []);
-
   const loadPrincipalReports = useCallback(async () => {
     const [parentRes, studentRes] = await Promise.all([
       fetch("/api/reports/parent-adviser?role=principal", { cache: "no-store" }),
@@ -1239,10 +1248,6 @@ function PrincipalReportsPageContent() {
         (report.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
       ])));
       setSelectedReport((current) => current ? nextReports.find((report) => report.id === current.id) ?? null : null);
-      setSelectedParent((current) => {
-        if (!current) return current;
-        return groupByStudentParent(reportsForActiveTab(nextReports)).find((group) => group.key === current.key) ?? null;
-      });
       // The parent-report list is ready even if the optional student feed is
       // still waiting on a separate database request.
       setLoadingReports(false);
@@ -1255,7 +1260,7 @@ function PrincipalReportsPageContent() {
     } else {
       setStudentReports((studentData?.reports ?? []) as PrincipalStudentReport[]);
     }
-  }, [reportsForActiveTab]);
+  }, []);
 
   const loadPrincipalMessages = useCallback(async () => {
     const res = await fetch("/api/reports/principal-messages", { cache: "no-store" });
@@ -1314,14 +1319,14 @@ function PrincipalReportsPageContent() {
 
     openedNotificationReportRef.current = requestedReportId;
     setMainTab("Escalated");
-    setSelectedParent(parent);
+    setSelectedParentKey(parent.key);
     setSelectedReport(report);
     setReplyText("");
     setReplyAttachments([]);
     setViewStep("detail");
-    // A new Principal handoff is acknowledged by Start Conversation. Read-only
-    // monitoring reports may still be marked viewed as soon as they are opened.
-    if (!report.canReply) markReportStatus(report.id, "Read").catch(() => null);
+    // Opening either a read-only monitoring report or an escalated
+    // conversation acknowledges it for this Principal only.
+    if (isPrincipalReportUnread(report)) markReportStatus(report.id, "Read").catch(() => null);
   }, [reports, requestedReportId]);
 
 
@@ -1371,9 +1376,9 @@ function PrincipalReportsPageContent() {
       .sort((a, b) => b.maxConcernLevel - a.maxConcernLevel);
   })();
 
-  const showReportsPanel = viewStep === "reports" || (viewStep === "detail" && !!selectedParent);
-  const detailPosition = selectedParent ? "left-[420px]" : "left-0";
-  const detailWidth = selectedParent ? "right-0 w-auto" : "w-full max-w-[860px]";
+  const showReportsPanel = isReportsPanelVisible(viewStep, Boolean(selectedParent), true);
+  const showReportsPanelOnMobile = isReportsPanelVisible(viewStep, Boolean(selectedParent), false);
+  const { position: detailPosition, width: detailWidth } = detailPanelLayout(Boolean(selectedParent));
 
   function panelClass(visible: boolean, bg: string, width: string, position = "left-0", mobileVisible = visible) {
     const desktopPosition = position === "left-[420px]" ? "md:left-[420px]" : "md:left-0";
@@ -1387,21 +1392,16 @@ function PrincipalReportsPageContent() {
       }`;
   }
 
-  function refreshSelectedParent(nextReports: Report[], parent: ParentGroup | null) {
-    if (!parent) return;
-    const nextParent = groupByStudentParent(reportsForActiveTab(nextReports)).find((group) => group.key === parent.key) ?? null;
-    setSelectedParent(nextParent);
-  }
-
   async function markReportStatus(id: number, status: ReportStatus) {
     const isReadReceipt = status === "Read";
-    if (!isReadReceipt) {
+    if (isReadReceipt) {
+      // Clear Panel 1 immediately. The API persists the receipt and restores
+      // the server state if the write fails.
+      setReports((prev) => prev.map((report) => report.id === id ? markPrincipalReportRead(report) : report));
+      setSelectedReport((prev) => prev?.id === id ? markPrincipalReportRead(prev) : prev);
+    } else {
       statusOverridesRef.current[id] = { status, at: Date.now() };
-      setReports((prev) => {
-        const next = prev.map((report) => report.id === id ? { ...report, status } : report);
-        refreshSelectedParent(next, selectedParent);
-        return next;
-      });
+      setReports((prev) => prev.map((report) => report.id === id ? { ...report, status } : report));
       setSelectedReport((prev) => prev?.id === id ? { ...prev, status } : prev);
     }
 
@@ -1420,11 +1420,7 @@ function PrincipalReportsPageContent() {
       }
       if (data?.report) {
         const updated = data.report as Report;
-        setReports((prev) => {
-          const next = prev.map((report) => report.id === id ? updated : report);
-          refreshSelectedParent(next, selectedParent);
-          return next;
-        });
+        setReports((prev) => prev.map((report) => report.id === id ? updated : report));
         setSelectedReport((prev) => prev?.id === id ? updated : prev);
         setPrincipalReplies((prev) => ({
           ...prev,
@@ -1452,7 +1448,7 @@ function PrincipalReportsPageContent() {
   }
 
   function selectParent(group: ParentGroup) {
-    setSelectedParent(group);
+    setSelectedParentKey(group.key);
     setSelectedReport(null);
     setReplyText("");
     setReplyAttachments([]);
@@ -1465,7 +1461,7 @@ function PrincipalReportsPageContent() {
     setReplyAttachments([]);
     setReplyError(null);
     setViewStep("detail");
-    if (!report.canReply) markReportStatus(report.id, "Read").catch(() => null);
+    if (isPrincipalReportUnread(report)) markReportStatus(report.id, "Read").catch(() => null);
   }
 
   async function unlockReport(report: Report) {
@@ -1519,7 +1515,7 @@ function PrincipalReportsPageContent() {
 
   function switchMainTab(tab: MainTab) {
     setMainTab(tab);
-    setSelectedParent(null);
+    setSelectedParentKey(null);
     setSelectedReport(null);
     setViewStep("list");
     setFilterTab("All");
@@ -2115,6 +2111,9 @@ function PrincipalReportsPageContent() {
                     const hasEscalatedFromGuidance = group.reports.some((report) => report.escalatedToPrincipal);
                     const hasEscalatedToGuidance = group.reports.some((report) => report.escalatedToGuidance && !report.escalatedToPrincipal);
                     const hasAcceptedGuidanceTicket = group.reports.some((report) => report.ticketStatus === "accepted");
+                    const hasSubmittedToAdviser = group.reports.some((report) =>
+                      principalReportStatusLabel(report) === "Submitted report to Adviser"
+                    );
 
                     return (
                       <button
@@ -2156,16 +2155,22 @@ function PrincipalReportsPageContent() {
                             Guidance ticket accepted · Read only
                           </div>
                         )}
+                        {!hasEscalatedFromGuidance && !hasEscalatedToGuidance && !hasAcceptedGuidanceTicket && hasSubmittedToAdviser && !allResolved && (
+                          <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-sky-700">
+                            <Send className="h-3 w-3" />
+                            Submitted report to Adviser
+                          </div>
+                        )}
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[420px]", "left-0", viewStep === "reports")}>
+              <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[420px]", "left-0", showReportsPanelOnMobile)}>
                 <div className="flex items-center gap-2 border-b border-slate-100 px-3 pb-1 pt-3">
                   <button
-                    onClick={() => { setSelectedParent(null); setSelectedReport(null); setViewStep("list"); }}
+                    onClick={() => { setSelectedParentKey(null); setSelectedReport(null); setViewStep("list"); }}
                     className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-violet-50 hover:text-violet-600"
                   >
                     <ChevronRight className="h-3.5 w-3.5 rotate-180" /> Back

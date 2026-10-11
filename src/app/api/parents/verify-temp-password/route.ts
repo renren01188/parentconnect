@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import {
-  isTemporaryPasswordExpired,
+  legacyTemporaryPasswordExpiryEpochSeconds,
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     const { data: parent, error } = await supabase
       .from("parents")
-      .select("password, password_set, status, archive_status")
+      .select("password, password_set, status, archive_status, temporary_password_expires_at")
       .eq("id", parentId)
       .maybeSingle();
     if (error) throw error;
@@ -76,11 +76,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: INCORRECT_PASSWORD_MESSAGE }, { status: 401 });
     }
 
-    const passwordExpirySeconds = temporaryPasswordExpiryEpochSeconds(password);
+    const passwordExpirySeconds = temporaryPasswordExpiryEpochSeconds(parent?.temporary_password_expires_at)
+      ?? legacyTemporaryPasswordExpiryEpochSeconds(password);
     if (
       !passwordExpirySeconds
       || passwordExpirySeconds !== tokenExpirySeconds
-      || isTemporaryPasswordExpired(password)
+      || passwordExpirySeconds * 1_000 <= Date.now()
     ) return temporaryPasswordExpired();
 
     const verifiedToken = await new SignJWT({ ...payload, temporaryPasswordVerified: true })

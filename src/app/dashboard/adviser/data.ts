@@ -20,6 +20,9 @@ export function getPriorityLabel(level: number): "Urgent" | "High" | "Medium" | 
 
 export interface Report {
   id: number;
+  /** Immutable relationship identifiers supplied by the principal reports API. */
+  parent_id?: number | null;
+  student_id?: string | null;
   parent_name: string;
   submitted_by_name?: string;
   submitted_by_role?: "Subject Teacher";
@@ -52,6 +55,8 @@ export interface Report {
   hasUnreadForGuidance?: boolean;
   /** Principal-specific persisted viewed state for an escalated report */
   principalHasRead?: boolean;
+  /** True when this Principal has not read the parent report or latest parent reply. */
+  hasUnreadForPrincipal?: boolean;
   attachments?: MessageAttachment[];
   replies?: { sender: string; message: string; sent_at: string; attachments?: MessageAttachment[]; profilePicture?: string | null }[];
   ticketId?: number | null;

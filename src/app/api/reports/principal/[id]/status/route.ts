@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalSession, listGuidanceTickets, listMessages, toPrincipalReport } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
+import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -64,7 +65,7 @@ export async function PATCH(
     const tickets = await listGuidanceTickets([reportId]);
     const ticket = tickets.get(reportId);
     const readKeys = [
-      `principal-report-read-${reportId}`,
+      principalReportReadKey(reportId),
       `parent-report-submitted-${reportId}`,
       ...(existing.escalated_to_principal ? [`guidance-escalated-${reportId}`] : []),
       ...(ticket?.status === "accepted" ? [`guidance-ticket-accepted-${ticket.id}`] : []),

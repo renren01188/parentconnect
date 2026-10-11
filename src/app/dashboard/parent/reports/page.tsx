@@ -8,6 +8,12 @@ import { useNotifContext } from "../context/NotificationContext";
 import { DEFAULT_CATEGORIES, CONCERN_PERCENTAGES, computeConcernLevel, type ChatMessage, type Report, type MessageAttachment, type MessageStatus, type ReportStatus } from "../data";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import {
+  canSubmitConfirmedReport,
+  createReportSubmissionConfirmation,
+  setReportTermsAccepted,
+  updateReportTermsScroll,
+} from "./reportSubmissionTerms";
 
 // Only class advisers — parents cannot send directly to the principal
 type AdviserRecipient = {
@@ -213,6 +219,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
     message: string;
     attachments: MessageAttachment[];
     allowHistoryAccess: boolean;
+    termsAccepted: boolean;
   }) => Promise<void>;
   advisers: AdviserRecipient[];
 }) {
@@ -227,10 +234,12 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
-  const [showTerms, setShowTerms] = useState(false);
-  const [allowHistoryAccess] = useState(true);
-  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [confirmation, setConfirmation] = useState(() => createReportSubmissionConfirmation());
   const adviserRef = useRef<HTMLDivElement>(null);
+  const confirmationDialogRef = useRef<HTMLDivElement>(null);
+  const confirmationTermsRef = useRef<HTMLDivElement>(null);
+  const confirmationCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmationOpenerRef = useRef<HTMLElement | null>(null);
   const adviser = advisers[adviserIdx];
 
   // Compute concern level silently (used on submit, not shown to parent)
@@ -244,13 +253,84 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
     return () => document.removeEventListener("mousedown", h);
   }, [adviserOpen]);
   useEffect(() => {
-    function h(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    function h(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (showConsent) closeConfirmationModal();
+      else onClose();
+    }
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
+  }, [onClose, showConsent]);
+
+  useEffect(() => {
+    if (!showConsent) return;
+
+    confirmationOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => confirmationCloseButtonRef.current?.focus());
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      confirmationOpenerRef.current?.focus();
+    };
+  }, [showConsent]);
+
+  useEffect(() => {
+    if (!showConsent) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const terms = confirmationTermsRef.current;
+      if (!terms) return;
+      setConfirmation((current) => updateReportTermsScroll(current, {
+        scrollTop: terms.scrollTop,
+        clientHeight: terms.clientHeight,
+        scrollHeight: terms.scrollHeight,
+      }));
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [showConsent]);
 
   function toggleCat(name: string) {
     setSelectedCats(prev => prev.includes(name) ? prev.filter(c => c !== name) : [...prev, name]);
+  }
+
+  function openConfirmationModal() {
+    setConfirmation(createReportSubmissionConfirmation());
+    setShowConsent(true);
+  }
+
+  function closeConfirmationModal() {
+    setShowConsent(false);
+    setConfirmation(createReportSubmissionConfirmation());
+  }
+
+  function handleTermsScroll(event: React.UIEvent<HTMLDivElement>) {
+    const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+    setConfirmation((current) => updateReportTermsScroll(current, { scrollTop, clientHeight, scrollHeight }));
+  }
+
+  function handleConfirmationKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeConfirmationModal();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusable = Array.from(confirmationDialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   const otherSelected = selectedCats.includes("Other");
@@ -258,9 +338,13 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
 
 
   async function handleSubmit() {
-    if (!canSubmit || !adviser) return;
+    // No additional conversation-history permission is collected here. Keep
+    // prior conversation history private unless a separate consent flow sets it.
+    const allowHistoryAccess = false;
+    const termsAccepted = confirmation.termsAccepted;
+    if (!canSubmit || !adviser || !canSubmitConfirmedReport(confirmation) || !termsAccepted) return;
     // Close the consent prompt immediately; the report submission can continue in the background.
-    setShowConsent(false);
+    closeConfirmationModal();
     // Replace generic "Other" with the typed description if provided
     const finalCats = selectedCats.map(c => (c === "Other" && otherText.trim()) ? `Other: ${otherText.trim()}` : c);
     const finalEntries = allCats.filter(c => selectedCats.includes(c.name));
@@ -275,7 +359,8 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
         concernLevel: computeConcernLevel(finalEntries),
         message: message.trim(),
         attachments,
-        allowHistoryAccess: true,
+        allowHistoryAccess,
+        termsAccepted,
       });
       setSubmitted(true);
     } catch (error) {
@@ -437,7 +522,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 14, borderTop: "1px solid #f1f5f9" }}>
               <button type="button" onClick={onClose}
                 style={{ padding: "9px 20px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#fff", color: "#475569", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-              <button type="button" onClick={() => setShowConsent(true)} disabled={!canSubmit}
+              <button type="button" onClick={openConfirmationModal} disabled={!canSubmit}
                 style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 20px", borderRadius: 10, border: "none", background: canSubmit ? "#2563eb" : "#93c5fd", color: "#fff", fontSize: 13, fontWeight: 700, cursor: canSubmit ? "pointer" : "not-allowed" }}>
                 {isSubmitting ? (
                   <>
@@ -453,12 +538,86 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
           </div>
         )}
         {showConsent && !submitted && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-3 sm:p-6"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (event.target === event.currentTarget) closeConfirmationModal();
+            }}
+          >
+            <div
+              ref={confirmationDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="report-submission-confirmation-title"
+              aria-describedby="report-submission-confirmation-description"
+              onKeyDown={handleConfirmationKeyDown}
+              className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 sm:px-6">
+                <div>
+                  <h2 id="report-submission-confirmation-title" className="text-lg font-extrabold text-slate-900">Confirm report submission</h2>
+                  <p id="report-submission-confirmation-description" className="mt-1 text-xs leading-relaxed text-slate-600">Read and accept the report submission terms before submitting.</p>
+                </div>
+                <button
+                  ref={confirmationCloseButtonRef}
+                  type="button"
+                  onClick={closeConfirmationModal}
+                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  aria-label="Close report submission confirmation"
+                >
+                  <X className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+                <section aria-labelledby="report-submission-terms-title">
+                  <h3 id="report-submission-terms-title" className="text-sm font-extrabold text-slate-800">REPORT SUBMISSION TERMS AND CONDITIONS</h3>
+                  <div
+                    ref={confirmationTermsRef}
+                    onScroll={handleTermsScroll}
+                    className="mt-3 max-h-52 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 sm:max-h-60"
+                    aria-label="Report submission terms. Scroll to the end to enable acceptance."
+                  >
+                    <p>The report submission feature of PARENTCONNECT is intended for legitimate school-related concerns. All information provided in a report shall be accurate, relevant, and presented in a clear and respectful manner. Any supporting files or attachments shall be relevant to the concern being reported.</p>
+                    <p className="mt-3">Submitted reports may be read, reviewed, and addressed by the assigned adviser and may be monitored by the school principal. When necessary, reports may be referred or escalated to other authorized school personnel for appropriate action. Information contained in submitted reports shall be handled with appropriate confidentiality and accessed only by authorized personnel.</p>
+                    <p className="mt-3">Before submission, the report details and attachments should be reviewed carefully to ensure accuracy and completeness.</p>
+                    <p className="mt-3">By selecting <strong>&quot;I Agree&quot;</strong> and submitting the report, the reporting party acknowledges having read and understood these Terms and Conditions and confirms that the information provided is accurate to the best of their knowledge.</p>
+                  </div>
+                  {!confirmation.hasReachedTermsEnd && <p role="status" className="mt-2 text-xs font-medium text-amber-700">Scroll to the end of the terms to enable the agreement checkbox.</p>}
+                  <label className={`mt-3 flex items-start gap-3 rounded-xl border p-3 text-xs leading-relaxed ${confirmation.hasReachedTermsEnd ? "border-blue-200 bg-blue-50/60 text-slate-800" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+                    <input
+                      type="checkbox"
+                      checked={confirmation.termsAccepted}
+                      disabled={!confirmation.hasReachedTermsEnd}
+                      onChange={(event) => setConfirmation((current) => setReportTermsAccepted(current, event.target.checked))}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600 disabled:cursor-not-allowed"
+                    />
+                    <span>I have read and agree to the Report Submission Terms and Conditions.</span>
+                  </label>
+                </section>
+              </div>
+
+              <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-4 sm:px-6">
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button type="button" onClick={closeConfirmationModal} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-600">Cancel</button>
+                  <button type="button" onClick={handleSubmit} disabled={!canSubmitConfirmedReport(confirmation) || isSubmitting} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-blue-300">
+                    {isSubmitting ? "Submitting..." : "Yes, Submit Report"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/*
+        {false && showConsent && !submitted && (
           <div onClick={e => e.stopPropagation()} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
             <div style={{ background: "#fff", borderRadius: 14, padding: 22, width: "min(430px, calc(100vw - 48px))", boxSizing: "border-box", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
               {showTerms ? (
                 <>
                   <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 800, color: "#0f172a" }}>Terms of Agreement</h3>
-                  <div style={{ maxHeight: 300, overflowY: "auto", fontSize: 12, lineHeight: 1.65, color: "#475569" }}>
+                    <p style={{ margin: "0 0 10px" }}>Legacy terms content removed.</p>
                     <p style={{ margin: "0 0 10px" }}>By submitting this report, you understand that it will first be reviewed by your Class Adviser and may be escalated through the school’s reporting process: Adviser, Guidance Counselor, then Principal.</p>
                     <p style={{ margin: "0 0 10px" }}>If you select “Yes,” you consent to higher authorities viewing the previous conversation history between you and the Class Adviser and between you and the Guidance Counselor when the report reaches them. This helps them understand the full context of your concern.</p>
                     <p style={{ margin: 0 }}>If you select “No,” higher authorities will not be shown those previous conversations after escalation. They may still view the report details and messages addressed to them. You may choose either option before accepting these Terms of Agreement.</p>
@@ -484,7 +643,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
               )}
             </div>
           </div>
-        )}
+        )} */}
       </div>
     </div>
   );
@@ -912,6 +1071,7 @@ function ParentReportsPageContent() {
     message: string;
     attachments: MessageAttachment[];
     allowHistoryAccess: boolean;
+    termsAccepted: boolean;
   }) {
     const res = await fetch("/api/reports/parent-adviser", {
       method: "POST",

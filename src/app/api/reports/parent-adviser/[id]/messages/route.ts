@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidanceMessageEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import {
   getAdviserSession,
   getGuidanceSession,
@@ -345,6 +346,16 @@ async function insertMessage(
   if (!insertedId) throw new Error("Message insert did not return an identifier.");
 
   if (senderRole === "parent") {
+    // A new Parent message is unread for every Principal until that Principal
+    // opens the report. This touches only Principal receipts; it never changes
+    // Parent/Adviser read flags, workflow status, escalation, or permissions.
+    const { error: principalReadError } = await supabase
+      .from("principal_notification_reads")
+      .delete()
+      .eq("notif_key", principalReportReadKey(reportId));
+
+    if (principalReadError) throw principalReadError;
+
     const { error: readError } = await supabase
       .from("parent_adviser_report_messages")
       .update({ read_by_parent: true })

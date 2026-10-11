@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendStudentReportAdviserEmail } from "@/lib/mailer";
 import { verifyGoogleRecaptcha } from "@/lib/googleRecaptcha";
-import { consumePublicRateLimit } from "@/lib/publicRateLimit";
+import { consumePublicRateLimit, isPublicRateLimitUnavailableError } from "@/lib/publicRateLimit";
 import { logAudit } from "@/lib/audit";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { getPrincipalSession } from "../reports/parent-adviser/_lib";
@@ -355,6 +355,9 @@ export async function POST(req: NextRequest) {
     }, { status: 201 });
   } catch (error: unknown) {
     console.error("POST /api/student-reports error:", error);
-    return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
+    return NextResponse.json(
+      { success: false, message: errorMessage(error) },
+      { status: isPublicRateLimitUnavailableError(error) || isUpstreamUnavailable(error) ? 503 : 500 },
+    );
   }
 }

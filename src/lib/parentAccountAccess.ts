@@ -14,10 +14,11 @@ function normalizeState(value: string | null | undefined) {
 /**
  * Parent registration is verified through the school-maintained parent/student
  * link, not a staff-approval state. These separate protection states still
- * prevent access.
+ * prevent access. A parent scheduled for deletion intentionally remains able
+ * to sign in during the recovery period so the in-app deletion notice can be
+ * seen; archived/deleted accounts remain blocked below.
  */
 const PROTECTED_PARENT_STATES = new Set([
-  "deletion suspended",
   "deletion pending",
   "pending deletion",
   "pending",

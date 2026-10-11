@@ -3,6 +3,7 @@ import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { hasUnreadForPrincipal as hasUnreadPrincipalReport } from "@/lib/principalReportReadState.cjs";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -459,10 +460,16 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
   const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
   const threadMessages = principalThreadMessages(row, messages);
   const isResolved = row.status === "resolved";
-  const hasUnreadForPrincipal = !isResolved && !principalHasRead && threadMessages.some((msg) => msg.sender_role === "parent" && !msg.read_by_adviser);
+  const hasUnreadForPrincipal = hasUnreadPrincipalReport({
+    status: row.status,
+    principalHasRead,
+    messages: threadMessages,
+  });
 
   return {
     id: row.id,
+    parent_id: row.parent_id,
+    student_id: row.student_id,
     parent_name: row.parent_name,
     student_name: row.student_name,
     category: categoryForAdviser(row.categories?.[0]),

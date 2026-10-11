@@ -85,7 +85,21 @@ type ParentNotificationPreview = {
     color: string;
     iconColor: string;
     announcementId?: number;
+    parentDeletionNotificationId?: number;
 };
+
+type ParentScheduledDeletionNotice = {
+    scheduledDeletionId: number;
+    deleteAfter: string | null;
+    approvedAt: string | null;
+};
+
+function scheduledDeletionDateLabel(value: string | null) {
+    if (!value) return "the date provided by the school";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "the date provided by the school";
+    return date.toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
+}
 
 /*
 const REMOVED_REPORT_SAMPLE = [
@@ -133,6 +147,7 @@ function WeekDots({ attendance }: { attendance: StudentInfo["attendance"] }) {
 export default function ParentDashboard() {
     const router = useRouter();
     const [notifs, setNotifs] = useState<ParentNotificationPreview[]>([]);
+    const [scheduledDeletionNotice, setScheduledDeletionNotice] = useState<ParentScheduledDeletionNotice | null>(null);
     const [students, setStudents] = useState<StudentInfo[]>([]);
     const [selectedId, setSelectedId] = useState("");
     const [parentName, setParentName] = useState("Parent");
@@ -240,6 +255,7 @@ export default function ParentDashboard() {
                 const notifRes = await fetch("/api/parents/notifications", { cache: "no-store" });
                 const notifData = await notifRes.json().catch(() => null);
                 const realNotifications = Array.isArray(notifData?.notifications) ? notifData.notifications : [];
+                setScheduledDeletionNotice(notifData?.scheduledDeletionNotice ?? null);
                 setNotifs(realNotifications.slice(0, 3).map((notif: {
                     id: number;
                     title: string;
@@ -247,6 +263,7 @@ export default function ParentDashboard() {
                     time: string;
                     unread: boolean;
                     announcementId?: number;
+                    parentDeletionNotificationId?: number;
                 }) => ({
                     id: notif.id,
                     type: "message",
@@ -258,6 +275,7 @@ export default function ParentDashboard() {
                     color: notif.unread ? "bg-blue-50 border-blue-200" : "bg-slate-50 border-slate-200",
                     iconColor: "bg-blue-500",
                     announcementId: notif.announcementId,
+                    parentDeletionNotificationId: notif.parentDeletionNotificationId,
                 })));
                 const reportsRes = await fetch("/api/reports/parent-adviser?role=parent", { cache: "no-store" });
                 const reportsJson = await reportsRes.json().catch(() => null);
@@ -300,7 +318,11 @@ export default function ParentDashboard() {
         fetch("/api/parents/notifications", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify({
+                parentDeletionNotificationIds: notifs.flatMap(notif =>
+                    notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []
+                ),
+            }),
         }).catch(() => null);
     };
 
@@ -313,7 +335,9 @@ export default function ParentDashboard() {
         fetch("/api/parents/notifications", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ notificationId: notif.id }),
+            body: JSON.stringify(notif.parentDeletionNotificationId
+                ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
+                : { notificationId: notif.id }),
         }).catch(() => null);
         router.push("/dashboard/parent/notifications");
     }
@@ -366,6 +390,16 @@ export default function ParentDashboard() {
                     </div>
 
                     {/* ── Select Student ── */}
+                    {scheduledDeletionNotice && (
+                        <div role="alert" className="mb-5 rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-red-950 shadow-sm sm:px-5">
+                            <p className="text-sm font-extrabold">Your account is scheduled for deletion</p>
+                            <p className="mt-1 text-sm leading-6 text-red-800">
+                                Your ParentConnect account is scheduled for deletion on <strong>{scheduledDeletionDateLabel(scheduledDeletionNotice.deleteAfter)}</strong>.
+                                Contact the ICT office immediately if this is unexpected.
+                            </p>
+                        </div>
+                    )}
+
                     <div data-parent-guide="student-switcher" className={`mb-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm sm:px-5 ${guideHighlight("student-switcher")}`}>
                         <div className="flex items-center gap-3 mb-3">
                             <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">

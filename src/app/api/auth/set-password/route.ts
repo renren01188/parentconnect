@@ -6,7 +6,10 @@ import { jwtVerify, SignJWT } from "jose";
 import { sendParentRegistrationConfirmation } from "@/lib/mailer";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-import { TEMPORARY_PASSWORD_EXPIRED_MESSAGE } from "@/lib/parentTemporaryPassword";
+import {
+  TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
+  temporaryPasswordExpiryEpochSeconds,
+} from "@/lib/parentTemporaryPassword";
 
 const SECRET = getJwtSecret();
 
@@ -106,7 +109,7 @@ export async function POST(req: NextRequest) {
 
     const { data: parent, error: parentError } = await supabase
       .from("parents")
-      .select("password_set, status, archive_status")
+      .select("password_set, status, archive_status, temporary_password_expires_at")
       .eq("id", parentId)
       .maybeSingle();
     if (parentError) throw parentError;
@@ -116,6 +119,12 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       );
     }
+
+    const persistedExpirySeconds = temporaryPasswordExpiryEpochSeconds(parent.temporary_password_expires_at);
+    if (
+      parent.temporary_password_expires_at != null
+      && persistedExpirySeconds !== temporaryPasswordExpirySeconds
+    ) return temporaryPasswordExpired();
 
     // Check immediately before activation as well as when the signed session
     // is read, so a request that crosses the ten-minute boundary cannot set a
@@ -128,7 +137,7 @@ export async function POST(req: NextRequest) {
 
     const { data: activatedParent, error } = await supabase
       .from("parents")
-      .update({ password: hashed, password_set: 1, temp_password: null, status: "active" })
+      .update({ password: hashed, password_set: 1, temp_password: null, temporary_password_expires_at: null, status: "active" })
       .eq("id", parentId)
       .eq("password_set", 0)
       .select("id")

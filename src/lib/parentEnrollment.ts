@@ -125,6 +125,7 @@ export async function provisionParentForStudent(input: ParentEnrollmentInput) {
         address: input.address?.trim() || null,
         password,
         temp_password: null,
+        temporary_password_expires_at: null,
         password_set: 0,
         status: "active",
       })

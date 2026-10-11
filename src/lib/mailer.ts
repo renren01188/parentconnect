@@ -1,4 +1,5 @@
 import { sendWithBrevo } from "@/lib/brevoApi";
+import { PARENT_TEMPORARY_PASSWORD_EMAIL_NOTICE } from "@/lib/parentSignupConfirmation";
 
 type EmailMessage = {
   from?: string;
@@ -173,7 +174,7 @@ export async function sendTempPasswordEmail({
             </table>
           </div>
           <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-top:12px;">
-            <p style="margin:0;font-size:12px;color:#92400e;">⚠️ <strong>Important:</strong> This temporary password expires in 10 minutes. Enter it promptly, then create your own password.</p>
+            <p style="margin:0;font-size:12px;color:#92400e;">⚠️ <strong>Important:</strong> ${PARENT_TEMPORARY_PASSWORD_EMAIL_NOTICE}</p>
           </div>
         </div>
         <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">This is an automated message from ParentConnect. Please do not reply.</p>

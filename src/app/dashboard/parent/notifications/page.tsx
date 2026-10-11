@@ -28,6 +28,8 @@ type PageNotification = Notification & {
   senderName?: string;
   senderRole?: "Principal" | "Adviser" | "Guidance" | "ICT";
   reportId?: number;
+  parentDeletionNotificationId?: number;
+  deleteAfter?: string | null;
   createdAt?: string;
 };
 
@@ -138,6 +140,16 @@ function NotificationsPageContent() {
         { event: "*", schema: "public", table: "parent_adviser_report_messages" },
         () => { loadNotifications().catch(() => null); }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "parent_deletion_notifications" },
+        () => { loadNotifications().catch(() => null); }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scheduled_deletions" },
+        () => { loadNotifications().catch(() => null); }
+      )
       .subscribe();
 
     return () => {
@@ -174,6 +186,9 @@ function NotificationsPageContent() {
     Attendance: notifications.filter((notif) =>
       notif.tab.includes("Attendance") && notif.unread
     ).length,
+    Account: notifications.filter((notif) =>
+      notif.tab.includes("Account") && notif.unread
+    ).length,
   };
 
   const filteredNotifications = notifications.filter((notif) =>
@@ -190,7 +205,10 @@ function NotificationsPageContent() {
         reportIds: notifications.flatMap((notif) => notif.reportId ? [notif.reportId] : []),
         notificationIds: notifications
           .filter((notif) => notif.source === "database" && !notif.reportId && notif.id > 0)
+          .filter((notif) => !notif.parentDeletionNotificationId)
           .flatMap((notif) => notif.notificationIds ?? [notif.id]),
+        parentDeletionNotificationIds: notifications
+          .flatMap((notif) => notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []),
       }),
     }).catch(() => null);
   }, [notifications]);
@@ -216,6 +234,8 @@ function NotificationsPageContent() {
         body: JSON.stringify(
           notif.reportId
             ? { reportId: notif.reportId }
+            : notif.parentDeletionNotificationId
+              ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
             : notif.announcementId
               ? { notificationIds: notif.notificationIds ?? [notif.id] }
               : notif.id < 0
@@ -290,7 +310,7 @@ function NotificationsPageContent() {
           className="mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
           style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
         >
-          {(["All", "Unread", "Principal", "Teacher", "Guidance", "Attendance"] as FilterTab[]).map(
+          {(["All", "Unread", "Principal", "Teacher", "Guidance", "Attendance", "Account"] as FilterTab[]).map(
             (tab) => {
               const isActive = activeTab === tab;
               const count = tabCounts[tab];

@@ -58,7 +58,6 @@ type AuthorizationAction = "approve" | "reject" | "restore" | "delete-now";
 type BulkDeletionResult = {
   successful: number;
   failed: number;
-  emails: { sent: number; pending: number; failed: number; batchId?: string | null };
 };
 
 export function BulkDeletionModal({
@@ -96,32 +95,6 @@ export function BulkDeletionModal({
   const [authorizationError, setAuthorizationError] = useState("");
   const [operationResult, setOperationResult] = useState<BulkDeletionResult | null>(null);
 
-  useEffect(() => {
-    const batchId = operationResult?.emails.batchId;
-    if (!batchId || operationResult.emails.pending === 0) return;
-
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch(`/api/deletion-email-jobs?batchId=${encodeURIComponent(batchId)}`);
-        const result = await response.json();
-        if (!cancelled && result.success) {
-          setOperationResult((previous) => previous ? {
-            ...previous,
-            emails: { ...previous.emails, sent: result.sent, pending: result.pending, failed: result.failed },
-          } : previous);
-        }
-      } catch {
-        // Keep the last known queued result visible; the scheduler will retry.
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 5_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [operationResult?.emails.batchId, operationResult?.emails.pending]);
   const activeDeletionKeys = useMemo(
     () =>
       new Set(
@@ -272,12 +245,6 @@ export function BulkDeletionModal({
       setOperationResult({
         successful: Number(result.deletion?.successful ?? result.deletions?.length ?? 0),
         failed: Number(result.deletion?.failed ?? 0),
-        emails: {
-          sent: Number(result.emails?.sent ?? 0),
-          pending: Number(result.emails?.pending ?? 0),
-          failed: Number(result.emails?.failed ?? 0),
-          batchId: result.emails?.batchId ?? null,
-        },
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not schedule deletion.");
@@ -564,15 +531,11 @@ export function BulkDeletionModal({
           ) : operationResult ? (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
               <h3 className="font-extrabold">Bulk deletion scheduled</h3>
-              <p className="mt-1 text-emerald-800">Notifications continue in the background; you can safely close this dialog.</p>
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <p className="mt-1 text-emerald-800">Scheduled Parent accounts receive an in-app notification. No Parent deletion email is sent.</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion successful</span><strong>{operationResult.successful}</strong></div>
                 <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion failed</span><strong>{operationResult.failed}</strong></div>
-                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails sent</span><strong>{operationResult.emails.sent}</strong></div>
-                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails pending</span><strong>{operationResult.emails.pending}</strong></div>
-                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Emails failed</span><strong>{operationResult.emails.failed}</strong></div>
               </div>
-              {operationResult.emails.pending > 0 && <p className="mt-3 text-xs text-emerald-800">Pending emails are sent in controlled batches and temporary failures are retried automatically.</p>}
             </div>
           ) : (
             <>

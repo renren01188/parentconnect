@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       password: hashedPassword,
       password_set: 1,
       temp_password: null,
+      temporary_password_expires_at: null,
       reset_token: null,
       reset_token_expiry: null,
     }).eq("id", parent.id).eq("password_set", 1).select("id").maybeSingle();

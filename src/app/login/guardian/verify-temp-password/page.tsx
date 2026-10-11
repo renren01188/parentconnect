@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, CheckCircle, Eye, EyeOff, KeyRound, Mail, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
 
 const INCORRECT_PASSWORD_MESSAGE = "Please check the correct temporary password or check your email address if it is correct.";
 const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
@@ -76,8 +77,8 @@ export default function VerifyTemporaryPasswordPage() {
             <ShieldCheck className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-extrabold text-slate-800">Verify Temporary Password</h1>
-          <p className="text-slate-500 text-sm text-center mt-1.5 max-w-xs">
-            We sent a temporary password to your email. Enter it below to continue.
+          <p className="text-slate-500 text-sm text-center mt-1.5 max-w-sm leading-5">
+            {PARENT_SIGNUP_CONFIRMATION_MESSAGE}
           </p>
         </div>
 

@@ -14,7 +14,7 @@ import {
 import { parentAccountAccessIssue } from "@/lib/parentAccountAccess";
 import { getJwtSecret } from "@/lib/authSecret";
 import {
-  isTemporaryPasswordExpired,
+  legacyTemporaryPasswordExpiryEpochSeconds,
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     const { data: parents, error } = await supabase
       .from("parents")
       .select(`
-        id, email, password, temp_password, password_set, status, archive_status, student_id, contact_number,
+        id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number,
         parent_first_name, parent_last_name,
         students!inner ( first_name, last_name, grade, section )
       `)
@@ -109,8 +109,9 @@ export async function POST(req: NextRequest) {
     const passwordSet = parent.password_set === true || parent.password_set === 1;
     const temporaryPasswordExpirySeconds = passwordSet
       ? null
-      : temporaryPasswordExpiryEpochSeconds(password);
-    if (!passwordSet && (!temporaryPasswordExpirySeconds || isTemporaryPasswordExpired(password))) {
+      : temporaryPasswordExpiryEpochSeconds(parent.temporary_password_expires_at)
+        ?? legacyTemporaryPasswordExpiryEpochSeconds(password);
+    if (!passwordSet && (!temporaryPasswordExpirySeconds || temporaryPasswordExpirySeconds * 1_000 <= Date.now())) {
       return NextResponse.json({
         success: false,
         temporaryPasswordExpired: true,
