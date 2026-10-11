@@ -2,20 +2,51 @@
 
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
+import { useState } from "react";
+import { performLogout } from "@/lib/logoutAction";
+import { LogoutConfirmationModal } from "./LogoutConfirmationModal";
 
-export default function LogoutButton() {
+type LogoutButtonProps = {
+  logoutEndpoint: string;
+  redirectTo: string;
+  label?: string;
+  className: string;
+  onLogoutStarted?: () => void;
+  redirectMethod?: "push" | "replace";
+};
+
+export default function LogoutButton({
+  logoutEndpoint,
+  redirectTo,
+  label = "Logout",
+  className,
+  onLogoutStarted,
+  redirectMethod = "push",
+}: LogoutButtonProps) {
   const router = useRouter();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  async function handleLogout() {
-    await fetch("/api/auth/adviser/logout", { method: "POST" });
-    router.push("/login/adviser");
-    router.refresh();
+  async function confirmLogout() {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+    onLogoutStarted?.();
+
+    await performLogout({ logoutEndpoint, redirectTo, redirectMethod, router });
   }
 
   return (
-    <button onClick={handleLogout}
-      className="flex items-center justify-center gap-2 w-full bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-colors">
-      <LogOut className="w-3.5 h-3.5" /> Logout
-    </button>
+    <>
+      <button type="button" onClick={() => setConfirmOpen(true)} className={className}>
+        <LogOut className="h-3.5 w-3.5" /> {label}
+      </button>
+      <LogoutConfirmationModal
+        open={confirmOpen}
+        saving={isLoggingOut}
+        onConfirm={confirmLogout}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </>
   );
 }

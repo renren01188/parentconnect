@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  LayoutDashboard, Users, GraduationCap, ClipboardList, Inbox, LogOut, Menu, Monitor, Megaphone, X,
+  LayoutDashboard, Users, GraduationCap, ClipboardList, Inbox, Menu, Monitor, Megaphone, X,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
 
 const mainNav = [
@@ -38,7 +39,6 @@ function Badge({ count }: { count: number }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { inboxUnreadCount, annUnreadCount } = useNotifications();
   const [ictUser, setIctUser] = useState<IctSummary | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -83,13 +83,6 @@ export default function Sidebar() {
   const displayName = ictUser?.name || "ICT Admin";
   const closeMenu = () => setMobileOpen(false);
   const isActive = (href: string) => href === "/dashboard/ict" ? pathname === href : pathname.startsWith(href);
-  const handleLogout = async () => {
-    closeMenu();
-    await fetch("/api/auth/ict/logout", { method: "POST" }).catch(() => null);
-    router.push("/login/ict");
-    router.refresh();
-  };
-
   return (
     <>
       <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-[#274e13]/30 bg-gradient-to-r from-[#1a3a0a] to-[#274e13] px-4 shadow-sm md:hidden">
@@ -114,7 +107,12 @@ export default function Sidebar() {
 
         <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
           <Link href="/dashboard/ict/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/ict/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white/30 bg-[#274e13] text-xs font-bold text-white">{initials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{displayName}</p><p className="text-[10px] text-white/50">ICT Personnel</p></div></Link>
-          <button onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/10"><LogOut className="h-3.5 w-3.5" /> Logout</button>
+          <LogoutButton
+            logoutEndpoint="/api/auth/ict/logout"
+            redirectTo="/login/ict"
+            onLogoutStarted={closeMenu}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/10"
+          />
         </div>
       </aside>
     </>

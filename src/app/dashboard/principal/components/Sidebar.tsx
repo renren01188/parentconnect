@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  LayoutDashboard, FileText, CreditCard, Bell, LogOut, Shield, Activity, X, Monitor,
+  LayoutDashboard, FileText, CreditCard, Bell, Shield, Activity, X, Monitor,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS: {
@@ -46,7 +47,6 @@ function getInitials(principal: PrincipalSummary | null) {
 
 export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { reportCount, adviserMessageCount, ictMessageCount, principalNotifCount } = useNotifContext();
   const [principal, setPrincipal] = useState<PrincipalSummary | null>(null);
 
@@ -195,17 +195,12 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
             </div>
           </Link>
 
-          <button
-            onClick={async () => {
-              await fetch("/api/auth/principal/logout", { method: "POST" }).catch(() => null);
-              onClose?.();
-              router.push("/login/principal");
-              router.refresh();
-            }}
-            className="flex items-center justify-center gap-2 w-full bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-colors"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Logout
-          </button>
+          <LogoutButton
+            logoutEndpoint="/api/auth/principal/logout"
+            redirectTo="/login/principal"
+            onLogoutStarted={onClose}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-red-600"
+          />
         </div>
       </aside>
     </>

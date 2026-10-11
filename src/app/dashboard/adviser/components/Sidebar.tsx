@@ -4,9 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  LayoutDashboard, Users, ScanLine, FileText, Bell, LogOut, Monitor,
+  LayoutDashboard, Users, ScanLine, FileText, Bell, Monitor,
   ArrowUpCircle, GraduationCap, Menu, X,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS = [
@@ -88,7 +89,12 @@ export default function Sidebar() {
 
         <div className="flex flex-col gap-2 border-t border-emerald-500/40 px-3 pb-4 pt-3">
           <Link href="/dashboard/adviser/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/adviser/profile") ? "bg-white/18" : "hover:bg-emerald-500/40"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-400 text-xs font-bold text-white ring-2 ring-white/20">{adviserInitials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{adviserName}</p><p className="text-[10px] text-emerald-300">Class Adviser</p></div></Link>
-          <Link href="/login/adviser" onClick={closeMenu} className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-red-600"><LogOut className="h-3.5 w-3.5" /> Logout</Link>
+          <LogoutButton
+            logoutEndpoint="/api/auth/adviser/logout"
+            redirectTo="/login/adviser"
+            onLogoutStarted={closeMenu}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-red-600"
+          />
         </div>
       </aside>
     </>

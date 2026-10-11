@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Bell, FileText, HeartHandshake, LayoutDashboard, LogOut, Menu, Megaphone, Monitor, X,
+  Bell, FileText, HeartHandshake, LayoutDashboard, Menu, Megaphone, Monitor, X,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 import { useNotifContext } from "../context/NotificationContext";
 import {
   getGuidanceFullName,
@@ -28,7 +29,6 @@ function Badge({ count }: { count: number }) {
 
 export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { reportsUnreadCount, escalatedCount, notifUnreadCount, principalAnnouncementUnreadCount, ictUnreadCount } = useNotifContext();
   const [profile, setProfile] = useState<GuidanceProfile | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -72,13 +72,6 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const isActive = (href: string) => href === "/dashboard/guidance" ? pathname === href : pathname.startsWith(href);
   const badgeFor = (badgeKey?: string) => badgeKey === "reports" ? reportsUnreadCount : badgeKey === "announcements" ? principalAnnouncementUnreadCount : badgeKey === "ict" ? ictUnreadCount : badgeKey === "notifications" ? notifUnreadCount : 0;
   const closeMenu = () => setMobileOpen(false);
-  const logOut = async () => {
-    closeMenu();
-    await fetch("/api/auth/guidance/logout", { method: "POST" }).catch(() => null);
-    router.push("/");
-    router.refresh();
-  };
-
   return (
     <>
       <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-sky-500/40 bg-gradient-to-r from-sky-600 to-sky-700 px-4 shadow-sm md:hidden">
@@ -105,7 +98,12 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
 
         <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
           <Link href="/dashboard/guidance/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/guidance/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-white ring-2 ring-white/20">{profileInitials}</span><span className="min-w-0"><span className="block truncate text-xs font-semibold leading-tight text-white">{profileName}</span><span className="block text-[10px] text-sky-100">{profile?.school || "Guidance Office"}</span></span></Link>
-          <button type="button" onClick={logOut} className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-red-600"><LogOut className="h-3.5 w-3.5" /> Logout</button>
+          <LogoutButton
+            logoutEndpoint="/api/auth/guidance/logout"
+            redirectTo="/"
+            onLogoutStarted={closeMenu}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-red-600"
+          />
         </div>
       </aside>
     </>

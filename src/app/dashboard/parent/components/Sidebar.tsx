@@ -5,8 +5,9 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, CalendarDays, FileText,
-  Bell, LogOut, Menu, UserRound, X,
+  Bell, Menu, UserRound, X,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS = [
@@ -84,17 +85,6 @@ export default function Sidebar() {
   const parentName = parent?.name || "Parent";
   const parentInitials = useMemo(() => getInitials(parent), [parent]);
   const closeMenu = () => setMobileOpen(false);
-  const signOut = async () => {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } finally {
-      closeMenu();
-      // Use a document navigation so the browser cannot retain the Parent
-      // route or its data in Next's in-memory client cache after logout.
-      window.location.replace("/login/guardian");
-    }
-  };
-
   return (
     <>
       <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-white/10 px-4 shadow-sm md:hidden" style={{ background: "linear-gradient(90deg, #1a2035 0%, #141928 100%)" }}>
@@ -121,7 +111,14 @@ export default function Sidebar() {
 
         <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
           <Link href="/dashboard/parent/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/parent/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-500 text-xs font-bold text-white ring-2 ring-white/20">{parentInitials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{parentName}</p><p className="text-[10px] text-slate-400">Parent</p></div></Link>
-          <button onClick={signOut} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2.5 text-xs font-bold text-slate-300 transition-colors hover:bg-white/20 hover:text-white"><LogOut className="h-3.5 w-3.5" /> Sign out</button>
+          <LogoutButton
+            logoutEndpoint="/api/auth/logout"
+            redirectTo="/login/guardian"
+            redirectMethod="replace"
+            label="Sign out"
+            onLogoutStarted={closeMenu}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2.5 text-xs font-bold text-slate-300 transition-colors hover:bg-white/20 hover:text-white"
+          />
         </div>
       </aside>
     </>

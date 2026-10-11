@@ -178,7 +178,7 @@ export default function ContactUsPage() {
                   <p className="text-sm font-bold text-slate-800 mb-0.5">Address</p>
                   <p className="text-sm text-slate-500 leading-relaxed">
                     Santiago Elementary School<br />
-                    Santiago, Philippines
+                    Arnaldo Highway, Brgy. Santiago, General Trias, Philippines, 4107
                   </p>
                 </div>
               </div>
@@ -199,7 +199,7 @@ export default function ContactUsPage() {
                 </div>
                 <div>
                   <p className="text-sm font-bold text-slate-800 mb-0.5">Email</p>
-                  <p className="text-sm text-slate-500">santiago.elemschool@deped.gov.ph</p>
+                  <p className="text-sm text-slate-500">107966@deped.gov.ph</p>
                 </div>
               </div>
             </div>
