@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
 
 type RefreshMessages = (background?: boolean) => Promise<boolean>;
 
@@ -12,8 +13,10 @@ export function useStaffMessagesRealtime(channelName: string, refreshMessages: R
   useEffect(() => {
     const client = supabaseBrowser;
     if (!client) {
-      setLiveUpdateNotice("Live updates are unavailable in this browser. Messages can still be refreshed automatically.");
-      return;
+      const noticeTimer = window.setTimeout(() => {
+        setLiveUpdateNotice("Live updates are unavailable in this browser. Messages can still be refreshed automatically.");
+      }, 0);
+      return () => window.clearTimeout(noticeTimer);
     }
 
     let disposed = false;
@@ -44,23 +47,30 @@ export function useStaffMessagesRealtime(channelName: string, refreshMessages: R
       }, 1_200);
     };
 
-    const channel = client
-      .channel(channelName)
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        void refreshAndClearNotice();
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          setLiveUpdateNotice(null);
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          void retryConnection();
-        }
-      });
+    let channel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
+    void subscribeRealtimeInvalidations(client, () => {
+      void refreshAndClearNotice();
+    }, (status) => {
+      if (status === "SUBSCRIBED") {
+        setLiveUpdateNotice(null);
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        void retryConnection();
+      }
+    }).then((connectedChannel) => {
+      if (disposed) {
+        if (connectedChannel) void client.removeChannel(connectedChannel);
+        return;
+      }
+      channel = connectedChannel;
+      if (!channel) {
+        setLiveUpdateNotice("Updates will refresh automatically. Existing messages remain available.");
+      }
+    });
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshAndClearNotice();
     };
-    const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, 300_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
@@ -68,7 +78,7 @@ export function useStaffMessagesRealtime(channelName: string, refreshMessages: R
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       window.clearInterval(fallbackRefresh);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
-      void client.removeChannel(channel);
+      if (channel) void client.removeChannel(channel);
     };
   }, [channelName, refreshMessages]);
 

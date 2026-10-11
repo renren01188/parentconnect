@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Calendar, Clock, Edit2, Eye, Monitor, Plus, Trash2, UserRound, X } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { useNotifContext } from "../context/NotificationContext";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 
 type Tab = "incoming" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -99,39 +100,17 @@ export default function AnnouncementsPage() {
     }
   }, []);
 
+  useVisibleRefresh(loadIncomingAnnouncements);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "announcements") return loadIncomingAnnouncements();
+  });
+
   useEffect(() => {
     void (async () => {
       await Promise.all([loadMyAnnouncements(), loadIncomingAnnouncements()]);
       setLoading(false);
     })();
   }, [loadIncomingAnnouncements, loadMyAnnouncements]);
-
-  useEffect(() => {
-    // The authenticated route is the fallback for custom-cookie sessions
-    // where browser table events are restricted by RLS.
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void loadIncomingAnnouncements();
-    };
-    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    const client = supabaseBrowser;
-    if (!client) return () => {
-      window.clearInterval(refreshInterval);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-
-    const channel = client
-      .channel("guidance-incoming-announcements")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "principal_announcements" }, () => void loadIncomingAnnouncements())
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ict_announcements" }, () => void loadIncomingAnnouncements())
-      .subscribe();
-
-    return () => {
-      window.clearInterval(refreshInterval);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      client.removeChannel(channel);
-    };
-  }, [loadIncomingAnnouncements]);
 
   const openNewAnnouncement = () => {
     setEditingAnnouncement(null);

@@ -63,6 +63,8 @@ export interface Report {
   ticketStatus?: "pending" | "accepted" | "rejected" | null;
   ticketRejectionReason?: string | null;
   canReply?: boolean;
+  /** Conversation data has been fetched for this report. */
+  detailsLoaded?: boolean;
 }
 
 export interface MessageAttachment {

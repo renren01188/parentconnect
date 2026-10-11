@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { sendGuidancePrincipalEscalationEmail } from "@/lib/mailer";
 import { getGuidanceSession, listMessages, toGuidanceReport, unreadGuidanceMessageIds } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -86,6 +87,11 @@ export async function PATCH(
 
       const refreshedMessages = unreadMessageIds.length > 0 ? await listMessages([reportId]) : messages;
       await logAudit({ action: "Report Viewed", performedById: guidance.id, performedBy: guidance.name, performedByRole: "Guidance Counselor", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: currentReport.status, newStatus: "ongoing", module: "Reports", details: `Opened escalated report #${reportId} for review.` });
+      await publishReportRealtimeInvalidation({
+        parentId: report.parent_id,
+        adviserId: report.adviser_id,
+        includeGuidance: true,
+      });
       return NextResponse.json({
         success: true,
         report: toGuidanceReport(report, refreshedMessages.get(reportId) ?? []),
@@ -182,6 +188,12 @@ export async function PATCH(
     }
 
     await logAudit({ action: normalized === "resolved" ? "Report Resolved" : escalatedToPrincipal ? "Escalated to Principal" : "Report Status Updated", performedById: guidance.id, performedBy: guidance.name, performedByRole: "Guidance Counselor", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: currentReport.status, newStatus: normalized, module: "Reports", details: escalatedToPrincipal ? `Escalated report #${reportId} from Guidance to the Principal.` : `Changed report #${reportId} from ${currentReport.status} to ${normalized}.` });
+
+    await publishReportRealtimeInvalidation({
+      parentId: report.parent_id,
+      adviserId: report.adviser_id,
+      includeGuidance: true,
+    });
 
     const messages = await listMessages([reportId]);
     return NextResponse.json({

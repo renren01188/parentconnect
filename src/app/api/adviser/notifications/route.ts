@@ -11,12 +11,6 @@ export async function GET() {
         }
 
         const retentionStart = notificationRetentionStart();
-        const { error: expiredReadsError } = await supabase.from("adviser_notification_reads")
-            .delete()
-            .eq("adviser_id", adviser.id)
-            .lt("read_at", retentionStart);
-        if (expiredReadsError) throw expiredReadsError;
-
         const adviserSections = adviser.sections?.length
             ? adviser.sections
             : adviser.section ? [adviser.section] : [];
@@ -104,7 +98,8 @@ export async function GET() {
             supabase
                 .from("adviser_notification_reads")
                 .select("notif_key")
-                .eq("adviser_id", adviser.id),
+                .eq("adviser_id", adviser.id)
+                .gte("read_at", retentionStart),
 
             // Principal announcements store a sender id, not a display name.
             // Resolve it server-side so the adviser modal can show both the

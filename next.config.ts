@@ -7,6 +7,11 @@ if (process.env.NODE_ENV === "production" && (!process.env.NEXTAUTH_SECRET || pr
 }
 
 const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: "images.unsplash.com", pathname: "/**" },
+    ],
+  },
   // Next.js 16 defaults to Turbopack. The empty object opts in explicitly
   // and silences the "webpack config but no turbopack config" warning.
   // Keep tracing and Turbopack inside this application when a parent folder

@@ -740,6 +740,7 @@ function ParentReportsPageContent() {
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const markingReadIds = useRef<Set<number>>(new Set());
   const pendingMessagesRef = useRef<Map<number, ChatMessage[]>>(new Map());
+  const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const messagesRef = useRef<HTMLDivElement>(null);
 
   // All categories derived from all reports (for the pill row)
@@ -775,7 +776,7 @@ function ParentReportsPageContent() {
   }, []);
 
   const loadReports = useCallback(async () => {
-    const res = await fetch("/api/reports/parent-adviser", { cache: "no-store" });
+    const res = await fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       const message = data?.message || "Unable to load reports.";
@@ -795,6 +796,29 @@ function ParentReportsPageContent() {
     setSelectedId((current) => current ?? nextReports[0]?.id ?? null);
   }, [mergePendingMessages]);
 
+  const loadReportDetail = useCallback(async (id: number) => {
+    const inFlight = detailRequestsRef.current.get(id);
+    if (inFlight) return inFlight;
+
+    const request = (async () => {
+      const res = await fetch(`/api/reports/parent-adviser?reportId=${id}`, { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+      const report = (data?.reports?.[0] ?? null) as Report | null;
+      if (!report) return;
+      const [mergedReport] = mergePendingMessages([report]);
+      setReports((current) => current.map((item) => item.id === id ? mergedReport : item));
+      setLoadError("");
+    })();
+
+    detailRequestsRef.current.set(id, request);
+    try {
+      await request;
+    } finally {
+      detailRequestsRef.current.delete(id);
+    }
+  }, [mergePendingMessages]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -803,7 +827,7 @@ function ParentReportsPageContent() {
         setLoading(true);
         setLoadError("");
         const [reportsRes, advisersRes] = await Promise.all([
-          fetch("/api/reports/parent-adviser", { cache: "no-store" }),
+          fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
           fetch("/api/reports/parent-adviser/advisers", { cache: "no-store" }),
         ]);
         const [reportsData, advisersData] = await Promise.all([
@@ -870,6 +894,9 @@ function ParentReportsPageContent() {
     setSelectedId(id);
     setReplyText("");
     setReplyAttachments([]);
+    void loadReportDetail(id).catch((error) => {
+      setLoadError(error instanceof Error ? error.message : "Unable to load this conversation.");
+    });
     const selected = reports.find(r => r.id === id);
     if (!selected?.unread || selected.reportStatus === "Resolved") return;
     markReportRead(id).catch(() => null);
@@ -894,6 +921,13 @@ function ParentReportsPageContent() {
   }, [reports, searchParams, markReportRead]);
 
   const selectedReport = reports.find(r => r.id === selectedId) ?? reports[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedReport || selectedReport.detailsLoaded) return;
+    void loadReportDetail(selectedReport.id).catch((error) => {
+      setLoadError(error instanceof Error ? error.message : "Unable to load this conversation.");
+    });
+  }, [selectedReport, loadReportDetail]);
   const requiresStudentConcernConsent = Boolean(
     selectedReport?.subject.startsWith("[Student Concern] ") &&
     selectedReport.allowHistoryAccess === null
@@ -912,9 +946,9 @@ function ParentReportsPageContent() {
 
   const filteredReports = reports.filter(r => {
     if (activeFilter === "Unread") if (!r.unread) return false;
-    if (activeFilter === "Principal") if (r.recipientRole !== "Principal" && !r.messages.some(message => message.threadType === "principal")) return false;
-    if (activeFilter === "Adviser") if (r.recipientRole !== "Class Adviser" && !r.messages.some(message => message.threadType === "adviser")) return false;
-    if (activeFilter === "Guidance") if (r.recipientRole !== "Guidance" && !r.messages.some(message => message.threadType === "guidance")) return false;
+    if (activeFilter === "Principal") if (r.recipientRole !== "Principal" && !r.threadTypes?.includes("principal") && !r.messages.some(message => message.threadType === "principal")) return false;
+    if (activeFilter === "Adviser") if (r.recipientRole !== "Class Adviser" && !r.threadTypes?.includes("adviser") && !r.messages.some(message => message.threadType === "adviser")) return false;
+    if (activeFilter === "Guidance") if (r.recipientRole !== "Guidance" && !r.threadTypes?.includes("guidance") && !r.messages.some(message => message.threadType === "guidance")) return false;
     if (categoryFilter !== "All") if (!r.categories.includes(categoryFilter)) return false;
     return true;
   });

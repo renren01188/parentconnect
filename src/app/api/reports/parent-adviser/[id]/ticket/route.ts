@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { sendNewGuidanceTicketEmail } from "@/lib/mailer";
 import { getParentSession, getReportForParent } from "../../_lib";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type Attachment = { name: string; type: string; size: number; dataUrl: string };
 
@@ -79,6 +80,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // valid if the optional realtime nudge is unavailable.
       console.error("Unable to trigger Guidance ticket realtime refresh:", reportRefreshError);
     }
+
+    await publishReportRealtimeInvalidation({
+      parentId: report.parent_id ?? parent.id,
+      adviserId: report.adviser_id,
+      includeGuidance: true,
+    });
 
     // A counselor is assigned only when the ticket is accepted, so a new
     // pending ticket is sent to every active Guidance counselor. Delivery is

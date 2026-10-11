@@ -1,6 +1,5 @@
 "use client";
 
-import ExcelJS from "exceljs";
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -189,6 +188,7 @@ function reportExportRows(items: Report[]) {
 }
 
 async function exportReportsToExcel(items: Report[], filename: string) {
+    const { default: ExcelJS } = await import("exceljs");
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "ParentConnect";
     workbook.created = new Date();
@@ -391,10 +391,12 @@ function exportReportsToPdf(items: Report[], filename: string) {
 function ExportReportsModal({
     reports,
     selectedReport,
+    loadReportsForExport,
     onClose,
 }: {
     reports: Report[];
     selectedReport: Report | null;
+    loadReportsForExport: (ids: number[]) => Promise<Report[]>;
     onClose: () => void;
 }) {
     const [format, setFormat] = useState<ExportFormat>("excel");
@@ -407,12 +409,17 @@ function ExportReportsModal({
     async function handleExport() {
         if (!canExport) return;
         setExporting(true);
-        const items = scope === "all" ? reports : selectedExportReport ? [selectedExportReport] : [];
+        const reportIds = scope === "all"
+            ? reports.map((report) => report.id)
+            : selectedExportReport ? [selectedExportReport.id] : [];
         const baseName = scope === "all"
             ? `guidance_all_concerns_${new Date().toISOString().slice(0, 10)}`
             : `guidance_concern_${safeFilePart(selectedExportReport?.subject ?? "selected")}`;
 
         try {
+            // Exporting is an explicit user action, so it is the right time
+            // to load the complete records without slowing the inbox itself.
+            const items = await loadReportsForExport(reportIds);
             if (format === "excel") await exportReportsToExcel(items, baseName);
             else exportReportsToPdf(items, baseName);
             onClose();
@@ -927,12 +934,13 @@ function ReportsPageContent() {
     const escalationInFlightRef = useRef<Set<number>>(new Set());
     const ticketLoadInFlightRef = useRef<Promise<GuidanceTicket[]> | null>(null);
     const ticketDecisionInFlightRef = useRef<Set<number>>(new Set());
+    const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
 
     // Guidance escalation local state (keyed by report id)
     const [guidanceEscalated, setGuidanceEscalated] = useState<Record<number, boolean>>({});
 
     const loadGuidanceReports = useCallback(async () => {
-        const res = await fetch("/api/reports/parent-adviser?role=guidance", { cache: "no-store" });
+        const res = await fetch("/api/reports/parent-adviser?role=guidance&summary=1", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load guidance reports.");
         const nextReports = (data?.reports ?? []) as Report[];
@@ -955,6 +963,42 @@ function ReportsPageContent() {
             if (!current) return current;
             return groupByParent(nextReports).find((group) => group.parent_name === current.parent_name) ?? current;
         });
+    }, []);
+
+    const loadReportDetail = useCallback(async (id: number) => {
+        const inFlight = reportDetailRequestsRef.current.get(id);
+        if (inFlight) return inFlight;
+
+        const request = (async () => {
+            const res = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${id}`, { cache: "no-store" });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+            const report = (data?.reports?.[0] ?? null) as Report | null;
+            if (!report) return;
+            setReports((current) => current.map((item) => item.id === id ? report : item));
+            setGuidanceReplies((current) => ({
+                ...current,
+                [id]: (report.replies ?? []).filter((reply) => reply.sender === "Guidance" || reply.sender === report.parent_name),
+            }));
+            setSelectedReport((current) => current?.id === id ? report : current);
+        })();
+
+        reportDetailRequestsRef.current.set(id, request);
+        try {
+            await request;
+        } finally {
+            reportDetailRequestsRef.current.delete(id);
+        }
+    }, []);
+
+    const loadReportsForExport = useCallback(async (ids: number[]) => {
+        const responses = await Promise.all(ids.map(async (id) => {
+            const res = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${id}`, { cache: "no-store" });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to load a report for export.");
+            return (data?.reports?.[0] ?? null) as Report | null;
+        }));
+        return responses.filter((report): report is Report => report !== null);
     }, []);
 
     async function refreshTickets(operation: TicketLoadOperation) {
@@ -1131,6 +1175,13 @@ function ReportsPageContent() {
     const selectedAdminConversationId = selectedAdminMsg?.conversationId ?? String(selectedAdminMsg?.id ?? "");
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminLastReply = selectedAdminMsg?.replies?.at(-1);
+
+    useEffect(() => {
+        if (leftTab !== "Parent" || !selectedReport || selectedReport.detailsLoaded) return;
+        void loadReportDetail(selectedReport.id).catch((error) => {
+            console.error("Unable to load guidance conversation:", error);
+        });
+    }, [leftTab, selectedReport, loadReportDetail]);
 
     function isNearBottom(element: HTMLDivElement) {
         return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
@@ -1377,6 +1428,9 @@ function ReportsPageContent() {
         setSelectedReport(r);
         forceParentScrollRef.current = true;
         parentWasNearBottomRef.current = true;
+        void loadReportDetail(r.id).catch((error) => {
+            console.error("Unable to load guidance conversation:", error);
+        });
         if (r.hasUnreadForGuidance && (r.guidanceSeen || unlockedReports.has(r.id))) {
             markGuidanceSeen(r.id).catch(() => null);
         }
@@ -2185,7 +2239,7 @@ function ReportsPageContent() {
                     </div>
                 );
             })()}
-            {showExportModal && <ExportReportsModal reports={reports} selectedReport={selectedReport} onClose={() => setShowExportModal(false)} />}
+            {showExportModal && <ExportReportsModal reports={reports} selectedReport={selectedReport} loadReportsForExport={loadReportsForExport} onClose={() => setShowExportModal(false)} />}
             {showNewMessage && (
                 <NewMessageModal
                     mode={leftTab === "Principal" ? "message" : "concern"}

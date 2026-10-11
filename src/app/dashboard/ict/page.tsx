@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState, type ElementType } from "react";
 import { Activity, AlertTriangle, ArrowRight, Bell, ClipboardList, Download, GraduationCap, Megaphone, Monitor, RefreshCw, ShieldAlert, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import IctDashboardGuide from "./components/IctDashboardGuide";
 
 type IctProfile = { name: string; employeeId: string; email: string };
@@ -98,6 +99,11 @@ export default function DashboardPage() {
     }
   }, []);
 
+  useVisibleRefresh(() => loadDashboard(true));
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "announcements") return loadDashboard(true);
+  });
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => { void loadDashboard(); }, 0);
     return () => window.clearTimeout(initialLoad);
@@ -105,15 +111,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const refresh = () => { void loadDashboard(true); };
-    const client = supabaseBrowser;
-    const channel = client?.channel("ict-dashboard-principal-announcements").on("postgres_changes", { event: "*", schema: "public", table: "principal_announcements" }, refresh).subscribe();
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("ict-profile-updated", refresh);
-    return () => { window.clearInterval(fallbackRefresh); document.removeEventListener("visibilitychange", refreshWhenVisible); window.removeEventListener("ict-profile-updated", refresh); if (channel && client) void client.removeChannel(channel); };
+    return () => { window.removeEventListener("ict-profile-updated", refresh); };
   }, [loadDashboard]);
 
   const stats = dashboard?.stats ?? EMPTY_STATS;

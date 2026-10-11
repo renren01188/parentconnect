@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidanceMessageEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import {
   getAdviserSession,
@@ -130,7 +131,8 @@ export async function POST(
       }
 
       const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
-      await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser", idempotencyKey);
+      const result = await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser", idempotencyKey);
+      if (!result.duplicate) await publishReportInvalidation(report);
       return NextResponse.json({ success: true });
     }
 
@@ -169,7 +171,7 @@ export async function POST(
       }
 
       const isFirstGuidanceReply = !report.guidance_seen_at;
-      await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
+      const result = await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
       if (isFirstGuidanceReply && report.parent_email) {
         try {
           await sendGuidanceMessageEmail({
@@ -185,6 +187,7 @@ export async function POST(
           console.error("Guidance parent email failed:", emailError);
         }
       }
+      if (!result.duplicate) await publishReportInvalidation(report);
       return NextResponse.json({ success: true });
     }
 
@@ -214,8 +217,9 @@ export async function POST(
         );
       }
 
-      await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal", idempotencyKey);
+      const result = await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal", idempotencyKey);
       // Email notifications are intentionally disabled for Principal <-> Parent conversations.
+      if (!result.duplicate) await publishReportInvalidation(report);
       return NextResponse.json({ success: true });
     }
 
@@ -240,13 +244,27 @@ export async function POST(
       threadType,
       report.escalated_to_principal ? "principal" : report.escalated_to_guidance ? "guidance" : "adviser"
     );
-    await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType, idempotencyKey);
+    const result = await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType, idempotencyKey);
     // Email notifications are intentionally disabled for Parent <-> Principal conversations.
+    if (!result.duplicate) await publishReportInvalidation(report);
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     console.error("POST /api/reports/parent-adviser/[id]/messages error:", error);
     return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
   }
+}
+
+async function publishReportInvalidation(report: {
+  parent_id?: number | null;
+  adviser_id?: number | null;
+  escalated_to_guidance?: boolean | null;
+  escalated_to_principal?: boolean | null;
+}) {
+  await publishReportRealtimeInvalidation({
+    parentId: report.parent_id,
+    adviserId: report.adviser_id,
+    includeGuidance: Boolean(report.escalated_to_guidance),
+  });
 }
 
 async function insertMessage(

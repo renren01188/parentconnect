@@ -226,7 +226,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
         const refreshWhenVisible = () => {
             if (document.visibilityState === "visible") void fetchLetters();
         };
-        const refreshTimer = window.setInterval(refreshWhenVisible, 60_000);
+        const refreshTimer = window.setInterval(refreshWhenVisible, 300_000);
         document.addEventListener("visibilitychange", refreshWhenVisible);
         return () => {
             window.clearInterval(refreshTimer);

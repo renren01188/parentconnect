@@ -1,6 +1,5 @@
 "use client";
 
-import ExcelJS from "exceljs";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -419,6 +418,7 @@ function monitoringExportRows(items: MonitoringEntry[]) {
 }
 
 async function exportMonitoringToExcel(items: MonitoringEntry[]) {
+  const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ParentConnect";
   workbook.created = new Date();
@@ -1149,6 +1149,7 @@ function PrincipalReportsPageContent() {
   const [parentRecipients, setParentRecipients] = useState<ParentRecipient[]>([]);
   const [loadingReports, setLoadingReports] = useState(true);
   const statusOverridesRef = useRef<Record<number, { status: ReportStatus; at: number }>>({});
+  const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
   const [replyText, setReplyText] = useState("");
@@ -1221,7 +1222,7 @@ function PrincipalReportsPageContent() {
 
   const loadPrincipalReports = useCallback(async () => {
     const [parentRes, studentRes] = await Promise.all([
-      fetch("/api/reports/parent-adviser?role=principal", { cache: "no-store" }),
+      fetch("/api/reports/parent-adviser?role=principal&summary=1", { cache: "no-store" }),
       fetch("/api/student-reports?role=principal", { cache: "no-store" }),
     ]);
     const [parentData, studentData] = await Promise.all([
@@ -1259,6 +1260,32 @@ function PrincipalReportsPageContent() {
       console.warn("Student reports are temporarily unavailable:", studentData?.message || studentRes.statusText);
     } else {
       setStudentReports((studentData?.reports ?? []) as PrincipalStudentReport[]);
+    }
+  }, []);
+
+  const loadReportDetail = useCallback(async (id: number) => {
+    const inFlight = reportDetailRequestsRef.current.get(id);
+    if (inFlight) return inFlight;
+
+    const request = (async () => {
+      const res = await fetch(`/api/reports/parent-adviser?role=principal&reportId=${id}`, { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+      const report = (data?.reports?.[0] ?? null) as Report | null;
+      if (!report) return;
+      setReports((current) => current.map((item) => item.id === id ? report : item));
+      setPrincipalReplies((current) => ({
+        ...current,
+        [id]: (report.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
+      }));
+      setSelectedReport((current) => current?.id === id ? report : current);
+    })();
+
+    reportDetailRequestsRef.current.set(id, request);
+    try {
+      await request;
+    } finally {
+      reportDetailRequestsRef.current.delete(id);
     }
   }, []);
 
@@ -1309,6 +1336,13 @@ function PrincipalReportsPageContent() {
   // only after Guidance persists escalated_to_principal, rather than relying
   // on the generic report status from an Adviser-to-Guidance handoff.
   const liveUpdateNotice = useReportMessagesRealtime("principal-reports-live-list", loadPrincipalReports);
+
+  useEffect(() => {
+    if (!selectedReport || selectedReport.detailsLoaded) return;
+    void loadReportDetail(selectedReport.id).catch((error) => {
+      setReplyError(error instanceof Error ? error.message : "Unable to load this conversation.");
+    });
+  }, [selectedReport, loadReportDetail]);
 
   useEffect(() => {
     if (!Number.isSafeInteger(requestedReportId) || openedNotificationReportRef.current === requestedReportId) return;
@@ -1430,6 +1464,9 @@ function PrincipalReportsPageContent() {
     setReplyAttachments([]);
     setReplyError(null);
     setViewStep("detail");
+    void loadReportDetail(report.id).catch((error) => {
+      setReplyError(error instanceof Error ? error.message : "Unable to load this conversation.");
+    });
     if (isPrincipalReportUnread(report)) markReportStatus(report.id, "Read").catch(() => null);
   }
 

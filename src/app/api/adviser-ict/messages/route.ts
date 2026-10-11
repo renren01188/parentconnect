@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { idempotencyKeyFrom, isUniqueViolation } from "@/lib/serverIdempotency";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type Role = "adviser" | "ict";
 type Session = {
@@ -227,11 +228,23 @@ async function findRecipient(session: Session, recipientId: string) {
   return recipients.find((recipient) => recipient.id === `${type}:${id}`) ?? null;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const session = await currentSession();
     if (!session) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+    }
+
+    if (req.nextUrl.searchParams.get("summary") === "1") {
+      const { count, error } = await supabase
+        .from("staff_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("sender_type", otherRole(session.type))
+        .eq("recipient_type", session.type)
+        .eq("recipient_id", session.id)
+        .eq("status", "unread");
+      if (error) throw error;
+      return NextResponse.json({ success: true, unreadCount: count ?? 0 });
     }
 
     const [recipients, messagesResult] = await Promise.all([
@@ -384,6 +397,11 @@ export async function POST(req: NextRequest) {
       if (isUniqueViolation(error)) return NextResponse.json({ success: true, idempotent: true }, { status: 200 });
       throw error;
     }
+
+    await publishRealtimeInvalidation([
+      { role: session.type, id: session.id },
+      { role: recipientType, id: Number(rawRecipientId) },
+    ], "staff-messages");
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (error) {

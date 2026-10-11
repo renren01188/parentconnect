@@ -80,6 +80,10 @@ export interface Report {
   ticketId?: number | null;
   ticketStatus?: "pending" | "accepted" | "rejected" | null;
   ticketRejectionReason?: string | null;
+  /** Conversation data has been fetched for this report. */
+  detailsLoaded?: boolean;
+  /** Used by list filters before the complete message history is downloaded. */
+  threadTypes?: ("adviser" | "guidance" | "principal")[];
 }
 
 export const INITIAL_REPORTS: Report[] = [

@@ -12,7 +12,8 @@ import {
   Filter,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 type GuidanceNotification = {
   id: string;
@@ -119,18 +120,14 @@ export default function GuidanceNotificationsPage() {
     })
     .finally(() => setLoading(false)), [setNotifUnreadCount]);
 
+  useVisibleRefresh(loadNotifications);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "reports" || scope === "notifications") return loadNotifications();
+  });
+
   useEffect(() => {
     void loadNotifications();
 
-    const client = supabaseBrowser;
-    if (!client) return;
-    const channel = client
-      .channel("guidance-notification-feed")
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => void loadNotifications())
-      .on("postgres_changes", { event: "*", schema: "public", table: "guidance_notification_reads" }, () => void loadNotifications())
-      .subscribe();
-
-    return () => { void client.removeChannel(channel); };
   }, [loadNotifications]);
 
   const unread = notifications.filter((notification) => !notification.read).length;

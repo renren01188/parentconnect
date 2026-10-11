@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useState, useEffect } from "react";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import PrincipalAttendanceSummaryGuide from "../components/PrincipalAttendanceSummaryGuide";
 
 
@@ -155,11 +155,13 @@ function downloadArrayBuffer(buffer: ArrayBuffer, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-async function loadTemplateWorkbook(): Promise<ExcelJS.Workbook> {
+type ExcelJSRuntime = { Workbook: new () => ExcelJS.Workbook };
+
+async function loadTemplateWorkbook(exceljs: ExcelJSRuntime): Promise<ExcelJS.Workbook> {
   const templateResp = await fetch("/SF2_2025_newtemplate.xlsx");
   if (!templateResp.ok) throw new Error("Failed to load SF2 template workbook.");
   const templateBuf = await templateResp.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
+  const workbook = new exceljs.Workbook();
   await workbook.xlsx.load(templateBuf);
   return workbook;
 }
@@ -547,7 +549,8 @@ async function exportSF2(
   holidayDates: string[] = [],
   schoolDayDates: string[] = [],
 ) {
-  const workbook = await loadTemplateWorkbook();
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = await loadTemplateWorkbook(ExcelJS);
   const worksheet = getTemplateWorksheet(workbook);
   populateSF2Worksheet(workbook, worksheet, section, gradeLabel, month, year, holidayDates, schoolDayDates);
   const out = await workbook.xlsx.writeBuffer();
@@ -561,7 +564,8 @@ async function exportGradeSF2(
   holidayDates: string[] = [],
   schoolDayDates: string[] = [],
 ) {
-  const templateWorkbook = await loadTemplateWorkbook();
+  const { default: ExcelJS } = await import("exceljs");
+  const templateWorkbook = await loadTemplateWorkbook(ExcelJS);
   const templateSheet = getTemplateWorksheet(templateWorkbook);
   const outputWorkbook = new ExcelJS.Workbook();
   outputWorkbook.creator = "Principal Dashboard";

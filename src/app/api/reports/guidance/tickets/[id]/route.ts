@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceSession } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -21,7 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (ticket.status !== "pending") return NextResponse.json({ success: false, message: "This ticket has already been decided." }, { status: 409 });
     const { data: report, error: reportLookupError } = await supabase
       .from("parent_adviser_reports")
-      .select("id, status")
+      .select("id, status, parent_id, adviser_id")
       .eq("id", ticket.report_id)
       .maybeSingle();
     if (reportLookupError) throw reportLookupError;
@@ -57,6 +58,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (reportRefreshError) throw reportRefreshError;
     }
     await logAudit({ action: nextStatus === "accepted" ? "Ticket Accepted" : "Ticket Rejected", performedById: guidance.id, performedBy: guidance.name, performedByRole: "Guidance Counselor", targetUser: `Ticket #${ticketId}`, targetRole: "Guidance Ticket", targetType: "Guidance Ticket", targetId: ticketId, relatedTicketId: ticketId, relatedReportId: ticket.report_id, previousStatus: ticket.status, newStatus: nextStatus, module: "Guidance Tickets", details: nextStatus === "rejected" ? `Rejected ticket #${ticketId}: ${reason}` : `Accepted ticket #${ticketId} for report #${ticket.report_id}.` });
+    await publishReportRealtimeInvalidation({
+      parentId: report.parent_id,
+      adviserId: report.adviser_id,
+      includeGuidance: true,
+    });
     return NextResponse.json({ success: true, ticketId, reportId: ticket.report_id, status: nextStatus });
   } catch (error) {
     console.error("PATCH /api/reports/guidance/tickets/[id] error:", error);

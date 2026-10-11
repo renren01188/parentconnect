@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import { sendParentReportAdviserEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
   getAdviserSession,
   getGuidanceSession,
@@ -10,11 +11,16 @@ import {
   getParentSession,
   getPrincipalSession,
   listGuidanceTickets,
+  listMessageSummaries,
   listMessages,
   toAdviserReport,
+  toAdviserReportSummary,
   toGuidanceReport,
+  toGuidanceReportSummary,
   toParentReport,
+  toParentReportSummary,
   toPrincipalReport,
+  toPrincipalReportSummary,
   type ReportRow,
 } from "./_lib";
 
@@ -167,6 +173,9 @@ export async function GET(req: NextRequest) {
     const reportId = Number.isSafeInteger(requestedReportId) && requestedReportId > 0
       ? requestedReportId
       : null;
+    // A list request returns only information needed to render cards and
+    // badges. Supplying reportId always returns the complete conversation.
+    const summary = req.nextUrl.searchParams.get("summary") === "1" && !reportId;
 
     if (role === "adviser") {
       const adviser = await getAdviserSession();
@@ -185,10 +194,15 @@ export async function GET(req: NextRequest) {
       if (error) throw error;
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
+      const [messages, tickets] = await Promise.all([
+        (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
+        listGuidanceTickets(rows.map((row) => row.id), !summary),
+      ]);
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toAdviserReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
+        reports: rows.map((row) => summary
+          ? toAdviserReportSummary(row, messages.get(row.id) ?? [], tickets.get(row.id))
+          : { ...toAdviserReport(row, messages.get(row.id) ?? [], tickets.get(row.id)), detailsLoaded: true }),
       });
     }
 
@@ -212,20 +226,30 @@ export async function GET(req: NextRequest) {
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
       const [messages, tickets, principalReadsResult] = await Promise.all([
-        listMessages(rows.map((row) => row.id)),
-        listGuidanceTickets(rows.map((row) => row.id)),
+        (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
+        listGuidanceTickets(rows.map((row) => row.id), !summary),
         supabase.from("principal_notification_reads").select("notif_key").eq("principal_id", principal.id),
       ]);
       if (principalReadsResult.error) throw principalReadsResult.error;
       const principalReadKeys = new Set((principalReadsResult.data ?? []).map((read) => read.notif_key));
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toPrincipalReport(
-          row,
-          messages.get(row.id) ?? [],
-          tickets.get(row.id),
-          principalReadKeys.has(principalReportReadKey(row.id)),
-        )),
+        reports: rows.map((row) => summary
+          ? toPrincipalReportSummary(
+            row,
+            messages.get(row.id) ?? [],
+            tickets.get(row.id),
+            principalReadKeys.has(principalReportReadKey(row.id)),
+          )
+          : {
+            ...toPrincipalReport(
+              row,
+              messages.get(row.id) ?? [],
+              tickets.get(row.id),
+              principalReadKeys.has(principalReportReadKey(row.id)),
+            ),
+            detailsLoaded: true,
+          }),
       });
     }
 
@@ -246,10 +270,15 @@ export async function GET(req: NextRequest) {
       if (error) throw error;
 
       const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
+      const [messages, tickets] = await Promise.all([
+        (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
+        listGuidanceTickets(rows.map((row) => row.id), !summary),
+      ]);
       return NextResponse.json({
         success: true,
-        reports: rows.map((row) => toGuidanceReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
+        reports: rows.map((row) => summary
+          ? toGuidanceReportSummary(row, messages.get(row.id) ?? [], tickets.get(row.id))
+          : { ...toGuidanceReport(row, messages.get(row.id) ?? [], tickets.get(row.id)), detailsLoaded: true }),
       });
     }
 
@@ -275,10 +304,15 @@ export async function GET(req: NextRequest) {
     if (error) throw error;
 
     const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-    const [messages, tickets] = await Promise.all([listMessages(rows.map((row) => row.id)), listGuidanceTickets(rows.map((row) => row.id))]);
+    const [messages, tickets] = await Promise.all([
+      (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
+      listGuidanceTickets(rows.map((row) => row.id), !summary),
+    ]);
     return NextResponse.json({
       success: true,
-      reports: rows.map((row) => toParentReport(row, messages.get(row.id) ?? [], tickets.get(row.id))),
+      reports: rows.map((row) => summary
+        ? toParentReportSummary(row, messages.get(row.id) ?? [], tickets.get(row.id))
+        : { ...toParentReport(row, messages.get(row.id) ?? [], tickets.get(row.id)), detailsLoaded: true }),
     });
   } catch (error: unknown) {
     console.error("GET /api/reports/parent-adviser error:", error);
@@ -515,6 +549,8 @@ export async function POST(req: NextRequest) {
       details:         `Parent submitted a report: "${trimmedSubject}" (${categories.join(", ")}).`,
       module:          "Reports",
     });
+
+    await publishReportRealtimeInvalidation({ parentId: parent.id, adviserId: adviser.id });
 
     const messages = await listMessages([report.id]);
     return NextResponse.json({

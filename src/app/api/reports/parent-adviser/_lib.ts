@@ -21,6 +21,18 @@ const MESSAGE_SELECT = [
   "read_by_parent",
   "read_by_adviser",
 ].join(", ");
+// Inbox/list queries need enough metadata to calculate unread state and the
+// active thread, but must not download every body or attachment data URL.
+const MESSAGE_SUMMARY_SELECT = [
+  "id",
+  "report_id",
+  "sender_role",
+  "sender_name",
+  "thread_type",
+  "created_at",
+  "read_by_parent",
+  "read_by_adviser",
+].join(", ");
 const MESSAGE_REPORT_ID_CHUNK_SIZE = 25;
 
 export type ReportRow = {
@@ -54,7 +66,7 @@ export type MessageRow = {
   report_id: number;
   sender_role: "parent" | "adviser" | "principal" | "guidance" | "subject_teacher";
   sender_name: string;
-  body: string;
+  body?: string;
   thread_type?: "adviser" | "guidance" | "principal" | null;
   attachments?: MessageAttachment[] | null;
   created_at: string;
@@ -267,7 +279,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
         sender: isStaffMessage ? "staff" : "parent",
         senderName: isStaffMessage ? msg.sender_name || recipientName : "You",
         timestamp: formatDate(msg.created_at),
-        text: msg.body,
+        text: msg.body ?? "",
         threadType: messageThreadType(row, messages, msg),
         attachments: attachmentsFromRow(msg.attachments),
       };
@@ -283,6 +295,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     ticketId: ticket?.id ?? null,
     ticketStatus: ticket?.status ?? null,
     ticketRejectionReason: ticket?.rejection_reason ?? null,
+    threadTypes: [...new Set(messages.map((message) => messageThreadType(row, messages, message)))],
   };
 }
 
@@ -322,7 +335,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
   void legacyAdviserThreadMessages;
   const replies = adviserMessages.map((msg) => ({
     sender: msg.sender_role === "adviser" ? "Adviser" : msg.sender_role === "principal" ? "Principal" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
-    message: msg.body,
+    message: msg.body ?? "",
     sent_at: formatDate(msg.created_at),
     attachments: attachmentsFromRow(msg.attachments),
   }));
@@ -446,7 +459,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     hasUnreadForGuidance,
     replies: threadMessages.map((msg) => ({
       sender: msg.sender_role === "guidance" ? "Guidance" : row.parent_name,
-      message: msg.body,
+      message: msg.body ?? "",
       sent_at: formatDate(msg.created_at),
       attachments: attachmentsFromRow(msg.attachments),
     })),
@@ -499,22 +512,24 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
       sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : row.parent_name,
       senderName: msg.sender_role === "parent" ? row.parent_name : (msg.sender_name || "Staff Member"),
       senderRole: msg.sender_role,
-      message: msg.body,
+      message: msg.body ?? "",
       sent_at: formatDate(msg.created_at),
       attachments: attachmentsFromRow(msg.attachments),
     })),
   };
 }
 
-export async function listGuidanceTickets(reportIds: number[]) {
+export async function listGuidanceTickets(reportIds: number[], includeAttachments = true) {
   const ids = [...new Set(reportIds.filter((id) => Number.isFinite(id)))];
   if (!ids.length) return new Map<number, GuidanceTicketRow>();
   const { data, error } = await supabase
     .from("parent_report_guidance_tickets")
-    .select("id, report_id, parent_id, student_id, adviser_id, concern, message, attachments, status, rejection_reason, assigned_guidance_id, created_at, decided_at")
+    .select(includeAttachments
+      ? "id, report_id, parent_id, student_id, adviser_id, concern, message, attachments, status, rejection_reason, assigned_guidance_id, created_at, decided_at"
+      : "id, report_id, status, rejection_reason, decided_at")
     .in("report_id", ids);
   if (error) throw error;
-  return new Map(((data ?? []) as GuidanceTicketRow[]).map((ticket) => [ticket.report_id, ticket]));
+  return new Map(((data ?? []) as unknown as GuidanceTicketRow[]).map((ticket) => [ticket.report_id, ticket]));
 }
 
 export function initials(name: string) {
@@ -535,22 +550,37 @@ function categoryForAdviser(category?: string) {
 }
 
 export async function listMessages(reportIds: number[]) {
+  return listMessagesWithSelect(reportIds, MESSAGE_SELECT);
+}
+
+/** Lightweight metadata used by the report inbox. Full messages and
+ * attachment data are loaded only after a report is opened. */
+export async function listMessageSummaries(reportIds: number[]) {
+  return listMessagesWithSelect(reportIds, MESSAGE_SUMMARY_SELECT);
+}
+
+async function listMessagesWithSelect(reportIds: number[], select: string) {
   const uniqueReportIds = [...new Set(reportIds.filter((id) => Number.isFinite(id)))];
   if (uniqueReportIds.length === 0) return new Map<number, MessageRow[]>();
 
-  const rows: MessageRow[] = [];
+  const chunks: number[][] = [];
   for (let index = 0; index < uniqueReportIds.length; index += MESSAGE_REPORT_ID_CHUNK_SIZE) {
-    const chunk = uniqueReportIds.slice(index, index + MESSAGE_REPORT_ID_CHUNK_SIZE);
+    chunks.push(uniqueReportIds.slice(index, index + MESSAGE_REPORT_ID_CHUNK_SIZE));
+  }
+
+  // The chunks are independent. Running them concurrently avoids making a
+  // large report inbox wait for one database round trip per 25 reports.
+  const rows = (await Promise.all(chunks.map(async (chunk) => {
     const { data, error } = await supabase
       .from("parent_adviser_report_messages")
-      .select(MESSAGE_SELECT)
+      .select(select)
       .in("report_id", chunk)
       .order("report_id", { ascending: true })
       .order("created_at", { ascending: true });
 
     if (error) throw error;
-    rows.push(...((data ?? []) as unknown as MessageRow[]));
-  }
+    return (data ?? []) as unknown as MessageRow[];
+  }))).flat();
 
   const map = new Map<number, MessageRow[]>();
   for (const msg of rows) {
@@ -559,6 +589,33 @@ export async function listMessages(reportIds: number[]) {
     map.set(msg.report_id, current);
   }
   return map;
+}
+
+/** Summary mappers intentionally omit conversation contents. They retain all
+ * fields that drive list filters, badges, statuses, and escalation controls. */
+export function toParentReportSummary(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
+  const report = toParentReport(row, messages, ticket);
+  return {
+    ...report,
+    preview: report.preview || "Open this report to view the latest update.",
+    messages: [],
+    detailsLoaded: false,
+  };
+}
+
+export function toAdviserReportSummary(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
+  const report = toAdviserReport(row, messages, ticket);
+  return { ...report, message: "", attachments: [], replies: [], detailsLoaded: false };
+}
+
+export function toGuidanceReportSummary(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
+  const report = toGuidanceReport(row, messages, ticket);
+  return { ...report, message: "", attachments: [], replies: [], detailsLoaded: false };
+}
+
+export function toPrincipalReportSummary(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null, principalHasRead = false) {
+  const report = toPrincipalReport(row, messages, ticket, principalHasRead);
+  return { ...report, message: "", attachments: [], replies: [], detailsLoaded: false };
 }
 
 export async function getAdviserSession() {

@@ -2,9 +2,10 @@
 
 // src/app/dashboard/adviser/context/NotificationContext.tsx
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 
 interface NotifContextType {
@@ -38,9 +39,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
+  const hasLoadedInitialCounts = useRef(false);
 
   useEffect(() => {
+    // Each count has its own single-flight guard. A report save can update the
+    // report page, sidebar, and an open notifications page at nearly the same
+    // time; one API read per count is enough for that burst.
+    let reportCountRequest: Promise<void> | null = null;
+    let ictCountRequest: Promise<void> | null = null;
+    let notificationCountRequest: Promise<void> | null = null;
+
     async function loadReportCount() {
+      if (reportCountRequest) return reportCountRequest;
+      reportCountRequest = (async () => {
       try {
         const [parentReportsRes, studentReportsRes, principalMessagesRes] = await Promise.all([
           fetch("/api/reports/parent-adviser?role=adviser", { cache: "no-store" }),
@@ -82,74 +93,113 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         setUnreadCount(actionableParentReports + actionableStudentReports + actionablePrincipalMessages);
       } catch {
         setUnreadCount(0);
+      } finally {
+        reportCountRequest = null;
       }
+      })();
+      return reportCountRequest;
     }
 
     async function loadIctCount() {
+      if (ictCountRequest) return ictCountRequest;
+      ictCountRequest = (async () => {
       try {
-        const { response: res, data } = await fetchJsonWithRetry<IctMessagesResponse>("/api/adviser-ict/messages", { cache: "no-store" });
+        const { response: res, data } = await fetchJsonWithRetry<IctMessagesResponse>("/api/adviser-ict/messages?summary=1", { cache: "no-store" });
         if (res.ok) setIctUnreadCount(Number(data?.unreadCount ?? 0));
       } catch {
         // Retain the last confirmed count while a temporary request is retried.
+      } finally {
+        ictCountRequest = null;
       }
+      })();
+      return ictCountRequest;
     }
 
     async function loadNotifCount() {
+      if (notificationCountRequest) return notificationCountRequest;
+      notificationCountRequest = (async () => {
       try {
         const { response: res, data } = await fetchJsonWithRetry<AdviserNotificationsResponse>("/api/adviser/notifications", { cache: "no-store" });
         if (res.ok) setNotifUnreadCount(Number(data?.sidebarUnreadCount ?? data?.unreadCount ?? 0));
       } catch {
         // Retain the last confirmed count while a temporary request is retried.
+      } finally {
+        notificationCountRequest = null;
       }
+      })();
+      return notificationCountRequest;
     }
 
-    loadReportCount();
-    loadIctCount();
-    loadNotifCount();
+    const refreshAllCounts = () => Promise.all([loadReportCount(), loadIctCount(), loadNotifCount()]);
+    // React Strict Mode deliberately runs effects twice in local development.
+    // Do not turn that development-only check into a duplicate five-request
+    // sidebar burst. A real remount gets a new provider/ref and still loads.
+    if (!hasLoadedInitialCounts.current) {
+      hasLoadedInitialCounts.current = true;
+      void refreshAllCounts();
+    }
 
+    // API routes enforce the custom cookie session. Refresh only while this
+    // dashboard is visible so badges stay reliable if a browser cannot read a
+    // Supabase Realtime database event.
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshAllCounts();
+      window.dispatchEvent(new Event("adviser-notifications-changed"));
+    };
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, 300_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
 
     const client = supabaseBrowser;
-    if (!client) return;
+    if (!client) {
+      return () => {
+        window.clearInterval(fallbackRefresh);
+        document.removeEventListener("visibilitychange", refreshWhenVisible);
+        window.removeEventListener("focus", refreshWhenVisible);
+      };
+    }
 
-    // Notification data is refreshed only in response to a database change that
-    // can create or change an adviser notification.  Do not poll this endpoint:
-    // polling made the notifications page request and re-render even when there
-    // was nothing new to show.
+    // Server-side invalidations are the only realtime source here. Keeping the
+    // old postgres_changes subscription as well caused duplicate refresh bursts
+    // for the same update, and it was not authorized by the custom session.
     const notifyNotificationChange = () => {
-      loadNotifCount();
+      void loadNotifCount();
       window.dispatchEvent(new Event("adviser-notifications-changed"));
     };
 
-    const channel = client
-      .channel("adviser-sidebar-report-count")
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-        loadReportCount();
+    let disposed = false;
+    let sessionChannel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
+    void subscribeRealtimeInvalidations(client, ({ scope }) => {
+      if (scope === "staff-messages") {
+        void loadIctCount();
+        return;
+      }
+      if (scope === "reports") {
+        void loadReportCount();
         notifyNotificationChange();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
-        loadReportCount();
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "attendance_logs" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_reports" }, () => {
-        loadReportCount();
+        return;
+      }
+      if (scope === "notifications" || scope === "announcements") {
         notifyNotificationChange();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "adviser_notification_reads" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "*", schema: "public", table: "advisers" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "*", schema: "public", table: "principal_staff_messages" }, () => {
-        loadReportCount();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        loadIctCount();
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "adviser_announcements" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "guidance_announcements" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "principal_announcements" }, notifyNotificationChange)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ict_announcements" }, notifyNotificationChange)
-      .subscribe();
+        return;
+      }
+      void refreshAllCounts();
+      window.dispatchEvent(new Event("adviser-notifications-changed"));
+    }).then((connectedChannel) => {
+      if (disposed) {
+        if (connectedChannel) void client.removeChannel(connectedChannel);
+        return;
+      }
+      sessionChannel = connectedChannel;
+    });
 
     return () => {
-      client.removeChannel(channel);
+      disposed = true;
+      window.clearInterval(fallbackRefresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+      if (sessionChannel) void client.removeChannel(sessionChannel);
     };
   }, []);
 

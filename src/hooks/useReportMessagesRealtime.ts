@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
 
 type RefreshReports = () => void | Promise<void>;
 
@@ -64,17 +65,23 @@ export function useReportMessagesRealtime(channelName: string, refreshReports: R
       }, 75);
     };
 
-    const channel = client
-      .channel(channelName)
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, scheduleRefresh)
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, scheduleRefresh)
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") setLiveUpdateNotice(null);
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
-          scheduleRefresh();
-        }
-      });
+    let channel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
+    void subscribeRealtimeInvalidations(client, scheduleRefresh, (status) => {
+      if (status === "SUBSCRIBED") setLiveUpdateNotice(null);
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
+        scheduleRefresh();
+      }
+    }).then((connectedChannel) => {
+      if (disposed) {
+        if (connectedChannel) void client.removeChannel(connectedChannel);
+        return;
+      }
+      channel = connectedChannel;
+      if (!channel) {
+        setLiveUpdateNotice("Updates will refresh automatically. Existing reports remain available.");
+      }
+    });
 
     // Realtime is the normal update path. A quiet, visibility-aware fallback
     // protects users whose browser/network drops the websocket without making
@@ -82,14 +89,14 @@ export function useReportMessagesRealtime(channelName: string, refreshReports: R
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const fallbackTimer = window.setInterval(refreshWhenVisible, 60_000);
+    const fallbackTimer = window.setInterval(refreshWhenVisible, 300_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       disposed = true;
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       window.clearInterval(fallbackTimer);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
-      void client.removeChannel(channel);
+      if (channel) void client.removeChannel(channel);
     };
   }, [channelName]);
 

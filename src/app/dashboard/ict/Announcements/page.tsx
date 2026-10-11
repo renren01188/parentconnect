@@ -3,7 +3,8 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
 import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, UserRound } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 type Tab = "principal" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -140,27 +141,13 @@ export default function ICTAnnouncementsPage() {
     }
   }, []);
 
+  useVisibleRefresh(loadAnnouncements);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "announcements") return loadAnnouncements();
+  });
+
   useEffect(() => {
     loadAnnouncements();
-  }, [loadAnnouncements]);
-
-  useEffect(() => {
-    const client = supabaseBrowser;
-    if (!client) return;
-
-    const channel = client
-      .channel("ict-announcements-status")
-      .on("postgres_changes",
-        { event: "*", schema: "public", table: "ict_announcements" },
-        () => { loadAnnouncements(); }
-      )
-      .on("postgres_changes",
-        { event: "*", schema: "public", table: "principal_announcements" },
-        () => { loadAnnouncements(); }
-      )
-      .subscribe();
-
-    return () => { client.removeChannel(channel); };
   }, [loadAnnouncements]);
 
   const isFormReady = Boolean(form.title.trim() && form.body.trim() && form.audience);

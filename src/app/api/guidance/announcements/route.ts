@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
 import { sendGuidanceAnnouncementEmail } from "@/lib/mailer";
+import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 
 // ── GET — fetch all announcements by this guidance counselor ──────────────────
 export async function GET() {
@@ -64,6 +65,13 @@ export async function POST(req: NextRequest) {
     // ── If Published immediately, notify recipients ────────────────────────
     if (status === "Published") {
       await notifyRecipients(ann, audience);
+
+      const recipientRoles: RealtimeRecipientRole[] = ["principal"];
+      if (audience === "Parents" || audience === "Both") recipientRoles.push("parent");
+      if (audience === "Class Advisers" || audience === "Both") recipientRoles.push("adviser");
+      const recipients = await recipientsForRoles(recipientRoles);
+      recipients.push({ role: "guidance", id: Number(guidance.id) });
+      await publishRealtimeInvalidation(recipients, "announcements");
     }
 
     return NextResponse.json({ success: true, announcement: ann });

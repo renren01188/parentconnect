@@ -4,6 +4,7 @@ import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendGuidanceMessageEmail, sendStaffMessageEmail } from "@/lib/mailer";
+import { publishRealtimeInvalidation, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
   getGuidanceSession,
   getPrincipalSession,
@@ -362,6 +363,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    await publishRealtimeInvalidation([
+      { role: current.type, id: current.id },
+      { role: recipientType, id: Number(rawRecipientId) },
+    ], "staff-messages");
+
     return NextResponse.json({ success: true, message: createdMessage }, { status: 201 });
   } catch (error: unknown) {
     console.error("POST /api/reports/staff-messages error:", error);
@@ -433,6 +439,10 @@ export async function PATCH(req: NextRequest) {
       if (error) throw error;
       // Email notifications are intentionally disabled for replies.
       // Only new conversations (POST) trigger an email notification.
+      await publishRealtimeInvalidation([
+        { role: current.type, id: current.id },
+        { role: recipientType as StaffRole, id: recipientId },
+      ], "staff-messages");
       return NextResponse.json({ success: true, message: createdMessage });
     } else {
       const now = new Date().toISOString();
@@ -543,5 +553,6 @@ async function sendGuidanceToParent({
   });
 
   const messages = await listMessages([report.id]);
+  await publishReportRealtimeInvalidation({ parentId: Number(parent.id), includeGuidance: true });
   return NextResponse.json({ success: true, report: toParentReport(report, messages.get(report.id) ?? []) }, { status: 201 });
 }

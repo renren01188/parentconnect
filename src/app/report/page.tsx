@@ -1,5 +1,6 @@
 "use client";
 
+import { SchoolBackground } from "@/components/SchoolBackground";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
 import Link from "next/link";
@@ -316,8 +317,7 @@ export default function ReportPage() {
 
       {/* Hero Header */}
       <header className="relative w-full min-h-[250px] overflow-hidden sm:h-48 sm:min-h-0">
-        <div className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')` }} />
+        <SchoolBackground />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
         <div className="relative z-10 flex flex-col items-center justify-center gap-3 px-4 py-5 pb-10 text-center sm:h-full sm:flex-row sm:justify-between sm:px-8 sm:py-0 sm:pb-0 sm:text-left">
           <div className="max-w-xl">

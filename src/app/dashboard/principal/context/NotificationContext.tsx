@@ -1,12 +1,15 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 type PrincipalConversationSummary = {
   status?: string;
 };
+type PrincipalMessagesResponse = { inbox?: PrincipalConversationSummary[] };
+type IctMessagesResponse = { unreadCount?: number };
+type PrincipalNotificationsResponse = { reportUnreadCount?: number; unreadCount?: number };
 
 interface NotifContextType {
   unreadCount: number;
@@ -41,30 +44,42 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [principalNotifCount, setPrincipalNotifCount] = useState(0);
   const unreadCount = reportCount + adviserMessageCount + ictMessageCount;
 
-  const refreshCounts = useCallback(async () => {
-    const [messagesResult, ictResult, notifResult] = await Promise.all([
-      fetchJsonWithRetry<any>("/api/reports/principal-messages", { cache: "no-store" }),
-      fetchJsonWithRetry<any>("/api/principal-ict/messages", { cache: "no-store" }),
-      fetchJsonWithRetry<any>("/api/principal/notifications", { cache: "no-store" }),
-    ]);
-    const { response: messagesRes, data: messagesData } = messagesResult;
-    const { response: ictRes, data: ictData } = ictResult;
-    const { response: notifRes, data: notifData } = notifResult;
-
-    if (messagesRes.ok) {
-      const conversations = (messagesData?.inbox ?? []) as PrincipalConversationSummary[];
+  const refreshAdviserMessages = useCallback(async () => {
+    const { response, data } = await fetchJsonWithRetry<PrincipalMessagesResponse>("/api/reports/principal-messages", { cache: "no-store" });
+    if (response.ok) {
+      const conversations = (data?.inbox ?? []) as PrincipalConversationSummary[];
       setAdviserMessageCount(conversations.filter((conversation) => conversation.status === "Unread").length);
     }
+  }, []);
 
-    if (ictRes.ok) {
-      setIctMessageCount(Number(ictData?.unreadCount ?? 0));
-    }
-
-    if (notifRes.ok) {
-      setReportCount(Number(notifData?.reportUnreadCount ?? 0));
-      setPrincipalNotifCount(Number(notifData?.unreadCount ?? 0));
+  const refreshIctMessages = useCallback(async () => {
+    const { response, data } = await fetchJsonWithRetry<IctMessagesResponse>("/api/principal-ict/messages?summary=1", { cache: "no-store" });
+    if (response.ok) {
+      setIctMessageCount(Number(data?.unreadCount ?? 0));
     }
   }, []);
+
+  const refreshNotifications = useCallback(async () => {
+    const { response, data } = await fetchJsonWithRetry<PrincipalNotificationsResponse>("/api/principal/notifications", { cache: "no-store" });
+    if (response.ok) {
+      setReportCount(Number(data?.reportUnreadCount ?? 0));
+      setPrincipalNotifCount(Number(data?.unreadCount ?? 0));
+    }
+  }, []);
+
+  const refreshCounts = useCallback(async () => {
+    await Promise.all([refreshAdviserMessages(), refreshIctMessages(), refreshNotifications()]);
+  }, [refreshAdviserMessages, refreshIctMessages, refreshNotifications]);
+
+  useSessionInvalidation(({ scope }) => {
+    if (scope === "reports" || scope === "notifications" || scope === "announcements") {
+      return refreshNotifications();
+    }
+    if (scope === "staff-messages") {
+      return Promise.all([refreshAdviserMessages(), refreshIctMessages()]).then(() => undefined);
+    }
+    return refreshCounts();
+  });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -74,45 +89,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") refreshCounts().catch(() => null);
     };
-    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    const refreshInterval = window.setInterval(refreshWhenVisible, 300_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
-
-    const client = supabaseBrowser;
-    if (!client) {
-      return () => {
-        window.clearTimeout(timer);
-        window.clearInterval(refreshInterval);
-        document.removeEventListener("visibilitychange", refreshWhenVisible);
-      };
-    }
-
-    const channel = client
-      .channel("principal-sidebar-counts")
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_report_guidance_tickets" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "adviser_principal_messages" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "principal_staff_messages" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "principal_notification_reads" }, () => {
-        refreshCounts().catch(() => null);
-      })
-      .subscribe();
 
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(refreshInterval);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
-      client.removeChannel(channel);
     };
   }, [refreshCounts]);
 

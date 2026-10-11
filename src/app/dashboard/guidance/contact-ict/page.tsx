@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Search, Send, Upload, X } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { keyForSubmission, type IdempotencyAttempt } from "@/lib/clientIdempotency";
+import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 
 type Recipient = {
     id: string;
@@ -293,7 +293,6 @@ export default function ContactICTPage() {
     const [replyAttachments, setReplyAttachments] = useState<MessageAttachment[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [liveUpdateError, setLiveUpdateError] = useState<string | null>(null);
     const [sendingReply, setSendingReply] = useState(false);
     const [showCompose, setShowCompose] = useState(false);
     const threadEndRef = useRef<HTMLDivElement>(null);
@@ -342,64 +341,7 @@ export default function ContactICTPage() {
         void loadMessages();
     }, [loadMessages]);
 
-    useEffect(() => {
-        const client = supabaseBrowser;
-        if (!client) {
-            setLiveUpdateError("Live updates are unavailable in this browser. Messages can still be refreshed manually.");
-            return;
-        }
-
-        let disposed = false;
-        let retrying = false;
-        let retryTimer: number | undefined;
-        const retryLiveRefresh = async () => {
-            if (retrying || disposed) return;
-            retrying = true;
-            const firstAttempt = await loadMessages(true);
-            if (disposed) return;
-            if (firstAttempt) {
-                setLiveUpdateError(null);
-                retrying = false;
-                return;
-            }
-            retryTimer = window.setTimeout(async () => {
-                const secondAttempt = await loadMessages(true);
-                if (!disposed && !secondAttempt) {
-                    setLiveUpdateError("Live updates are reconnecting. Your existing messages remain available and will refresh automatically.");
-                }
-                if (!disposed && secondAttempt) setLiveUpdateError(null);
-                retrying = false;
-            }, 1_200);
-        };
-
-        const channel = client
-            .channel("guidance-ict-messages")
-            .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-                void loadMessages(true);
-            })
-            .subscribe((status) => {
-                if (status === "SUBSCRIBED") {
-                    setLiveUpdateError(null);
-                    return;
-                }
-                if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                    void retryLiveRefresh();
-                }
-            });
-
-        const refreshWhenVisible = () => {
-            if (document.visibilityState === "visible") void loadMessages(true);
-        };
-        const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
-        document.addEventListener("visibilitychange", refreshWhenVisible);
-        return () => {
-            disposed = true;
-            if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-            window.clearInterval(fallbackRefresh);
-            document.removeEventListener("visibilitychange", refreshWhenVisible);
-            void client.removeChannel(channel);
-        };
-    }, [loadMessages]);
+    const liveUpdateError = useStaffMessagesRealtime("guidance-ict-messages", loadMessages);
 
     useEffect(() => {
         threadEndRef.current?.scrollIntoView({ behavior: "smooth" });

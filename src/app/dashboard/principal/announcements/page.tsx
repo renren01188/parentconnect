@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, Users } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
 
 type Tab = "all-staffs" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled" | "Draft" | "Resolved";
@@ -130,26 +131,44 @@ function PrincipalAnnouncementsPageContent() {
 
     loadAnnouncements();
 
+    // The server route remains authoritative for custom-cookie sessions. This
+    // quiet fallback prevents announcement lists from becoming stale if a
+    // browser cannot receive a direct database-change subscription.
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadAnnouncements();
+    };
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, 300_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
+
     const client = supabaseBrowser;
-    if (!client) return;
+    if (!client) {
+      return () => {
+        window.clearInterval(fallbackRefresh);
+        document.removeEventListener("visibilitychange", refreshWhenVisible);
+        window.removeEventListener("focus", refreshWhenVisible);
+      };
+    }
 
-    const channel = client
-      .channel("principal-staff-announcements")
-      .on("postgres_changes",
-        { event: "INSERT", schema: "public", table: "adviser_announcements" },
-        () => { loadAnnouncements(); }
-      )
-      .on("postgres_changes",
-        { event: "INSERT", schema: "public", table: "guidance_announcements" },
-        () => { loadAnnouncements(); }
-      )
-      .on("postgres_changes",
-        { event: "INSERT", schema: "public", table: "ict_announcements" },
-        () => { loadAnnouncements(); }
-      )
-      .subscribe();
+    let disposed = false;
+    let sessionChannel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
+    void subscribeRealtimeInvalidations(client, ({ scope }) => {
+      if (!scope || scope === "announcements") void loadAnnouncements();
+    }).then((connectedChannel) => {
+      if (disposed) {
+        if (connectedChannel) void client.removeChannel(connectedChannel);
+        return;
+      }
+      sessionChannel = connectedChannel;
+    });
 
-    return () => { client.removeChannel(channel); };
+    return () => {
+      disposed = true;
+      window.clearInterval(fallbackRefresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+      if (sessionChannel) void client.removeChannel(sessionChannel);
+    };
   }, []);
 
 

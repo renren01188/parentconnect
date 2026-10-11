@@ -12,7 +12,8 @@ import {
   FileText,
   Users,
 } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import GuidanceDashboardGuide from "./components/GuidanceDashboardGuide";
 
 
@@ -52,30 +53,13 @@ export default function GuidanceDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
+  useVisibleRefresh(loadDashboard);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "reports") return loadDashboard();
+  });
+
   useEffect(() => {
     void loadDashboard();
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void loadDashboard();
-    };
-    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    const client = supabaseBrowser;
-    if (!client) return () => {
-      window.clearInterval(refreshInterval);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-
-    const channel = client
-      .channel("guidance-dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => void loadDashboard())
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => void loadDashboard())
-      .subscribe();
-
-    return () => {
-      window.clearInterval(refreshInterval);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      client.removeChannel(channel);
-    };
   }, [loadDashboard]);
 
   const guideHighlight = (target: string) => guideTarget === target

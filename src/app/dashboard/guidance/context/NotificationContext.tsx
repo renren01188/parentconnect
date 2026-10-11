@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 type GuidanceNotifContextType = {
   unreadCount: number;
@@ -89,7 +89,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const loadIctCount = useCallback(async () => {
     try {
-      const res = await fetch("/api/guidance-ict/messages", { cache: "no-store" });
+      const res = await fetch("/api/guidance-ict/messages?summary=1", { cache: "no-store" });
       const data = await res.json().catch(() => null);
       setIctUnreadCount(res.ok ? Number(data?.unreadCount ?? 0) : 0);
     } catch {
@@ -125,6 +125,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const refreshPrincipalAnnouncementCount = refreshNotificationCounts;
 
+  useSessionInvalidation(async ({ scope }) => {
+    if (scope === "reports") {
+      await Promise.all([refreshGuidanceCounts(), refreshNotificationCounts()]);
+      return;
+    }
+    if (scope === "staff-messages") {
+      await Promise.all([refreshGuidanceCounts(), loadIctCount()]);
+      return;
+    }
+    if (scope === "notifications" || scope === "announcements") {
+      await refreshNotificationCounts();
+      return;
+    }
+    await Promise.all([refreshGuidanceCounts(), loadIctCount(), refreshNotificationCounts()]);
+  });
+
   const markAnnouncementRead = useCallback((notifKey: string) => {
     fetch("/api/guidance/notifications/read", {
       method: "PATCH",
@@ -142,58 +158,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       loadIctCount();
       refreshNotificationCounts();
     });
-    // Ticket RLS deliberately blocks browser-table reads. Realtime can be
-    // unavailable for those custom-cookie sessions, so poll the server-owned
-    // counts as a fallback and keep the sidebar authoritative.
+    // The server-side broadcast is the normal update path. This is only a
+    // recovery path when a browser drops its Realtime socket.
     const refreshWhenVisible = () => {
       if (document.visibilityState !== "visible") return;
       refreshGuidanceCounts();
+      loadIctCount();
       refreshNotificationCounts();
     };
-    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    const refreshInterval = window.setInterval(refreshWhenVisible, 300_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
-
-    const client = supabaseBrowser;
-    if (!client) {
-      return () => {
-        cancelAnimationFrame(frame);
-        window.clearInterval(refreshInterval);
-        document.removeEventListener("visibilitychange", refreshWhenVisible);
-      };
-    }
-
-    const channel = client
-      .channel("guidance-sidebar-counts")
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_reports" }, () => {
-        refreshGuidanceCounts();
-        refreshNotificationCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_adviser_report_messages" }, () => {
-        refreshGuidanceCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "parent_report_guidance_tickets" }, () => {
-        refreshGuidanceCounts();
-        refreshNotificationCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        refreshGuidanceCounts();
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "principal_announcements" }, () => {
-        refreshNotificationCounts();
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ict_announcements" }, () => {
-        refreshNotificationCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "guidance_notification_reads" }, () => {
-        refreshNotificationCounts();
-      })
-      .subscribe();
 
     return () => {
       cancelAnimationFrame(frame);
       window.clearInterval(refreshInterval);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
-      client.removeChannel(channel);
     };
   }, [refreshGuidanceCounts, loadIctCount, refreshNotificationCounts]);
 

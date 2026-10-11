@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getPrincipalSession, listGuidanceTickets, listMessages, toPrincipalReport } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -92,6 +93,11 @@ export async function PATCH(
     }
     const refreshedMessages = await listMessages([reportId]);
     await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "read" ? "Report Viewed" : "Report Status Updated", performedById: principal.id, performedBy: principal.name, performedByRole: "Principal", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: existing.status, newStatus: normalized === "read" ? existing.status : normalized, module: "Reports", details: normalized === "read" ? `Opened report #${reportId}.` : `Changed report #${reportId} from ${existing.status} to ${normalized}.` });
+    await publishReportRealtimeInvalidation({
+      parentId: report.parent_id,
+      adviserId: report.adviser_id,
+      includeGuidance: Boolean(report.escalated_to_guidance),
+    });
 
     return NextResponse.json({
       success: true,

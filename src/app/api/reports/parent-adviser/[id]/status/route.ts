@@ -8,6 +8,7 @@ import {
   toAdviserReport,
 } from "../../_lib";
 import { logAudit } from "@/lib/audit";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -74,6 +75,12 @@ export async function PATCH(
     if (readError) throw readError;
 
     await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "escalated" ? "Escalated to Guidance" : "Report Status Updated", performedById: adviser.id, performedBy: [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser", performedByRole: "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, relatedStudentId: report.student_id, previousStatus: report.status, newStatus: normalized, module: "Reports", details: normalized === "escalated" ? `Escalated report #${reportId} from Adviser to Guidance.` : `Changed report #${reportId} from ${report.status} to ${normalized}.` });
+
+    await publishReportRealtimeInvalidation({
+      parentId: report.parent_id,
+      adviserId: adviser.id,
+      includeGuidance: normalized === "escalated" || Boolean(report.escalated_to_guidance),
+    });
 
     const updatedReport = await getReportForAdviser(reportId, adviser.id);
     const messages = await listMessages([reportId]);

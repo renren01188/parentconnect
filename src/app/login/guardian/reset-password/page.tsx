@@ -1,5 +1,6 @@
 "use client";
 
+import { SchoolBackground } from "@/components/SchoolBackground";
 import { useState } from "react";
 import { Eye, EyeOff, Lock, CheckCircle, AlertCircle, KeyRound } from "lucide-react";
 import Link from "next/link";
@@ -104,7 +105,7 @@ function ResetPasswordForm() {
 export default function ResetPasswordPage() {
   return <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
     <header className="relative w-full h-48 overflow-hidden">
-      <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')" }} />
+      <SchoolBackground />
       <div className="absolute inset-0 bg-gradient-to-r from-[#0d1526]/90 via-[#1a2035]/80 to-[#0d1526]/70" />
       <div className="relative z-10 flex items-center h-full px-8"><h1 className="text-white font-bold text-xl md:text-2xl">ParentConnect: <span className="text-indigo-300">Parent Communication and RFID Monitoring</span></h1></div>
     </header>

@@ -1,8 +1,9 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 export type NotificationType = "info" | "warning" | "alert" | "success";
 
@@ -98,46 +99,45 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setInboxUnreadCount(0);
   }, []);
 
-  const refreshCounts = useCallback(async () => {
+  const refreshInboxCount = useCallback(async () => {
     try {
-      const [messageResult, announcementResult] = await Promise.all([
-        fetchJsonWithRetry<InboxCountResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" }),
-        fetchJsonWithRetry<AnnouncementCountResponse>("/api/ict/notifications", { cache: "no-store" }),
-      ]);
-      const { response: msgRes, data: msgData } = messageResult;
-      const { response: annRes, data: annData } = announcementResult;
+      const { response: msgRes, data: msgData } = await fetchJsonWithRetry<InboxCountResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" });
       const messages = Array.isArray(msgData?.messages) ? msgData.messages : [];
       if (msgRes.ok) {
         setInboxUnreadCount(messages.filter((message) =>
           message.status === "New" && Number(message.sortAt ?? 0) > inboxSeenAt
         ).length);
       }
-      if (annRes.ok) setAnnUnreadCount(Number(annData?.unreadCount ?? 0));
     } catch {
       // Retain the last confirmed counts while a temporary request is retried.
     }
   }, [inboxSeenAt]);
 
+  const refreshAnnouncementCount = useCallback(async () => {
+    try {
+      const { response, data } = await fetchJsonWithRetry<AnnouncementCountResponse>("/api/ict/notifications", { cache: "no-store" });
+      if (response.ok) setAnnUnreadCount(Number(data?.unreadCount ?? 0));
+    } catch {
+      // Retain the last confirmed count while a temporary request is retried.
+    }
+  }, []);
+
+  const refreshCounts = useCallback(async () => {
+    await Promise.all([refreshInboxCount(), refreshAnnouncementCount()]);
+  }, [refreshInboxCount, refreshAnnouncementCount]);
+
+  useVisibleRefresh(refreshCounts);
+  useSessionInvalidation(({ scope }) => {
+    if (scope === "staff-messages") return refreshInboxCount();
+    if (scope === "announcements" || scope === "notifications") return refreshAnnouncementCount();
+    return refreshCounts();
+  });
+
   useEffect(() => {
     const initialRefresh = window.setTimeout(() => { void refreshCounts(); }, 0);
 
-    const client = supabaseBrowser;
-    if (!client) return () => window.clearTimeout(initialRefresh);
-
-    const channel = client
-      .channel("ict-sidebar-inbox-count")
-      .on("postgres_changes", { event: "*", schema: "public", table: "staff_messages" }, () => {
-        refreshCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "ict_notification_reads" }, () => {
-        refreshCounts();
-      })
-      .subscribe();
-
-
     return () => {
       window.clearTimeout(initialRefresh);
-      client.removeChannel(channel);
     };
   }, [refreshCounts]);
 

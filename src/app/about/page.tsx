@@ -1,5 +1,7 @@
 "use client";
 
+import { SchoolBackground } from "@/components/SchoolBackground";
+
 import {
   GraduationCap,
   ArrowLeft,
@@ -112,12 +114,7 @@ export default function AboutPage() {
 
       {/* ── Hero Header ── */}
       <header className="relative w-full h-48 overflow-hidden">
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{
-            backgroundImage: `url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')`,
-          }}
-        />
+        <SchoolBackground />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-900/85 via-slate-800/75 to-slate-900/70" />
 
         {/* Top bar */}

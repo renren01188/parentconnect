@@ -1,5 +1,6 @@
 "use client";
 
+import { SchoolBackground } from "@/components/SchoolBackground";
 import { Suspense, useEffect, useRef, useState } from "react";
 import {
   Users, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle,
@@ -303,10 +304,7 @@ function GuardianLoginPageContent() {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
       <header className="relative w-full h-48 overflow-hidden">
-        <div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url('https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80')` }}
-        />
+        <SchoolBackground />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
         <div className="relative z-10 flex items-center justify-between h-full px-8">
           <div>

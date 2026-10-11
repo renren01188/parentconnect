@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
 import { normalizePrincipalAnnouncementAudience } from "@/lib/principalAnnouncementAudience";
+import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 
 export async function GET() {
   try {
@@ -127,6 +128,15 @@ export async function POST(req: Request) {
     // success. The fan-out is a single idempotent upsert for every recipient.
     if (status === "Published") {
       await deliverPrincipalAnnouncement(announcement, principal);
+
+      const recipientRoles: RealtimeRecipientRole[] = audience === "Everyone"
+        ? ["parent", "adviser", "guidance", "ict"]
+        : audience === "Advisers"
+          ? ["adviser", "ict"]
+          : ["parent"];
+      const recipients = await recipientsForRoles(recipientRoles);
+      recipients.push({ role: "principal", id: Number(principal.id) });
+      await publishRealtimeInvalidation(recipients, "announcements");
     }
 
     return NextResponse.json({

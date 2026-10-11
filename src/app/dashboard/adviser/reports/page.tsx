@@ -843,6 +843,7 @@ function ReportsPageContent() {
     const [reports, setReports] = useState<Report[]>([]);
     const [studentReps, setStudentReps] = useState<StudentReport[]>([]);
     const [adminMsgs, setAdminMsgs] = useState<AdminMessage[]>([]);
+    const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
     const parentMessagesRef = useRef<HTMLDivElement>(null);
     const adminMessagesRef = useRef<HTMLDivElement>(null);
 
@@ -862,7 +863,7 @@ function ReportsPageContent() {
     const adminMessageKey = (message: AdminMessage) => message.conversationId ?? `principal-message:${message.id}`;
 
     const loadReports = useCallback(async () => {
-        const res = await fetch("/api/reports/parent-adviser?role=adviser", { cache: "no-store" });
+        const res = await fetch("/api/reports/parent-adviser?role=adviser&summary=1", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load reports.");
         const nextReports = (data.reports ?? []) as Report[];
@@ -874,6 +875,28 @@ function ReportsPageContent() {
             if (!current) return current;
             return groupByParent(nextReports).find(group => group.parent_name === current.parent_name) ?? current;
         });
+    }, []);
+
+    const loadReportDetail = useCallback(async (id: number) => {
+        const inFlight = reportDetailRequestsRef.current.get(id);
+        if (inFlight) return inFlight;
+
+        const request = (async () => {
+            const res = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${id}`, { cache: "no-store" });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+            const report = (data?.reports?.[0] ?? null) as Report | null;
+            if (!report) return;
+            setReports((current) => current.map((item) => item.id === id ? report : item));
+            setSelectedReport((current) => current?.id === id ? report : current);
+        })();
+
+        reportDetailRequestsRef.current.set(id, request);
+        try {
+            await request;
+        } finally {
+            reportDetailRequestsRef.current.delete(id);
+        }
     }, []);
 
     const loadStudentReports = useCallback(async () => {
@@ -970,6 +993,13 @@ function ReportsPageContent() {
     const selectedAdminConversationId = selectedAdminMsg?.conversationId ?? null;
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminMessage = selectedAdminMsg?.message ?? "";
+
+    useEffect(() => {
+        if (leftTab !== "Parent" || !selectedReport || selectedReport.detailsLoaded) return;
+        void loadReportDetail(selectedReport.id).catch((error) => {
+            setActionError(error instanceof Error ? error.message : "Unable to load this conversation.");
+        });
+    }, [leftTab, selectedReport, loadReportDetail]);
 
     useEffect(() => {
         if (leftTab !== "Parent" || !selectedReportId) return;
@@ -1247,6 +1277,9 @@ function ReportsPageContent() {
         setSelectedReport(r);
         setReplyText("");
         setReplyAttachments([]);
+        void loadReportDetail(r.id).catch((error) => {
+            setActionError(error instanceof Error ? error.message : "Unable to load this conversation.");
+        });
     }
 
     function selectAdminMsg(m: AdminMessage) {

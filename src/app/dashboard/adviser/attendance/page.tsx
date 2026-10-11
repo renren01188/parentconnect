@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { resolveRfidScanValue } from "@/lib/rfid";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
@@ -584,6 +584,9 @@ async function exportMonthlySF2(
     holidayDates: string[] = [],
     schoolDayDates: string[] = [],
 ) {
+    // Keep the large spreadsheet library out of the normal attendance page.
+    // It is loaded only after the user explicitly requests an SF2 export.
+    const { default: ExcelJS } = await import("exceljs");
     const res = await fetch("/SF2_2025_newtemplate.xlsx");
     if (!res.ok) throw new Error("Failed to load SF2 template.");
 
@@ -1879,7 +1882,7 @@ export default function AdviserAttendancePage() {
         const refreshWhenVisible = () => {
             if (document.visibilityState === "visible") void loadClassSession();
         };
-        const timer = window.setInterval(refreshWhenVisible, 60_000);
+        const timer = window.setInterval(refreshWhenVisible, 300_000);
         document.addEventListener("visibilitychange", refreshWhenVisible);
         return () => {
             window.clearInterval(timer);

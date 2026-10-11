@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 type ParentRecipientRow = {
   parent_id: number;
@@ -124,6 +125,13 @@ export async function POST(req: NextRequest) {
 
     // Delivery is dashboard-only. The persisted announcement and the
     // idempotent Parent notification fan-out above are the delivery record.
+    const principalRecipients = await recipientsForRoles(["principal"]);
+    const realtimeRecipients = [
+      ...recipients.map((recipient) => ({ role: "parent" as const, id: recipient.parent_id })),
+      ...principalRecipients,
+      { role: "adviser" as const, id: Number(adviser.id) },
+    ];
+    await publishRealtimeInvalidation(realtimeRecipients, "announcements");
 
     return NextResponse.json({
       success: true,

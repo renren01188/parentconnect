@@ -13,7 +13,8 @@ import {
 
 import Sidebar from "../components/Sidebar";
 import { useNotifContext } from "../context/NotificationContext";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   type FilterTab,
   type Notification,
@@ -106,55 +107,20 @@ function NotificationsPageContent() {
     setNotifications([...unique.values()]);
   }, []);
 
+  useVisibleRefresh(loadNotifications);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") {
+      return loadNotifications();
+    }
+  });
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       loadNotifications().catch(() => null);
     }, 0);
 
-    const client = supabaseBrowser;
-    if (!client) {
-      return () => window.clearTimeout(initialLoad);
-    }
-
-    const channel = client
-      .channel("parent-announcement-notifications")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "parent_announcement_notifications" },
-        () => {
-          loadNotifications().catch(() => null);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "attendance_logs" },
-        () => { loadNotifications().catch(() => null); }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "parent_adviser_reports" },
-        () => { loadNotifications().catch(() => null); }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "parent_adviser_report_messages" },
-        () => { loadNotifications().catch(() => null); }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "parent_deletion_notifications" },
-        () => { loadNotifications().catch(() => null); }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "scheduled_deletions" },
-        () => { loadNotifications().catch(() => null); }
-      )
-      .subscribe();
-
     return () => {
       window.clearTimeout(initialLoad);
-      client.removeChannel(channel);
     };
   }, [loadNotifications]);
 

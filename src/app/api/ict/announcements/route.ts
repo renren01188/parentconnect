@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendIctAnnouncementEmail } from "@/lib/mailer";
+import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 
 export async function GET() {
     try {
@@ -64,6 +65,15 @@ export async function POST(req: Request) {
 
         if (status === "Published") {
             await fanOutIctAnnouncement(ann, senderName);
+
+            const recipientRoles: RealtimeRecipientRole[] = [];
+            if (audience.includes("Parents")) recipientRoles.push("parent");
+            if (audience.includes("Class Advisers")) recipientRoles.push("adviser");
+            if (audience.includes("Guidance")) recipientRoles.push("guidance");
+            if (audience.includes("Principal")) recipientRoles.push("principal");
+            const recipients = await recipientsForRoles(recipientRoles);
+            recipients.push({ role: "ict", id: Number(ict.id) });
+            await publishRealtimeInvalidation(recipients, "announcements");
         }
 
         return NextResponse.json({ success: true, announcement: { ...ann, id: String(ann.id) } });
