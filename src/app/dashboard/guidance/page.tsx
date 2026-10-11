@@ -54,9 +54,16 @@ export default function GuidanceDashboard() {
 
   useEffect(() => {
     void loadDashboard();
-    const refreshInterval = window.setInterval(() => void loadDashboard(), 15_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadDashboard();
+    };
+    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     const client = supabaseBrowser;
-    if (!client) return () => window.clearInterval(refreshInterval);
+    if (!client) return () => {
+      window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
 
     const channel = client
       .channel("guidance-dashboard")
@@ -66,6 +73,7 @@ export default function GuidanceDashboard() {
 
     return () => {
       window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       client.removeChannel(channel);
     };
   }, [loadDashboard]);

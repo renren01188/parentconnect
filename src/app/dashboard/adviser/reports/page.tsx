@@ -936,36 +936,6 @@ function ReportsPageContent() {
     // parent report for an adviser with an otherwise empty inbox.
     const liveUpdateNotice = useReportMessagesRealtime("adviser-reports-live-list", loadReports);
 
-    useEffect(() => {
-        const reportId = selectedReport?.id;
-        if (!reportId) return;
-        let cancelled = false;
-        let polling = false;
-        const refreshOpenConversation = async () => {
-            if (polling) return;
-            polling = true;
-            try {
-                const response = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${reportId}`, { cache: "no-store" });
-                const data = await response.json().catch(() => null);
-                const refreshed = data?.reports?.[0] as Report | undefined;
-                if (!cancelled && response.ok && refreshed) {
-                    setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
-                    setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
-                }
-            } catch {
-                // The next targeted poll will retry without interrupting the draft.
-            } finally {
-                polling = false;
-            }
-        };
-        void refreshOpenConversation();
-        const timer = window.setInterval(() => { void refreshOpenConversation(); }, 30_000);
-        return () => {
-            cancelled = true;
-            window.clearInterval(timer);
-        };
-    }, [selectedReport?.id]);
-
     // ── Handle deep-link from notification ───────────────────────────────
     useEffect(() => {
         const tab = searchParams.get("tab") as LeftTab | null;

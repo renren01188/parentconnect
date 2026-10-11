@@ -109,9 +109,16 @@ export default function AnnouncementsPage() {
   useEffect(() => {
     // The authenticated route is the fallback for custom-cookie sessions
     // where browser table events are restricted by RLS.
-    const refreshInterval = window.setInterval(() => void loadIncomingAnnouncements(), 15_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadIncomingAnnouncements();
+    };
+    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     const client = supabaseBrowser;
-    if (!client) return () => window.clearInterval(refreshInterval);
+    if (!client) return () => {
+      window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
 
     const channel = client
       .channel("guidance-incoming-announcements")
@@ -121,6 +128,7 @@ export default function AnnouncementsPage() {
 
     return () => {
       window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       client.removeChannel(channel);
     };
   }, [loadIncomingAnnouncements]);

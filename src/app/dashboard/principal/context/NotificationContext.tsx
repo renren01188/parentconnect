@@ -71,15 +71,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       refreshCounts().catch(() => null);
     }, 0);
     // Server routes remain the authority for Principal notification counts.
-    const refreshInterval = window.setInterval(() => {
-      refreshCounts().catch(() => null);
-    }, 30_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshCounts().catch(() => null);
+    };
+    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     const client = supabaseBrowser;
     if (!client) {
       return () => {
         window.clearTimeout(timer);
         window.clearInterval(refreshInterval);
+        document.removeEventListener("visibilitychange", refreshWhenVisible);
       };
     }
 
@@ -108,6 +111,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       client.removeChannel(channel);
     };
   }, [refreshCounts]);

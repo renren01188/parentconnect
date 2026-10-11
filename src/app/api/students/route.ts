@@ -18,7 +18,6 @@ import { logAudit } from "@/lib/audit";
 import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getActiveIct } from "@/lib/apiAuthorization";
-import { getArchivedStudentLrns, getScheduledStudentLrns } from "@/lib/deletionAccess";
 import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
@@ -65,6 +64,22 @@ type AttendanceLog = {
   attendance_date: string;
   session_type: string | null;
   status: string | null;
+};
+
+type RosterStudent = {
+  id: number;
+  student_id: string;
+  first_name: string;
+  middle_name: string | null;
+  last_name: string;
+  suffix: string | null;
+  gender: string;
+  grade: string;
+  section: string;
+  rfid_card: string | null;
+  class_session: string | null;
+  created_at: string | null;
+  archive_status: string | null;
 };
 
 type SessionSchedule = {
@@ -124,25 +139,77 @@ function unauthorizedStudentApi() {
   );
 }
 
-async function getScheduledAttendanceLogs(studentIds: string[]) {
+async function getScheduledAttendanceLogs(studentIds: string[], startDate?: string | null, endDate?: string | null) {
   const logs: AttendanceLog[] = [];
+  const pageSize = 1000;
+  const studentIdChunkSize = 500;
+
+  for (let start = 0; start < studentIds.length; start += studentIdChunkSize) {
+    const studentIdChunk = studentIds.slice(start, start + studentIdChunkSize);
+    for (let from = 0; ; from += pageSize) {
+      let query = supabase
+        .from("attendance_logs")
+        .select("student_id, attendance_date, session_type, status")
+        .in("student_id", studentIdChunk)
+        .eq("type", "Time In")
+        .not("session_type", "is", null)
+        .order("attendance_date", { ascending: false });
+      if (startDate) query = query.gte("attendance_date", startDate);
+      if (endDate) query = query.lte("attendance_date", endDate);
+      const { data, error } = await query.range(from, from + pageSize - 1);
+
+      if (error) throw error;
+      const page = (data ?? []) as AttendanceLog[];
+      logs.push(...page);
+      if (page.length < pageSize) break;
+    }
+  }
+
+  return logs;
+}
+
+function studentFullName(student: Pick<RosterStudent, "first_name" | "middle_name" | "last_name" | "suffix">) {
+  return [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(" ");
+}
+
+async function listAdviserRoster(grade: string, section: string) {
+  const rows: RosterStudent[] = [];
   const pageSize = 1000;
 
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
-      .from("attendance_logs")
-      .select("student_id, attendance_date, session_type, status")
-      .in("student_id", studentIds)
-      .eq("type", "Time In")
-      .not("session_type", "is", null)
-      .order("attendance_date", { ascending: false })
+      .from("students")
+      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, class_session, created_at, archive_status")
+      .eq("grade", grade)
+      .eq("section", section)
+      .order("last_name", { ascending: true })
+      .order("first_name", { ascending: true })
       .range(from, from + pageSize - 1);
-
     if (error) throw error;
-    const page = (data ?? []) as AttendanceLog[];
-    logs.push(...page);
-    if (page.length < pageSize) return logs;
+    const page = (data ?? []) as RosterStudent[];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
   }
+}
+
+async function listScheduledStudentDeletionIds() {
+  const { data, error } = await supabase
+    .from("scheduled_deletions")
+    .select("target_id")
+    .eq("target_type", "student")
+    .eq("status", "Scheduled");
+  if (error) throw error;
+  return new Set((data ?? []).map((row) => Number(row.target_id)).filter(Number.isSafeInteger));
+}
+
+async function getCurrentSchoolYear() {
+  const { data, error } = await supabase
+    .from("school_year_config")
+    .select("start_date, end_date")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 async function getSchedulesForDates(dates: string[]) {
@@ -376,23 +443,15 @@ export async function GET(req: NextRequest) {
       ? requestedSection
       : adviserSections[0] ?? adviser?.section ?? "";
 
-    const rpcFilter = filter === "Excused" ? "All" : filter;
-
-    // The attendance RPC has no ordering argument. Fetch this adviser's
-    // filtered roster, then sort and paginate it here so every page is truly
-    // alphabetical and remains full after scheduled-deletion rows are hidden.
-    const { data: rows, error } = await supabase.rpc("get_students_with_attendance", {
-      p_grade: adviser?.grade ?? "",
-      p_section: activeSection,
-      // The RPC only handles contiguous search text. Fetch this adviser's
-      // roster, then apply normalized token matching below so name order and
-      // extra spaces do not affect results.
-      p_search: "",
-      p_filter: rpcFilter,
-      p_limit: 5000,
-      p_offset: 0,
-    });
-    if (error) throw error;
+    // Do not use the legacy attendance RPC here. It aggregates attendance for
+    // the whole school on every roster visit, even though this screen shows a
+    // single adviser's section. The lightweight roster query is followed by
+    // attendance work only for the relevant students below.
+    const [rows, scheduledDeletionIds, currentSchoolYear] = await Promise.all([
+      listAdviserRoster(adviser.grade ?? "", activeSection),
+      listScheduledStudentDeletionIds(),
+      getCurrentSchoolYear(),
+    ]);
 
     const today = getToday();
 
@@ -401,19 +460,28 @@ export async function GET(req: NextRequest) {
     const dow = todayDate.getDay();
     const isWeekend = dow === 0 || dow === 6;
 
-    const matchingSearchRows = (rows ?? []).filter((row: {
-      full_name?: unknown;
-      first_name?: unknown;
-      middle_name?: unknown;
-      last_name?: unknown;
-      student_id?: unknown;
-    }) => matchesAdviserStudentSearch(row, search));
+    const matchingSearchRows = rows.filter((row) => matchesAdviserStudentSearch({
+      full_name: studentFullName(row),
+      first_name: row.first_name,
+      middle_name: row.middle_name,
+      last_name: row.last_name,
+      student_id: row.student_id,
+    }, search));
+    const visibleRows = matchingSearchRows.filter((row) =>
+      row.archive_status !== "archived" && !scheduledDeletionIds.has(row.id)
+    );
+    const sortedVisibleRows = [...visibleRows].sort((first, second) =>
+      studentFullName(first).localeCompare(studentFullName(second), undefined, { sensitivity: "base" })
+      || first.student_id.localeCompare(second.student_id)
+    );
+    // The default view needs attendance only for the students visible on the
+    // current page. Status filters intentionally evaluate the full class so
+    // their totals and pagination remain accurate.
+    const rowsForCalculation = filter === "All"
+      ? sortedVisibleRows.slice(offset, offset + limit)
+      : sortedVisibleRows;
     const studentIds = Array.from(
-      new Set(matchingSearchRows.map((row: { student_id?: string }) => row.student_id).filter(Boolean))
-    ) as string[];
-    const [scheduledStudentLrns, archivedStudentLrns] = await Promise.all([getScheduledStudentLrns(studentIds), getArchivedStudentLrns(studentIds)]);
-    const visibleRows = matchingSearchRows.filter((row: { student_id?: string }) =>
-      !row.student_id || (!scheduledStudentLrns.has(row.student_id) && !archivedStudentLrns.has(row.student_id))
+      new Set(rowsForCalculation.map((row) => row.student_id).filter(Boolean))
     );
 
     // The attendance RPC is intentionally focused on attendance fields. The
@@ -421,22 +489,16 @@ export async function GET(req: NextRequest) {
     const classSessionByStudentId = new Map<string, string | null>();
     const classSessionBySection = new Map<string, string | null>();
     if (studentIds.length > 0) {
-      const { data: sessionAssignments, error: sessionAssignmentsError } = await supabase
-        .from("students")
-        .select("student_id, class_session")
-        .in("student_id", studentIds);
-
-      if (sessionAssignmentsError) throw sessionAssignmentsError;
-      for (const student of sessionAssignments ?? []) {
+      for (const student of rowsForCalculation) {
         classSessionByStudentId.set(student.student_id, student.class_session ?? null);
       }
 
       const sectionNames = Array.from(new Set(
-        visibleRows.map((row: { section?: string }) => row.section).filter(Boolean)
-      )) as string[];
+        rowsForCalculation.map((row) => row.section).filter(Boolean)
+      ));
       const grades = Array.from(new Set(
-        visibleRows.map((row: { grade?: string }) => row.grade).filter(Boolean)
-      )) as string[];
+        rowsForCalculation.map((row) => row.grade).filter(Boolean)
+      ));
       if (sectionNames.length > 0 && grades.length > 0) {
         const { data: sectionAssignments, error: sectionAssignmentsError } = await supabase
           .from("sections")
@@ -454,63 +516,12 @@ export async function GET(req: NextRequest) {
     // Fetch registration dates to avoid marking brand-new students as Absent
     const registeredTodayIds = new Set<string>();
     if (studentIds.length > 0) {
-      const { data: regDates } = await supabase
-        .from("students")
-        .select("student_id, created_at")
-        .in("student_id", studentIds);
-
-      for (const s of regDates ?? []) {
-        if (s.created_at) {
-          const regDate = new Date(new Date(s.created_at).getTime() + 8 * 60 * 60 * 1000)
+      for (const student of rowsForCalculation) {
+        if (student.created_at) {
+          const regDate = new Date(new Date(student.created_at).getTime() + 8 * 60 * 60 * 1000)
             .toISOString().split("T")[0];
-          if (regDate === today) registeredTodayIds.add(s.student_id);
+          if (regDate === today) registeredTodayIds.add(student.student_id);
         }
-      }
-    }
-
-    const parentByStudentId = new Map<string, {
-      parent_first_name?: string | null;
-      parent_last_name?: string | null;
-      relationship?: string | null;
-      contact_number?: string | null;
-      parent_email?: string | null;
-      parent_address?: string | null;
-    }>();
-
-    if (studentIds.length > 0) {
-      const { data: parentLinks, error: parentLinksError } = await supabase
-        .from("parent_student_links")
-        .select(`
-          student_id,
-          relationship,
-          parents!inner (
-            parent_first_name,
-            parent_last_name,
-            contact_number,
-            email,
-            address
-          )
-        `)
-        .in("student_id", studentIds);
-
-      if (parentLinksError) throw parentLinksError;
-
-      for (const link of parentLinks ?? []) {
-        const parent = link.parents as unknown as {
-          parent_first_name?: string | null;
-          parent_last_name?: string | null;
-          contact_number?: string | null;
-          email?: string | null;
-          address?: string | null;
-        };
-        parentByStudentId.set(link.student_id as string, {
-          parent_first_name: parent.parent_first_name,
-          parent_last_name: parent.parent_last_name,
-          relationship: link.relationship as string | null,
-          contact_number: parent.contact_number,
-          parent_email: parent.email,
-          parent_address: parent.address,
-        });
       }
     }
 
@@ -532,7 +543,7 @@ export async function GET(req: NextRequest) {
     // session on the same date. This excludes unscheduled/manual leftovers
     // from both the Today's status and the attendance percentage.
     const attendanceLogs = studentIds.length > 0
-      ? await getScheduledAttendanceLogs(studentIds)
+      ? await getScheduledAttendanceLogs(studentIds, currentSchoolYear?.start_date, currentSchoolYear?.end_date)
       : [];
     const scheduledDates = Array.from(new Set([today, ...attendanceLogs.map((log) => log.attendance_date)]));
     const schedules = scheduledDates.length > 0
@@ -585,11 +596,11 @@ export async function GET(req: NextRequest) {
 
     const currentMinutes = getCurrentMinutes();
 
-    let data = visibleRows.map((row: { student_id?: string; grade?: string; section?: string }) => {
+    let data = rowsForCalculation.map((row) => {
       const classSession = classSessionBySection.get(`${row.grade}|${row.section}`)
-        ?? (row.student_id ? classSessionByStudentId.get(row.student_id) ?? null : null);
+        ?? classSessionByStudentId.get(row.student_id) ?? null;
       const session = classSession ? todaySessionsByType.get(classSession) : undefined;
-      const recordedStatus = row.student_id && classSession
+      const recordedStatus = classSession
         ? todayLogByStudentAndSession.get(`${row.student_id}|${classSession}`)
         : undefined;
       const absenceCutoff = timeToMinutes(session?.absent_after ?? session?.scheduled_end);
@@ -610,9 +621,9 @@ export async function GET(req: NextRequest) {
 
       return {
         ...row,
-        ...(row.student_id ? parentByStudentId.get(row.student_id) ?? {} : {}),
+        full_name: studentFullName(row),
         class_session: classSession,
-        attendance_rate: row.student_id ? attendanceRateByStudentId.get(row.student_id) ?? null : null,
+        attendance_rate: attendanceRateByStudentId.get(row.student_id) ?? null,
         today_status: todayStatus,
       };
     });
@@ -629,8 +640,8 @@ export async function GET(req: NextRequest) {
     });
 
     const noClassesToday = isWeekend || (data.length > 0 && data.every((row: { today_status?: string }) => row.today_status === "No Classes"));
-    const total = data.length;
-    const pageData = data.slice(offset, offset + limit);
+    const total = filter === "All" ? sortedVisibleRows.length : data.length;
+    const pageData = filter === "All" ? data : data.slice(offset, offset + limit);
 
     const { count: pendingReports } = await supabase
       .from("parent_adviser_reports")

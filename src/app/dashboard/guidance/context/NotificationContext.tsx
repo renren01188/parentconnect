@@ -145,16 +145,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // Ticket RLS deliberately blocks browser-table reads. Realtime can be
     // unavailable for those custom-cookie sessions, so poll the server-owned
     // counts as a fallback and keep the sidebar authoritative.
-    const refreshInterval = window.setInterval(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
       refreshGuidanceCounts();
       refreshNotificationCounts();
-    }, 15_000);
+    };
+    const refreshInterval = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     const client = supabaseBrowser;
     if (!client) {
       return () => {
         cancelAnimationFrame(frame);
         window.clearInterval(refreshInterval);
+        document.removeEventListener("visibilitychange", refreshWhenVisible);
       };
     }
 
@@ -188,6 +192,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelAnimationFrame(frame);
       window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       client.removeChannel(channel);
     };
   }, [refreshGuidanceCounts, loadIctCount, refreshNotificationCounts]);

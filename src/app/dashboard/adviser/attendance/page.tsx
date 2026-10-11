@@ -1876,8 +1876,15 @@ export default function AdviserAttendancePage() {
     // Keep the screen aligned with ICT's configured start/end times even when
     // the Adviser leaves this page open while a session changes state.
     useEffect(() => {
-        const timer = window.setInterval(loadClassSession, 30_000);
-        return () => window.clearInterval(timer);
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === "visible") void loadClassSession();
+        };
+        const timer = window.setInterval(refreshWhenVisible, 60_000);
+        document.addEventListener("visibilitychange", refreshWhenVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener("visibilitychange", refreshWhenVisible);
+        };
     }, [loadClassSession]);
 
     // ICT schedule edits are reflected immediately; polling remains as a

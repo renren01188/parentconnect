@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { isAttendanceEmailEnabled } from "@/lib/attendanceNotificationSettings";
 import { sendWithEmail } from "@/lib/mailer";
+import { mapWithConcurrency } from "@/lib/deletionEmailQueue";
 
 type EmailJob = {
   id: string;
@@ -11,7 +12,9 @@ type EmailJob = {
 };
 
 export const DEFAULT_ATTENDANCE_EMAIL_BATCH_SIZE = 20;
+export const DEFAULT_ATTENDANCE_EMAIL_CONCURRENCY = 4;
 const MAX_ATTENDANCE_EMAIL_BATCH_SIZE = 20;
+const MAX_ATTENDANCE_EMAIL_CONCURRENCY = 4;
 const PROCESSING_STALE_AFTER_MS = 10 * 60_000;
 const UNKNOWN_PROCESSING_ERROR = "Email provider outcome is unknown after a worker interruption. Verify the provider before manually requeueing this job.";
 
@@ -124,7 +127,7 @@ async function processJob(job: EmailJob) {
   }
 }
 
-export async function processAttendanceEmailJobs(options?: { batchSize?: number; attendanceLogId?: number }) {
+export async function processAttendanceEmailJobs(options?: { batchSize?: number; concurrency?: number; attendanceLogId?: number }) {
   if (!await isAttendanceEmailEnabled()) {
     await skipPendingJobs(options?.attendanceLogId);
     return { processed: 0, sent: 0, failed: 0, skipped: 0 };
@@ -135,6 +138,11 @@ export async function processAttendanceEmailJobs(options?: { batchSize?: number;
     DEFAULT_ATTENDANCE_EMAIL_BATCH_SIZE,
     MAX_ATTENDANCE_EMAIL_BATCH_SIZE,
   );
+  const concurrency = positiveInt(
+    options?.concurrency === undefined ? process.env.ATTENDANCE_EMAIL_CONCURRENCY : String(options.concurrency),
+    DEFAULT_ATTENDANCE_EMAIL_CONCURRENCY,
+    MAX_ATTENDANCE_EMAIL_CONCURRENCY,
+  );
   await failStaleProcessingJobs(options?.attendanceLogId);
   const jobs: EmailJob[] = [];
   for (let index = 0; index < batchSize; index += 1) {
@@ -142,7 +150,7 @@ export async function processAttendanceEmailJobs(options?: { batchSize?: number;
     if (!job) break;
     jobs.push(job);
   }
-  const outcomes = await Promise.all(jobs.map(processJob));
+  const outcomes = await mapWithConcurrency(jobs, concurrency, processJob);
   return {
     processed: jobs.length,
     sent: outcomes.filter((outcome) => outcome === "sent").length,

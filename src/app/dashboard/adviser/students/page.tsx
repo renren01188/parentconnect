@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -11,10 +12,26 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
-import { TransferFromStandbyModal, type ReadyTransferSummary } from "./TransferFromStandbyModal";
-import { ImportRegistrationModal } from "./ImportRegistrationModal";
-import { RfidCardModal } from "./RfidCardModal";
-import { BulkDeleteModal } from "./BulkDeleteModal";
+import type { ReadyTransferSummary } from "./TransferFromStandbyModal";
+
+// These modal workflows are only needed after a user clicks an action. Loading
+// them on demand keeps the initial roster page bundle small.
+const TransferFromStandbyModal = dynamic(
+  () => import("./TransferFromStandbyModal").then((module) => module.TransferFromStandbyModal),
+  { ssr: false }
+);
+const ImportRegistrationModal = dynamic(
+  () => import("./ImportRegistrationModal").then((module) => module.ImportRegistrationModal),
+  { ssr: false }
+);
+const RfidCardModal = dynamic(
+  () => import("./RfidCardModal").then((module) => module.RfidCardModal),
+  { ssr: false }
+);
+const BulkDeleteModal = dynamic(
+  () => import("./BulkDeleteModal").then((module) => module.BulkDeleteModal),
+  { ssr: false }
+);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

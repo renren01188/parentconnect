@@ -235,9 +235,17 @@ export async function GET(req: NextRequest) {
     if (messagesResult.error && !isMissingTableError(messagesResult.error)) throw messagesResult.error;
     const rows = messagesResult.error ? [] : ((messagesResult.data ?? []) as Array<Record<string, unknown>>);
     const roots = rows.filter((row) => !Number(row.source_message_id));
+    const repliesByRootId = new Map<number, Array<Record<string, unknown>>>();
+    for (const row of rows) {
+      const rootId = Number(row.source_message_id);
+      if (!rootId) continue;
+      const replies = repliesByRootId.get(rootId) ?? [];
+      replies.push(row);
+      repliesByRootId.set(rootId, replies);
+    }
     const conversations = roots.map((root) => {
       const rootId = Number(root.id);
-      const replies = rows.filter((row) => Number(row.source_message_id) === rootId).sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)));
+      const replies = (repliesByRootId.get(rootId) ?? []).sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)));
       const thread = [root, ...replies];
       const last = thread.at(-1) ?? root;
       const latestIncoming = last.recipient_type === current.type && Number(last.recipient_id) === current.id;

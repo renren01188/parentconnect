@@ -57,12 +57,17 @@ export function useStaffMessagesRealtime(channelName: string, refreshMessages: R
         }
       });
 
-    const fallbackRefresh = window.setInterval(() => { void refreshAndClearNotice(); }, 15_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshAndClearNotice();
+    };
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       disposed = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       window.clearInterval(fallbackRefresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       void client.removeChannel(channel);
     };
   }, [channelName, refreshMessages]);

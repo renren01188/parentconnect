@@ -1132,33 +1132,6 @@ function ReportsPageContent() {
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminLastReply = selectedAdminMsg?.replies?.at(-1);
 
-    useEffect(() => {
-        if (!selectedReportId) return;
-        let cancelled = false;
-        let polling = false;
-        const refreshOpenConversation = async () => {
-            if (polling) return;
-            polling = true;
-            try {
-                const response = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${selectedReportId}`, { cache: "no-store" });
-                const data = await response.json().catch(() => null);
-                const refreshed = data?.reports?.[0] as Report | undefined;
-                if (!cancelled && response.ok && refreshed) {
-                    setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
-                    setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
-                    setGuidanceReplies((current) => ({ ...current, [refreshed.id]: refreshed.replies ?? [] }));
-                }
-            } catch {
-                // Keep the current conversation visible until the next poll succeeds.
-            } finally {
-                polling = false;
-            }
-        };
-        void refreshOpenConversation();
-        const timer = window.setInterval(() => { void refreshOpenConversation(); }, 3_000);
-        return () => { cancelled = true; window.clearInterval(timer); };
-    }, [selectedReportId]);
-
     function isNearBottom(element: HTMLDivElement) {
         return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
     }

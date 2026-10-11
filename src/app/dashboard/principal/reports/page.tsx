@@ -1330,37 +1330,6 @@ function PrincipalReportsPageContent() {
   }, [reports, requestedReportId]);
 
 
-  useEffect(() => {
-    const reportId = selectedReport?.id;
-    if (!reportId) return;
-    let cancelled = false;
-    let polling = false;
-    const refreshOpenConversation = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const response = await fetch(`/api/reports/parent-adviser?role=principal&reportId=${reportId}`, { cache: "no-store" });
-        const data = await response.json().catch(() => null);
-        const refreshed = data?.reports?.[0] as Report | undefined;
-        if (!cancelled && response.ok && refreshed) {
-          setReports((current) => current.map((report) => report.id === refreshed.id ? refreshed : report));
-          setSelectedReport((current) => current?.id === refreshed.id ? refreshed : current);
-          setPrincipalReplies((current) => ({
-            ...current,
-            [refreshed.id]: (refreshed.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
-          }));
-        }
-      } catch {
-        // Keep the current conversation visible until the next poll succeeds.
-      } finally {
-        polling = false;
-      }
-    };
-    void refreshOpenConversation();
-    const timer = window.setInterval(() => { void refreshOpenConversation(); }, 3_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [selectedReport?.id]);
-
   const filteredGroups = (() => {
     const term = search.trim().toLowerCase();
     return groupByStudentParent(currentReports)

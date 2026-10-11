@@ -107,9 +107,13 @@ export default function DashboardPage() {
     const refresh = () => { void loadDashboard(true); };
     const client = supabaseBrowser;
     const channel = client?.channel("ict-dashboard-principal-announcements").on("postgres_changes", { event: "*", schema: "public", table: "principal_announcements" }, refresh).subscribe();
-    const fallbackRefresh = window.setInterval(refresh, 30_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("ict-profile-updated", refresh);
-    return () => { window.clearInterval(fallbackRefresh); window.removeEventListener("ict-profile-updated", refresh); if (channel && client) void client.removeChannel(channel); };
+    return () => { window.clearInterval(fallbackRefresh); document.removeEventListener("visibilitychange", refreshWhenVisible); window.removeEventListener("ict-profile-updated", refresh); if (channel && client) void client.removeChannel(channel); };
   }, [loadDashboard]);
 
   const stats = dashboard?.stats ?? EMPTY_STATS;

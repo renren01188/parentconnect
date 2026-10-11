@@ -387,11 +387,16 @@ export default function ContactICTPage() {
                 }
             });
 
-        const fallbackRefresh = window.setInterval(() => { void loadMessages(true); }, 15_000);
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === "visible") void loadMessages(true);
+        };
+        const fallbackRefresh = window.setInterval(refreshWhenVisible, 60_000);
+        document.addEventListener("visibilitychange", refreshWhenVisible);
         return () => {
             disposed = true;
             if (retryTimer !== undefined) window.clearTimeout(retryTimer);
             window.clearInterval(fallbackRefresh);
+            document.removeEventListener("visibilitychange", refreshWhenVisible);
             void client.removeChannel(channel);
         };
     }, [loadMessages]);

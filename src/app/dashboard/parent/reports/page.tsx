@@ -903,37 +903,6 @@ function ParentReportsPageContent() {
 
   useEffect(() => {
     if (!selectedReportId) return;
-    let cancelled = false;
-    let polling = false;
-
-    const refreshOpenConversation = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const response = await fetch(`/api/reports/parent-adviser?reportId=${selectedReportId}`, { cache: "no-store" });
-        const data = await response.json().catch(() => null);
-        const refreshed = data?.reports?.[0] as Report | undefined;
-        if (!cancelled && response.ok && refreshed) {
-          const merged = mergePendingMessages([refreshed])[0];
-          setReports((current) => current.map((report) => report.id === merged.id ? merged : report));
-        }
-      } catch {
-        // Keep the current conversation visible until the next poll succeeds.
-      } finally {
-        polling = false;
-      }
-    };
-
-    void refreshOpenConversation();
-    const timer = window.setInterval(() => { void refreshOpenConversation(); }, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [selectedReportId, mergePendingMessages]);
-
-  useEffect(() => {
-    if (!selectedReportId) return;
     const timer = setTimeout(() => {
       const el = messagesRef.current;
       if (el) el.scrollTop = el.scrollHeight;

@@ -223,8 +223,15 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
             }
         }
         fetchLetters();
-        const refreshTimer = window.setInterval(fetchLetters, 15_000);
-        return () => window.clearInterval(refreshTimer);
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === "visible") void fetchLetters();
+        };
+        const refreshTimer = window.setInterval(refreshWhenVisible, 60_000);
+        document.addEventListener("visibilitychange", refreshWhenVisible);
+        return () => {
+            window.clearInterval(refreshTimer);
+            document.removeEventListener("visibilitychange", refreshWhenVisible);
+        };
     }, [students]);
 
     async function handleSubmitRequest() {

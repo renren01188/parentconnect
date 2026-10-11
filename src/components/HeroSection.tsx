@@ -1,15 +1,21 @@
 "use client";
 
 import { BellRing, GraduationCap, Heart, Radio } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 
 export default function HeroSection() {
   return (
     <header className="relative isolate overflow-hidden bg-[#132546] text-white">
-      <div
+      <Image
         aria-hidden="true"
-        className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: "url('/hero-school-4.png')" }}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover object-center"
+        fill
+        priority
+        quality={70}
+        sizes="100vw"
+        src="/hero-school-4.png"
       />
       <div className="absolute inset-0 bg-[linear-gradient(110deg,rgba(12,27,59,0.97)_0%,rgba(18,56,86,0.91)_54%,rgba(15,78,92,0.82)_100%)]" />
       <div className="absolute -left-20 top-24 h-64 w-64 rounded-full bg-sky-400/20 blur-3xl" />

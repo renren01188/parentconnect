@@ -76,11 +76,19 @@ export function useReportMessagesRealtime(channelName: string, refreshReports: R
         }
       });
 
-    const fallbackTimer = window.setInterval(() => { void refresh(); }, 15_000);
+    // Realtime is the normal update path. A quiet, visibility-aware fallback
+    // protects users whose browser/network drops the websocket without making
+    // every open Reports page poll the database continuously.
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const fallbackTimer = window.setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       disposed = true;
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       window.clearInterval(fallbackTimer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       void client.removeChannel(channel);
     };
   }, [channelName]);
