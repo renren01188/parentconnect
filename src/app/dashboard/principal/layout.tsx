@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Menu } from "lucide-react";
+import Link from "next/link";
 import Sidebar from "./components/Sidebar";
 import { NotificationProvider } from "./context/NotificationContext";
 
@@ -21,10 +22,10 @@ export default function PrincipalLayout({ children }: { children: React.ReactNod
 
           {/* Mobile top bar — only visible below md */}
           <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-[#6b2fa0]/50 bg-gradient-to-r from-[#3a1660] to-[#522081] px-4 shadow-sm md:hidden">
-            <div>
+            <Link href="/dashboard/principal" className="rounded-md focus:outline-none focus:ring-2 focus:ring-white/70">
               <p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p>
               <p className="mt-0.5 text-[10px] text-white/75">Santiago Elementary · Principal</p>
-            </div>
+            </Link>
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}

@@ -1,21 +1,24 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, CheckCircle, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
+import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
 
-function PasswordRule({ met, text }: { met: boolean; text: string }) {
-  return (
-    <div className={`flex items-center gap-2 text-xs ${met ? "text-violet-700 font-medium" : "text-gray-600"}`}>
-      {met ? (
-        <CheckCircle className="w-3.5 h-3.5 shrink-0 text-violet-500" />
-      ) : (
-        <div className="w-3.5 h-3.5 rounded-full bg-gray-400 shrink-0" />
-      )}
-      {text}
-    </div>
-  );
-}
+const PRINCIPAL_THEME = {
+  canvas: "#f5f3ff",
+  sidebar: "linear-gradient(180deg, #4c1d95 0%, #6d28d9 50%, #7e22ce 100%)",
+  sidebarMuted: "#ede9fe",
+  header: "linear-gradient(135deg, #5b21b6 0%, #7c3aed 100%)",
+  headerMuted: "#ede9fe",
+  accent: "#7c3aed",
+  accentDark: "#5b21b6",
+  accentSoft: "#ede9fe",
+  panelBorder: "#ddd6fe",
+  noticeBackground: "#f5f3ff",
+  noticeBorder: "#ddd6fe",
+  noticeText: "#4c1d95",
+};
 
 export default function PrincipalSetPasswordPage() {
   const router = useRouter();
@@ -37,15 +40,14 @@ export default function PrincipalSetPasswordPage() {
   const passwordsMatch = newPwd === confirmPwd && confirmPwd !== "";
   const canSubmit = allMet && passwordsMatch && !loading;
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     setError("");
 
     if (!allMet) {
       setError("Please meet all password requirements.");
       return;
     }
-
     if (!passwordsMatch) {
       setError("Passwords do not match.");
       return;
@@ -59,7 +61,6 @@ export default function PrincipalSetPasswordPage() {
         body: JSON.stringify({ newPassword: newPwd, confirmPassword: confirmPwd }),
       });
       const data = await res.json();
-
       if (!data.success) {
         setError(data.message || "Something went wrong.");
         return;
@@ -78,148 +79,35 @@ export default function PrincipalSetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex bg-violet-50 font-sans">
-      <div className="hidden lg:flex w-80 flex-shrink-0 flex-col justify-between px-8 py-10 bg-violet-950 text-white">
-        <div>
-          <div className="flex items-center gap-3 mb-10">
-            <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
-              <ShieldCheck className="w-5 h-5 text-violet-100" />
-            </div>
-            <div>
-              <p className="font-extrabold leading-tight">ParentConnect</p>
-              <p className="text-violet-200 text-[11px]">Principal Portal</p>
-            </div>
-          </div>
-          <h2 className="font-extrabold text-2xl leading-snug mb-3">
-            Secure your principal account.
-          </h2>
-          <p className="text-violet-200 text-sm leading-relaxed">
-            You logged in with a temporary password. Create a permanent password before opening your dashboard.
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          {[
-            { step: "1", label: "Succession completed", done: true },
-            { step: "2", label: "Login with temporary password", done: true },
-            { step: "3", label: "Set permanent password", done: false },
-            { step: "4", label: "Access dashboard", done: false },
-          ].map((item) => (
-            <div key={item.step} className="flex items-center gap-3">
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${item.done ? "bg-white text-violet-700" : "bg-white/15 text-white"}`}>
-                {item.done ? "OK" : item.step}
-              </div>
-              <p className={`text-sm font-medium ${item.done ? "text-white" : "text-violet-100"}`}>{item.label}</p>
-            </div>
-          ))}
-        </div>
-
-        <p className="text-violet-300 text-xs">(c) 2026 Santiago Elementary School</p>
-      </div>
-
-      <main className="flex-1 flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-md">
-          {done ? (
-            <div className="bg-white rounded-2xl shadow-xl border border-violet-100 p-10 flex flex-col items-center text-center">
-              <div className="w-20 h-20 rounded-full bg-violet-100 flex items-center justify-center mb-5">
-                <CheckCircle className="w-10 h-10 text-violet-500" />
-              </div>
-              <h2 className="text-2xl font-extrabold text-slate-800 mb-2">Password Set!</h2>
-              <p className="text-slate-500 text-sm">Redirecting you to your dashboard...</p>
-            </div>
-          ) : (
-            <div className="bg-white rounded-2xl shadow-xl border border-violet-100 overflow-hidden">
-              <div className="px-8 pt-8 pb-7 bg-violet-700">
-                <div className="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center mb-4">
-                  <ShieldCheck className="w-7 h-7 text-white" />
-                </div>
-                <h1 className="text-2xl font-extrabold text-white">Create New Password</h1>
-                <p className="text-violet-100 text-sm mt-1.5">
-                  Set a permanent password for your Principal account.
-                </p>
-              </div>
-
-              <form onSubmit={handleSubmit} className="px-8 py-7 space-y-5">
-                <div className="flex items-start gap-2.5 bg-violet-50 border border-violet-200 rounded-xl px-4 py-3">
-                  <AlertCircle className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
-                  <p className="text-xs text-violet-800 leading-relaxed">
-                    These passwords must match before you can continue to the dashboard.
-                  </p>
-                </div>
-
-                {error && (
-                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-3 rounded-xl">
-                    <AlertCircle className="w-4 h-4 shrink-0" /> {error}
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                    Create New Password <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showNew ? "text" : "password"}
-                      value={newPwd}
-                      onChange={(e) => { setNewPwd(e.target.value); setError(""); }}
-                      required
-                      className="w-full px-4 py-3 pr-11 text-sm text-gray-900 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400 transition"
-                    />
-                    <button type="button" onClick={() => setShowNew((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                      {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-xl p-3.5 space-y-2">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Password Requirements</p>
-                  {rules.map((rule) => <PasswordRule key={rule.text} met={rule.met} text={rule.text} />)}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                    Confirm Password <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showConfirm ? "text" : "password"}
-                      value={confirmPwd}
-                      onChange={(e) => { setConfirmPwd(e.target.value); setError(""); }}
-                      required
-                      className={`w-full px-4 py-3 pr-11 text-sm text-gray-900 border rounded-xl outline-none focus:ring-2 transition ${
-                        confirmPwd && !passwordsMatch
-                          ? "border-red-300 focus:ring-red-200 focus:border-red-400"
-                          : "border-gray-200 focus:ring-violet-300 focus:border-violet-400"
-                      }`}
-                    />
-                    <button type="button" onClick={() => setShowConfirm((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                      {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  {confirmPwd && !passwordsMatch ? (
-                    <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" /> Passwords do not match
-                    </p>
-                  ) : null}
-                  {passwordsMatch ? (
-                    <p className="mt-1 text-xs text-violet-700 flex items-center gap-1">
-                      <CheckCircle className="w-3 h-3" /> Passwords match
-                    </p>
-                  ) : null}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!canSubmit}
-                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-bold text-white bg-violet-700 hover:bg-violet-800 transition-all duration-200 active:scale-95 shadow-md shadow-violet-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? "Setting password..." : <><ShieldCheck className="w-4 h-4" /> Set Password &amp; Go to Dashboard</>}
-                </button>
-              </form>
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
+    <SetPasswordScreen
+      theme={PRINCIPAL_THEME}
+      icon={ShieldCheck}
+      portalLabel="Principal Portal"
+      sidebarTitle={<>Almost there!<br />Set your password.</>}
+      sidebarDescription="You've completed principal succession. Create a permanent password to secure your account and access your dashboard."
+      steps={[
+        { step: "1", label: "Succession completed", done: true },
+        { step: "2", label: "Login with temporary password", done: true },
+        { step: "3", label: "Set permanent password", done: false },
+        { step: "4", label: "Access your dashboard", done: false },
+      ]}
+      headerDescription="Welcome! Set a permanent password to secure your Principal account."
+      temporaryPasswordMessage="You logged in with a temporary password. Create a new permanent password before accessing your dashboard."
+      password={newPwd}
+      confirmPassword={confirmPwd}
+      showPassword={showNew}
+      showConfirmation={showConfirm}
+      rules={rules}
+      passwordsMatch={passwordsMatch}
+      canSubmit={canSubmit}
+      loading={loading}
+      error={error}
+      completed={done}
+      onPasswordChange={(value) => { setNewPwd(value); setError(""); }}
+      onConfirmPasswordChange={(value) => { setConfirmPwd(value); setError(""); }}
+      onTogglePassword={() => setShowNew((value) => !value)}
+      onToggleConfirmation={() => setShowConfirm((value) => !value)}
+      onSubmit={handleSubmit}
+    />
   );
 }

@@ -30,6 +30,8 @@ export type StudentParentRegistrationProps = {
 type ApprovalPhase = null | "review" | "sent";
 
 const STEPS = ["Student Info", "RFID & Section", "Verification Records", "Review & Submit"];
+const SUFFIX_OPTIONS = ["Jr.", "Sr.", "II", "III", "IV"] as const;
+const LEARNING_MODALITY_OPTIONS = ["Face-to-Face", "Modular"] as const;
 
 const emptyForm = {
   firstName: "", middleName: "", lastName: "", suffix: "", studentId: "", gender: "",
@@ -443,18 +445,29 @@ export function StudentParentRegistration({
     setTryNext(false);
   }
 
-  const nameFields: (keyof FormData)[] = [
-    "firstName","middleName","lastName","suffix",
-    "fatherFirstName","fatherMiddleName","fatherLastName","fatherSuffix",
+  const uppercaseFields: (keyof FormData)[] = [
+    "firstName","middleName","lastName",
+    "fatherFirstName","fatherMiddleName","fatherLastName",
     "motherFirstName","motherMiddleName","motherLastName",
-    "guardianFirstName","guardianMiddleName","guardianLastName","guardianSuffix",
+    "guardianFirstName","guardianMiddleName","guardianLastName",
     "address","barangay","municipalityCity","province",
   ];
+  const suffixFields: (keyof FormData)[] = ["suffix", "fatherSuffix", "guardianSuffix"];
+
+  const canonicalSuffix = (value: string) => {
+    const suffix = SUFFIX_OPTIONS.find(option => option.toLowerCase() === value.trim().toLowerCase());
+    return suffix ?? "";
+  };
 
   const set = (field: keyof FormData, raw: string) => {
-    const value = nameFields.includes(field) ? capitalize(raw) : raw;
+    // Suffixes are displayed by exact option value. Uppercasing "Jr." to
+    // "JR." made the controlled select fall back to its "None" label.
+    const value = suffixFields.includes(field)
+      ? canonicalSuffix(raw)
+      : uppercaseFields.includes(field) ? capitalize(raw) : raw;
     setForm(prev => ({ ...prev, [field]: value }));
     setTouched(prev => ({ ...prev, [field]: true }));
+    if (apiError) setApiError("");
   };
   const touch = (field: keyof FormData) => setTouched(prev => ({ ...prev, [field]: true }));
 
@@ -501,6 +514,21 @@ export function StudentParentRegistration({
     (["Father", "Mother", "Guardian"] as const).some(role =>
       recordHasAnyName(student, role) && !recordHasCompleteName(student, role)
     );
+  const fatherRecordIncomplete = recordHasAnyName(form, "Father") && !recordHasCompleteName(form, "Father");
+  const motherRecordIncomplete = recordHasAnyName(form, "Mother") && !recordHasCompleteName(form, "Mother");
+  const guardianRecordIncomplete = recordHasAnyName(form, "Guardian") && !recordHasCompleteName(form, "Guardian");
+  if (tryNext && fatherRecordIncomplete) {
+    E.fatherFirstName = "Enter both first and last name.";
+    E.fatherLastName = "Enter both first and last name.";
+  }
+  if (tryNext && motherRecordIncomplete) {
+    E.motherFirstName = "Enter both first and last name.";
+    E.motherLastName = "Enter both first and last name.";
+  }
+  if (tryNext && guardianRecordIncomplete) {
+    E.guardianFirstName = "Enter both first and last name.";
+    E.guardianLastName = "Enter both first and last name.";
+  }
   const guardianHasName = recordHasAnyName(form, "Guardian");
   const guardianRelationshipMissing = guardianHasName && !form.guardianRelationship;
   const guardianOtherRelationshipMissing = isMissingOtherGuardianRelationship(
@@ -522,6 +550,21 @@ export function StudentParentRegistration({
     && !pendingManualRfid.trim() && !duplicateRfid;
   const step2OK = !guardianRelationshipMissing && !guardianOtherRelationshipMissing
     && hasVerificationRecord(form) && !hasIncompleteVerificationRecord(form);
+
+  const verificationSummary = (student: FormData) => {
+    const records = [
+      student.fatherFirstName && student.fatherLastName
+        ? `Father: ${[student.fatherFirstName, student.fatherMiddleName, student.fatherLastName, student.fatherSuffix].filter(Boolean).join(" ")}`
+        : "",
+      student.motherFirstName && student.motherLastName
+        ? `Mother: ${[student.motherFirstName, student.motherMiddleName, student.motherLastName].filter(Boolean).join(" ")}`
+        : "",
+      student.guardianFirstName && student.guardianLastName
+        ? `Guardian: ${[student.guardianFirstName, student.guardianMiddleName, student.guardianLastName, student.guardianSuffix].filter(Boolean).join(" ")}${student.guardianRelationship ? ` (${student.guardianRelationship})` : ""}`
+        : "",
+    ].filter(Boolean);
+    return records.join(" • ");
+  };
 
   const handleNext = () => {
     setTryNext(true);
@@ -569,14 +612,15 @@ export function StudentParentRegistration({
           );
       });
       if (invalidIndex >= 0) {
-        selectStudent(invalidIndex);
+        if (invalidIndex !== activeStudentIndex) selectStudent(invalidIndex);
         setTryNext(true);
-        setApiError("Record at least one complete Father, Mother, or Guardian verification name for each student.");
+        setApiError("Complete both first and last name for every parent or guardian record you started, and record at least one complete verification name.");
         return;
       }
     }
     const ok = step === 0 ? step0OK : step === 1 ? step1OK : step === 2 ? step2OK : true;
     if (ok) {
+      setApiError("");
       setStep(s => s + 1);
       setTryNext(false);
       setTouched({});
@@ -905,7 +949,7 @@ export function StudentParentRegistration({
                     <Field label="Suffix" hint="Optional">
                       <select className={inputOk} value={form.suffix} onChange={e => set("suffix", e.target.value)}>
                         <option value="">None</option>
-                        {["Jr.","Sr.","II","III","IV"].map(s => <option key={s} value={s}>{s}</option>)}
+                        {SUFFIX_OPTIONS.map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}
                       </select>
                     </Field>
                   </div>
@@ -947,7 +991,15 @@ export function StudentParentRegistration({
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Birth Date"><input type="date" className={inputOk} value={form.birthDate} onChange={e => set("birthDate", e.target.value)} /></Field>
-                    <Field label="Learning Modality"><input className={inputOk} placeholder="e.g. Face-to-face" value={form.learningModality} onChange={e => set("learningModality", e.target.value)} /></Field>
+                    <Field label="Learning Modality">
+                      <div className="relative">
+                        <select className={`${inputOk} appearance-none pr-10`} value={form.learningModality} onChange={e => set("learningModality", e.target.value)}>
+                          <option value="">Select learning modality</option>
+                          {LEARNING_MODALITY_OPTIONS.map(modality => <option key={modality} value={modality}>{modality}</option>)}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      </div>
+                    </Field>
                     <Field label="Mother Tongue"><input className={inputOk} value={form.motherTongue} onChange={e => set("motherTongue", e.target.value)} /></Field>
                     <Field label="IP (Ethnic Group)" hint="Optional"><input className={inputOk} value={form.ipEthnicGroup} onChange={e => set("ipEthnicGroup", e.target.value)} /></Field>
                   </div>
@@ -1168,6 +1220,12 @@ export function StudentParentRegistration({
                   <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-relaxed text-blue-700">
                     Record at least one complete Father, Mother, or Guardian name. These records verify the parent during Guardian Sign Up; email and contact number are entered by the parent at sign-up.
                   </p>
+                  {apiError && (
+                    <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                      <p className="text-xs text-red-600">{apiError}</p>
+                    </div>
+                  )}
                   {/* The parent enters their email during Guardian Sign Up.
                     <div className="relative">
                       <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -1210,20 +1268,20 @@ export function StudentParentRegistration({
                   </section>
                   <section className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Father&apos;s Information <span className="font-normal text-slate-400">(if available)</span></h3>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><Field label="Last Name"><input className={inputOk} value={form.fatherLastName} onChange={e => set("fatherLastName", e.target.value)} /></Field><Field label="First Name"><input className={inputOk} value={form.fatherFirstName} onChange={e => set("fatherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.fatherMiddleName} onChange={e => set("fatherMiddleName", e.target.value)} /></Field><Field label="Suffix" hint="Optional"><select className={inputOk} value={form.fatherSuffix} onChange={e => set("fatherSuffix", e.target.value)}><option value="">None</option>{["Jr.", "Sr.", "II", "III", "IV"].map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field></div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><Field label="Last Name" error={E.fatherLastName}><input className={E.fatherLastName ? inputErr : inputOk} value={form.fatherLastName} onChange={e => set("fatherLastName", e.target.value)} /></Field><Field label="First Name" error={E.fatherFirstName}><input className={E.fatherFirstName ? inputErr : inputOk} value={form.fatherFirstName} onChange={e => set("fatherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.fatherMiddleName} onChange={e => set("fatherMiddleName", e.target.value)} /></Field><Field label="Suffix" hint="Optional"><select className={inputOk} value={form.fatherSuffix} onChange={e => set("fatherSuffix", e.target.value)}><option value="">None</option>{SUFFIX_OPTIONS.map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field></div>
                   </section>
                   <section className="rounded-2xl border border-pink-100 bg-pink-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Mother&apos;s Maiden Information <span className="font-normal text-slate-400">(if available)</span></h3>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3"><Field label="Last Name"><input className={inputOk} value={form.motherLastName} onChange={e => set("motherLastName", e.target.value)} /></Field><Field label="First Name"><input className={inputOk} value={form.motherFirstName} onChange={e => set("motherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.motherMiddleName} onChange={e => set("motherMiddleName", e.target.value)} /></Field></div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3"><Field label="Last Name" error={E.motherLastName}><input className={E.motherLastName ? inputErr : inputOk} value={form.motherLastName} onChange={e => set("motherLastName", e.target.value)} /></Field><Field label="First Name" error={E.motherFirstName}><input className={E.motherFirstName ? inputErr : inputOk} value={form.motherFirstName} onChange={e => set("motherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.motherMiddleName} onChange={e => set("motherMiddleName", e.target.value)} /></Field></div>
                   </section>
                   <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                     <h3 className="mb-1 text-sm font-bold text-slate-800">Guardian Information</h3>
                     <p className="mb-4 text-xs text-slate-500">Complete this if a guardian is responsible for the student; otherwise, leave it blank.</p>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <Field label="Last Name"><input className={inputOk} value={form.guardianLastName} onChange={e => set("guardianLastName", e.target.value)} /></Field>
-                      <Field label="First Name"><input className={inputOk} value={form.guardianFirstName} onChange={e => set("guardianFirstName", e.target.value)} /></Field>
+                      <Field label="Last Name" error={E.guardianLastName}><input className={E.guardianLastName ? inputErr : inputOk} value={form.guardianLastName} onChange={e => set("guardianLastName", e.target.value)} /></Field>
+                      <Field label="First Name" error={E.guardianFirstName}><input className={E.guardianFirstName ? inputErr : inputOk} value={form.guardianFirstName} onChange={e => set("guardianFirstName", e.target.value)} /></Field>
                       <Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.guardianMiddleName} onChange={e => set("guardianMiddleName", e.target.value)} /></Field>
-                      <Field label="Suffix" hint="Optional"><select className={inputOk} value={form.guardianSuffix} onChange={e => set("guardianSuffix", e.target.value)}><option value="">None</option>{["Jr.", "Sr.", "II", "III", "IV"].map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field>
+                      <Field label="Suffix" hint="Optional"><select className={inputOk} value={form.guardianSuffix} onChange={e => set("guardianSuffix", e.target.value)}><option value="">None</option>{SUFFIX_OPTIONS.map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field>
                       <Field label="Guardian relationship" required={guardianHasName} error={E.guardianRelationship}>
                         <select className={E.guardianRelationship ? inputErr : inputOk} value={form.guardianRelationship} onChange={e => set("guardianRelationship", e.target.value)}>
                           <option value="">Select guardian relationship</option>
@@ -1257,6 +1315,8 @@ export function StudentParentRegistration({
                         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">{studentName(student, index)}</p>
                         <ReviewRow label="LRN" value={student.studentId} />
                         <ReviewRow label="Gender" value={student.gender} />
+                        <ReviewRow label="Mother Tongue" value={student.motherTongue} />
+                        <ReviewRow label="Learning Modality" value={student.learningModality} />
                         <ReviewRow label="Grade" value={student.grade} />
                         <ReviewRow label="Class Session" value={student.classSession ? `${student.classSession} Class` : ""} />
                         <ReviewRow label="Section" value={student.section} />
@@ -1265,9 +1325,12 @@ export function StudentParentRegistration({
                     ))}
                     <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 sm:col-span-2">
                       <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Parent / Guardian</p>
-                      <div>
-                        <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
-                      </div>
+                      {students.map((student, index) => (
+                        <div key={index} className="mb-3 last:mb-0">
+                          <ReviewRow label={`${studentName(student, index)} verification`} value={verificationSummary(student)} />
+                        </div>
+                      ))}
+                      <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
                     </div>
                   </div>
                   {apiError && (

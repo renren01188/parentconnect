@@ -250,7 +250,7 @@ export function ParentQuickGuide({ steps, preferenceEndpoint, onStepChange }: Pa
 
           {error && <p role="alert" className="mt-3 text-sm font-medium text-red-600">{error}</p>}
 
-          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
               onClick={() => setStepIndex((index) => index - 1)}
@@ -261,9 +261,17 @@ export function ParentQuickGuide({ steps, preferenceEndpoint, onStepChange }: Pa
             </button>
             <button
               type="button"
+              onClick={finishGuide}
+              disabled={saving}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Skip guide
+            </button>
+            <button
+              type="button"
               onClick={isLastStep ? finishGuide : () => setStepIndex((index) => index + 1)}
               disabled={saving}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:ml-auto"
             >
               {saving ? "Saving…" : isLastStep ? "Finish guide" : "Next"}
               {isLastStep ? <Check className="h-4 w-4" aria-hidden="true" /> : <ArrowRight className="h-4 w-4" aria-hidden="true" />}

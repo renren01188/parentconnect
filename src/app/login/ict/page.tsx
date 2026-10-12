@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Monitor, ArrowLeft, ArrowRight } from "lucide-react";
+import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 import Link from "next/link";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
@@ -73,6 +74,8 @@ export default function ICTLoginPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to user selection
         </Link>
+
+        <LoginInstitutionLogos className="justify-center mb-6" />
 
         {/* Icon */}
         <div className="flex justify-center mb-4">

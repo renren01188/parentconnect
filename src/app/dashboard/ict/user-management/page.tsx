@@ -22,12 +22,36 @@ import {
 
 // ─── Types ────────────────────────────────────────────────
 type Role = "Adviser" | "Parent" | "ICT" | "Guidance";
-type Status = "Active" | "Inactive";
+type Status = "Active" | "Inactive" | "Pending Activation";
 type AuditAction = "created" | "edited" | "activated" | "deactivated" | "deleted" | "approved" | "rejected";
 type ApprovalStatus = "Pending" | "Approved" | "Rejected";
 type Gender = "Male" | "Female" | "";
 interface DeleteSchedule { scheduledAtMs: number; deleteAtMs: number; }
 interface ScheduledDeletion { id: number; target_type: "student" | "parent" | "adviser" | "ict" | "guidance"; target_id: string; target_name: string; target_email?: string | null; reason: string; status: "PendingICT" | "Scheduled" | "Rejected" | "Restored" | "Archived" | "Deleted"; requested_at: string; delete_after?: string | null; grade?: string | null; section?: string | null; }
+interface AdviserTransferConflict {
+  grade: string;
+  section: string;
+  outgoingAdviserId: number;
+  outgoingAdviserName: string;
+  outgoingAdviserEmail: string;
+}
+interface AdviserRelocation {
+  grade: string;
+  sections: string[];
+}
+interface ScheduledAdviserTransfer {
+  id: number;
+  outgoing_adviser_id: number;
+  incoming_adviser_id: number;
+  outgoing_name: string;
+  incoming_name: string;
+  grade: string;
+  section: string;
+  effective_at: string;
+  note?: string | null;
+  status: "Scheduled" | "Failed";
+  failure_reason?: string | null;
+}
 
 interface UserRow {
   id: string; accountIds?: number[]; initials: string; name: string; email: string;
@@ -61,7 +85,6 @@ interface ApprovalRequest {
 // ─── Constants ────────────────────────────────────────────
 const PRIMARY = "#274e13";
 const PER_PAGE = 5;
-const DELETE_GRACE_DAYS = 30;
 
 const INITIAL_SECTIONS: Record<string, string[]> = {
   "Grade 1": ["Rizal", "Mabini"], "Grade 2": ["Bonifacio", "Del Pilar"],
@@ -116,6 +139,24 @@ function getDeleteCountdown(schedule?: DeleteSchedule) {
     remainingDays: Math.ceil(remainingMs / 86400000),
     deleteLabel: formatLongDate(schedule.deleteAtMs),
   };
+}
+
+function splitAdviserClassGrade(value: string) {
+  const separator = value.includes("–") ? "–" : "-";
+  const index = value.indexOf(separator);
+  if (index < 0) return { grade: value.trim(), sections: [] as string[] };
+  return {
+    grade: value.slice(0, index).trim(),
+    sections: value.slice(index + separator.length).split(",").map((section) => section.trim()).filter(Boolean),
+  };
+}
+
+function tomorrowManilaDate() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const tomorrow = new Date(`${values.year}-${values.month}-${values.day}T00:00:00+08:00`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return tomorrow.toISOString().slice(0, 10);
 }
 
 async function writeAudit(entry: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) {
@@ -630,8 +671,8 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
     setPasswordError("");
     setStep("sending");
     try {
-      const targetType = user.role === "Parent" ? "parent" : user.role === "Adviser" ? "adviser" : "ict";
-      const targetId = user.accountIds?.[0] ?? Number(user.id.replace(/^(parent|adviser|ict)-/, ""));
+      const targetType = user.role === "Parent" ? "parent" : user.role === "Adviser" ? "adviser" : user.role === "Guidance" ? "guidance" : "ict";
+      const targetId = user.accountIds?.[0] ?? Number(user.id.replace(/^(parent|adviser|ict|guidance)-/, ""));
       const response = await fetch("/api/scheduled-deletions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targetType, targetId, targetName: user.name, targetEmail: user.email, reason: reason || "Account deletion requested by ICT.", password }) });
       const result = await response.json();
       if (!result.success) throw new Error(result.message || "Could not schedule deletion.");
@@ -869,21 +910,29 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
 }
 
 // ─── Edit Adviser Modal ───────────────────────────────────
-type EditStep = "edit" | "confirm" | "success" | "sent";
+type EditStep = "edit" | "confirm" | "transfer" | "success" | "sent";
 
-function EditAdviserModal({ user, onClose, onAudit, onSave }: {
+function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }: {
   user: UserRow; onClose: () => void;
   onAudit: (e: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) => void;
   onSave?: (u: UserRow) => void;
+  onTransferChanged?: () => Promise<void> | void;
 }) {
-  const [step, setStep] = useState<"edit" | "confirm" | "success">("edit");
+  const [step, setStep] = useState<EditStep>("edit");
   const [saving, setSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [transferConflicts, setTransferConflicts] = useState<AdviserTransferConflict[]>([]);
+  const [transferRelocation, setTransferRelocation] = useState<AdviserRelocation | null>(null);
+  const [releaseCurrentAssignment, setReleaseCurrentAssignment] = useState(false);
+  const [transferEffectiveDate, setTransferEffectiveDate] = useState(tomorrowManilaDate);
+  const [transferNote, setTransferNote] = useState("");
   const isICT = user.role === "ICT";
   const isGuidance = user.role === "Guidance";
+  const isPendingActivation = user.status === "Pending Activation";
   const assignmentLabel = isICT || isGuidance ? "Department" : "Class/Grade";
 
   const [form, setForm] = useState({
@@ -902,6 +951,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
 
   const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") +
     (form.suffix && form.suffix !== "None" ? ` ${form.suffix}` : "");
+  const transferConflict = transferConflicts[0] ?? null;
 
   const changes: { field: string; from: string; to: string }[] = [];
   if (fullName !== user.name) changes.push({ field: "Name", from: user.name, to: fullName });
@@ -915,6 +965,10 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
   async function handleReview() {
     if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim()) {
       alert("First name, last name, and email are required."); return;
+    }
+    if (isPendingActivation && form.email.trim().toLowerCase() !== user.email.trim().toLowerCase()) {
+      setPasswordError("For a pending account, use “Send a new temporary password” to correct the email and deliver new credentials together.");
+      return;
     }
     if (form.newPassword || form.confirmPassword || form.currentPassword) {
       const verifyRes = await fetch("/api/ict/verify-password", {
@@ -937,7 +991,83 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
       }
     }
     setPasswordError("");
+
+    if (!isICT && !isGuidance && form.classGrade !== user.classGrade) {
+      const assignment = splitAdviserClassGrade(form.classGrade);
+      const incomingAdviserId = user.accountIds?.[0] ?? Number(user.id.replace(/^adviser-/, ""));
+      if (assignment.grade && assignment.sections.length && Number.isInteger(incomingAdviserId)) {
+        try {
+          const response = await fetch("/api/adviser-transfers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "check", incomingAdviserId, grade: assignment.grade, sections: assignment.sections }),
+          });
+          const result = await response.json();
+          if (!result.success) {
+            setPasswordError(result.message || "Unable to check the selected section.");
+            return;
+          }
+          if (result.conflicts?.length) {
+            setTransferConflicts(result.conflicts);
+            setTransferRelocation(result.relocation ?? null);
+            setReleaseCurrentAssignment(false);
+            setStep("transfer");
+            return;
+          }
+        } catch {
+          setPasswordError("Unable to check the selected section. Please try again.");
+          return;
+        }
+      }
+    }
     setStep("confirm");
+  }
+
+  async function handleTransfer(effect: "schedule" | "immediate") {
+    if (!transferConflict || transferConflicts.length === 0) return;
+    const incomingAdviserId = user.accountIds?.[0] ?? Number(user.id.replace(/^adviser-/, ""));
+    if (!Number.isInteger(incomingAdviserId)) {
+      setPasswordError("The incoming adviser account could not be identified.");
+      return;
+    }
+    if (transferRelocation && !releaseCurrentAssignment) {
+      setPasswordError(`Confirm that ${fullName} will leave Grade ${transferRelocation.grade} - ${transferRelocation.sections.join(", ")} before continuing.`);
+      return;
+    }
+    const targetSections = transferConflicts.map((conflict) => conflict.section);
+    if (effect === "immediate" && !window.confirm(`Transfer Grade ${transferConflict.grade} – ${targetSections.join(", ")} to ${fullName} now? The outgoing adviser will lose access immediately.${transferRelocation ? ` ${fullName} will also leave Grade ${transferRelocation.grade} – ${transferRelocation.sections.join(", ")}.` : ""}`)) return;
+
+    setSaving(true);
+    setPasswordError("");
+    try {
+      const response = await fetch("/api/adviser-transfers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: effect,
+          incomingAdviserId,
+          grade: transferConflict.grade,
+          sections: targetSections,
+          effectiveDate: transferEffectiveDate,
+          note: transferNote,
+          releaseCurrentAssignment,
+        }),
+      });
+      const result = await response.json();
+      if (!result.success) throw new Error(result.message || "Unable to transfer the section.");
+
+      await onTransferChanged?.();
+      const outgoingNames = [...new Set(transferConflicts.map((conflict) => conflict.outgoingAdviserName))].join(", ");
+      const relocationMessage = transferRelocation ? ` ${fullName} will leave Grade ${transferRelocation.grade} – ${transferRelocation.sections.join(", ")} at that time.` : "";
+      setSuccessMessage(effect === "immediate"
+        ? `Grade ${transferConflict.grade} – ${targetSections.join(", ")} was transferred immediately. ${outgoingNames} no longer has access to those sections.${relocationMessage}`
+        : `The handover of Grade ${transferConflict.grade} – ${targetSections.join(", ")} is scheduled for ${new Date(`${transferEffectiveDate}T00:00:00+08:00`).toLocaleDateString("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" })}. ${outgoingNames} keeps access until then.${relocationMessage}`);
+      setStep("success");
+    } catch (err: unknown) {
+      setPasswordError(err instanceof Error ? err.message : "Unable to transfer the section.");
+    } finally {
+      setSaving(false);
+    }
   }
   async function handleSend() {
     setSaving(true);
@@ -968,6 +1098,13 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
         }),
       });
       const data = await res.json();
+      if (data.code === "ADVISER_SECTION_OCCUPIED" && data.conflicts?.length) {
+        setTransferConflicts(data.conflicts);
+        setTransferRelocation(null);
+        setReleaseCurrentAssignment(false);
+        setStep("transfer");
+        return;
+      }
       if (!data.success) throw new Error(data.message || "Failed to save account details.");
 
       if (onSave) onSave(updated);
@@ -975,9 +1112,51 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
         action: "edited", targetUser: updated.name, targetRole: user.role, targetEmail: updated.email,
         performedBy: "ICT Admin", details: changes.map(c => `${c.field}: "${c.from}" -> "${c.to}"`).join("; "), changes,
       });
+      setSuccessMessage(`Changes for ${fullName} were saved directly by ICT and logged in the audit trail.`);
       setStep("success");
     } catch (err: unknown) {
       setPasswordError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleResendTemporaryPassword() {
+    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) {
+      setPasswordError("Enter a valid email address before sending a new temporary password.");
+      return;
+    }
+    setSaving(true);
+    setPasswordError("");
+    try {
+      const response = await fetch("/api/ict/user-management", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "resend-pending-activation",
+          userId: user.id,
+          role: user.role,
+          email: form.email,
+        }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.message || "Unable to resend the temporary password.");
+
+      const updated = { ...user, email: data.email ?? form.email.trim().toLowerCase(), status: "Pending Activation" as Status };
+      onSave?.(updated);
+      await onAudit({
+        action: "edited",
+        targetUser: updated.name,
+        targetRole: updated.role,
+        targetEmail: updated.email,
+        performedBy: "ICT Admin",
+        details: "Corrected the pending-activation email and sent a newly generated temporary password. The old temporary password was invalidated.",
+        changes: [{ field: "Temporary password", from: "Previous temporary password", to: "New temporary password sent" }],
+      });
+      setSuccessMessage(`A new temporary password was sent to ${updated.email}. The account remains pending until ${fullName} sets a permanent password.`);
+      setStep("success");
+    } catch (err: unknown) {
+      setPasswordError(err instanceof Error ? err.message : "Unable to resend the temporary password.");
     } finally {
       setSaving(false);
     }
@@ -990,8 +1169,8 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
           <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4">
             <CheckCircle className="w-7 h-7 text-teal-600" />
           </div>
-          <h3 className="text-lg font-bold text-gray-800 mb-1">Changes Saved!</h3>
-          <p className="text-sm text-gray-500 mb-5">Changes for <strong>{fullName}</strong> were saved directly by ICT and logged in the audit trail.</p>
+          <h3 className="text-lg font-bold text-gray-800 mb-1">{successMessage.startsWith("A new") ? "Temporary Password Sent!" : "Changes Saved!"}</h3>
+          <p className="text-sm text-gray-500 mb-5">{successMessage}</p>
           <button onClick={onClose} className="w-full py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
         </div>
       </div>
@@ -1002,15 +1181,15 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "95vh" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 shrink-0">
-          {step === "confirm" && (
+          {(step === "confirm" || step === "transfer") && (
             <button onClick={() => setStep("edit")} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
           <div className="flex-1">
-            <h2 className="text-base font-bold text-gray-900">{step === "edit" ? (isICT ? "Edit ICT Account" : isGuidance ? "Edit Guidance Account" : "Edit Adviser") : "Confirm Changes"}</h2>
+            <h2 className="text-base font-bold text-gray-900">{step === "edit" ? (isICT ? "Edit ICT Account" : isGuidance ? "Edit Guidance Account" : "Edit Adviser") : step === "transfer" ? "Section Already Has an Adviser" : "Confirm Changes"}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              {step === "edit" ? `Editing: ${user.name}` : "Confirm before saving changes directly"}
+              {step === "edit" ? `Editing: ${user.name}` : step === "transfer" ? "Choose when the adviser handover should take effect" : "Confirm before saving changes directly"}
             </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><X className="w-4 h-4" /></button>
@@ -1049,6 +1228,22 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
                 </div>
               </div>
               <FInput label="Employee ID" required value={form.employeeId} onChange={v => setForm(p => ({ ...p, employeeId: v }))} />
+              {isPendingActivation && (
+                <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <Clock className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+                    <div>
+                      <p className="text-xs font-bold text-sky-800">Pending activation</p>
+                      <p className="mt-1 text-xs leading-5 text-sky-700">Correct the email above if needed, then send a new temporary password. This replaces the old one; the account becomes active only after its owner sets a permanent password.</p>
+                      <button type="button" onClick={handleResendTemporaryPassword} disabled={saving}
+                        className="mt-3 inline-flex items-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-xs font-bold text-white transition hover:bg-sky-800 disabled:opacity-60">
+                        {saving ? <><svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Sending…</> : <><Send className="h-3.5 w-3.5" />Send a new temporary password</>}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {isPendingActivation && passwordError && <p role="alert" className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
             </div>
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">{isICT ? "System Access" : isGuidance ? "Department" : "Class Assignment"}</p>
@@ -1058,7 +1253,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
                   ? <p className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm font-semibold text-gray-600">Student Support Services</p>
                   : <GradeSectionPicker value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />}
             </div>
-            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
+            {!isPendingActivation && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
@@ -1089,7 +1284,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
                 </div>
               </div>
               {passwordError && <p className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
-            </div>
+            </div>}
             <div className="flex justify-between pt-2">
               <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
               <button onClick={handleReview} disabled={!hasChanges}
@@ -1100,8 +1295,56 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
           </div>
         )}
 
-        {step === "confirm" && (
+        {step === "transfer" && transferConflict && (
           <div className="p-6 overflow-y-auto flex-1 space-y-4">
+            <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="text-xs leading-5 text-amber-800">
+                <p><strong>{[...new Set(transferConflicts.map((conflict) => conflict.outgoingAdviserName))].join(", ")}</strong> is the active adviser for <strong>Grade {transferConflict.grade} – {transferConflicts.map((conflict) => conflict.section).join(", ")}</strong>.</p>
+                <p className="mt-1">ICT cannot assign the same section to two active advisers. Choose a scheduled handover or transfer it immediately.</p>
+              </div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm">
+              <p className="font-bold text-gray-800">{transferConflict.outgoingAdviserName} <span className="font-normal text-gray-400">→</span> {fullName}</p>
+              <p className="mt-1 text-xs text-gray-500">Grade {transferConflict.grade} – {transferConflicts.map((conflict) => conflict.section).join(", ")}</p>
+            </div>
+            {transferRelocation && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-xs leading-5 text-red-800">
+                <input type="checkbox" checked={releaseCurrentAssignment} onChange={(event) => { setReleaseCurrentAssignment(event.target.checked); setPasswordError(""); }} className="mt-0.5 h-4 w-4 shrink-0 accent-red-600" />
+                <span><strong>Release current assignment:</strong> on the effective date, {fullName} will leave <strong>Grade {transferRelocation.grade} – {transferRelocation.sections.join(", ")}</strong>. Those sections will be unassigned until ICT assigns another adviser.</span>
+              </label>
+            )}
+            <div>
+              <FLabel required>Scheduled effective date</FLabel>
+              <input type="date" value={transferEffectiveDate} min={tomorrowManilaDate()} onChange={(event) => setTransferEffectiveDate(event.target.value)}
+                className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" />
+              <p className="mt-1 text-[11px] text-gray-400">The current adviser retains access until this date. The handover runs automatically shortly after midnight Philippine time.</p>
+            </div>
+            <div>
+              <FLabel>Transfer note (optional)</FLabel>
+              <textarea value={transferNote} onChange={(event) => setTransferNote(event.target.value)} maxLength={500} rows={3} placeholder="Reason for this adviser transfer"
+                className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" />
+            </div>
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs leading-5 text-sky-800">
+              This action only handles the section handover. If you changed other profile details above, save those separately after the transfer is complete.
+            </div>
+            {passwordError && <p role="alert" className="text-xs font-semibold text-red-600">{passwordError}</p>}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+              <button onClick={() => setStep("edit")} disabled={saving} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 disabled:opacity-60">Go Back</button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button onClick={() => handleTransfer("immediate")} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-60">
+                  <AlertTriangle className="h-4 w-4" /> Effect Transfer Immediately
+                </button>
+                <button onClick={() => handleTransfer("schedule")} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60">
+                  {saving ? "Saving…" : <><Clock className="h-4 w-4" /> Schedule Transfer</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === "confirm" && (
+          <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto p-6">
             <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-700">Save changes to <strong>{user.name}</strong>? Password changes were authorized with the current ICT password.</p>
@@ -1110,12 +1353,12 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
               <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{changes.length} Change{changes.length !== 1 ? "s" : ""} Ready to Save</p>
               <div className="space-y-3">
                 {changes.map(({ field, from, to }) => (
-                  <div key={field} className="flex items-start justify-between gap-4">
+                  <div key={field} className="grid min-w-0 grid-cols-[minmax(7rem,9rem)_minmax(0,1fr)] items-start gap-3">
                     <span className="text-xs font-semibold text-gray-500 w-36 shrink-0">{field}</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <span className="text-xs text-gray-400 line-through truncate">{from}</span>
-                      <span className="text-gray-300">→</span>
-                      <span className="text-xs font-bold truncate text-[#274e13]">{to}</span>
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                      <span title={from} className="min-w-0 truncate text-xs text-gray-400 line-through">{from}</span>
+                      <span className="shrink-0 text-gray-300">→</span>
+                      <span title={to} className="min-w-0 truncate text-xs font-bold text-[#274e13]">{to}</span>
                     </div>
                   </div>
                 ))}
@@ -1134,6 +1377,61 @@ function EditAdviserModal({ user, onClose, onAudit, onSave }: {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function AdviserTransferQueueModal({ configured, transfers, onClose, onChanged }: {
+  configured: boolean;
+  transfers: ScheduledAdviserTransfer[];
+  onClose: () => void;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  async function cancelTransfer(transfer: ScheduledAdviserTransfer) {
+    if (!window.confirm(`Cancel the scheduled transfer of Grade ${transfer.grade} – ${transfer.section}?`)) return;
+    setCancellingId(transfer.id);
+    setError("");
+    try {
+      const response = await fetch("/api/adviser-transfers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel", transferId: transfer.id }),
+      });
+      const result = await response.json();
+      if (!result.success) throw new Error(result.message || "Unable to cancel this transfer.");
+      await onChanged();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to cancel this transfer.");
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "85vh" }} onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center gap-3 border-b border-gray-100 px-6 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#274e13]/10 text-[#274e13]"><Clock className="h-4 w-4" /></div>
+          <div className="flex-1"><h2 className="text-base font-bold text-gray-900">Scheduled Adviser Transfers</h2><p className="mt-0.5 text-xs text-gray-500">Review or cancel a pending section handover.</p></div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+          {!configured && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800"><p className="font-bold">Scheduled transfers need one database migration.</p><p className="mt-1">The immediate transfer option is available now. Deploy the project migration to enable date-based handovers and this queue.</p></div>}
+          {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">{error}</p>}
+          {configured && transfers.length === 0 && <div className="py-10 text-center"><CheckCircle2 className="mx-auto mb-2 h-9 w-9 text-emerald-300" /><p className="text-sm font-semibold text-gray-600">No pending adviser transfers.</p></div>}
+          {transfers.map((transfer) => (
+            <div key={transfer.id} className={`rounded-xl border p-4 ${transfer.status === "Failed" ? "border-red-200 bg-red-50" : "border-gray-200 bg-gray-50"}`}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div><p className="text-sm font-bold text-gray-800">Grade {transfer.grade} – {transfer.section}</p><p className="mt-1 text-xs text-gray-600"><strong>{transfer.outgoing_name}</strong> <span className="px-1 text-gray-400">→</span> <strong>{transfer.incoming_name}</strong></p><p className="mt-2 text-[11px] font-semibold text-[#274e13]">{transfer.status === "Scheduled" ? `Effective ${new Date(transfer.effective_at).toLocaleDateString("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" })}` : transfer.failure_reason || "Transfer failed"}</p>{transfer.note && <p className="mt-1 text-[11px] text-gray-500">Note: {transfer.note}</p>}</div>
+                {transfer.status === "Scheduled" && <button onClick={() => cancelTransfer(transfer)} disabled={cancellingId === transfer.id} className="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-60">{cancellingId === transfer.id ? "Cancelling…" : "Cancel Transfer"}</button>}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1464,7 +1762,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
         )}
 
         {step === "confirm" && (
-          <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto p-6">
             <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-700">Save changes to <strong>{user.name}</strong>? This will be recorded in the audit trail.</p>
@@ -1473,12 +1771,12 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
               <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{changes.length} Change{changes.length !== 1 ? "s" : ""}</p>
               <div className="space-y-3">
                 {changes.map(({ field, from, to }) => (
-                  <div key={field} className="flex items-start justify-between gap-4">
+                  <div key={field} className="grid min-w-0 grid-cols-[minmax(7rem,9rem)_minmax(0,1fr)] items-start gap-3">
                     <span className="text-xs font-semibold text-gray-500 w-36 shrink-0">{field}</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <span className="text-xs text-gray-400 line-through truncate">{from}</span>
-                      <span className="text-gray-300">→</span>
-                      <span className="text-xs font-bold truncate text-[#274e13]">{to}</span>
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                      <span title={from} className="min-w-0 truncate text-xs text-gray-400 line-through">{from}</span>
+                      <span className="shrink-0 text-gray-300">→</span>
+                      <span title={to} className="min-w-0 truncate text-xs font-bold text-[#274e13]">{to}</span>
                     </div>
                   </div>
                 ))}
@@ -1772,8 +2070,11 @@ export default function UserManagementPage() {
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [previewUser, setPreviewUser] = useState<UserRow | null>(null);
   const [scheduledDeletions, setScheduledDeletions] = useState<ScheduledDeletion[]>([]);
+  const [scheduledAdviserTransfers, setScheduledAdviserTransfers] = useState<ScheduledAdviserTransfer[]>([]);
+  const [adviserTransfersConfigured, setAdviserTransfersConfigured] = useState(true);
   const [sectionCatalog, setSectionCatalog] = useState<{ grade: string; name: string }[]>([]);
   const [showBulkDeletion, setShowBulkDeletion] = useState(false);
+  const [showAdviserTransfers, setShowAdviserTransfers] = useState(false);
   const [deletionActionError, setDeletionActionError] = useState("");
   const [pagination, setPagination] = useState({ page: 1, total: 0, totalPages: 1 });
   const [serverCounts, setServerCounts] = useState({ total: 0, advisers: 0, ict: 0, guidance: 0, parents: 0 });
@@ -1786,6 +2087,7 @@ export default function UserManagementPage() {
        const approvalsPromise = fetch("/api/ict/approvals");
        const auditPromise = fetch("/api/ict/audit-log");
        const deletionsPromise = fetch("/api/scheduled-deletions");
+       const transfersPromise = fetch("/api/adviser-transfers");
        const approvalsRes = await approvalsPromise;
        const approvalsData = await approvalsRes.json();
        const userParams = new URLSearchParams({ page: String(page), pageSize: String(PER_PAGE), role: apiRole, query: deferredQuery });
@@ -1793,15 +2095,17 @@ export default function UserManagementPage() {
          const pendingEmails = (approvalsData.approvals ?? []).filter((approval: ApprovalRequest) => approval.status === "Pending").map((approval: ApprovalRequest) => approval.adviserEmail).filter(Boolean);
          userParams.set("emails", pendingEmails.length ? pendingEmails.join(",") : "__no_pending_approval__");
        }
-       const [usersRes, auditRes, deletionsRes] = await Promise.all([
+       const [usersRes, auditRes, deletionsRes, transfersRes] = await Promise.all([
         fetch(`/api/ict/user-management?${userParams.toString()}`),
         auditPromise,
         deletionsPromise,
+        transfersPromise,
       ]);
 
       const usersData = await usersRes.json();
       const auditData = await auditRes.json();
       const deletionsData = await deletionsRes.json();
+      const transfersData = await transfersRes.json();
 
       if (usersData.success) {
         setSectionCatalog(usersData.sections ?? []);
@@ -1825,6 +2129,10 @@ export default function UserManagementPage() {
       if (approvalsData.success) setApprovals(approvalsData.approvals);
       if (auditData.success) setAuditLog(auditData.auditLog);
       if (deletionsData.success) setScheduledDeletions(deletionsData.deletions ?? []);
+      if (transfersData.success) {
+        setScheduledAdviserTransfers(transfersData.transfers ?? []);
+        setAdviserTransfersConfigured(transfersData.configured !== false);
+      }
     } catch (err) {
       console.error("Failed to load user management data:", err);
       setLoadError(err instanceof Error ? err.message : "Unable to load user management data. Please try again.");
@@ -1893,38 +2201,19 @@ export default function UserManagementPage() {
     });
   }
 
-  async function markDeletionScheduled() {
-    await loadData();
-  }
-
   async function updateScheduledDeletion(id: number, action: "approve" | "reject" | "restore" | "delete-now") {
     if (action === "delete-now" && !window.confirm("Archive this account now? Its related history will be preserved and ICT can restore it.")) return;
-    const password = action === "approve" ? window.prompt("Enter your current ICT password to approve this deletion request:") : undefined;
-    if (action === "approve" && !password) return;
+    const requiresPassword = action === "approve" || action === "restore" || action === "delete-now";
+    const password = requiresPassword
+      ? window.prompt(`Enter your current ICT password to ${action === "approve" ? "approve" : action === "restore" ? "restore" : "archive"} this deletion request:`)
+      : undefined;
+    if (requiresPassword && !password) return;
     setDeletionActionError("");
     const response = await fetch("/api/scheduled-deletions", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action, password }) });
     const result = await response.json();
     if (!result.success) { setDeletionActionError(result.message || "Unable to update deletion."); return; }
     await loadData();
   }
-
-  useEffect(() => {
-    const dueUsers = users.filter((u) => u.deleteSchedule && u.deleteSchedule.deleteAtMs <= Date.now());
-    if (dueUsers.length === 0) return;
-
-    dueUsers.forEach((user) => {
-      addAudit({
-        action: "deleted",
-        targetUser: user.name,
-        targetRole: user.role,
-        targetEmail: user.email,
-        performedBy: "System",
-        details: `Account archived after the ${DELETE_GRACE_DAYS}-day grace period; related history preserved.`,
-      });
-    });
-
-    setUsers((prev) => prev.filter((u) => !u.deleteSchedule || u.deleteSchedule.deleteAtMs > Date.now()));
-  }, [users]);
 
   const rows = useMemo(() => filterMode === "approval"
     ? users.filter(u => approvals.some(a => a.adviserEmail === u.email && a.status === "Pending"))
@@ -1933,6 +2222,7 @@ export default function UserManagementPage() {
   const counts = serverCounts;
   const scheduledDeletionCount = users.filter((u) => u.deleteSchedule).length;
   const pendingDeletionRequestCount = scheduledDeletions.filter((item) => item.status === "PendingICT").length;
+  const scheduledTransferCount = scheduledAdviserTransfers.filter((item) => item.status === "Scheduled").length;
 
   return (
     <div className="min-h-full min-w-0 overflow-x-clip bg-gray-100 p-4 sm:p-6">
@@ -1946,6 +2236,7 @@ export default function UserManagementPage() {
           <button onClick={() => router.push("/dashboard/ict/user-management/create-user")} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
             <UserPlus className="w-4 h-4" /> Create User
           </button>
+          <button onClick={() => setShowAdviserTransfers(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-bold text-violet-700 transition hover:bg-violet-50"><Clock className="w-4 h-4" /> Adviser Transfers{scheduledTransferCount > 0 && <span className="-mr-1 rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{scheduledTransferCount}</span>}</button>
           <button onClick={() => setShowBulkDeletion(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
           <button onClick={() => setShowApprovals(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
             <FileCheck className="w-4 h-4" /> Approvals
@@ -2056,6 +2347,7 @@ export default function UserManagementPage() {
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-semibold text-gray-800 truncate">{u.name}</p>
                             {hasPendingApproval && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200"><Bell className="w-2.5 h-2.5" /> Pending</span>}
+                            {u.status === "Pending Activation" && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200"><Clock className="w-2.5 h-2.5" /> Pending activation</span>}
                             {deleteCountdown && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200"><Clock className="w-2.5 h-2.5" /> Delete in {deleteCountdown.remainingDays}d</span>}
                           </div>
                           <p className="text-xs text-gray-400 truncate">{u.email}</p>
@@ -2112,6 +2404,7 @@ export default function UserManagementPage() {
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>
                         {hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
+                        {user.status === "Pending Activation" && <span className="rounded-full border border-sky-200 bg-sky-100 px-2 py-1 text-[10px] font-bold text-sky-700">Pending activation</span>}
                         {deleteCountdown && <span className="rounded-full border border-red-200 bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">Delete in {deleteCountdown.remainingDays}d</span>}
                       </div>
                       <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
@@ -2189,13 +2482,14 @@ export default function UserManagementPage() {
       {previewUser && <PreviewModal user={previewUser} onClose={() => setPreviewUser(null)} onEdit={u => { setPreviewUser(null); setEditUser(u); }} />}
       {editUser && (editUser.role === "Adviser" || editUser.role === "ICT" || editUser.role === "Guidance") && (
         <EditAdviserModal user={editUser} onClose={() => setEditUser(null)} onAudit={addAudit}
-          onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }} />
+          onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); }} onTransferChanged={loadData} />
       )}
       {editUser && editUser.role === "Parent" && (
         <EditParentModal user={editUser} onClose={() => setEditUser(null)} onAudit={addAudit}
           onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }} />
       )}
       {showBulkDeletion && <BulkDeletionModal users={users} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
+      {showAdviserTransfers && <AdviserTransferQueueModal configured={adviserTransfersConfigured} transfers={scheduledAdviserTransfers} onClose={() => setShowAdviserTransfers(false)} onChanged={loadData} />}
     </div>
   );
 }

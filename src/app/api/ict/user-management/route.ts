@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
+import { randomInt } from "crypto";
 import { supabase } from "@/lib/supabase";
+import {
+  sendAdviserTempPasswordEmail,
+  sendGuidanceTempPasswordEmail,
+  sendIctTempPasswordEmail,
+} from "@/lib/mailer";
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
 import { logAudit } from "@/lib/audit";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import { processDueScheduledDeletions } from "@/lib/processScheduledDeletions";
+import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
 import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
@@ -17,7 +25,7 @@ const SECRET = new TextEncoder().encode(
 );
 
 type Role = "Adviser" | "Parent" | "ICT" | "Guidance";
-type Status = "Active" | "Inactive";
+type Status = "Active" | "Inactive" | "Pending Activation";
 
 type FamilyDetails = {
   fatherFirstName?: string;
@@ -89,11 +97,26 @@ type UserRow = {
 };
 
 function normalizeStatus(status: unknown): Status {
-  return String(status ?? "").toLowerCase() === "inactive" ? "Inactive" : "Active";
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "pending_activation") return "Pending Activation";
+  return normalized === "inactive" ? "Inactive" : "Active";
+}
+
+/** Archived records are retained for history but excluded from active user management. */
+function isVisibleUserRecord(row: { archive_status?: unknown }) {
+  const archiveStatus = String(row.archive_status ?? "").trim().toLowerCase();
+  // Support older rows that used "deleted" before archival was standardized.
+  return archiveStatus !== "archived" && archiveStatus !== "deleted";
 }
 
 function toDbStatus(status: unknown) {
+  if (String(status) === "Pending Activation") return "pending_activation";
   return String(status) === "Inactive" ? "inactive" : "active";
+}
+
+function generateTemporaryPassword() {
+  const characters = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
+  return Array.from({ length: 10 }, () => characters[randomInt(characters.length)]).join("");
 }
 
 function isMissingColumnError(error: { code?: string; message?: string } | null) {
@@ -261,7 +284,20 @@ async function getIctSession() {
   try {
     const { payload } = await jwtVerify(token, SECRET);
     if (payload.role !== "ict") return null;
-    return { ictId: Number(payload.id) };
+    const ictId = Number(payload.id);
+    if (!Number.isSafeInteger(ictId) || ictId <= 0) return null;
+    // A pending ICT account may authenticate only to choose its own permanent
+    // password. It must not be able to operate User Management by calling
+    // this API directly before activation.
+    const { data: ict, error } = await supabase
+      .from("ict_admins")
+      .select("status, archive_status, password_set")
+      .eq("id", ictId)
+      .maybeSingle();
+    if (error || !ict) return null;
+    const passwordSet = ict.password_set == null || ict.password_set === true || ict.password_set === 1;
+    if (ict.status !== "active" || ict.archive_status === "archived" || ict.archive_status === "deleted" || !passwordSet) return null;
+    return { ictId };
   } catch {
     return null;
   }
@@ -285,6 +321,10 @@ export async function GET(request: NextRequest) {
     const auth = await requireIct();
     if ("error" in auth) return auth.error;
 
+    // Archive any records whose recovery period is over before calculating
+    // the list, counts, or pagination sent to ICT.
+    await Promise.all([processDueScheduledDeletions(), processDueAdviserTransfers()]);
+
     const [
       { data: advisers, error: adviserError },
       { data: ictAdmins, error: ictError },
@@ -294,19 +334,19 @@ export async function GET(request: NextRequest) {
     ] = await Promise.all([
       supabase
         .from("advisers")
-        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, grade, section, sections, status")
+        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, grade, section, sections, status, archive_status")
         .order("last_name", { ascending: true }),
       supabase
         .from("ict_admins")
-        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status")
+        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status, archive_status")
         .order("last_name", { ascending: true }),
       supabase
         .from("guidance_counselors")
-        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status")
+        .select("id, employee_id, first_name, middle_name, last_name, suffix, email, phone, status, archive_status")
         .order("last_name", { ascending: true }),
       supabase
         .from("parents")
-        .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set")
+        .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set, archive_status")
         .order("parent_last_name", { ascending: true }),
       supabase
         .from("parent_student_links")
@@ -326,7 +366,7 @@ export async function GET(request: NextRequest) {
     const [studentResult, sectionResult] = await Promise.all([
       supabase
         .from("students")
-        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, birth_date, mother_tongue, ip_ethnic_group, religion, house_street_sitio_purok, barangay, municipality_city, province, learning_modality"),
+        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, birth_date, mother_tongue, ip_ethnic_group, religion, house_street_sitio_purok, barangay, municipality_city, province, learning_modality, archive_status"),
       supabase
         .from("sections")
         .select("grade, name")
@@ -338,7 +378,17 @@ export async function GET(request: NextRequest) {
     if (studentError) throw studentError;
     if (sectionCatalogError) throw sectionCatalogError;
 
-    const studentDbIds = (students ?? []).map((student: any) => student.id).filter(Boolean);
+    // Keep archived roots out before building list rows, child links, and the
+    // pagination/count metadata returned to the client.
+    const visibleAdvisers = (advisers ?? []).filter(isVisibleUserRecord);
+    const visibleIctAdmins = (ictAdmins ?? []).filter(isVisibleUserRecord);
+    const visibleGuidanceCounselors = (guidanceCounselors ?? []).filter(isVisibleUserRecord);
+    const visibleParents = (parents ?? []).filter(isVisibleUserRecord);
+    const visibleStudents = (students ?? []).filter(isVisibleUserRecord);
+    const visibleStudentIds = new Set(visibleStudents.map((student) => String(student.student_id)));
+    const visibleLinks = (links ?? []).filter((link) => visibleStudentIds.has(String(link.student_id)));
+
+    const studentDbIds = visibleStudents.map((student: any) => student.id).filter(Boolean);
     const familyResult = studentDbIds.length
       ? await supabase.from("student_family_members").select("student_db_id, role, first_name, middle_name, last_name, suffix, relationship, contact_number").in("student_db_id", studentDbIds)
       : { data: [], error: null };
@@ -356,16 +406,16 @@ export async function GET(request: NextRequest) {
     for (const member of familyMembers ?? []) familyByStudent.set(member.student_db_id, [...(familyByStudent.get(member.student_db_id) ?? []), member]);
 
     // Map student_id → student row
-    const studentById = new Map((students ?? []).map((s: any) => [s.student_id, s]));
+    const studentById = new Map(visibleStudents.map((s: any) => [s.student_id, s]));
 
     // Map parent_id → list of student_ids
     const linksByParent = new Map<number, string[]>();
-    for (const link of links ?? []) {
+    for (const link of visibleLinks) {
       const pid = Number(link.parent_id);
       linksByParent.set(pid, [...(linksByParent.get(pid) ?? []), link.student_id]);
     }
 
-    const adviserRows: UserRow[] = (advisers ?? []).map((adviser: any) => {
+    const adviserRows: UserRow[] = visibleAdvisers.map((adviser: any) => {
       const sections = Array.isArray(adviser.sections) && adviser.sections.length
         ? adviser.sections
         : adviser.section
@@ -393,7 +443,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    const ictRows: UserRow[] = (ictAdmins ?? []).map((ict: any) => ({
+    const ictRows: UserRow[] = visibleIctAdmins.map((ict: any) => ({
       id: `ict-${ict.id}`,
       accountIds: [ict.id],
       initials: initials(ict.first_name, ict.last_name),
@@ -410,7 +460,7 @@ export async function GET(request: NextRequest) {
       employeeId: ict.employee_id ?? "",
     }));
 
-    const guidanceRows: UserRow[] = (guidanceCounselors ?? []).map((guidance: GuidanceAccountRow) => ({
+    const guidanceRows: UserRow[] = visibleGuidanceCounselors.map((guidance: GuidanceAccountRow) => ({
       id: `guidance-${guidance.id}`,
       accountIds: [guidance.id],
       initials: initials(guidance.first_name ?? "", guidance.last_name ?? ""),
@@ -427,7 +477,7 @@ export async function GET(request: NextRequest) {
       employeeId: guidance.employee_id ?? "",
     }));
 
-    const parentRows: UserRow[] = (parents ?? []).map((parent: any) => {
+    const parentRows: UserRow[] = visibleParents.map((parent: any) => {
       const linkedStudentIds = linksByParent.get(Number(parent.id)) ?? [];
       const verificationFamily = linkedStudentIds
         .map((studentId) => familyByStudent.get(Number(studentById.get(studentId)?.id)) ?? [])
@@ -489,8 +539,8 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    const linkedStudentIds = new Set((links ?? []).map((link: any) => String(link.student_id)));
-    const pendingRegistrationRows: UserRow[] = (students ?? [])
+    const linkedStudentIds = new Set(visibleLinks.map((link: any) => String(link.student_id)));
+    const pendingRegistrationRows: UserRow[] = visibleStudents
       .filter((student: any) => !linkedStudentIds.has(String(student.student_id)))
       .map((student: any) => {
         const family = familyByStudent.get(student.id) ?? [];
@@ -591,6 +641,135 @@ export async function PATCH(req: NextRequest) {
     if ("error" in auth) return auth.error;
 
     const body = await req.json();
+
+    // A typo in an address can still be accepted by an SMTP server even
+    // though the mailbox does not exist. Pending accounts give ICT a safe
+    // recovery path: correct the address and replace the old temporary
+    // password with a newly generated one.
+    if (body?.action === "resend-pending-activation") {
+      const role = body?.role as Role | undefined;
+      const userId = typeof body?.userId === "string" ? body.userId : "";
+      const requestedEmail = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+      const roleConfig = role === "Adviser"
+        ? { table: "advisers", prefix: "adviser-" }
+        : role === "Guidance"
+          ? { table: "guidance_counselors", prefix: "guidance-" }
+          : role === "ICT"
+            ? { table: "ict_admins", prefix: "ict-" }
+            : null;
+
+      if (!roleConfig || !userId.startsWith(roleConfig.prefix) || !/^\S+@\S+\.\S+$/.test(requestedEmail)) {
+        return NextResponse.json({ success: false, message: "Provide a valid pending staff account and email address." }, { status: 400 });
+      }
+
+      const id = Number(userId.slice(roleConfig.prefix.length));
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return NextResponse.json({ success: false, message: "Invalid staff account." }, { status: 400 });
+      }
+
+      const accountColumns = role === "Adviser"
+        ? "id, first_name, middle_name, last_name, suffix, email, password_hash, password_set, status, archive_status, grade, section, sections"
+        : "id, first_name, middle_name, last_name, suffix, email, password_hash, password_set, status, archive_status";
+      const { data: rawAccount, error: accountError } = await supabase
+        .from(roleConfig.table)
+        .select(accountColumns)
+        .eq("id", id)
+        .maybeSingle();
+      if (accountError) throw accountError;
+      const account = rawAccount as {
+        id: number; first_name?: string | null; middle_name?: string | null; last_name?: string | null; suffix?: string | null;
+        email?: string | null; password_hash: string; password_set?: boolean | number | null; status?: string | null; archive_status?: string | null;
+        grade?: string | null; section?: string | null; sections?: string[] | null;
+      } | null;
+      if (!account) {
+        return NextResponse.json({ success: false, message: "Staff account not found." }, { status: 404 });
+      }
+
+      const passwordSet = account.password_set === true || account.password_set === 1;
+      if (account.archive_status === "archived" || account.archive_status === "deleted" || account.status !== "pending_activation" || passwordSet) {
+        return NextResponse.json(
+          { success: false, message: "Only unactivated staff accounts can receive a replacement temporary password." },
+          { status: 409 },
+        );
+      }
+
+      const { data: sameEmailAccounts, error: emailCheckError } = await supabase
+        .from(roleConfig.table)
+        .select("id")
+        .eq("email", requestedEmail)
+        .neq("id", id)
+        .limit(1);
+      if (emailCheckError) throw emailCheckError;
+      if ((sameEmailAccounts ?? []).length > 0) {
+        return NextResponse.json({ success: false, message: "Another account with this email already exists." }, { status: 409 });
+      }
+
+      const temporaryPassword = generateTemporaryPassword();
+      const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+      const { error: updateError } = await supabase
+        .from(roleConfig.table)
+        .update({ email: requestedEmail, password_hash: passwordHash, password_set: false, status: "pending_activation", updated_at: new Date().toISOString() })
+        .eq("id", id);
+      if (updateError) throw updateError;
+
+      const accountName = [account.first_name, account.middle_name, account.last_name, account.suffix].filter(Boolean).join(" ") || "Staff member";
+      try {
+        if (role === "Adviser") {
+          const sections = Array.isArray(account.sections) && account.sections.length > 0
+            ? account.sections
+            : account.section ? [account.section] : [];
+          await sendAdviserTempPasswordEmail({
+            adviserEmail: requestedEmail,
+            adviserName: accountName,
+            grade: account.grade ?? "",
+            section: sections[0] ?? "",
+            additionalSections: sections.slice(1),
+            tempPassword: temporaryPassword,
+          });
+        } else if (role === "Guidance") {
+          await sendGuidanceTempPasswordEmail({ guidanceEmail: requestedEmail, guidanceName: accountName, tempPassword: temporaryPassword });
+        } else {
+          await sendIctTempPasswordEmail({ ictEmail: requestedEmail, ictName: accountName, tempPassword: temporaryPassword });
+        }
+      } catch (mailError) {
+        console.error("[user-management] Replacement temporary-password email failed:", mailError);
+        const { error: rollbackError } = await supabase
+          .from(roleConfig.table)
+          .update({
+            email: account.email,
+            password_hash: account.password_hash,
+            password_set: account.password_set,
+            status: account.status,
+          })
+          .eq("id", id);
+        if (rollbackError) console.error("[user-management] Pending activation rollback failed:", rollbackError);
+        return NextResponse.json(
+          { success: false, message: "The email could not be sent. The account was left unchanged; correct the email and try again." },
+          { status: 503 },
+        );
+      }
+
+      await logAudit({
+        action: "Temporary Password Resent",
+        performedById: auth.session.ictId,
+        performedBy: `ICT ${auth.session.ictId}`,
+        performedByRole: "ICT",
+        targetUser: accountName,
+        targetRole: role,
+        targetType: "user",
+        targetId: id,
+        module: "User Management",
+        details: `Replaced the temporary password for pending ${role} account ${id} and sent it to the corrected email address.`,
+      });
+
+      return NextResponse.json({
+        success: true,
+        email: requestedEmail,
+        status: "Pending Activation",
+        message: "A new temporary password was sent. The old temporary password no longer works.",
+      });
+    }
+
     const user = body?.user as UserRow | undefined;
     const currentPassword = body?.currentPassword;
     const newPassword = body?.newPassword;
@@ -606,6 +785,12 @@ export async function PATCH(req: NextRequest) {
     let passwordPatch: { password_hash: string; password_set: true } | Record<string, never> = {};
 
     if (hasPasswordChange) {
+      if (user.status === "Pending Activation") {
+        return NextResponse.json(
+          { success: false, message: "Pending accounts must receive credentials through “Send a new temporary password”." },
+          { status: 409 },
+        );
+      }
       if (typeof newPassword !== "string" || newPassword.length < 8) {
         return NextResponse.json(
           { success: false, message: "New password must be at least 8 characters." },
@@ -882,6 +1067,38 @@ export async function PATCH(req: NextRequest) {
       const id = Number(user.id.replace("adviser-", ""));
       const { grade, section } = splitClassGrade(user.classGrade);
       const sections = section ? section.split(",").map((value) => value.trim()).filter(Boolean) : [];
+
+      // Never allow a direct edit to silently create two active advisers for
+      // the same section. The transfer endpoint performs the handover instead.
+      if (grade && sections.length) {
+        const { data: activeAdvisers, error: activeAdviserError } = await supabase
+          .from("advisers")
+          .select("id, first_name, middle_name, last_name, suffix, email, sections, section, archive_status")
+          .eq("grade", grade)
+          .eq("status", "active")
+          .neq("id", id);
+        if (activeAdviserError) throw activeAdviserError;
+
+        const conflicts = (activeAdvisers ?? []).flatMap((adviser) => {
+          if (!isVisibleUserRecord(adviser)) return [];
+          const assigned = adviser.sections?.length ? adviser.sections : adviser.section ? [adviser.section] : [];
+          return sections.filter((requestedSection) => assigned.includes(requestedSection)).map((requestedSection) => ({
+            grade,
+            section: requestedSection,
+            outgoingAdviserId: adviser.id,
+            outgoingAdviserName: fullName(adviser),
+            outgoingAdviserEmail: adviser.email,
+          }));
+        });
+        if (conflicts.length) {
+          return NextResponse.json({
+            success: false,
+            code: "ADVISER_SECTION_OCCUPIED",
+            message: "One or more selected sections already have an active adviser. Schedule or effect a transfer instead.",
+            conflicts,
+          }, { status: 409 });
+        }
+      }
 
       const { data, error } = await supabase
         .from("advisers")

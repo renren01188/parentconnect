@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       .update({
         password_hash: hashed,
         password_set: true,
+        status: "active",
         updated_at: new Date().toISOString(),
       })
       .eq("id", payload.id)

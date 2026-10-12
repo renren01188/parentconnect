@@ -103,7 +103,13 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   const isPublicParentApi = pathname === "/api/parents/signup"
-    || pathname === "/api/parents/check-email";
+    || pathname === "/api/parents/check-email"
+    // A new account has no parent ID yet. This endpoint validates the signed
+    // short-lived signup cookie before it creates the parent session.
+    || pathname === "/api/parents/verify-temp-password"
+    // A pending signup has no parent session yet. This endpoint validates its
+    // signed, short-lived cookie before it reveals or sends a replacement.
+    || pathname === "/api/parents/resend-temp-password";
   const isParentFeatureApi = (pathname.startsWith("/api/parents/") && !isPublicParentApi)
     || pathname.startsWith("/api/excuse-letters")
     || pathname === "/api/attendance/parent-history";

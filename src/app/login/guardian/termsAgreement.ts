@@ -23,6 +23,16 @@ export function createGuardianTermsState(termsAccepted = false): GuardianTermsSt
 }
 
 export function openGuardianTerms(state: GuardianTermsState): GuardianTermsState {
+  // Reopening is a review action after acceptance. Keep the visible checkbox
+  // in sync with the consent that was already recorded for this signup.
+  if (state.termsAccepted) {
+    return {
+      ...state,
+      isOpen: true,
+      hasReachedEnd: true,
+      checkboxChecked: true,
+    };
+  }
   return {
     ...state,
     isOpen: true,
@@ -61,13 +71,14 @@ export function acceptGuardianTerms(state: GuardianTermsState): GuardianTermsSta
   return {
     ...state,
     isOpen: false,
-    hasReachedEnd: false,
-    checkboxChecked: false,
+    hasReachedEnd: true,
+    checkboxChecked: true,
     termsAccepted: true,
   };
 }
 
 export function closeGuardianTerms(state: GuardianTermsState): GuardianTermsState {
+  if (state.termsAccepted) return { ...state, isOpen: false };
   return {
     ...state,
     isOpen: false,

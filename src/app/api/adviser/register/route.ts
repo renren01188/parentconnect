@@ -4,6 +4,61 @@ import bcrypt from "bcryptjs";
 import { sendAdviserTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 
+type AdviserAssignmentRecord = {
+  id: number;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string | null;
+  suffix: string | null;
+  email: string | null;
+  grade: string | null;
+  section: string | null;
+  sections: string[] | null;
+  status: string | null;
+  archive_status: string | null;
+};
+
+function assignedSections(adviser: AdviserAssignmentRecord) {
+  return (adviser.sections?.length ? adviser.sections : adviser.section ? [adviser.section] : [])
+    .map((section) => section.trim())
+    .filter(Boolean);
+}
+
+function isCurrentAssignment(adviser: AdviserAssignmentRecord) {
+  const status = String(adviser.status ?? "active").toLowerCase();
+  const archiveStatus = String(adviser.archive_status ?? "active").toLowerCase();
+  return status !== "inactive" && archiveStatus !== "archived" && archiveStatus !== "deleted";
+}
+
+function adviserName(adviser: AdviserAssignmentRecord) {
+  return [adviser.first_name, adviser.middle_name, adviser.last_name, adviser.suffix]
+    .filter(Boolean)
+    .join(" ")
+    .trim() || "Existing adviser";
+}
+
+async function findAssignmentConflicts(grade: string, requestedSections: string[]) {
+  const { data, error } = await supabase
+    .from("advisers")
+    .select("id, first_name, middle_name, last_name, suffix, email, grade, section, sections, status, archive_status")
+    .eq("grade", grade);
+  if (error) throw error;
+
+  return ((data ?? []) as AdviserAssignmentRecord[]).flatMap((adviser) => {
+    if (!isCurrentAssignment(adviser)) return [];
+    const assigned = assignedSections(adviser);
+    return requestedSections
+      .filter((section) => assigned.includes(section))
+      .map((section) => ({
+        section,
+        adviserId: adviser.id,
+        adviserName: adviserName(adviser),
+        adviserEmail: adviser.email ?? "",
+        status: adviser.status ?? "active",
+      }));
+  });
+}
+
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
   return Array.from({ length: 10 }, () =>
@@ -39,6 +94,32 @@ async function deriveClassSession(
   if (sessions.size === 0) return "Morning";
   if (sessions.size > 1) return "Mixed";
   return [...sessions][0];
+}
+
+/** Reports whether a selected grade/section is already reserved by an adviser. */
+export async function GET(request: NextRequest) {
+  if (!(await getActiveIct())) {
+    return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
+  }
+
+  try {
+    const grade = request.nextUrl.searchParams.get("grade")?.trim() ?? "";
+    const sections = [...new Set(
+      (request.nextUrl.searchParams.get("sections") ?? "")
+        .split(",")
+        .map((section) => section.trim())
+        .filter(Boolean),
+    )];
+    if (!grade || sections.length === 0) {
+      return NextResponse.json({ success: false, message: "A grade and at least one section are required." }, { status: 400 });
+    }
+
+    const conflicts = await findAssignmentConflicts(grade, sections);
+    return NextResponse.json({ success: true, conflicts });
+  } catch (error) {
+    console.error("GET /api/adviser/register assignment check error:", error);
+    return NextResponse.json({ success: false, message: "Unable to check adviser assignments." }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -119,9 +200,24 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Derive classSession ──────────────────────────────────────────────────
-    const allSections: string[] = additionalSections?.length
-      ? [section, ...additionalSections]
-      : [section];
+    const allSections = [...new Set([
+      String(section).trim(),
+      ...(Array.isArray(additionalSections) ? additionalSections : [])
+        .map((item) => String(item).trim())
+        .filter(Boolean),
+    ])];
+    const conflicts = await findAssignmentConflicts(String(gradeLevel).trim(), allSections);
+    if (conflicts.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "ADVISER_SECTION_OCCUPIED",
+          message: "One or more selected sections already have an adviser assigned. Choose an available section or use Adviser Transfer.",
+          conflicts,
+        },
+        { status: 409 },
+      );
+    }
 
     console.log("[adviser/register] Deriving class session for sections:", allSections);
     const classSession =
@@ -150,7 +246,10 @@ export async function POST(req: NextRequest) {
       employee_id: employeeId.trim(),
       password_hash: hashedTemp,
       password_set: false,
-      status: "active",
+      // The account is not usable as an adviser until its owner has set a
+      // permanent password. This also lets ICT correct a mistyped email and
+      // resend a fresh temporary password from User Management.
+      status: "pending_activation",
       class_session: classSession,
     }).select("id").single();
 
@@ -197,7 +296,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Adviser account created. A temporary password has been sent to ${email}.`,
+      message: `Adviser account is pending activation. A temporary password has been sent to ${email}.`,
     });
 
   } catch (error: unknown) {

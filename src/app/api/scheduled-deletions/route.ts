@@ -18,7 +18,14 @@ function getIctName(ict: { first_name?: string; middle_name?: string | null; las
 
 function targetRole(targetType: string) {
   if (targetType === "ict") return "ICT Admin";
+  if (targetType === "guidance") return "Guidance Counselor";
   return targetType.charAt(0).toUpperCase() + targetType.slice(1);
+}
+
+function accountTypeLabel(targetType: string) {
+  if (targetType === "guidance") return "Guidance Counselor";
+  if (targetType === "adviser") return "adviser";
+  return "ICT";
 }
 
 function parentName(parent: {
@@ -246,7 +253,7 @@ export async function POST(req: NextRequest) {
       }));
       return NextResponse.json({ success: true, deletions: data, message: "Deletion request sent to ICT for approval." });
     }
-    const allowedIctTypes = new Set(["parent", "adviser", "ict", "student"]);
+    const allowedIctTypes = new Set(["parent", "adviser", "guidance", "ict", "student"]);
     if (requestedTargets.some((target: { type: string }) => !allowedIctTypes.has(target.type))) return NextResponse.json({ success: false, message: "Unsupported deletion target." }, { status: 400 });
     // The ICT modal always submits `targets`, including when only one account
     // is selected. Keep that path separate from the legacy single-delete API.
@@ -349,9 +356,9 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetType === "parent" ? null : targetEmail || null, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
     if (error) throw error;
     if (ict) await suspendDeletionTarget(data);
-    if (ict && ["adviser", "ict"].includes(targetType) && targetEmail && scheduledAt) {
+    if (ict && ["adviser", "guidance", "ict"].includes(targetType) && targetEmail && scheduledAt) {
       try {
-        await sendAccountDeletionScheduledEmail({ recipientEmail: targetEmail, recipientName: targetName, accountType: targetType === "adviser" ? "adviser" : "ICT", reason: reason.trim(), deleteAfter: new Date(scheduledAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
+        await sendAccountDeletionScheduledEmail({ recipientEmail: targetEmail, recipientName: targetName, accountType: accountTypeLabel(targetType), reason: reason.trim(), deleteAfter: new Date(scheduledAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", data.id);
       } catch (mailError) { console.error("Account deletion-schedule email failed:", mailError); }
     }
@@ -403,7 +410,7 @@ export async function PATCH(req: NextRequest) {
       if (item.target_email) {
         try {
           if (item.target_type === "student") await sendStudentDeletionRevertedEmail({ parentEmail: item.target_email, studentName: item.target_name });
-          else if (["adviser", "ict"].includes(item.target_type)) await sendAccountDeletionRevertedEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: item.target_type === "adviser" ? "adviser" : "ICT" });
+          else if (["adviser", "guidance", "ict"].includes(item.target_type)) await sendAccountDeletionRevertedEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: accountTypeLabel(item.target_type) });
         }
         catch (mailError) { console.error("Deletion-revert email failed:", mailError); }
       }
@@ -451,10 +458,10 @@ export async function PATCH(req: NextRequest) {
         await sendStudentDeletionScheduledEmail({ parentEmail: item.target_email, studentName: item.target_name, reason: item.reason, deleteAfter: new Date((update as { delete_after: string }).delete_after).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", deletionId);
       } catch (mailError) { console.error("Student deletion approval email failed:", mailError); }
-    } else if (action === "approve" && item.target_email && ["adviser", "ict"].includes(item.target_type)) {
+    } else if (action === "approve" && item.target_email && ["adviser", "guidance", "ict"].includes(item.target_type)) {
       try {
         const deleteAfter = new Date((update as { delete_after: string }).delete_after).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
-        await sendAccountDeletionScheduledEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: item.target_type === "adviser" ? "adviser" : "ICT", reason: item.reason, deleteAfter });
+        await sendAccountDeletionScheduledEmail({ recipientEmail: item.target_email, recipientName: item.target_name, accountType: accountTypeLabel(item.target_type), reason: item.reason, deleteAfter });
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", deletionId);
       } catch (mailError) { console.error("Account deletion approval email failed:", mailError); }
     }

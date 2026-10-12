@@ -52,7 +52,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (adviser.archive_status === "archived" || adviser.status !== "active") {
+    const passwordSet = adviser.password_set == null
+      ? true
+      : adviser.password_set === true || adviser.password_set === 1;
+    const mayCompleteActivation = adviser.status === "pending_activation" && !passwordSet;
+
+    if (adviser.archive_status === "archived" || (adviser.status !== "active" && !mayCompleteActivation)) {
       await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Adviser", reason: "inactive account" });
       const failed = await failedLoginResult("adviser", guardSubject, req);
       return NextResponse.json(
@@ -92,7 +97,7 @@ export async function POST(req: NextRequest) {
       section:     adviser.section,
       sections:    sectionsArray,
       role:        "adviser",
-      passwordSet: adviser.password_set == null ? true : (adviser.password_set === true || adviser.password_set === 1),
+      passwordSet,
     };
 
     const token = await new SignJWT(payload)
@@ -120,7 +125,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success:     true,
-      passwordSet: adviser.password_set === true || adviser.password_set === 1,
+      passwordSet,
       message:     "Login successful.",
     });
   } catch (error: unknown) {

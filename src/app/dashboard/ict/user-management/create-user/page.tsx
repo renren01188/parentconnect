@@ -14,6 +14,13 @@ import { StudentParentRegistration } from "@/components/student-parent-registrat
 type AccountType = "adviser" | "ict" | "student" | "succession" | "guidance" | null;
 type AdviserStep = "form" | "review" | "sent";
 type ClassSessionTab = "Morning" | "Afternoon";
+type AdviserAssignmentConflict = {
+  section: string;
+  adviserId: number;
+  adviserName: string;
+  adviserEmail: string;
+  status: string;
+};
 
 const GRADES = ["Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6"];
 const SUFFIXES = ["None", "Jr.", "Sr.", "II", "III", "IV"];
@@ -102,13 +109,46 @@ function RoleCard({ selected, onSelect, icon: Icon, iconBg, iconColor, title, de
 
 // ─── Recently created (static) ────────────────────────────────────────────────
 
-const RECENTLY = [
-  { initials: "AL", color: "bg-teal-600", name: "Ana Lim", role: "Adviser", roleColor: "bg-teal-100 text-teal-700", date: "Mar 14, 8:15 AM" },
-  { initials: "KL", color: "bg-blue-600", name: "Kevin Lim", role: "Principal", roleColor: "bg-purple-100 text-purple-700", date: "Mar 13, 2:00 PM" },
-  { initials: "RC", color: "bg-orange-500", name: "Roberto Cruz", role: "Parent", roleColor: "bg-sky-100 text-sky-700", date: "Mar 13, 9:30 AM" },
-];
+type RecentlyCreatedUser = {
+  id: string;
+  initials: string;
+  name: string;
+  role: "Adviser" | "ICT Admin" | "Guidance Counselor" | "Parent";
+  createdAt: string | null;
+};
 
-function SummaryPanel({ accountType, summaryRows }: { accountType: AccountType; summaryRows: { label: string; status: "Filled" | "Pending" | null }[] }) {
+const recentRoleStyles: Record<RecentlyCreatedUser["role"], { avatar: string; badge: string }> = {
+  Adviser: { avatar: "bg-teal-600", badge: "bg-teal-100 text-teal-700" },
+  "ICT Admin": { avatar: "bg-[#274e13]", badge: "bg-green-100 text-green-700" },
+  "Guidance Counselor": { avatar: "bg-rose-600", badge: "bg-rose-100 text-rose-700" },
+  Parent: { avatar: "bg-sky-600", badge: "bg-sky-100 text-sky-700" },
+};
+
+function formatCreatedAt(createdAt: string) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "Recently created";
+  return new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "Asia/Manila",
+  }).format(date);
+}
+
+function SummaryPanel({
+  accountType,
+  summaryRows,
+  recentlyCreated,
+  recentlyCreatedLoading,
+  recentlyCreatedError,
+}: {
+  accountType: AccountType;
+  summaryRows: { label: string; status: "Filled" | "Pending" | null }[];
+  recentlyCreated: RecentlyCreatedUser[];
+  recentlyCreatedLoading: boolean;
+  recentlyCreatedError: string | null;
+}) {
   const typeLabel: Record<NonNullable<AccountType>, string> = {
     adviser: "Class Adviser", ict: "ICT Admin", student: "Student & Parent",
     succession: "Principal Succession", guidance: "Guidance Counselor",
@@ -125,8 +165,38 @@ function SummaryPanel({ accountType, summaryRows }: { accountType: AccountType; 
         {total > 0 && (<><div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-1"><div className="h-full bg-[#274e13] rounded-full transition-all duration-500" style={{ width: `${pct}%` }} /></div><p className="text-[10px] text-gray-400">Completion {filled} / {total} fields done</p></>)}
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-        <div className="flex items-center gap-2 mb-3"><Clock className="w-3.5 h-3.5 text-gray-400" /><h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Recently Created</h3></div>
-        <div className="space-y-3">{RECENTLY.map(u => (<div key={u.name} className="flex items-center gap-2.5"><div className={`w-8 h-8 rounded-full ${u.color} flex items-center justify-center text-white text-[10px] font-bold shrink-0`}>{u.initials}</div><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-gray-800 truncate">{u.name}</p><p className="text-[10px] text-gray-400">{u.date}</p><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${u.roleColor}`}>{u.role}</span></div></div>))}</div>
+        <div className="flex items-center gap-2 mb-3">
+          <Clock className="w-3.5 h-3.5 text-gray-400" />
+          <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Recently Created</h3>
+        </div>
+        {recentlyCreatedLoading ? (
+          <div className="flex items-center gap-2 py-2 text-xs text-gray-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading recent accounts…
+          </div>
+        ) : recentlyCreatedError ? (
+          <p className="py-1 text-xs leading-relaxed text-red-500">{recentlyCreatedError}</p>
+        ) : recentlyCreated.length === 0 ? (
+          <p className="py-1 text-xs leading-relaxed text-gray-400">No user accounts have been created yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {recentlyCreated.map((user) => {
+              const style = recentRoleStyles[user.role];
+              return (
+                <div key={user.id} className="flex items-center gap-2.5">
+                  <div className={"w-8 h-8 rounded-full " + style.avatar + " flex items-center justify-center text-white text-[10px] font-bold shrink-0"}>
+                    {user.initials}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-gray-800 truncate">{user.name}</p>
+                    {user.createdAt && <p className="text-[10px] text-gray-400">{formatCreatedAt(user.createdAt)}</p>}
+                    <span className={"text-[9px] font-bold px-1.5 py-0.5 rounded-full " + style.badge}>{user.role}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -426,6 +496,9 @@ function AdviserForm({ onDone, onSummaryChange }: {
   const [gradeOptions, setGradeOptions] = useState<string[]>(GRADES);
   const [sectionsList, setSectionsList] = useState<{ name: string; class_session: string | null }[]>([]);
   const [loadingSections, setLoadingSections] = useState(false);
+  const [assignmentConflicts, setAssignmentConflicts] = useState<AdviserAssignmentConflict[]>([]);
+  const [checkingAssignments, setCheckingAssignments] = useState(false);
+  const [assignmentCheckError, setAssignmentCheckError] = useState<string | null>(null);
 
   const [f, setF] = useState({
     firstName: "", middleName: "", lastName: "", suffix: "None",
@@ -458,6 +531,48 @@ function AdviserForm({ onDone, onSummaryChange }: {
       .finally(() => setLoadingSections(false));
   }, [f.grade]);
 
+  useEffect(() => {
+    const selectedSections = [f.section, ...f.additionalSections].filter(Boolean);
+    if (!f.grade || selectedSections.length === 0) {
+      setAssignmentConflicts([]);
+      setAssignmentCheckError(null);
+      setCheckingAssignments(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setCheckingAssignments(true);
+    setAssignmentConflicts([]);
+    setAssignmentCheckError(null);
+
+    fetch(
+      "/api/adviser/register?grade=" + encodeURIComponent(f.grade)
+        + "&sections=" + encodeURIComponent(selectedSections.join(",")),
+      { signal: controller.signal, cache: "no-store" },
+    )
+      .then(async (response) => {
+        const data = await response.json() as {
+          success?: boolean;
+          conflicts?: AdviserAssignmentConflict[];
+          message?: string;
+        };
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Unable to check adviser assignments.");
+        }
+        setAssignmentConflicts(data.conflicts ?? []);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setAssignmentConflicts([]);
+        setAssignmentCheckError(error instanceof Error ? error.message : "Unable to check adviser assignments.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCheckingAssignments(false);
+      });
+
+    return () => controller.abort();
+  }, [f.grade, f.section, f.additionalSections]);
+
   const updateSummary = (nf: typeof f) => {
     onSummaryChange([
       { label: "First Name", status: nf.firstName ? "Filled" : "Pending" },
@@ -476,6 +591,14 @@ function AdviserForm({ onDone, onSummaryChange }: {
   const setGrade = (v: string) => {
     const nf = { ...f, grade: v, section: "", additionalSections: [] };
     setF(nf); updateSummary(nf);
+    setAssignmentConflicts([]);
+    setAssignmentCheckError(null);
+  };
+
+  const setPrimarySection = (v: string) => {
+    const nf = { ...f, section: v };
+    setF(nf);
+    updateSummary(nf);
   };
 
   const addAdditional = (sec: string) => {
@@ -513,12 +636,13 @@ function AdviserForm({ onDone, onSummaryChange }: {
   if (step === "sent") return (
     <div className="p-6 text-center">
       <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4"><CheckCircle className="w-6 h-6 text-teal-600" /></div>
-      <h3 className="text-base font-bold text-gray-800 mb-1">Account Created!</h3>
+      <h3 className="text-base font-bold text-gray-800 mb-1">Account Pending Activation!</h3>
       <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as a Class Adviser.</p>
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
         <p className="font-bold">What happens next?</p>
         <p>A temporary password is sent to <strong>{f.email}</strong></p>
-        <p>The adviser logs in and resets their password on first login</p>
+        <p>The adviser sets a permanent password on first login; only then does the account become active.</p>
+        <p>If the email needs correction, ICT can resend new credentials from User Management.</p>
       </div>
       <button onClick={onDone} className="w-full py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
     </div>
@@ -635,7 +759,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
         <div>
           <label className="block text-xs font-semibold text-gray-600 mb-1.5">Primary Section<span className="text-red-500 ml-0.5">*</span></label>
           <div className="relative">
-            <select value={f.section} onChange={e => set("section")(e.target.value)}
+            <select value={f.section} onChange={e => setPrimarySection(e.target.value)}
               disabled={!f.grade || loadingSections}
               className="w-full appearance-none border border-gray-200 rounded-lg py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition bg-white pr-8 disabled:bg-gray-50 disabled:text-gray-400">
               <option value="">
@@ -660,6 +784,38 @@ function AdviserForm({ onDone, onSummaryChange }: {
           )}
         </div>
       </div>
+
+      {checkingAssignments && (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs text-blue-700">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Checking whether this section already has an adviser…
+        </div>
+      )}
+      {assignmentCheckError && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-700">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>{assignmentCheckError} Change the grade or section to try again.</p>
+        </div>
+      )}
+      {assignmentConflicts.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div>
+              <p className="font-bold">An adviser is already assigned to the selected section.</p>
+              <ul className="mt-1 space-y-1">
+                {assignmentConflicts.map((conflict) => (
+                  <li key={conflict.section}>
+                    <strong>{conflict.section}</strong> — {conflict.adviserName}
+                    {conflict.status === "pending_activation" ? " (account pending activation)" : ""}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5">Choose an available section, or use Adviser Transfer in User Management to replace the current adviser.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Additional Sections */}
       <div>
@@ -709,13 +865,19 @@ function AdviserForm({ onDone, onSummaryChange }: {
             if (!f.firstName || !f.lastName || !f.email || !f.employeeId || !f.grade || !f.section) {
               alert("Please fill all required fields."); return;
             }
+            if (checkingAssignments || assignmentCheckError) {
+              alert("Please wait until the adviser assignment check is complete."); return;
+            }
+            if (assignmentConflicts.length > 0) {
+              alert("An adviser is already assigned to one or more selected sections. Choose an available section or use Adviser Transfer."); return;
+            }
             if (f.phone && f.phone.length !== 11) {
               alert("Phone number must be 11 digits."); return;
             }
             setLoading(true);
             setTimeout(() => { setLoading(false); setStep("review"); }, 600);
           }}
-          disabled={loading}
+          disabled={loading || checkingAssignments || assignmentConflicts.length > 0 || !!assignmentCheckError}
           className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] disabled:opacity-60 transition"
         >
           {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Checking...</> : "Review & Create →"}
@@ -748,12 +910,13 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
   if (step === "sent") return (
     <div className="p-6 text-center">
       <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4"><CheckCircle className="w-6 h-6 text-teal-600" /></div>
-      <h3 className="text-base font-bold text-gray-800 mb-1">Account Created!</h3>
+      <h3 className="text-base font-bold text-gray-800 mb-1">Account Pending Activation!</h3>
       <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as a Guidance Counselor.</p>
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
         <p className="font-bold">What happens next?</p>
         <p>A temporary password is sent to <strong>{f.email}</strong></p>
-        <p>They must set a permanent password before dashboard access</p>
+        <p>They must set a permanent password before the account becomes active</p>
+        <p>If the email needs correction, ICT can resend new credentials from User Management.</p>
       </div>
       <button onClick={onDone} className="w-full py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
     </div>
@@ -1040,10 +1203,10 @@ function ICTAdminForm({ onDone, onSummaryChange }: { onDone: () => void; onSumma
   if (step === "sent") return (
     <div className="p-6 text-center">
       <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4"><CheckCircle className="w-6 h-6 text-teal-600" /></div>
-      <h3 className="text-base font-bold text-gray-800 mb-1">Account Created!</h3>
+      <h3 className="text-base font-bold text-gray-800 mb-1">Account Pending Activation!</h3>
       <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as an ICT Admin.</p>
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
-        <p className="font-bold">What happens next?</p><p>A temporary password is sent to <strong>{f.email}</strong></p><p>They must set a permanent password before dashboard access</p>
+        <p className="font-bold">What happens next?</p><p>A temporary password is sent to <strong>{f.email}</strong></p><p>They must set a permanent password before the account becomes active</p><p>If the email needs correction, ICT can resend new credentials from User Management.</p>
       </div>
       <button onClick={onDone} className="w-full py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
     </div>
@@ -1123,6 +1286,36 @@ export default function CreateUserPage() {
   const [formKey, setFormKey] = useState(0);
   const [summaryRows, setSummaryRows] = useState<{ label: string; status: "Filled" | "Pending" | null }[]>([]);
   const [showManageSessions, setShowManageSessions] = useState(false);
+  const [recentlyCreated, setRecentlyCreated] = useState<RecentlyCreatedUser[]>([]);
+  const [recentlyCreatedLoading, setRecentlyCreatedLoading] = useState(true);
+  const [recentlyCreatedError, setRecentlyCreatedError] = useState<string | null>(null);
+
+  const loadRecentlyCreated = useCallback(async () => {
+    setRecentlyCreatedLoading(true);
+    setRecentlyCreatedError(null);
+
+    try {
+      const response = await fetch("/api/ict/user-management/recently-created", { cache: "no-store" });
+      const payload = await response.json() as {
+        success?: boolean;
+        users?: RecentlyCreatedUser[];
+        message?: string;
+      };
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.message || "Unable to load recently created accounts.");
+      }
+      setRecentlyCreated(payload.users ?? []);
+    } catch (error) {
+      setRecentlyCreated([]);
+      setRecentlyCreatedError(error instanceof Error ? error.message : "Unable to load recently created accounts.");
+    } finally {
+      setRecentlyCreatedLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecentlyCreated();
+  }, [loadRecentlyCreated]);
 
   function selectType(t: AccountType) {
     setAccountType(t); setFormKey(k => k + 1);
@@ -1135,7 +1328,12 @@ export default function CreateUserPage() {
     else setSummaryRows([]);
   }
 
-  function handleDone() { setAccountType(null); setSummaryRows([]); setFormKey(k => k + 1); }
+  function handleDone() {
+    setAccountType(null);
+    setSummaryRows([]);
+    setFormKey(k => k + 1);
+    void loadRecentlyCreated();
+  }
 
   const typeLabel: Record<NonNullable<AccountType>, string> = {
     adviser: "Class Adviser Account", ict: "ICT Admin Account",
@@ -1211,7 +1409,13 @@ export default function CreateUserPage() {
             </div>
           )}
         </div>
-        <SummaryPanel accountType={accountType} summaryRows={summaryRows} />
+        <SummaryPanel
+          accountType={accountType}
+          summaryRows={summaryRows}
+          recentlyCreated={recentlyCreated}
+          recentlyCreatedLoading={recentlyCreatedLoading}
+          recentlyCreatedError={recentlyCreatedError}
+        />
       </div>
     </div>
   );

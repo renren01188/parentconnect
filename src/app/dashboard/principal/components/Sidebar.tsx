@@ -126,7 +126,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
 
         {/* Brand */}
         <div className="px-5 py-5 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
+          <Link href="/dashboard/principal" onClick={onClose} aria-label="Go to principal dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70">
             <div className="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
               <Shield className="w-4 h-4 text-white" />
             </div>
@@ -134,7 +134,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
               <p className="text-white font-extrabold text-sm leading-tight">ParentConnect</p>
               <p className="text-white/55 text-[10px] mt-0.5">{principal?.schoolName ?? "Principal"}</p>
             </div>
-          </div>
+          </Link>
         </div>
 
         {/* Nav */}

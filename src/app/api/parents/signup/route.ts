@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
-import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { cleanNamePart, sameParentEnrollmentName } from "@/lib/familyName";
 import { sendTempPasswordEmail } from "@/lib/mailer";
@@ -22,6 +21,8 @@ import {
 } from "@/lib/guardianRelationship";
 import {
   createTemporaryPassword,
+  createTemporaryPasswordProof,
+  PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS,
   PARENT_TEMPORARY_PASSWORD_TTL_SECONDS,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
@@ -191,10 +192,6 @@ export async function POST(req: NextRequest) {
       return parent ? [parent] : [];
     });
 
-    const { password: temporaryPassword, expiresAt: temporaryPasswordExpiresAt } = createTemporaryPassword();
-    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt);
-    if (!temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
-    const temporaryPasswordHash = await bcrypt.hash(temporaryPassword, 12);
     const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
     const [{ data: emailRows, error: emailError }, { data: roleRows, error: roleError }] = await Promise.all([
       supabase.from("parents").select(parentColumns).ilike("email", email),
@@ -252,9 +249,13 @@ export async function POST(req: NextRequest) {
     } else if (identityParent) {
       if (!parentAccountCanAccess(identityParent)) return enrollmentFailure(req, 403);
       const existingEmail = identityParent.email?.trim().toLowerCase() ?? "";
-      // Never overwrite an account belonging to somebody who has a different
-      // email address, even when another household has the same full name.
-      if (existingEmail && existingEmail !== email) return enrollmentFailure(req, 409);
+      // A fully registered account must never have its contact address
+      // replaced through sign-up. An incomplete account, however, may be a
+      // previous typo: keep it untouched for now and allow the parent to
+      // prove the corrected address before the verification step updates it.
+      if (isPasswordSet(identityParent.password_set) && existingEmail && existingEmail !== email) {
+        return enrollmentFailure(req, 409);
+      }
       matchedParent = identityParent;
     } else if (linkedClaimableParents.length === 1) {
       // ICT may have corrected an old manual-registration family name while
@@ -296,77 +297,21 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    let createdParentId: number | null = null;
-    if (matchedParent) {
-      // A compare-and-set claim prevents two concurrent requests from issuing
-      // different temporary passwords for the same pending account.
-      const { data: claimedParent, error: passwordError } = await supabase
-        .from("parents")
-        .update({
-          parent_first_name: firstName,
-          parent_middle_name: middleName || null,
-          parent_last_name: lastName,
-          parent_suffix: suffix || currentFamilyMember.suffix || null,
-          relationship,
-          email,
-          contact_number: contactNumber,
-          password: temporaryPasswordHash,
-          temp_password: null,
-          temporary_password_expires_at: temporaryPasswordExpiresAt.toISOString(),
-          password_set: 0,
-        })
-        .eq("id", matchedParent.id)
-        .eq("password", matchedParent.password)
-        .neq("archive_status", "archived")
-        .neq("password_set", 1)
-        .select("id")
-        .maybeSingle();
-      if (passwordError) throw passwordError;
-      if (!claimedParent) return enrollmentFailure(req, 409);
-    } else {
-      const { data: createdParent, error: createError } = await supabase
-        .from("parents")
-        .insert({
-          student_id: student.student_id,
-          parent_first_name: firstName,
-          parent_middle_name: middleName || null,
-          parent_last_name: lastName,
-          parent_suffix: suffix || currentFamilyMember.suffix || null,
-          relationship,
-          email,
-          contact_number: contactNumber,
-          password: temporaryPasswordHash,
-          temp_password: null,
-          temporary_password_expires_at: temporaryPasswordExpiresAt.toISOString(),
-          password_set: 0,
-          status: "active",
-        })
-        .select(parentColumns)
-        .single();
-      if (createError?.code === "23505") return enrollmentFailure(req, 409);
-      if (createError) throw createError;
-      matchedParent = createdParent as MatchedParent;
-      createdParentId = matchedParent.id;
-    }
-
-    // This exact role + normalized first/last-name reconciliation adds the
-    // entered child and every sibling recorded with the same parent/guardian,
-    // regardless of adviser, grade, or section. Middle names and suffixes
-    // are optional account details; partial or different first/last names
-    // never match.
-    try {
-      await reconcileParentStudentLinks({ parentId: matchedParent.id });
-    } catch (reconcileError) {
-      if (createdParentId) await supabase.from("parents").delete().eq("id", createdParentId);
-      throw reconcileError;
-    }
-
     const parentName = [
       firstName,
       middleName,
       lastName,
       suffix || currentFamilyMember.suffix,
     ].filter(Boolean).join(" ") || "Parent / Guardian";
+    const temporaryPasswordIssuedAt = new Date();
+    const temporaryPasswordResendAvailableAt = new Date(
+      temporaryPasswordIssuedAt.getTime() + PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS * 1_000,
+    );
+    const { password: temporaryPassword, expiresAt: temporaryPasswordExpiresAt } = createTemporaryPassword(
+      temporaryPasswordIssuedAt.getTime(),
+    );
+    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt);
+    if (!temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
 
     try {
       await sendTempPasswordEmail({
@@ -376,50 +321,42 @@ export async function POST(req: NextRequest) {
         tempPassword: temporaryPassword,
       });
     } catch {
-      // Avoid leaving a parent with a temporary password that was never sent.
-      if (createdParentId) {
-        await supabase.from("parents").delete().eq("id", createdParentId);
-      } else {
-        await supabase
-          .from("parents")
-          .update({
-            parent_first_name: matchedParent.parent_first_name,
-            parent_middle_name: matchedParent.parent_middle_name,
-            parent_last_name: matchedParent.parent_last_name,
-            parent_suffix: matchedParent.parent_suffix,
-            relationship: matchedParent.relationship,
-            email: matchedParent.email,
-            contact_number: matchedParent.contact_number,
-            password: matchedParent.password,
-            temp_password: matchedParent.temp_password,
-            temporary_password_expires_at: matchedParent.temporary_password_expires_at,
-            password_set: matchedParent.password_set,
-          })
-          .eq("id", matchedParent.id)
-          .eq("password", temporaryPasswordHash);
-      }
+      // No account or contact details have been written at this point, so a
+      // delivery failure leaves nothing for the parent to clean up or retry.
       return genericEnrollmentError(503);
     }
 
+    // Keep the approved enrollment only in this short-lived, HttpOnly cookie
+    // until the recipient proves they received the emailed password. This
+    // prevents an address typo from creating a blocked or unusable parent row.
     const token = await new SignJWT({
-      id: matchedParent.id,
-      role: "parent",
+      role: "pending-parent-signup",
+      pendingParentId: matchedParent?.id ?? null,
       email,
       studentId: student.student_id,
       parentName,
       studentName: `${student.first_name} ${student.last_name}`.trim(),
       grade: student.grade,
       section: student.section,
-      passwordSet: false,
-      temporaryPasswordVerified: false,
+      firstName,
+      middleName,
+      lastName,
+      suffix: suffix || currentFamilyMember.suffix || "",
+      contactNumber,
+      relationship,
+      guardianRelationship,
+      temporaryPasswordProof: createTemporaryPasswordProof(temporaryPassword),
       temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString(),
+      temporaryPasswordIssuedAt: temporaryPasswordIssuedAt.toISOString(),
+      temporaryPasswordResendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
     })
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt(Math.floor(temporaryPasswordIssuedAt.getTime() / 1_000))
       .setExpirationTime(temporaryPasswordExpiresAtSeconds)
       .sign(SECRET);
 
     const cookieStore = await cookies();
-    cookieStore.set("parent_token", token, {
+    cookieStore.set("parent_signup_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
@@ -435,6 +372,7 @@ export async function POST(req: NextRequest) {
       success: true,
       redirectTo: "/login/guardian/verify-temp-password",
       expiresAt: temporaryPasswordExpiresAt.toISOString(),
+      resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
       message: PARENT_SIGNUP_CONFIRMATION_MESSAGE,
     });
   } catch (error) {

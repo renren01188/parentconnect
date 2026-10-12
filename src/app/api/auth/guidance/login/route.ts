@@ -48,7 +48,12 @@ export async function POST(req: NextRequest) {
         { status: failed.status }
       );
     }
-    if (guidance.archive_status === "archived" || guidance.status !== "active") {
+    const passwordSet = guidance.password_set == null
+      ? true
+      : guidance.password_set === true || guidance.password_set === 1;
+    const mayCompleteActivation = guidance.status === "pending_activation" && !passwordSet;
+
+    if (guidance.archive_status === "archived" || (guidance.status !== "active" && !mayCompleteActivation)) {
       await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "Guidance Counselor", reason: "inactive account" });
       const failed = await failedLoginResult("guidance", guardSubject, req);
       return NextResponse.json(
@@ -68,10 +73,6 @@ export async function POST(req: NextRequest) {
     }
 
     await clearLoginFailures("guidance", guardSubject, req);
-
-    const passwordSet = guidance.password_set == null
-      ? true
-      : guidance.password_set === true || guidance.password_set === 1;
 
     const payload = {
       id: guidance.id,

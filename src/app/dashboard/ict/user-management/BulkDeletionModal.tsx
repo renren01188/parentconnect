@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CheckSquare,
   Eye,
@@ -48,7 +48,7 @@ export type QueueItem = {
 type Target = {
   id: number;
   name: string;
-  type: "parent" | "adviser";
+  type: "parent" | "adviser" | "guidance";
   email?: string;
   students?: { name: string; lrn: string }[];
   employeeId?: string;
@@ -74,7 +74,7 @@ export function BulkDeletionModal({
   onChanged: () => void;
 }) {
   const [tab, setTab] = useState<"create" | "pending" | "waiting">("create");
-  const [kind, setKind] = useState<"" | "adviser" | "parent">("");
+  const [kind, setKind] = useState<"" | "adviser" | "guidance" | "parent">("");
   const [grade, setGrade] = useState("");
   const [section, setSection] = useState("");
   const [search, setSearch] = useState("");
@@ -130,6 +130,7 @@ export function BulkDeletionModal({
       users
         .filter((user) => {
           if (kind === "adviser") return user.role === "Adviser";
+          if (kind === "guidance") return user.role === "Guidance";
           if (kind !== "parent" || user.role !== "Parent") return false;
           return user.studentDetails?.some(
             (student) =>
@@ -140,8 +141,8 @@ export function BulkDeletionModal({
         .filter((user) => {
           const accountId =
             user.accountIds?.[0] ?? Number(user.id.replace(/^.*-/, ""));
-          if (user.role === "Adviser")
-            return !activeDeletionKeys.has(`adviser:${accountId}`);
+          if (user.role === "Adviser" || user.role === "Guidance")
+            return !activeDeletionKeys.has(`${user.role === "Guidance" ? "guidance" : "adviser"}:${accountId}`);
           const sectionStudents = (user.studentDetails ?? []).filter(
             (student) => student.grade === grade && student.section === section,
           );
@@ -194,7 +195,7 @@ export function BulkDeletionModal({
   const selected = (user: BulkUser): Target => ({
     id: user.accountIds?.[0] ?? Number(user.id.replace(/^.*-/, "")),
     name: user.name,
-    type: user.role === "Parent" ? "parent" : "adviser",
+    type: user.role === "Parent" ? "parent" : user.role === "Guidance" ? "guidance" : "adviser",
     email: user.email,
     employeeId: user.employeeId,
     advisory: user.classGrade,
@@ -453,8 +454,17 @@ export function BulkDeletionModal({
                         }
                       />
                       <div className="flex-1">
-                        <p className="text-sm font-bold text-slate-700">Parent Name: {item.parent_name || "—"}</p>
-                        <p className="text-xs text-slate-600">Student Name: {item.student_name || "—"}</p>
+                        {["adviser", "guidance", "ict"].includes(item.target_type) ? (
+                          <>
+                            <p className="text-sm font-bold text-slate-700">{item.target_type === "guidance" ? "Guidance Counselor" : item.target_type === "adviser" ? "Adviser" : "ICT Account"}: {item.target_name}</p>
+                            {item.target_email && <p className="text-xs text-slate-600">{item.target_email}</p>}
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-bold text-slate-700">Parent Name: {item.parent_name || "—"}</p>
+                            <p className="text-xs text-slate-600">Student Name: {item.student_name || "—"}</p>
+                          </>
+                        )}
                         <p className="mt-1 text-xs text-slate-600">Deletion Reason: {item.reason || "—"}</p>
                         {item.target_type === "student" &&
                           item.grade &&
@@ -541,7 +551,7 @@ export function BulkDeletionModal({
             <>
               {step === 1 && (
                 <>
-                  <div className="mb-6 grid grid-cols-2 gap-4 rounded-2xl bg-white p-2 shadow-sm">
+                  <div className="mb-6 grid grid-cols-1 gap-3 rounded-2xl bg-white p-2 shadow-sm sm:grid-cols-3 sm:gap-4">
                     <button
                       onClick={() => {
                         setKind("adviser");
@@ -550,6 +560,15 @@ export function BulkDeletionModal({
                       className={`rounded-xl px-5 py-4 text-left font-bold transition-all ${kind === "adviser" ? "bg-[#274e13] text-white shadow-md" : "bg-slate-50 text-slate-700 hover:bg-emerald-50"}`}
                     >
                       Advisers
+                    </button>
+                    <button
+                      onClick={() => {
+                        setKind("guidance");
+                        setPicked([]);
+                      }}
+                      className={`rounded-xl px-5 py-4 text-left font-bold transition-all ${kind === "guidance" ? "bg-[#274e13] text-white shadow-md" : "bg-slate-50 text-slate-700 hover:bg-emerald-50"}`}
+                    >
+                      Guidance
                     </button>
                     <button
                       onClick={() => {
@@ -589,7 +608,7 @@ export function BulkDeletionModal({
                       </select>
                     </div>
                   )}
-                  {kind && (kind === "adviser" || section) && (
+                  {kind && (kind === "adviser" || kind === "guidance" || section) && (
                     <>
                       <div className="mb-3 flex gap-3">
                         <div className="relative flex-1">
@@ -676,12 +695,14 @@ export function BulkDeletionModal({
                         <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
                           {item.type === "parent"
                             ? "Parent / Guardian account"
-                            : "Adviser account"}
+                            : item.type === "guidance"
+                              ? "Guidance Counselor account"
+                              : "Adviser account"}
                         </p>
-                        {item.type === "adviser" && (
+                        {(item.type === "adviser" || item.type === "guidance") && (
                           <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                             <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">Employee Number</span><span className="font-bold text-slate-700">{item.employeeId || "Not available"}</span></div>
-                            <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">Advisory</span><span className="font-bold text-slate-700">{item.advisory || "Not assigned"}</span></div>
+                            <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">{item.type === "guidance" ? "Department" : "Advisory"}</span><span className="font-bold text-slate-700">{item.advisory || (item.type === "guidance" ? "Student Support Services" : "Not assigned")}</span></div>
                           </div>
                         )}
                         {item.type === "parent" &&

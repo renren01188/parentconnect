@@ -1,6 +1,7 @@
 "use client";
 
 import { SchoolBackground } from "@/components/SchoolBackground";
+import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 import { Suspense, useEffect, useRef, useState } from "react";
 import {
   Users, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle,
@@ -313,20 +314,7 @@ function GuardianLoginPageContent() {
               ParentConnect: <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
             </h1>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
-            <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-white/10 border-2 border-white/30 flex items-center justify-center">
-                <span className="text-yellow-300 font-black text-sm">DepED</span>
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">DEPARTMENT OF<br />EDUCATION</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-sky-700/40 border-2 border-sky-400/50 flex items-center justify-center">
-                <Users className="w-6 h-6 text-sky-300" />
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">SANTIAGO<br />ELEM. SCHOOL</span>
-            </div>
-          </div>
+          <LoginInstitutionLogos />
         </div>
         <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
           <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
@@ -534,7 +522,7 @@ function GuardianLoginPageContent() {
               </div>
 
               <p className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-[11px] leading-relaxed text-blue-700">
-                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional and will be saved only when provided. Your email address and mobile number will be saved for your new account. After verification, you will create your own password.
+                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional and will be saved only when provided. Your email address and mobile number are saved only after you verify the temporary password sent to your email. Then you will create your own password.
               </p>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
@@ -693,7 +681,7 @@ function GuardianLoginPageContent() {
                 <input
                   type="checkbox"
                   checked={terms.checkboxChecked}
-                  disabled={!terms.hasReachedEnd}
+                  disabled={terms.termsAccepted || !terms.hasReachedEnd}
                   onChange={(event) => setTerms((current) => setGuardianTermsCheckbox(current, event.target.checked))}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-700 disabled:cursor-not-allowed"
                 />
@@ -710,10 +698,10 @@ function GuardianLoginPageContent() {
                 <button
                   type="button"
                   onClick={acceptTerms}
-                  disabled={!canAcceptGuardianTerms(terms)}
+                  disabled={terms.termsAccepted || !canAcceptGuardianTerms(terms)}
                   className="rounded-xl bg-indigo-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Accept
+                  {terms.termsAccepted ? "Accepted" : "Accept"}
                 </button>
               </div>
             </div>

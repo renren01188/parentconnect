@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
     const { error } = await supabase
       .from("advisers")
-      .update({ password_hash: hashed, password_set: true })
+      .update({ password_hash: hashed, password_set: true, status: "active" })
       .eq("id", payload.id);
 
     if (error) throw error;

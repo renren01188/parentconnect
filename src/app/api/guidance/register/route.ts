@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
         employee_id: normalizedEmployeeId,
         password_hash: hashedTemp,
         password_set: false,
-        status: "active",
+        status: "pending_activation",
       })
       .select("id")
       .single();
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Guidance counselor account created. A temporary password has been sent to ${normalizedEmail}.`,
+      message: `Guidance counselor account is pending activation. A temporary password has been sent to ${normalizedEmail}.`,
     });
   } catch (error: unknown) {
     console.error("POST /api/guidance/register error:", error);

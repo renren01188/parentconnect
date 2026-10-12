@@ -1,6 +1,7 @@
 "use client";
 
 import { SchoolBackground } from "@/components/SchoolBackground";
+import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -83,20 +84,7 @@ export default function GuidanceLoginPage() {
               ParentConnect: <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
             </h1>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
-            <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-white/10 border-2 border-white/30 flex items-center justify-center">
-                <span className="text-yellow-300 font-black text-sm">DepED</span>
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">DEPARTMENT OF<br />EDUCATION</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="w-14 h-14 rounded-full bg-sky-700/40 border-2 border-sky-400/50 flex items-center justify-center">
-                <HeartHandshake className="w-6 h-6 text-sky-300" />
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">SANTIAGO<br />ELEM. SCHOOL</span>
-            </div>
-          </div>
+          <LoginInstitutionLogos />
         </div>
         <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
           <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">

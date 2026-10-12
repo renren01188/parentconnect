@@ -46,7 +46,12 @@ export async function POST(req: NextRequest) {
         { status: failed.status }
       );
     }
-    if (ict.archive_status === "archived" || ict.status !== "active") {
+    const passwordSet = ict.password_set == null
+      ? true
+      : ict.password_set === true || ict.password_set === 1;
+    const mayCompleteActivation = ict.status === "pending_activation" && !passwordSet;
+
+    if (ict.archive_status === "archived" || (ict.status !== "active" && !mayCompleteActivation)) {
       await logSecurityAlert({ request: req, identifier: cleanedIdentifier, role: "ICT Admin", reason: "inactive account" });
       const failed = await failedLoginResult("ict", guardSubject, req);
       return NextResponse.json(
@@ -66,10 +71,6 @@ export async function POST(req: NextRequest) {
     }
 
     await clearLoginFailures("ict", guardSubject, req);
-
-    const passwordSet = ict.password_set == null
-      ? true
-      : ict.password_set === true || ict.password_set === 1;
 
     const fullName = [ict.first_name, ict.middle_name, ict.last_name, ict.suffix]
       .filter(Boolean).join(" ");

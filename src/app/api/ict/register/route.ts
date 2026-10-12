@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
         employee_id: normalizedEmployeeId,
         password_hash: passwordHash,
         password_set: false,
-        status: "active",
+        status: "pending_activation",
       })
       .select("id")
       .single();
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `ICT admin account created. A temporary password has been sent to ${normalizedEmail}.`,
+      message: `ICT admin account is pending activation. A temporary password has been sent to ${normalizedEmail}.`,
     });
   } catch (error: unknown) {
     console.error("POST /api/ict/register error:", error);

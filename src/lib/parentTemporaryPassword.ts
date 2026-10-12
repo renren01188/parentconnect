@@ -1,6 +1,7 @@
 import crypto from "crypto";
 
 export const PARENT_TEMPORARY_PASSWORD_TTL_SECONDS = 10 * 60;
+export const PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS = 2 * 60;
 export const TEMPORARY_PASSWORD_EXPIRED_MESSAGE = "Your temporary password has expired. Please start Parent signup again.";
 
 type TemporaryPassword = {
@@ -31,6 +32,25 @@ export function createTemporaryPassword(now = Date.now()): TemporaryPassword {
     password: secureShuffle(parts).join(""),
     expiresAt,
   };
+}
+
+/**
+ * Creates a server-secret proof for a temporary password held in a short-lived
+ * signup cookie. This lets us wait to persist the account until the recipient
+ * proves they received the password, without exposing a password hash to the
+ * browser.
+ */
+export function createTemporaryPasswordProof(password: string) {
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret) throw new Error("NEXTAUTH_SECRET must be configured.");
+  return crypto.createHmac("sha256", secret).update(password).digest("hex");
+}
+
+export function matchesTemporaryPasswordProof(password: string, proof: unknown) {
+  if (typeof proof !== "string" || !/^[a-f0-9]{64}$/i.test(proof)) return false;
+  const expected = Buffer.from(createTemporaryPasswordProof(password), "hex");
+  const received = Buffer.from(proof, "hex");
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 /** Validates the printable format without logging or otherwise exposing it. */

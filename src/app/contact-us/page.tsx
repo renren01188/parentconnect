@@ -185,7 +185,7 @@ export default function ContactUsPage() {
                 </div>
                 <div>
                   <p className="text-sm font-bold text-slate-800 mb-0.5">Phone</p>
-                  <p className="text-sm text-slate-500">(+63) 000-000-0000</p>
+                  <p className="text-sm text-slate-500">(046) 412-3397 / (046) 889-5779</p>
                 </div>
               </div>
 
