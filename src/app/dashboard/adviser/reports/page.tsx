@@ -15,6 +15,12 @@ import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import AdviserReportsGuide from "../components/AdviserReportsGuide";
 import {
+    adviserReportStatusCategory,
+    adviserReportStatusLabel,
+    effectiveAdviserReportStatus,
+    summarizeAdviserReportStatuses,
+} from "@/lib/adviserReportStatusSummary";
+import {
     getPriorityLabel,
     type Report, type ReportStatus, type ReportCategory,
     type StudentReport, type StudentReportStatus, type StudentReportCategory,
@@ -71,13 +77,6 @@ function getStatusStyle(status: ReportStatus) {
         case "Resolved": return "bg-emerald-100 text-emerald-700";
         case "Escalated": return "bg-red-100 text-red-600";
     }
-}
-function reportStatusLabel(report: Report, showGuidanceEscalation = true) {
-    if (report.resolvedByPrincipal) return "Resolved By the Principal";
-    if (report.resolvedByGuidance) return "Resolved By the Guidance";
-    if (report.escalatedToPrincipal) return "Escalated to Principal";
-    if (showGuidanceEscalation && report.escalatedToGuidance) return "Escalated to Guidance";
-    return report.status;
 }
 function getStudentStatusStyle(status: StudentReportStatus) {
     switch (status) {
@@ -847,11 +846,6 @@ function ReportsPageContent() {
     const parentMessagesRef = useRef<HTMLDivElement>(null);
     const adminMessagesRef = useRef<HTMLDivElement>(null);
 
-    // Guidance escalation local state (keyed by report id)
-    const [guidanceEscalated, setGuidanceEscalated] = useState<Record<number, boolean>>(
-        {}
-    );
-
     // Tracks which reports the adviser has explicitly unlocked (clicked "See the concern")
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
     const [unlockedStudentReports, setUnlockedStudentReports] = useState<Set<number>>(new Set()); // ✅ add here
@@ -868,7 +862,6 @@ function ReportsPageContent() {
         if (!res.ok) throw new Error(data?.message || "Unable to load reports.");
         const nextReports = (data.reports ?? []) as Report[];
         setReports(nextReports);
-        setGuidanceEscalated(Object.fromEntries(nextReports.map(r => [r.id, r.escalatedToGuidance ?? false])));
 
         setSelectedReport(current => current ? nextReports.find(r => r.id === current.id) ?? current : current);
         setSelectedParent(current => {
@@ -1019,9 +1012,9 @@ function ReportsPageContent() {
 
     // Filter parent groups by status tab AND category
     const filteredParentGroups = parentGroups.filter(g => {
-        if (filterTab === "Pending") if (!g.reports.some(r => r.status === "New" || r.status === "Read")) return false;
-        if (filterTab === "Ongoing") if (!g.reports.some(r => r.status === "Ongoing")) return false;
-        if (filterTab === "Escalated") if (!g.reports.some(r => r.status === "Escalated")) return false;
+        if (filterTab === "Pending") if (!g.reports.some(r => adviserReportStatusCategory(r) === "pending")) return false;
+        if (filterTab === "Ongoing") if (!g.reports.some(r => adviserReportStatusCategory(r) === "ongoing")) return false;
+        if (filterTab === "Escalated") if (!g.reports.some(r => adviserReportStatusCategory(r) === "escalated")) return false;
         if (categoryFilter !== "All") if (!g.reports.some(r => r.categories.includes(categoryFilter))) return false;
         return true;
     });
@@ -1056,9 +1049,6 @@ function ReportsPageContent() {
             return groupByParent(nextReports).find(g => g.parent_name === current.parent_name) ?? current;
         });
         if (selectedReport?.id === id) setSelectedReport(prev => prev ? (updatedReport ?? { ...prev, status }) : prev);
-        if (updatedReport) {
-            setGuidanceEscalated(prev => ({ ...prev, [id]: updatedReport.escalatedToGuidance ?? false }));
-        }
         // When a parent report is resolved, also resolve the linked student concern
         if (status === "Resolved") {
             const report = reports.find(r => r.id === id);
@@ -1443,13 +1433,13 @@ function ReportsPageContent() {
                                 )}
                                 {filteredParentGroups.map(g => {
                                     const isActive = selectedParent?.parent_name === g.parent_name;
-                                    const allResolved = g.reports.every(r => r.status === "Resolved");
-                                    const ongoingCount = g.reports.filter(r => r.status === "Ongoing").length;
-                                    const hasOngoing = ongoingCount > 0;
-                                    const hasEscalated = g.reports.some(r => guidanceEscalated[r.id] && r.status !== "Resolved");
+                                    const summary = summarizeAdviserReportStatuses(g.reports);
+                                    const allResolved = summary.total > 0 && summary.resolved === summary.total;
+                                    const hasOngoing = summary.ongoing > 0;
+                                    const hasEscalated = summary.escalated > 0;
                                     return (
                                         <button key={g.parent_name} onClick={() => { setSelectedParent(g); setSelectedReport(null); setViewStep("reports"); }}
-                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-emerald-200 bg-emerald-50 ring-2 ring-emerald-200" : hasOngoing ? "border-emerald-200 bg-emerald-50 shadow-sm hover:bg-emerald-100" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                                            className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-emerald-200 bg-emerald-50 ring-2 ring-emerald-200" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : hasOngoing ? "border-emerald-200 bg-emerald-50 shadow-sm hover:bg-emerald-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                                             <div className="flex items-center gap-2.5">
                                                 <ParentAvatar name={g.parent_name} profilePicture={g.parent_profile_picture} initials={g.initials} className="w-9 h-9 rounded-full text-xs" />
                                                 <div className="flex-1 min-w-0">
@@ -1460,17 +1450,16 @@ function ReportsPageContent() {
                                                     <p className="text-[11px] text-slate-400 truncate">Student Name: {g.student_name}</p>
                                                 </div>
                                             </div>
-                                            <div className="mt-2 flex items-center justify-between">
-                                                {allResolved && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-100 text-emerald-700">All Resolved</span>}
-                                                {!allResolved && hasOngoing && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-600 text-white">{ongoingCount} ongoing</span>}
-                                                {!allResolved && <span />}
+                                            <div className="mt-2 flex items-center justify-between gap-2">
+                                                <div className="flex min-w-0 flex-wrap gap-1">
+                                                    {allResolved && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-100 text-emerald-700">All Resolved</span>}
+                                                    {!allResolved && summary.pending > 0 && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-amber-100 text-amber-700">{summary.pending} pending review</span>}
+                                                    {!allResolved && summary.ongoing > 0 && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-600 text-white">{summary.ongoing} ongoing</span>}
+                                                    {!allResolved && summary.escalated > 0 && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-red-100 text-red-700">{summary.escalated} escalated</span>}
+                                                    {!allResolved && summary.resolved > 0 && <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-slate-100 text-slate-600">{summary.resolved} resolved</span>}
+                                                </div>
                                                 <span className="text-[10px] text-slate-400">{g.reports.length} report{g.reports.length !== 1 ? "s" : ""}</span>
                                             </div>
-                                            {hasEscalated && (
-                                                <div className="mt-1.5 flex items-center gap-1 text-[10px] font-bold text-red-600">
-                                                    <TriangleAlert className="w-3 h-3" /> Escalated to Guidance
-                                                </div>
-                                            )}
                                         </button>
                                     );
                                 })}
@@ -1574,7 +1563,7 @@ function ReportsPageContent() {
                                                 className={`w-full text-left rounded-xl px-3 py-3 transition border ${r.status === "Resolved" ? "bg-emerald-50 border-emerald-100 hover:bg-emerald-100" : "bg-red-50 border-red-100 hover:bg-red-100"} ${isActive ? "ring-2 ring-emerald-300" : ""}`}>
                                                 <div className="flex items-start justify-between gap-2 mb-1.5">
                                                     <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(r.status)}`}>{reportStatusLabel(r)}</span>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(effectiveAdviserReportStatus(r))}`}>{adviserReportStatusLabel(r)}</span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-1 mb-2">
                                                     {r.categories.map(cat => (
@@ -1694,7 +1683,7 @@ function ReportsPageContent() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport)}</span>
+                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(effectiveAdviserReportStatus(selectedReport))}`}>{adviserReportStatusLabel(selectedReport)}</span>
                                             </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (
@@ -1780,7 +1769,7 @@ function ReportsPageContent() {
                                                 </div>
                                             </div>
                                             <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(selectedReport.status)}`}>{reportStatusLabel(selectedReport)}</span>
+                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(effectiveAdviserReportStatus(selectedReport))}`}>{adviserReportStatusLabel(selectedReport)}</span>
                                             </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (

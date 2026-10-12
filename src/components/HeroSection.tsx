@@ -13,7 +13,7 @@ export default function HeroSection() {
         className="absolute inset-0 h-full w-full object-cover object-center"
         fill
         priority
-        quality={70}
+        quality={75}
         sizes="100vw"
         src="/hero-school-4.png"
       />

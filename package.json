@@ -22,7 +22,8 @@
     "test:parent-deletion-notifications": "node scripts/test-parent-deletion-notifications.cjs",
     "test:guardian-terms": "node scripts/test-guardian-signup-terms.cjs",
     "test:report-submission-terms": "node scripts/test-report-submission-terms.cjs",
-    "test:logout-confirmation": "node scripts/test-logout-confirmation.cjs"
+    "test:logout-confirmation": "node scripts/test-logout-confirmation.cjs",
+    "test:adviser-report-statuses": "node scripts/test-adviser-report-statuses.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

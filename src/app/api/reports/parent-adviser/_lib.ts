@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
+import { effectiveAdviserReportStatus } from "@/lib/adviserReportStatusSummary";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { hasUnreadForPrincipal as hasUnreadPrincipalReport } from "@/lib/principalReportReadState.cjs";
@@ -198,6 +199,19 @@ export function adviserReportStatus(status: string): "New" | "Read" | "Ongoing" 
   return "New";
 }
 
+/**
+ * Guidance changes the shared row to `ongoing` when it begins review. In the
+ * Adviser's inbox that row is still handed off, so the unresolved escalation
+ * flags take precedence over the shared workflow status.
+ */
+function adviserDisplayReportStatus(row: ReportRow) {
+  return effectiveAdviserReportStatus({
+    status: adviserReportStatus(row.status),
+    escalatedToGuidance: row.escalated_to_guidance,
+    escalatedToPrincipal: Boolean(row.escalated_to_principal),
+  });
+}
+
 export function statusFromAdviser(status: string) {
   const normalized = status.toLowerCase();
   if (normalized === "resolved") return "resolved";
@@ -353,7 +367,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
     submitted_by_name: openingMessage?.sender_role === "subject_teacher" ? openingMessage.sender_name : undefined,
     submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     submitted_at: formatDate(row.created_at),
-    status: adviserReportStatus(row.status),
+    status: adviserDisplayReportStatus(row),
     resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance && !row.escalated_to_principal,
     resolvedByPrincipal: row.status === "resolved" && Boolean(row.escalated_to_principal),
     guidanceSeen: Boolean(row.guidance_seen_at),

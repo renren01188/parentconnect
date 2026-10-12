@@ -179,10 +179,6 @@ export default function AdviserDashboardPage() {
           <p className="text-slate-400 text-sm mt-0.5">{todayLabel}</p>
           <p className="text-slate-400 text-sm mt-1">{currentSectionLabel}</p>
         </div>
-        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 shadow-sm">
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-sm font-medium text-slate-600">Scanner Online</span>
-        </div>
       </div>
 
       {adviser && adviser.sections?.length > 1 && (
