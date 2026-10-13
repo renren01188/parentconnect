@@ -2,6 +2,7 @@
 
 import React, { Fragment, useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { useRouter } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { getStudentAge } from "@/lib/studentAge";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import {
@@ -9,6 +10,10 @@ import {
   isMissingOtherGuardianRelationship,
   splitGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import {
+  uppercaseFamilyName,
+  validateUserManagementPasswordChange,
+} from "@/lib/ictUserManagementAccountUpdate";
 import { BulkDeletionModal } from "./BulkDeletionModal";
 import {
   Search, ChevronDown, Pencil, MoreHorizontal,
@@ -160,7 +165,7 @@ function tomorrowManilaDate() {
 }
 
 async function writeAudit(entry: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) {
-  await fetch("/api/ict/audit-log", {
+  const response = await fetch("/api/ict/audit-log", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -173,6 +178,10 @@ async function writeAudit(entry: Omit<AuditEntry, "id" | "timestamp" | "timestam
       changes: entry.changes ?? null,
     }),
   });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.success) {
+    throw new Error(data?.message || "The audit trail could not be recorded.");
+  }
 }
 
 // ─── Shared UI ────────────────────────────────────────────
@@ -563,6 +572,7 @@ function FamilyInformationCard({ family, onChange, title = "Shared family detail
   family: FamilyDetails; onChange: (u: FamilyDetails) => void; title?: string; description?: string; readOnly?: boolean;
 }) {
   const set = (key: keyof FamilyDetails) => (value: string) => onChange({ ...family, [key]: value });
+  const isFamilyNameField = (key: keyof FamilyDetails) => /^(father|mother|guardian)(First|Middle|Last)Name$/.test(String(key));
   const storedGuardianRelationship = splitGuardianRelationship(family.guardianRelationship);
   const guardianRelationship = storedGuardianRelationship.selection;
   const guardianRelationshipOther = family.guardianRelationship === "Other"
@@ -571,7 +581,7 @@ function FamilyInformationCard({ family, onChange, title = "Shared family detail
   const inp = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#274e13]/20 transition bg-white text-gray-900";
   const readOnlyInput = "w-full px-2.5 py-1.5 text-xs border border-gray-100 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed";
 
-  const field = (label: string, key: keyof FamilyDetails) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(family[key] ?? "")} onChange={e => set(key)(e.target.value)} className={readOnly ? readOnlyInput : inp} readOnly={readOnly} /></div>;
+  const field = (label: string, key: keyof FamilyDetails) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(family[key] ?? "")} onChange={e => set(key)(isFamilyNameField(key) ? uppercaseFamilyName(e.target.value) : e.target.value)} className={readOnly ? readOnlyInput : inp} readOnly={readOnly} /></div>;
 
   return (
     <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
@@ -970,7 +980,16 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       setPasswordError("For a pending account, use “Send a new temporary password” to correct the email and deliver new credentials together.");
       return;
     }
-    if (form.newPassword || form.confirmPassword || form.currentPassword) {
+    const passwordValidation = validateUserManagementPasswordChange(form.newPassword, form.confirmPassword);
+    if (!passwordValidation.ok) {
+      setPasswordError(passwordValidation.message);
+      return;
+    }
+    if (passwordValidation.changeRequested) {
+      if (!form.currentPassword) {
+        setPasswordError("Current ICT password is required to change a password.");
+        return;
+      }
       const verifyRes = await fetch("/api/ict/verify-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -979,14 +998,6 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       const verifyData = await verifyRes.json();
       if (!verifyData.success) {
         setPasswordError(verifyData.message || "Current ICT password is incorrect.");
-        return;
-      }
-      if (form.newPassword.length < 8) {
-        setPasswordError("New password must be at least 8 characters.");
-        return;
-      }
-      if (form.newPassword !== form.confirmPassword) {
-        setPasswordError("New password and confirmation do not match.");
         return;
       }
     }
@@ -1095,6 +1106,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
           user: updated,
           currentPassword: form.newPassword ? form.currentPassword : undefined,
           newPassword: form.newPassword || undefined,
+          confirmPassword: form.newPassword ? form.confirmPassword : undefined,
         }),
       });
       const data = await res.json();
@@ -1108,11 +1120,15 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       if (!data.success) throw new Error(data.message || "Failed to save account details.");
 
       if (onSave) onSave(updated);
-      await onAudit({
-        action: "edited", targetUser: updated.name, targetRole: user.role, targetEmail: updated.email,
-        performedBy: "ICT Admin", details: changes.map(c => `${c.field}: "${c.from}" -> "${c.to}"`).join("; "), changes,
-      });
-      setSuccessMessage(`Changes for ${fullName} were saved directly by ICT and logged in the audit trail.`);
+      try {
+        await onAudit({
+          action: "edited", targetUser: updated.name, targetRole: user.role, targetEmail: updated.email,
+          performedBy: "ICT Admin", details: changes.map(c => `${c.field}: "${c.from}" -> "${c.to}"`).join("; "), changes,
+        });
+        setSuccessMessage(`Changes for ${fullName} were saved directly by ICT and logged in the audit trail.`);
+      } catch {
+        setSuccessMessage(`Changes for ${fullName} were saved. The audit trail could not be recorded; no account changes were retried.`);
+      }
       setStep("success");
     } catch (err: unknown) {
       setPasswordError(err instanceof Error ? err.message : "Something went wrong.");
@@ -1447,6 +1463,8 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   const [passwordError, setPasswordError] = useState("");
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   const [form, setForm] = useState({
     firstName: user.firstName || "",
@@ -1542,7 +1560,16 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     if (missingVerificationRelationship || missingSharedRelationship) {
       alert("Specify the guardian's relationship when Others is selected."); return;
     }
-    if (form.newPassword || form.confirmPassword || form.currentPassword) {
+    const passwordValidation = validateUserManagementPasswordChange(form.newPassword, form.confirmPassword);
+    if (!passwordValidation.ok) {
+      setPasswordError(passwordValidation.message);
+      return;
+    }
+    if (passwordValidation.changeRequested) {
+      if (!form.currentPassword) {
+        setPasswordError("Current ICT password is required to change a password.");
+        return;
+      }
       const verifyRes = await fetch("/api/ict/verify-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1551,14 +1578,6 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
       const verifyData = await verifyRes.json();
       if (!verifyData.success) {
         setPasswordError(verifyData.message || "Current ICT password is incorrect.");
-        return;
-      }
-      if (form.newPassword.length < 8) {
-        setPasswordError("New password must be at least 8 characters.");
-        return;
-      }
-      if (form.newPassword !== form.confirmPassword) {
-        setPasswordError("New password and confirmation do not match.");
         return;
       }
     }
@@ -1592,37 +1611,32 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
       const res = await fetch("/api/ict/user-management", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user: updatedUser }),
+        body: JSON.stringify({
+          user: updatedUser,
+          currentPassword: form.newPassword ? form.currentPassword : undefined,
+          newPassword: form.newPassword || undefined,
+          confirmPassword: form.newPassword ? form.confirmPassword : undefined,
+        }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.message || "Failed to save changes.");
 
-      // Handle password change separately if needed
-      if (form.newPassword) {
-        const pwRes = await fetch("/api/ict/user-management", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user: updatedUser,
-            currentPassword: form.currentPassword,
-            newPassword: form.newPassword,
-          }),
-        });
-        const pwData = await pwRes.json();
-        if (!pwData.success) throw new Error(pwData.message || "Failed to update password.");
-      }
-
       onSave(updatedUser);
 
-      await onAudit({
+      try {
+        await onAudit({
         action: "edited",
         targetUser: updatedUser.name,
         targetRole: "Parent",
         targetEmail: updatedUser.email,
         performedBy: "ICT Admin",
         details: changes.map(c => `${c.field}: "${c.from}" → "${c.to}"`).join("; "),
-        changes,
-      });
+          changes,
+        });
+        setSuccessMessage("Account updated and logged in the audit trail.");
+      } catch {
+        setSuccessMessage("Account updated. The audit trail could not be recorded; no account changes were retried.");
+      }
 
       setStep("success");
     } catch (err: any) {
@@ -1738,7 +1752,16 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                           <button type="button" onClick={() => setShowNewPassword(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
                         </div>
                       </div>
-                      <FInput label="Confirm Password" type="password" value={form.confirmPassword} onChange={v => { setForm(p => ({ ...p, confirmPassword: v })); setPasswordError(""); }} />
+                      <div>
+                        <FLabel>Confirm Password</FLabel>
+                        <div className="relative">
+                          <input id="parent-confirm-password" type={showConfirmPassword ? "text" : "password"} value={form.confirmPassword} onChange={e => { setForm(p => ({ ...p, confirmPassword: e.target.value })); setPasswordError(""); }} placeholder="Confirm new password" autoComplete="new-password"
+                            className="w-full pr-10 px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
+                          <button type="button" onClick={() => setShowConfirmPassword(p => !p)} aria-controls="parent-confirm-password" aria-label={showConfirmPassword ? "Hide confirmation password" : "Show confirmation password"} aria-pressed={showConfirmPassword} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-[#274e13]/30 rounded-sm">
+                            {showConfirmPassword ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   {passwordError && <p className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
@@ -1798,7 +1821,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
               <CheckCircle className="w-8 h-8 text-[#274e13]" />
             </div>
             <h3 className="text-xl font-extrabold text-gray-800 mb-1">Changes Saved!</h3>
-            <p className="text-sm text-gray-500 mb-5">Account updated and logged in the audit trail.</p>
+            <p className="text-sm text-gray-500 mb-5">{successMessage || "Account updated and logged in the audit trail."}</p>
             <button onClick={onClose} className="w-full py-3 text-sm font-bold text-white rounded-xl hover:opacity-90 transition bg-[#274e13]">Done</button>
           </div>
         )}
@@ -2079,8 +2102,8 @@ export default function UserManagementPage() {
   const [pagination, setPagination] = useState({ page: 1, total: 0, totalPages: 1 });
   const [serverCounts, setServerCounts] = useState({ total: 0, advisers: 0, ict: 0, guidance: 0, parents: 0 });
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
+    if (!background) setLoading(true);
     setLoadError("");
     try {
        const apiRole = filterMode === "approval" ? "adviser" : filterMode;
@@ -2137,11 +2160,16 @@ export default function UserManagementPage() {
       console.error("Failed to load user management data:", err);
       setLoadError(err instanceof Error ? err.message : "Unable to load user management data. Please try again.");
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [deferredQuery, filterMode, page]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  useSessionInvalidation((event) => {
+    if (event.scope === "accounts" || event.scope === "students" || event.scope === "audit") {
+      return loadData({ background: true });
+    }
+  });
   const pendingApprovalCount = approvals.filter(a => a.status === "Pending").length;
 
   async function addAudit(e: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) {
@@ -2236,7 +2264,7 @@ export default function UserManagementPage() {
           <button onClick={() => router.push("/dashboard/ict/user-management/create-user")} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
             <UserPlus className="w-4 h-4" /> Create User
           </button>
-          <button onClick={() => setShowAdviserTransfers(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-bold text-violet-700 transition hover:bg-violet-50"><Clock className="w-4 h-4" /> Adviser Transfers{scheduledTransferCount > 0 && <span className="-mr-1 rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{scheduledTransferCount}</span>}</button>
+          <button onClick={() => setShowAdviserTransfers(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]"><Clock className="w-4 h-4" /> Adviser Transfers{scheduledTransferCount > 0 && <span className="-mr-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-extrabold text-white">{scheduledTransferCount}</span>}</button>
           <button onClick={() => setShowBulkDeletion(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
           <button onClick={() => setShowApprovals(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
             <FileCheck className="w-4 h-4" /> Approvals
@@ -2324,7 +2352,7 @@ export default function UserManagementPage() {
             </div>
           </div>
 
-          {loadError && <div className="m-4 flex flex-col items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between"><p>{loadError}</p><button onClick={loadData} className="min-h-10 rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold">Try again</button></div>}
+          {loadError && <div className="m-4 flex flex-col items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between"><p>{loadError}</p><button onClick={() => void loadData()} className="min-h-10 rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold">Try again</button></div>}
           {loading && users.length === 0 ? <div className="space-y-3 p-5" aria-live="polite"><p className="text-sm font-semibold text-gray-500">Loading users…</p><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /></div> : <>
           <table className="hidden w-full md:table">
             <thead>

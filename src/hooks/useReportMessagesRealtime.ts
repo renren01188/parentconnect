@@ -1,104 +1,148 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
-import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import type { ChannelStatus, RealtimeInvalidation } from "@/lib/subscribeRealtimeInvalidations";
 
 type RefreshReports = () => void | Promise<void>;
+type RefreshReport = (invalidation: RealtimeInvalidation) => void | Promise<void>;
+
+type ReportRealtimeOptions = {
+  /** Receives report-scoped events without replacing the selected conversation. */
+  onReportUpdate?: RefreshReport;
+  /** Reconnect recovery keeps ephemeral typing UI from becoming stale. */
+  onConnectionStatus?: (status: ChannelStatus) => void;
+};
 
 /**
- * Keeps each Reports inbox in sync with the report and message tables.
- *
- * This mirrors the Contact ICT subscription lifecycle, but coalesces the two
- * writes made for a sent message (the message row and its report timestamp).
- * The refresh callback updates data in place, so an open conversation and its
- * draft are never replaced by a page-level loading state.
+ * Keeps Reports inboxes current through the dashboard's single authenticated
+ * Realtime channel. Each report page used to open a second identical socket;
+ * this hook now only fans out the already-authorized, data-free invalidation.
  */
-export function useReportMessagesRealtime(channelName: string, refreshReports: RefreshReports) {
+export function useReportMessagesRealtime(
+  refreshReports: RefreshReports,
+  options: ReportRealtimeOptions = {},
+) {
   const [liveUpdateNotice, setLiveUpdateNotice] = useState<string | null>(null);
   const refreshRef = useRef(refreshReports);
+  const reportUpdateRef = useRef<RefreshReport | undefined>(options.onReportUpdate);
+  const connectionStatusRef = useRef<ReportRealtimeOptions["onConnectionStatus"]>(options.onConnectionStatus);
+  const mountedRef = useRef(true);
+  const refreshTimerRef = useRef<number | undefined>(undefined);
+  const reportTimerRef = useRef<number | undefined>(undefined);
+  const pendingReportUpdateRef = useRef<RealtimeInvalidation | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   useEffect(() => {
     refreshRef.current = refreshReports;
   }, [refreshReports]);
 
   useEffect(() => {
-    const client = supabaseBrowser;
-    if (!client) {
-      setLiveUpdateNotice("Live updates are unavailable in this browser. Reports will refresh automatically.");
+    reportUpdateRef.current = options.onReportUpdate;
+  }, [options.onReportUpdate]);
+
+  useEffect(() => {
+    connectionStatusRef.current = options.onConnectionStatus;
+  }, [options.onConnectionStatus]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (refreshTimerRef.current !== undefined) window.clearTimeout(refreshTimerRef.current);
+      if (reportTimerRef.current !== undefined) window.clearTimeout(reportTimerRef.current);
+    };
+  }, []);
+
+  const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
       return;
     }
-
-    let disposed = false;
-    let refreshTimer: number | undefined;
-    let refreshInFlight = false;
-    let refreshQueued = false;
-
-    const refresh = async () => {
-      if (refreshInFlight) {
-        refreshQueued = true;
-        return;
-      }
-      refreshInFlight = true;
-      try {
-        await refreshRef.current();
-        if (!disposed) setLiveUpdateNotice(null);
-      } catch {
-        if (!disposed) setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
-      } finally {
-        refreshInFlight = false;
-        if (refreshQueued && !disposed) {
-          refreshQueued = false;
-          void refresh();
-        }
-      }
-    };
-
-    const scheduleRefresh = () => {
-      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-      // INSERT/UPDATE events for one action often arrive together. Waiting one
-      // tick fetches the complete persisted conversation once and prevents UI
-      // duplicates caused by racing partial snapshots.
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = undefined;
+    refreshInFlightRef.current = true;
+    try {
+      await refreshRef.current();
+      if (mountedRef.current) setLiveUpdateNotice(null);
+    } catch {
+      if (mountedRef.current) setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
+    } finally {
+      refreshInFlightRef.current = false;
+      if (refreshQueuedRef.current && mountedRef.current) {
+        refreshQueuedRef.current = false;
         void refresh();
-      }, 75);
-    };
+      }
+    }
+  }, []);
 
-    let channel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
-    void subscribeRealtimeInvalidations(client, scheduleRefresh, (status) => {
-      if (status === "SUBSCRIBED") setLiveUpdateNotice(null);
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
-        scheduleRefresh();
-      }
-    }).then((connectedChannel) => {
-      if (disposed) {
-        if (connectedChannel) void client.removeChannel(connectedChannel);
-        return;
-      }
-      channel = connectedChannel;
-      if (!channel) {
-        setLiveUpdateNotice("Updates will refresh automatically. Existing reports remain available.");
-      }
-    });
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current !== undefined) window.clearTimeout(refreshTimerRef.current);
+    // A single write can update both a message and its report summary. Coalesce
+    // those events so the selected conversation is fetched once in place.
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = undefined;
+      void refresh();
+    }, 75);
+  }, [refresh]);
 
-    // Realtime is the normal update path. A quiet, visibility-aware fallback
-    // protects users whose browser/network drops the websocket without making
-    // every open Reports page poll the database continuously.
+  const refreshReport = useCallback(async (invalidation: RealtimeInvalidation) => {
+    try {
+      if (reportUpdateRef.current) await reportUpdateRef.current(invalidation);
+      else await refresh();
+      if (mountedRef.current) setLiveUpdateNotice(null);
+    } catch {
+      // The normal authorized inbox snapshot is the safe fallback for a stale
+      // ID or a report that is no longer accessible to this account.
+      scheduleRefresh();
+    }
+  }, [refresh, scheduleRefresh]);
+
+  const scheduleReportRefresh = useCallback((invalidation: RealtimeInvalidation) => {
+    if (invalidation.kind === "typing") {
+      void refreshReport(invalidation);
+      return;
+    }
+    pendingReportUpdateRef.current = invalidation;
+    if (reportTimerRef.current !== undefined) window.clearTimeout(reportTimerRef.current);
+    reportTimerRef.current = window.setTimeout(() => {
+      reportTimerRef.current = undefined;
+      const update = pendingReportUpdateRef.current;
+      pendingReportUpdateRef.current = null;
+      if (update) void refreshReport(update);
+    }, 75);
+  }, [refreshReport]);
+
+  useSessionInvalidation((invalidation) => {
+    if (invalidation.scope === "reports") {
+      if (invalidation.reportId) scheduleReportRefresh(invalidation);
+      else scheduleRefresh();
+      return;
+    }
+    if (invalidation.scope === "staff-messages") {
+      scheduleRefresh();
+      return;
+    }
+    if (!invalidation.scope) {
+      // Shared-channel reconnect: recover the server snapshot once, without
+      // navigating away or clearing the selected conversation and its draft.
+      connectionStatusRef.current?.("SUBSCRIBED");
+      scheduleRefresh();
+    }
+  });
+
+  // Realtime is the normal path. A quiet visibility-aware fallback protects a
+  // browser that was suspended without continuously polling the database.
+  useEffect(() => {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     const fallbackTimer = window.setInterval(refreshWhenVisible, 300_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
-      disposed = true;
-      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       window.clearInterval(fallbackTimer);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
-      if (channel) void client.removeChannel(channel);
     };
-  }, [channelName]);
+  }, [refresh]);
 
   return liveUpdateNotice;
 }

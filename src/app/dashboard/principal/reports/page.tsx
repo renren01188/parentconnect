@@ -20,6 +20,7 @@ import { type Report, type ReportStatus } from "../../adviser/data";
 import { UserAvatar } from "@/components/UserAvatar";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { useReportTyping } from "@/hooks/useReportTyping";
 import { isPrincipalReportUnread, markPrincipalReportRead } from "@/lib/principalReportReadState.cjs";
 import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
 import {
@@ -253,6 +254,7 @@ function getStatusStyle(status: ReportStatus) {
     case "New": return "bg-sky-500 text-white";
     case "Read": return "bg-slate-200 text-slate-600";
     case "Ongoing": return "bg-blue-100 text-blue-700";
+    case "Replied": return "bg-indigo-100 text-indigo-700";
     case "Resolved": return "bg-emerald-100 text-emerald-700";
     case "Escalated": return "bg-red-100 text-red-600";
   }
@@ -730,6 +732,7 @@ function StatusSummaryPills({ reports }: { reports: Report[] }) {
     New: { dot: "bg-sky-500", cls: "bg-sky-50 text-sky-800 border border-sky-200" },
     Read: { dot: "bg-slate-400", cls: "bg-slate-50 text-slate-700 border border-slate-200" },
     Ongoing: { dot: "bg-amber-400", cls: "bg-amber-50 text-amber-800 border border-amber-200" },
+    Replied: { dot: "bg-indigo-500", cls: "bg-indigo-50 text-indigo-800 border border-indigo-200" },
     Escalated: { dot: "bg-rose-500", cls: "bg-rose-50 text-rose-800 border border-rose-200" },
     Resolved: { dot: "bg-emerald-400", cls: "bg-emerald-50 text-emerald-800 border border-emerald-200" },
   };
@@ -753,13 +756,11 @@ function NewMessageModal({
   onMessageSent,
   staffRecipients,
   parentRecipients,
-  mode = "concern",
 }: {
   onClose: () => void;
   onMessageSent?: (payload: NewMessagePayload) => Promise<void> | void;
   staffRecipients: StaffRecipient[];
   parentRecipients: ParentRecipient[];
-  mode?: "concern" | "message";
 }) {
   const [recipientId, setRecipientId] = useState("");
   const [recipientOpen, setRecipientOpen] = useState(false);
@@ -788,7 +789,9 @@ function NewMessageModal({
   });
   const concernLevel = computeMessageLevel(selectedCats);
   const otherSelected = selectedCats.includes("Other");
-  const isMessageMode = mode === "message";
+  // This is a direct-message composer, so it never collects report-only
+  // category or concern-level metadata.
+  const isMessageMode = true;
   const canSubmit = !!recipientId && !!subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || !!otherText.trim()))) && (!!message.trim() || attachments.length > 0) && !sending;
   const barColor = concernLevel >= 100 ? "#dc2626" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#0ea5e9";
 
@@ -819,7 +822,7 @@ function NewMessageModal({
       <div className="flex max-h-[calc(100vh-24px)] w-full max-w-[500px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
           <div>
-            <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
+            <h2 className="text-xl font-extrabold text-slate-900">Send a Concern</h2>
             <p className="mt-1 text-sm text-slate-400">Send a message about a monitored or escalated report</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100">
@@ -855,8 +858,8 @@ function NewMessageModal({
                     <>
                       <RecipientAvatar recipient={selectedRecipient} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-800">{selectedRecipient.name}</p>
-                        <p className="text-xs text-slate-400">{selectedRecipient.type === "staff" ? `${selectedRecipient.role} · ${selectedRecipient.email}` : `Student: ${selectedRecipient.student}`}</p>
+                        <p className="truncate text-sm font-semibold text-slate-800">{selectedRecipient.type === "parent" ? selectedRecipient.student : selectedRecipient.name}</p>
+                        <p className="text-xs text-slate-400">{selectedRecipient.type === "staff" ? `${selectedRecipient.role} · ${selectedRecipient.email}` : `Parent: ${selectedRecipient.name}`}</p>
                       </div>
                     </>
                   ) : (
@@ -951,8 +954,8 @@ function NewMessageModal({
                           >
                             <RecipientAvatar recipient={parent} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-800">{parent.name}</p>
-                              <p className="truncate text-xs text-slate-400">Student: {parent.student} · {parent.gradeLevel}, {parent.section}</p>
+                              <p className="truncate text-sm font-semibold text-slate-800">{parent.student}</p>
+                              <p className="truncate text-xs text-slate-400">Parent: {parent.name}</p>
                             </div>
                             {recipientId === parent.id && <CheckCircle className="ml-auto h-4 w-4 shrink-0 text-violet-600" />}
                           </button>
@@ -965,11 +968,11 @@ function NewMessageModal({
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-bold text-slate-700">{isMessageMode ? "Topic" : "Subject"} <span className="text-red-500">*</span></label>
+              <label className="mb-1.5 block text-xs font-bold text-slate-700">Subject <span className="text-red-500">*</span></label>
               <input
                 value={subject}
                 onChange={(event) => setSubject(event.target.value)}
-                placeholder={isMessageMode ? "Enter topic..." : "Enter subject..."}
+                placeholder="Enter subject..."
                 className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
               />
             </div>
@@ -1165,6 +1168,8 @@ function PrincipalReportsPageContent() {
   const [conversationReplyAttachments, setConversationReplyAttachments] = useState<File[]>([]);
   const conversationMessagesRef = useRef<HTMLDivElement>(null);
   const reportMessagesRef = useRef<HTMLDivElement>(null);
+  const reportWasAtBottomRef = useRef(true);
+  const lastScrolledReportIdRef = useRef<number | null>(null);
   const openedNotificationReportRef = useRef<number | null>(null);
   const [resolveTargetId, setResolveTargetId] = useState<number | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -1184,6 +1189,7 @@ function PrincipalReportsPageContent() {
   const selectedConversationMessageCount = selectedConversation?.messages.length ?? 0;
   const selectedReportId = selectedReport?.id ?? null;
   const selectedReportReplies = selectedReport ? (principalReplies[selectedReport.id] ?? []) : [];
+  const reportTyping = useReportTyping(selectedReportId, "principal");
   const guideHighlight = (target: string) => guideTarget === target
     ? "relative z-[85] rounded-2xl ring-4 ring-violet-400 ring-offset-4 ring-offset-slate-50"
     : "";
@@ -1198,6 +1204,9 @@ function PrincipalReportsPageContent() {
 
   useEffect(() => {
     if (!selectedReportId) return;
+    const shouldFollowLatest = lastScrolledReportIdRef.current !== selectedReportId || reportWasAtBottomRef.current;
+    lastScrolledReportIdRef.current = selectedReportId;
+    if (!shouldFollowLatest) return;
     requestAnimationFrame(() => {
       const el = reportMessagesRef.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -1243,12 +1252,26 @@ function PrincipalReportsPageContent() {
         // Preserve the successful local transition instead of reverting it.
         return { ...report, status: override.status };
       });
-      setReports(nextReports);
-      setPrincipalReplies(Object.fromEntries(nextReports.map((report) => [
+      setReports((current) => nextReports.map((report) => {
+        const loaded = current.find((item) => item.id === report.id);
+        return loaded?.detailsLoaded
+          ? { ...report, message: loaded.message, attachments: loaded.attachments, replies: loaded.replies, detailsLoaded: true }
+          : report;
+      }));
+      setPrincipalReplies((current) => Object.fromEntries(nextReports.map((report) => [
         report.id,
-        (report.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
+        (current[report.id]?.length ?? 0) > 0
+          ? current[report.id]
+          : (report.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
       ])));
-      setSelectedReport((current) => current ? nextReports.find((report) => report.id === current.id) ?? null : null);
+      setSelectedReport((current) => {
+        if (!current) return current;
+        const summary = nextReports.find((report) => report.id === current.id);
+        if (!summary) return current;
+        return current.detailsLoaded
+          ? { ...summary, message: current.message, attachments: current.attachments, replies: current.replies, detailsLoaded: true }
+          : summary;
+      });
       // The parent-report list is ready even if the optional student feed is
       // still waiting on a separate database request.
       setLoadingReports(false);
@@ -1332,10 +1355,26 @@ function PrincipalReportsPageContent() {
     };
   }, [loadPrincipalMessages, loadPrincipalReports]);
 
-  // Report updates are applied in place. In particular, this changes canReply
-  // only after Guidance persists escalated_to_principal, rather than relying
-  // on the generic report status from an Adviser-to-Guidance handoff.
-  const liveUpdateNotice = useReportMessagesRealtime("principal-reports-live-list", loadPrincipalReports);
+  const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
+    reportTyping.onRealtimeEvent(event);
+    if (event.kind === "typing") return;
+    // The list refresh updates monitoring/status badges. The detailed fetch is
+    // limited to the selected report, keeping this conversation mounted.
+    await Promise.all([
+      loadPrincipalReports(),
+      event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+    ]);
+  }, [loadPrincipalReports, loadReportDetail, reportTyping, selectedReportId]);
+
+  const liveUpdateNotice = useReportMessagesRealtime(loadPrincipalReports, {
+    onReportUpdate: handleLiveReportUpdate,
+    onConnectionStatus: (status) => {
+      if (status === "CLOSED") {
+        reportTyping.clearOtherTyping();
+        reportTyping.stopTyping();
+      }
+    },
+  });
 
   useEffect(() => {
     if (!selectedReport || selectedReport.detailsLoaded) return;
@@ -1494,7 +1533,8 @@ function PrincipalReportsPageContent() {
     try {
       const validFiles = replyAttachments.filter(f => f.size <= MAX_ATTACHMENT_BYTES);
       const cleanedAttachments = await filesToAttachments(validFiles);
-      const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/messages`, {
+      const reportId = selectedReport.id;
+      const res = await fetch(`/api/reports/parent-adviser/${reportId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -1510,8 +1550,12 @@ function PrincipalReportsPageContent() {
       }
       setReplyText("");
       setReplyAttachments([]);
-      if (selectedReport.status !== "Ongoing") await markReportStatus(selectedReport.id, "Ongoing");
-      await loadPrincipalReports();
+      reportTyping.stopTyping();
+      // Do not keep the reply interaction pending just because the
+      // authoritative report refresh has not completed yet.
+      void Promise.all([loadPrincipalReports(), loadReportDetail(reportId)]).catch((refreshError) => {
+        console.warn("Unable to refresh the principal report after replying:", refreshError);
+      });
     } catch (error) {
       setReplyError(error instanceof Error ? error.message : "Your reply could not be sent. Please try again.");
     } finally {
@@ -1611,13 +1655,13 @@ function PrincipalReportsPageContent() {
   }
 
   async function handleNewMessageSent(payload: NewMessagePayload) {
-    const res = await fetch("/api/reports/principal-messages", {
+    const res = await fetch("/api/reports/staff-messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        role: "principal",
         recipientId: payload.recipient.id,
         subject: payload.subject,
-        categories: payload.categories,
         message: payload.body,
         attachments: payload.attachments,
       }),
@@ -1625,16 +1669,13 @@ function PrincipalReportsPageContent() {
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.message || "Unable to send message.");
 
-    if (payload.recipient.type === "parent") {
-      await Promise.all([loadPrincipalReports(), loadPrincipalMessages()]);
-      setMainTab("Messages");
-      if (data?.reportId) setSelectedConversationId(`parent-report:${data.reportId}`);
-      return;
-    }
-
-    await loadPrincipalMessages();
     setMainTab("Messages");
-    if (data?.conversationId) setSelectedConversationId(data.conversationId);
+    if (data?.message?.id) setSelectedConversationId(`staff-message:${data.message.id}`);
+    // The conversation is stored at this point; update the list without
+    // delaying the modal success state on a second request.
+    void loadPrincipalMessages().catch((refreshError) => {
+      console.warn("Unable to refresh principal messages after sending:", refreshError);
+    });
   }
 
   function renderTopTabs(mobile = false) {
@@ -2366,7 +2407,14 @@ function PrincipalReportsPageContent() {
                         )}
                       </div>
 
-                      <div ref={reportMessagesRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+                      <div
+                        ref={reportMessagesRef}
+                        onScroll={(event) => {
+                          const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+                          reportWasAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 48;
+                        }}
+                        className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5"
+                      >
                         {!hasPrincipalReply && (
                           <>
                             <div className="mb-5 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
@@ -2441,6 +2489,12 @@ function PrincipalReportsPageContent() {
                       </div>
 
                       <div className="border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
+                        {reportTyping.isOtherParticipantTyping && (
+                          <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                            <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:300ms]" /></span>
+                            The other participant is typing…
+                          </div>
+                        )}
                         <div className="mb-4 flex flex-wrap gap-2">
                           {selectedReport.status !== "Resolved" && canReply && (
                             <button
@@ -2484,7 +2538,7 @@ function PrincipalReportsPageContent() {
                           <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
                             <textarea
                               value={replyText}
-                              onChange={(event) => setReplyText(event.target.value)}
+                              onChange={(event) => { setReplyText(event.target.value); reportTyping.onDraftChange(Boolean(event.target.value.trim())); }}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter" && !event.shiftKey) {
                                   event.preventDefault();
@@ -2538,7 +2592,6 @@ function PrincipalReportsPageContent() {
       </div>
       {showNewMessage && (
         <NewMessageModal
-          mode={mainTab === "Messages" ? "message" : "concern"}
           onClose={() => setShowNewMessage(false)}
           onMessageSent={handleNewMessageSent}
           staffRecipients={staffRecipients}

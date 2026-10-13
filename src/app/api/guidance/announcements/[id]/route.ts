@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 // ── PATCH — edit an announcement ─────────────────────────────────────────────
 export async function PATCH(
@@ -18,9 +19,16 @@ export async function PATCH(
     const title      = typeof body.title    === "string" ? body.title.trim()   : undefined;
     const message    = typeof body.message  === "string" ? body.message.trim() : undefined;
     const audience   = typeof body.audience === "string" ? body.audience       : undefined;
-    const scheduledAt = body.scheduled_at
-      ? new Date(body.scheduled_at).toISOString()
-      : body.scheduled_at === null ? null : undefined;
+    const scheduledInput = body.scheduled_at;
+    if (scheduledInput && (typeof scheduledInput !== "string" || Number.isNaN(Date.parse(scheduledInput)))) {
+      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
+    }
+    if (scheduledInput && !isFutureSchoolCalendarDay(scheduledInput)) {
+      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
+    }
+    const scheduledAt = scheduledInput
+      ? new Date(scheduledInput).toISOString()
+      : scheduledInput === null ? null : undefined;
 
     if (audience && !["Class Advisers", "Parents", "Both"].includes(audience)) {
       return NextResponse.json({ success: false, message: "Invalid audience." }, { status: 400 });

@@ -4,6 +4,7 @@ import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
     process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -190,6 +191,7 @@ export async function PATCH(req: NextRequest) {
                 details: `${action === "approve" ? "Approved" : "Rejected"} Guidance Counselor profile update request.`,
                 changes: Array.isArray(requestData.changes) ? requestData.changes : [],
             });
+            await publishAccountRealtimeInvalidation([{ role: "guidance", id: Number(requestData.guidance_id) }]);
             return NextResponse.json({ success: true });
         }
 
@@ -368,6 +370,8 @@ export async function PATCH(req: NextRequest) {
             details: `${action === "approve" ? "Approved" : "Rejected"} Adviser profile update request.`,
             changes: Array.isArray(requestData.changes) ? requestData.changes : [],
         });
+
+        await publishAccountRealtimeInvalidation([{ role: "adviser", id: Number(requestData.adviser_id) }]);
 
         return NextResponse.json({ success: true });
     } catch (error: unknown) {

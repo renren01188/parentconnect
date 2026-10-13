@@ -1,9 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCheck, FileText, TicketCheck } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { mergeNotificationFeed } from "@/lib/notificationFeed";
 
 type Notification = {
   id: string;
@@ -22,15 +25,19 @@ export default function PrincipalNotificationsPage() {
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [reportUnreadCount, setReportUnreadCount] = useState(0);
+  const fetchSequence = useRef(0);
 
-  const loadNotifications = useCallback(async (): Promise<Notification[]> => {
+  const loadNotifications = useCallback(async (): Promise<void> => {
+    const requestId = ++fetchSequence.current;
     const response = await fetch("/api/principal/notifications", { cache: "no-store" });
     const data = await response.json().catch(() => null);
-    if (!response.ok || !data?.success) return [];
+    if (requestId !== fetchSequence.current || !response.ok || !data?.success) return;
     const rows = (data.notifications ?? []) as Notification[];
-    setItems(rows);
+    // Keep a card visible while an older page-open request finishes after a
+    // newer Realtime invalidation. The deterministic notification keys also
+    // make duplicate broadcasts harmless.
+    setItems((current) => mergeNotificationFeed(current, rows));
     setReportUnreadCount(Number(data.reportUnreadCount ?? 0));
-    return rows;
   }, []);
 
   const markRowsRead = useCallback(async (rows: Notification[]) => {
@@ -39,7 +46,7 @@ export default function PrincipalNotificationsPage() {
 
     // Viewing this page acknowledges notification cards only. A report remains
     // new in the Reports sidebar until the Principal opens that report.
-    setItems(rows.map((item) => ({ ...item, read: true })));
+    setItems((current) => current.map((item) => keys.includes(item.id) ? { ...item, read: true } : item));
 
     const response = await fetch("/api/principal/notifications/read", {
       method: "PATCH",
@@ -60,11 +67,17 @@ export default function PrincipalNotificationsPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       loadNotifications()
-        .then((rows) => markRowsRead(rows))
         .finally(() => setLoading(false));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadNotifications, markRowsRead]);
+  }, [loadNotifications]);
+
+  useVisibleRefresh(loadNotifications);
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") {
+      return loadNotifications();
+    }
+  });
 
   return (
     <div className="min-h-full min-w-0 overflow-x-clip bg-slate-50 p-4 sm:p-6">
@@ -85,7 +98,6 @@ export default function PrincipalNotificationsPage() {
         {loading ? <p className="p-8 text-center text-slate-400">Loading notifications...</p> : items.length ? items.map((item) => {
           const isEscalation = item.type === "guidance-escalated";
           const isAcceptedTicket = item.type === "guidance-ticket-accepted";
-          const isReport = item.category === "report";
           return (
             <div
               key={item.id}

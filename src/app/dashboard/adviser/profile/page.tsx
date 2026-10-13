@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
     Eye, EyeOff, ShieldCheck,
     School, Mail, Phone, Check, CircleAlert,
@@ -8,7 +8,7 @@ import {
     RefreshCw, Send, Users, FileText,
     Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, Camera, ImagePlus, Trash2, ChevronDown,
 } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 function checkPassword(pw: string) {
     return {
@@ -913,8 +913,9 @@ export default function AdviserProfilePage() {
     const [loadErr, setLoadErr] = useState("");
     const [showSettings, setShowSettings] = useState(false);
 
-    async function loadProfile() {
-        setLoading(true); setLoadErr("");
+    const loadProfile = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
+        if (!background) setLoading(true);
+        setLoadErr("");
         try {
             const res = await fetch("/api/adviser/me");
             const json = await res.json();
@@ -923,25 +924,19 @@ export default function AdviserProfilePage() {
         } catch (e: any) {
             setLoadErr(e.message || "Failed to load profile.");
         } finally {
-            setLoading(false);
+            if (!background) setLoading(false);
         }
-    }
+    }, []);
 
     useEffect(() => { loadProfile(); }, []);
 
-    // Keep the open profile page in sync when ICT reviews a request. The next
-    // server request also resolves the current assignment, so navigation to any
-    // adviser page immediately uses the approved class.
-    useEffect(() => {
-        const client = supabaseBrowser;
-        if (!profile?.id || !client) return;
-        const channel = client
-            .channel(`adviser-assignment-${profile.id}`)
-            .on("postgres_changes", { event: "*", schema: "public", table: "advisers", filter: `id=eq.${profile.id}` }, loadProfile)
-            .on("postgres_changes", { event: "*", schema: "public", table: "adviser_change_requests", filter: `adviser_id=eq.${profile.id}` }, loadProfile)
-            .subscribe();
-        return () => { client.removeChannel(channel); };
-    }, [profile?.id]);
+    // The former postgres_changes subscriptions could never deliver because
+    // advisers and adviser_change_requests have RLS and custom dashboard
+    // sessions are not Supabase Auth sessions. ICT now emits a targeted,
+    // data-free account invalidation after an approval or assignment change.
+    useSessionInvalidation((event) => {
+        if (event.scope === "accounts" && !showSettings) return loadProfile({ background: true });
+    });
 
     const initials = profile ? getInitials(profile.first_name, profile.last_name) : "??";
     const allSections = profile ? (profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []) : [];
@@ -986,7 +981,7 @@ export default function AdviserProfilePage() {
             {!loading && loadErr && (
                 <div className="flex flex-col items-center justify-center py-20 gap-3">
                     <p className="text-red-500 font-semibold">{loadErr}</p>
-                    <button onClick={loadProfile} className="px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600 transition-colors">Retry</button>
+                    <button onClick={() => void loadProfile()} className="px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600 transition-colors">Retry</button>
                 </div>
             )}
 

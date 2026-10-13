@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   User, Mail, Phone, CreditCard, Lock, Eye, EyeOff,
   Camera, Building2, Calendar,
@@ -604,6 +605,7 @@ export default function AccountProfilePage() {
   });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -654,10 +656,11 @@ export default function AccountProfilePage() {
     return () => {
       isMounted = false;
     };
-  // Load once on mount. Depending on the Next.js dev router object here can
-  // retrigger the effect and repeatedly re-request the profile route.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [profileRefreshKey]);
+
+  useSessionInvalidation((event) => {
+    if (event.scope === "accounts" && !showSettingsModal) setProfileRefreshKey((key) => key + 1);
+  });
 
   const fullName = [profile.firstName, profile.middleName, profile.lastName, profile.suffix]
     .filter(Boolean)

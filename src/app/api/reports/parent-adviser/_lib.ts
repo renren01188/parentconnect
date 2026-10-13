@@ -22,13 +22,15 @@ const MESSAGE_SELECT = [
   "read_by_parent",
   "read_by_adviser",
 ].join(", ");
-// Inbox/list queries need enough metadata to calculate unread state and the
-// active thread, but must not download every body or attachment data URL.
+// Inbox/list queries need enough metadata to calculate unread state, preview
+// the latest message, and identify its actual staff sender. Attachments stay
+// out of this query so an inbox never downloads attachment data URLs.
 const MESSAGE_SUMMARY_SELECT = [
   "id",
   "report_id",
   "sender_role",
   "sender_name",
+  "body",
   "thread_type",
   "created_at",
   "read_by_parent",
@@ -54,6 +56,8 @@ export type ReportRow = {
   status: string;
   escalated_to_guidance: boolean;
   escalated_to_principal?: boolean | null;
+  cancelled_at?: string | null;
+  cancelled_by_parent_id?: number | null;
   guidance_seen_at?: string | null;
   parent_seen_at: string | null;
   status_updated_at: string | null;
@@ -184,17 +188,19 @@ export async function getReportForAdviser(id: number, adviserId: number) {
   return data as ReportRow | null;
 }
 
-export function parentReportStatus(status: string): "Pending" | "In Review" | "Resolved" | "Escalated" {
+export function parentReportStatus(status: string): "Pending" | "In Review" | "Replied" | "Resolved" | "Escalated" {
   if (status === "resolved") return "Resolved";
   if (status === "escalated") return "Escalated";
+  if (status === "replied") return "Replied";
   if (status === "ongoing" || status === "read") return "In Review";
   return "Pending";
 }
 
-export function adviserReportStatus(status: string): "New" | "Read" | "Ongoing" | "Resolved" | "Escalated" {
+export function adviserReportStatus(status: string): "New" | "Read" | "Ongoing" | "Replied" | "Resolved" | "Escalated" {
   if (status === "resolved") return "Resolved";
   if (status === "escalated") return "Escalated";
   if (status === "ongoing") return "Ongoing";
+  if (status === "replied") return "Replied";
   if (status === "read") return "Read";
   return "New";
 }
@@ -205,6 +211,7 @@ export function adviserReportStatus(status: string): "New" | "Read" | "Ongoing" 
  * flags take precedence over the shared workflow status.
  */
 function adviserDisplayReportStatus(row: ReportRow) {
+  if (row.status === "cancelled") return "Resolved" as const;
   return effectiveAdviserReportStatus({
     status: adviserReportStatus(row.status),
     escalatedToGuidance: row.escalated_to_guidance,
@@ -217,12 +224,14 @@ export function statusFromAdviser(status: string) {
   if (normalized === "resolved") return "resolved";
   if (normalized === "escalated") return "escalated";
   if (normalized === "ongoing") return "ongoing";
+  if (normalized === "replied") return "replied";
   if (normalized === "read") return "read";
   return "new";
 }
 
-function formatDate(value: string) {
+export function formatReportTimestamp(value: string) {
   return new Date(value).toLocaleString("en-US", {
+    timeZone: "Asia/Manila",
     month: "long",
     day: "numeric",
     year: "numeric",
@@ -230,6 +239,8 @@ function formatDate(value: string) {
     minute: "2-digit",
   });
 }
+
+const formatDate = formatReportTimestamp;
 
 function timeAgo(value: string) {
   const diff = Date.now() - new Date(value).getTime();
@@ -249,6 +260,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   const isGuidanceConversation = ticket?.status === "accepted" || row.escalated_to_guidance || messages.some((msg) => msg.sender_role === "guidance");
   const visibleMessages = messages;
   const lastMessage = visibleMessages.at(-1) ?? messages.at(-1);
+  const latestStaffRole = latestParentConversationStaffRole(visibleMessages);
   const hasUnreadStaffMessage = visibleMessages.some((msg) =>
     (msg.sender_role === "adviser" || msg.sender_role === "principal" || msg.sender_role === "guidance" || msg.sender_role === "subject_teacher") && !msg.read_by_parent
   );
@@ -264,6 +276,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   };
   const recipientName = isPrincipalConversation ? principalName : isGuidanceConversation ? guidanceName : row.adviser_name;
   const subjectTeacherOpeningMessage = messages.find((msg) => msg.sender_role === "subject_teacher");
+  const canCancel = !isResolved && row.status !== "cancelled" && !row.cancelled_at && messages[0]?.sender_role === "parent";
 
   return {
     id: row.id,
@@ -272,7 +285,11 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     recipientInitials: initials(recipientName),
     recipientColor: isPrincipalConversation ? "#7c3aed" : isGuidanceConversation ? "#0ea5e9" : "#f59e0b",
     subject: row.subject,
-    preview: lastMessage?.body?.slice(0, 80) || "",
+    // Keep an ISO value for compact dashboard cards. Display components format
+    // it in their own locale; they must not parse a presentation label such as
+    // `submittedAt` back into a date.
+    createdAt: row.created_at,
+    preview: lastMessage?.body?.trim().slice(0, 80) || (lastMessage ? "An attachment was sent." : ""),
     status: isResolved ? "Resolved" : unread ? "Unread" : "Pending Response",
     reportStatus: hasOriginalReportStatus ? parentReportStatus(row.status) : null,
     hasReportStatus: hasOriginalReportStatus,
@@ -309,7 +326,11 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     ticketId: ticket?.id ?? null,
     ticketStatus: ticket?.status ?? null,
     ticketRejectionReason: ticket?.rejection_reason ?? null,
-    threadTypes: [...new Set(messages.map((message) => messageThreadType(row, messages, message)))],
+    canCancel,
+    // The role tabs use the most recent actual staff sender. Do not infer a
+    // sender from an assignment, escalation flag, or a parent's thread type.
+    latestStaffRole,
+    threadTypes: latestStaffRole ? [latestStaffRole] : [],
   };
 }
 
@@ -319,13 +340,25 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
   // adviser message, so the parent's first message is a real reply and must
   // remain in the Adviser ↔ Parent conversation.
   const openingMessage = messages[0] && (messages[0].sender_role === "parent" || messages[0].sender_role === "subject_teacher") ? messages[0] : undefined;
-  const isResolved = row.status === "resolved";
+  // Cancelled reports remain visible to staff, but are presented as closed so
+  // existing report controls cannot reopen or reply to them. The database
+  // status and audit entry retain the distinct cancellation reason.
+  const isResolved = row.status === "resolved" || row.status === "cancelled";
   const adviserMessages = adviserThreadMessages(row, messages, { includeInitialParent: false });
-  const hasUnreadForAdviser = !isResolved && row.status !== "ongoing" && messages.some((msg) =>
+  // Unread is message state, not workflow state. In particular, a historical
+  // Parent message must not become new again when a reply changes the report
+  // label to Replied.
+  const hasUnreadForAdviser = !isResolved && messages.some((msg) =>
     (msg.sender_role === "parent" || msg.sender_role === "subject_teacher") &&
     !msg.read_by_adviser &&
     // Don't count parent messages after Guidance entered — those are Guidance-thread messages
-    messageThreadType(row, messages, msg) === "adviser"
+    messageThreadType(row, messages, msg) === "adviser" &&
+    // Count at most the latest inbound Adviser-thread message. A stale unread
+    // receipt must not mask a later message that was already acknowledged.
+    msg.id === [...messages].reverse().find((candidate) =>
+      (candidate.sender_role === "parent" || candidate.sender_role === "subject_teacher") &&
+      messageThreadType(row, messages, candidate) === "adviser"
+    )?.id
   );
   // Only include messages in the Adviser↔Parent thread.
   // Once escalated to Guidance, any message where the parent is replying
@@ -348,6 +381,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
 
   void legacyAdviserThreadMessages;
   const replies = adviserMessages.map((msg) => ({
+    id: msg.id,
     sender: msg.sender_role === "adviser" ? "Adviser" : msg.sender_role === "principal" ? "Principal" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
     message: msg.body ?? "",
     sent_at: formatDate(msg.created_at),
@@ -387,6 +421,16 @@ type ReportThread = "adviser" | "guidance" | "principal";
 
 function explicitThreadType(value: unknown): ReportThread | null {
   return value === "adviser" || value === "guidance" || value === "principal" ? value : null;
+}
+
+function latestParentConversationStaffRole(messages: MessageRow[]): ReportThread | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const senderRole = messages[index]?.sender_role;
+    if (senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal") {
+      return senderRole;
+    }
+  }
+  return undefined;
 }
 
 function messageThreadType(row: ReportRow, messages: MessageRow[], message: MessageRow): ReportThread {
@@ -441,7 +485,7 @@ function principalThreadMessages(row: ReportRow, messages: MessageRow[]) {
 }
 
 export function unreadGuidanceMessageIds(row: ReportRow, messages: MessageRow[]) {
-  if (row.status === "resolved") return [];
+  if (row.status === "resolved" || row.status === "cancelled") return [];
   return guidanceThreadMessages(row, messages)
     .filter((msg) => msg.sender_role === "parent" && !msg.read_by_adviser)
     .map((msg) => msg.id);
@@ -452,7 +496,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
   const firstGuidanceMessage = messages.find((msg) => msg.sender_role === "guidance");
   const threadMessages = guidanceThreadMessages(row, messages);
   const hasUnreadForGuidance = unreadGuidanceMessageIds(row, messages).length > 0;
-  const isResolved = row.status === "resolved";
+  const isResolved = row.status === "resolved" || row.status === "cancelled";
 
   return {
     id: row.id,
@@ -472,6 +516,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     hasUnreadForGuidance,
     replies: threadMessages.map((msg) => ({
+      id: msg.id,
       sender: msg.sender_role === "guidance" ? "Guidance" : row.parent_name,
       message: msg.body ?? "",
       sent_at: formatDate(msg.created_at),
@@ -486,7 +531,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
 export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null, principalHasRead = false) {
   const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
   const threadMessages = principalThreadMessages(row, messages);
-  const isResolved = row.status === "resolved";
+  const isResolved = row.status === "resolved" || row.status === "cancelled";
   const hasUnreadForPrincipal = hasUnreadPrincipalReport({
     status: row.status,
     principalHasRead,
@@ -518,11 +563,12 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     // It survives page refreshes and distinguishes a new handoff from an
     // already viewed Principal report.
     principalHasRead,
-    canReply: Boolean(row.escalated_to_principal),
+    canReply: row.status !== "cancelled" && Boolean(row.escalated_to_principal),
     ticketId: ticket?.id ?? null,
     ticketStatus: ticket?.status ?? null,
     ticketRejectionReason: ticket?.rejection_reason ?? null,
     replies: threadMessages.map((msg) => ({
+      id: msg.id,
       sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : row.parent_name,
       senderName: msg.sender_role === "parent" ? row.parent_name : (msg.sender_name || "Staff Member"),
       senderRole: msg.sender_role,
@@ -605,13 +651,13 @@ async function listMessagesWithSelect(reportIds: number[], select: string) {
   return map;
 }
 
-/** Summary mappers intentionally omit conversation contents. They retain all
- * fields that drive list filters, badges, statuses, and escalation controls. */
+/** Summary mappers omit full conversation contents and attachment data, while
+ * retaining the actual latest message body needed for an accurate inbox preview. */
 export function toParentReportSummary(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   const report = toParentReport(row, messages, ticket);
   return {
     ...report,
-    preview: report.preview || "Open this report to view the latest update.",
+    preview: report.preview || "No messages yet.",
     messages: [],
     detailsLoaded: false,
   };

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidanceMessageEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
@@ -64,8 +64,8 @@ function isMissingColumn(error: { message?: string; code?: string } | null, colu
   );
 }
 
-function normalizeThreadType(value: unknown, fallback: "adviser" | "guidance" | "principal") {
-  return value === "adviser" || value === "guidance" || value === "principal" ? value : fallback;
+function isClosedReportStatus(status: unknown) {
+  return ["resolved", "cancelled"].includes(String(status ?? "").toLowerCase());
 }
 
 async function legacyDuplicateMessage(reportId: number, idempotencyKey: string) {
@@ -115,9 +115,9 @@ export async function POST(
         return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
       }
 
-      if (String(report.status ?? "").toLowerCase() === "resolved") {
+      if (isClosedReportStatus(report.status)) {
         return NextResponse.json(
-          { success: false, message: "This report has been resolved. You can no longer send messages in this conversation." },
+          { success: false, message: "This report is closed. You can no longer send messages in this conversation." },
           { status: 403 }
         );
       }
@@ -132,8 +132,10 @@ export async function POST(
 
       const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
       const result = await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser", idempotencyKey);
-      if (!result.duplicate) await publishReportInvalidation(report);
-      return NextResponse.json({ success: true });
+      // The message and report status are already committed. Broadcast after
+      // the response so a slow Realtime request never delays the sender UI.
+      if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+      return NextResponse.json({ success: true, messageId: result.id });
     }
 
     if (requestedRole === "guidance") {
@@ -155,9 +157,9 @@ export async function POST(
         return NextResponse.json({ success: false, message: "Escalated report not found." }, { status: 404 });
       }
 
-      if (String(report.status ?? "").toLowerCase() === "resolved") {
+      if (isClosedReportStatus(report.status)) {
         return NextResponse.json(
-          { success: false, message: "This report has been resolved. You can no longer send messages in this conversation." },
+          { success: false, message: "This report is closed. You can no longer send messages in this conversation." },
           { status: 403 }
         );
       }
@@ -172,23 +174,27 @@ export async function POST(
 
       const isFirstGuidanceReply = !report.guidance_seen_at;
       const result = await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
-      if (isFirstGuidanceReply && report.parent_email) {
-        try {
-          await sendGuidanceMessageEmail({
-            recipientEmail: String(report.parent_email),
-            recipientName: String(report.parent_name ?? "Parent"),
-            recipientRole: "Parent",
-            guidanceName: guidance.name,
-            subject: String(report.subject ?? "Guidance Message"),
-            message: trimmedBody,
-            hasAttachments: cleanedAttachments.length > 0,
-          });
-        } catch (emailError) {
-          console.error("Guidance parent email failed:", emailError);
-        }
+      if (!result.duplicate) {
+        after(async () => {
+          const deliveries = [publishReportInvalidation(report, reportId, result.id)];
+          if (isFirstGuidanceReply && report.parent_email) {
+            deliveries.push(sendGuidanceMessageEmail({
+              recipientEmail: String(report.parent_email),
+              recipientName: String(report.parent_name ?? "Parent"),
+              recipientRole: "Parent",
+              guidanceName: guidance.name,
+              subject: String(report.subject ?? "Guidance Message"),
+              message: trimmedBody,
+              hasAttachments: cleanedAttachments.length > 0,
+            }));
+          }
+          const outcomes = await Promise.allSettled(deliveries);
+          for (const outcome of outcomes) {
+            if (outcome.status === "rejected") console.error("Guidance message post-send delivery failed:", outcome.reason);
+          }
+        });
       }
-      if (!result.duplicate) await publishReportInvalidation(report);
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, messageId: result.id });
     }
 
     if (requestedRole === "principal") {
@@ -210,17 +216,17 @@ export async function POST(
         return NextResponse.json({ success: false, message: "Principal-escalated report not found." }, { status: 404 });
       }
 
-      if (String(report.status ?? "").toLowerCase() === "resolved") {
+      if (isClosedReportStatus(report.status)) {
         return NextResponse.json(
-          { success: false, message: "This report has been resolved. You can no longer send messages in this conversation." },
+          { success: false, message: "This report is closed. You can no longer send messages in this conversation." },
           { status: 403 }
         );
       }
 
       const result = await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal", idempotencyKey);
       // Email notifications are intentionally disabled for Principal <-> Parent conversations.
-      if (!result.duplicate) await publishReportInvalidation(report);
-      return NextResponse.json({ success: true });
+      if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+      return NextResponse.json({ success: true, messageId: result.id });
     }
 
     const parent = await getParentSession();
@@ -233,21 +239,26 @@ export async function POST(
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
 
-    if (String(report.status ?? "").toLowerCase() === "resolved") {
+    if (isClosedReportStatus(report.status)) {
       return NextResponse.json(
-        { success: false, message: "This report has been resolved. You can no longer send messages in this conversation." },
+        { success: false, message: "This report is closed. You can no longer send messages in this conversation." },
         { status: 403 }
       );
     }
 
-    const parentThreadType = normalizeThreadType(
-      threadType,
-      report.escalated_to_principal ? "principal" : report.escalated_to_guidance ? "guidance" : "adviser"
-    );
+    // The report handoff determines the Parent's active conversation. Do not
+    // let a browser-provided thread type route a reply back to an Adviser once
+    // Guidance or the Principal owns the report.
+    const parentThreadType = report.escalated_to_principal
+      ? "principal"
+      : report.escalated_to_guidance
+        ? "guidance"
+        : "adviser";
+    void threadType;
     const result = await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType, idempotencyKey);
     // Email notifications are intentionally disabled for Parent <-> Principal conversations.
-    if (!result.duplicate) await publishReportInvalidation(report);
-    return NextResponse.json({ success: true });
+    if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+    return NextResponse.json({ success: true, messageId: result.id });
   } catch (error: unknown) {
     console.error("POST /api/reports/parent-adviser/[id]/messages error:", error);
     return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
@@ -259,15 +270,118 @@ async function publishReportInvalidation(report: {
   adviser_id?: number | null;
   escalated_to_guidance?: boolean | null;
   escalated_to_principal?: boolean | null;
-}) {
+}, reportId: number, messageId: number) {
   await publishReportRealtimeInvalidation({
     parentId: report.parent_id,
     adviserId: report.adviser_id,
     includeGuidance: Boolean(report.escalated_to_guidance),
+    reportId,
+    kind: "message",
+    messageId,
   });
 }
 
+function scheduleMessageAudit({
+  reportId,
+  senderRole,
+  senderName,
+  currentStatus,
+  nextStatus,
+  attachments,
+  threadType,
+}: {
+  reportId: number;
+  senderRole: "parent" | "adviser" | "guidance" | "principal";
+  senderName: string;
+  currentStatus: string;
+  nextStatus?: string;
+  attachments: MessageAttachment[];
+  threadType: "adviser" | "guidance" | "principal";
+}) {
+  // The reply and report-state transaction has already committed at this
+  // point. Audit delivery must not turn that successful message into a false
+  // server error for the sender.
+  after(async () => {
+    try {
+      await logAudit({
+        action: "Message Sent",
+        performedBy: senderName,
+        performedByRole: senderRole === "parent" ? "Parent/Guardian" : senderRole === "guidance" ? "Guidance Counselor" : senderRole === "principal" ? "Principal" : "Adviser",
+        targetUser: `Report #${reportId}`,
+        targetRole: "Report",
+        targetType: "Parent Report Message",
+        targetId: reportId,
+        relatedReportId: reportId,
+        previousStatus: currentStatus,
+        newStatus: nextStatus ?? currentStatus,
+        module: "Reports",
+        details: `${senderName} sent a ${senderRole} message on report #${reportId}.`,
+        metadata: { attachmentCount: attachments.length, threadType },
+      });
+    } catch (error) {
+      console.error("Unable to record parent report message audit entry:", error);
+    }
+  });
+}
+
+function isMissingAtomicMessageFunction(error: { message?: string; code?: string } | null) {
+  return Boolean(
+    error &&
+    (error.code === "PGRST202" ||
+      /append_parent_adviser_report_message|schema cache/i.test(error.message ?? ""))
+  );
+}
+
 async function insertMessage(
+  reportId: number,
+  senderRole: "parent" | "adviser" | "guidance" | "principal",
+  senderName: string,
+  body: string,
+  currentStatus: string,
+  attachments: MessageAttachment[],
+  threadType: "adviser" | "guidance" | "principal",
+  idempotencyKey: string,
+) {
+  const { data, error } = await supabase.rpc("append_parent_adviser_report_message", {
+    p_report_id: reportId,
+    p_sender_role: senderRole,
+    p_sender_name: senderName,
+    p_body: body,
+    p_attachments: attachments,
+    p_thread_type: threadType,
+    p_idempotency_key: idempotencyKey,
+  });
+
+  if (!error) {
+    const row = Array.isArray(data) ? data[0] : data;
+    const id = Number(row?.message_id);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new Error("The saved message did not return an identifier.");
+    }
+    const duplicate = row?.duplicate === true;
+    const reportStatus = typeof row?.report_status === "string" ? row.report_status : currentStatus;
+    if (!duplicate) {
+      scheduleMessageAudit({
+        reportId,
+        senderRole,
+        senderName,
+        currentStatus,
+        nextStatus: reportStatus,
+        attachments,
+        threadType,
+      });
+    }
+    return { id, duplicate };
+  }
+
+  // The fallback is only for installations that have not applied the paired
+  // migration yet. Once it is applied, every normal request takes the single
+  // transactional RPC above.
+  if (!isMissingAtomicMessageFunction(error)) throw error;
+  return insertMessageLegacy(reportId, senderRole, senderName, body, currentStatus, attachments, threadType, idempotencyKey);
+}
+
+async function insertMessageLegacy(
   reportId: number,
   senderRole: "parent" | "adviser" | "guidance" | "principal",
   senderName: string,
@@ -383,15 +497,38 @@ async function insertMessage(
     if (readError) throw readError;
   }
 
+  if (senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal") {
+    // A successful staff reply is an acknowledgement of the existing Parent
+    // messages. Without this receipt, a historical message can reappear as a
+    // new sidebar item after the status changes to Replied.
+    const { error: readError } = await supabase
+      .from("parent_adviser_report_messages")
+      .update({ read_by_adviser: true })
+      .eq("report_id", reportId)
+      .in("sender_role", ["parent", "subject_teacher"]);
+    if (readError) throw readError;
+  }
+
   const normalizedStatus = String(currentStatus).toLowerCase();
-  const canMoveToOngoing = !["resolved", "escalated"].includes(normalizedStatus) || senderRole === "principal";
-  const nextStatus = (senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal") && canMoveToOngoing ? "ongoing" : undefined;
+  // A staff reply to an existing report is a workflow event.  Keep direct
+  // staff_messages out of this route so standalone messages never gain a
+  // report status.
+  const nextStatus = senderRole === "adviser" || senderRole === "guidance" || senderRole === "principal"
+    ? "replied"
+    // A new Parent message makes an Adviser conversation active again. Do
+    // not override an escalated Guidance/Principal workflow.
+    : senderRole === "parent" && threadType === "adviser" && normalizedStatus === "replied"
+      ? "ongoing"
+      : undefined;
   const now = new Date().toISOString();
   const updatePayload: Record<string, string> = {
     updated_at: now,
     last_message_at: now,
   };
-  if (nextStatus) updatePayload.status = nextStatus;
+  if (nextStatus) {
+    updatePayload.status = nextStatus;
+    updatePayload.status_updated_at = now;
+  }
   if (senderRole === "parent") updatePayload.parent_seen_at = now;
 
   let { error: updateError } = await supabase
@@ -409,6 +546,14 @@ async function insertMessage(
   }
 
   if (updateError) throw updateError;
-  await logAudit({ action: "Message Sent", performedBy: senderName, performedByRole: senderRole === "parent" ? "Parent/Guardian" : senderRole === "guidance" ? "Guidance Counselor" : senderRole === "principal" ? "Principal" : "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report Message", targetId: reportId, relatedReportId: reportId, previousStatus: currentStatus, newStatus: nextStatus ?? currentStatus, module: "Reports", details: `${senderName} sent a ${senderRole} message on report #${reportId}.`, metadata: { attachmentCount: attachments.length, threadType } });
+  scheduleMessageAudit({
+    reportId,
+    senderRole,
+    senderName,
+    currentStatus,
+    nextStatus,
+    attachments,
+    threadType,
+  });
   return { id: insertedId, duplicate: false };
 }

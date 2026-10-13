@@ -12,6 +12,7 @@ import {
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { useReportTyping } from "@/hooks/useReportTyping";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import AdviserReportsGuide from "../components/AdviserReportsGuide";
 import {
@@ -74,6 +75,7 @@ function getStatusStyle(status: ReportStatus) {
         case "New": return "bg-emerald-500 text-white";
         case "Read": return "bg-slate-200 text-slate-600";
         case "Ongoing": return "bg-blue-100 text-blue-600";
+        case "Replied": return "bg-indigo-100 text-indigo-700";
         case "Resolved": return "bg-emerald-100 text-emerald-700";
         case "Escalated": return "bg-red-100 text-red-600";
     }
@@ -147,7 +149,7 @@ function groupByParent(reports: Report[]): ParentGroup[] {
             map[r.parent_name] = { parent_name: r.parent_name, parent_profile_picture: r.parent_profile_picture, student_name: r.student_name, initials: getInitials(r.parent_name), reports: [], unread: 0, maxConcernLevel: 0 };
         }
         map[r.parent_name].reports.push(r);
-        if (r.hasUnreadForAdviser && r.status !== "Ongoing") map[r.parent_name].unread++;
+        if (r.hasUnreadForAdviser) map[r.parent_name].unread++;
         if (r.concernLevel > map[r.parent_name].maxConcernLevel) map[r.parent_name].maxConcernLevel = r.concernLevel;
     }
     for (const g of Object.values(map)) {
@@ -286,7 +288,7 @@ function AttachmentChips({ attachments }: { attachments?: MessageAttachment[] })
 }
 
 // ── New Message Modal ─────────────────────────────────────────────────────────
-function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () => void; onSent?: () => void | Promise<void>; mode?: "concern" | "message" }) {
+function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (conversationId: string) => void | Promise<void> }) {
     const [recipientId, setRecipientId] = useState("");
     const [recipientOpen, setRecipientOpen] = useState(false);
     const [subject, setSubject] = useState("");
@@ -332,7 +334,9 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
     });
     const concernLevel = computeAdviserLevel(selectedCats);
     const otherSelected = selectedCats.includes("Other");
-    const isMessageMode = mode === "message";
+    // This composer creates a direct message, not a report.  Categories and
+    // concern level therefore never belong to this form.
+    const isMessageMode = true;
     const canSubmit = recipientId && subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) && (message.trim() || attachments.length > 0) && !sending;
     function toggleCat(name: string) { setSelectedCats(p => p.includes(name) ? p.filter(c => c !== name) : [...p, name]); }
     const barColor = concernLevel >= 100 ? "#ef4444" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#10b981";
@@ -392,14 +396,11 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
             const finalCategories = isMessageMode ? ["Message"] : selectedCats.map(cat =>
                 cat === "Other" && otherText.trim() ? `Other: ${otherText.trim()}` : cat
             );
-            const endpoint = recipientId.startsWith("guidance:") || recipientId.startsWith("adviser:")
-                ? "/api/reports/staff-messages"
-                : "/api/reports/adviser-messages";
-            const res = await fetch(endpoint, {
+            const res = await fetch("/api/reports/staff-messages", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    role: recipientId.startsWith("guidance:") || recipientId.startsWith("adviser:") ? "adviser" : undefined,
+                    role: "adviser",
                     recipientId,
                     subject: subject.trim(),
                     categories: finalCategories,
@@ -409,8 +410,16 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
             });
             const data = await res.json().catch(() => null);
             if (!res.ok) throw new Error(data?.message || "Unable to send message.");
-            await onSent?.();
+            const createdMessageId = Number(data?.message?.id);
             setSubmitted(true);
+            // The message is durable once the POST succeeds. Refreshing the
+            // inbox is useful, but it must not hold the success state hostage
+            // to a second network request.
+            void Promise.resolve(onSent?.(Number.isSafeInteger(createdMessageId) && createdMessageId > 0
+                ? `staff-message:${createdMessageId}`
+                : "")).catch((refreshError) => {
+                console.warn("Unable to refresh the adviser message inbox after sending:", refreshError);
+            });
         } catch (error) {
             setSubmitError(error instanceof Error ? error.message : "Unable to send message.");
         } finally {
@@ -423,7 +432,7 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
             <div className="my-auto flex w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "calc(100dvh - 24px)" }} onClick={e => e.stopPropagation()}>
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-5 sm:px-6">
                     <div>
-                        <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
+                        <h2 className="text-xl font-extrabold text-slate-900">Send a Concern</h2>
                         <p className="text-sm text-slate-400 mt-1">Send a message to a parent or admin</p>
                     </div>
                     <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400"><X className="w-4 h-4" /></button>
@@ -450,7 +459,7 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
                                     {selectedRecipient ? (
                                         <><RecipientAvatar r={selectedRecipient} />
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.name}</p>
+                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.type === "parent" ? selectedRecipient.studentName : selectedRecipient.name}</p>
                                                 <p className="text-xs text-slate-400 truncate">
                                                     {selectedRecipient.type === "admin"
                                                         ? `Principal - ${selectedRecipient.email}`
@@ -458,7 +467,7 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
                                                             ? selectedRecipient.role === "Guidance"
                                                                 ? `Guidance Counselors - ${selectedRecipient.email}`
                                                                 : `School Adviser - ${selectedRecipient.email}`
-                                                            : `Student: ${selectedRecipient.studentName}`}
+                                                            : `Parent: ${selectedRecipient.actualParentName || selectedRecipient.name}`}
                                                 </p>
                                             </div></>
                                     ) : <p className="text-sm text-slate-400 flex-1">Select a recipient...</p>}
@@ -549,7 +558,7 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
                                             <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); setRecipientId(p.id); setRecipientOpen(false); }}
                                                 className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 transition ${recipientId === p.id ? "bg-emerald-50" : ""}`}>
                                                 <div className={`w-8 h-8 rounded-full ${getAvatarColor(p.name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>{getInitials(p.name)}</div>
-                                                <div><p className="text-sm font-semibold text-slate-800">{p.name}</p><p className="text-xs text-slate-400">Student: {p.studentName}</p></div>
+                                                <div><p className="text-sm font-semibold text-slate-800">{p.studentName}</p><p className="text-xs text-slate-400">Parent: {p.actualParentName || p.name}</p></div>
                                                 {recipientId === p.id && <CheckCircle className="w-4 h-4 text-emerald-500 ml-auto shrink-0" />}
                                             </button>
                                         ))}
@@ -558,8 +567,8 @@ function NewMessageModal({ onClose, onSent, mode = "concern" }: { onClose: () =>
                             </div>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1.5">{isMessageMode ? "Topic" : "Subject"} <span className="text-red-500">*</span></label>
-                            <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder={isMessageMode ? "Enter topic..." : "Enter subject..."}
+                            <label className="block text-xs font-bold text-slate-700 mb-1.5">Subject <span className="text-red-500">*</span></label>
+                            <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Enter subject..."
                                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                         </div>
                         {!isMessageMode && <div>
@@ -845,6 +854,8 @@ function ReportsPageContent() {
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
     const parentMessagesRef = useRef<HTMLDivElement>(null);
     const adminMessagesRef = useRef<HTMLDivElement>(null);
+    const reportWasAtBottomRef = useRef(true);
+    const lastScrolledReportIdRef = useRef<number | null>(null);
 
     // Tracks which reports the adviser has explicitly unlocked (clicked "See the concern")
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
@@ -861,9 +872,21 @@ function ReportsPageContent() {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load reports.");
         const nextReports = (data.reports ?? []) as Report[];
-        setReports(nextReports);
+        setReports((current) => nextReports.map((report) => {
+            const loaded = current.find((item) => item.id === report.id);
+            return loaded?.detailsLoaded
+                ? { ...report, message: loaded.message, attachments: loaded.attachments, replies: loaded.replies, detailsLoaded: true }
+                : report;
+        }));
 
-        setSelectedReport(current => current ? nextReports.find(r => r.id === current.id) ?? current : current);
+        setSelectedReport(current => {
+            if (!current) return current;
+            const summary = nextReports.find((report) => report.id === current.id);
+            if (!summary) return current;
+            return current.detailsLoaded
+                ? { ...summary, message: current.message, attachments: current.attachments, replies: current.replies, detailsLoaded: true }
+                : summary;
+        });
         setSelectedParent(current => {
             if (!current) return current;
             return groupByParent(nextReports).find(group => group.parent_name === current.parent_name) ?? current;
@@ -927,6 +950,7 @@ function ReportsPageContent() {
             ? nextMessages.find(message => adminMessageKey(message) === adminMessageKey(current)) ?? current
             : current
         );
+        return nextMessages;
     }, []);
 
     useEffect(() => {
@@ -948,10 +972,6 @@ function ReportsPageContent() {
         };
     }, [loadReports, loadStudentReports, loadAdminMessages]);
 
-    // Subscribing outside the selected-report effect also covers the first
-    // parent report for an adviser with an otherwise empty inbox.
-    const liveUpdateNotice = useReportMessagesRealtime("adviser-reports-live-list", loadReports);
-
     // ── Handle deep-link from notification ───────────────────────────────
     useEffect(() => {
         const tab = searchParams.get("tab") as LeftTab | null;
@@ -966,7 +986,9 @@ function ReportsPageContent() {
 
     // ── Keep sidebar Reports badge live ───────────────────────────────────
     useEffect(() => {
-        const newParent = reports.filter(r => r.hasUnreadForAdviser && r.status !== "Ongoing").length;
+        // Badge entries are unread inbound messages, independent from the
+        // report's workflow label.
+        const newParent = reports.filter(r => r.hasUnreadForAdviser).length;
         const newStudent = studentReps.filter(r => r.status === "New").length;
         const newAdmin = adminMsgs.filter(m => m.status === "New").length;
         setUnreadCount(newParent + newStudent + newAdmin);
@@ -986,6 +1008,30 @@ function ReportsPageContent() {
     const selectedAdminConversationId = selectedAdminMsg?.conversationId ?? null;
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminMessage = selectedAdminMsg?.message ?? "";
+    const reportTyping = useReportTyping(selectedReportId, "adviser");
+
+    const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
+        reportTyping.onRealtimeEvent(event);
+        if (event.kind === "typing") return;
+        await Promise.all([
+            loadReports(),
+            event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+        ]);
+    }, [loadReportDetail, loadReports, reportTyping, selectedReportId]);
+
+    const refreshAdviserInbox = useCallback(async () => {
+        await Promise.all([loadReports(), loadAdminMessages()]);
+    }, [loadAdminMessages, loadReports]);
+
+    const liveUpdateNotice = useReportMessagesRealtime(refreshAdviserInbox, {
+        onReportUpdate: handleLiveReportUpdate,
+        onConnectionStatus: (status) => {
+            if (status === "CLOSED") {
+                reportTyping.clearOtherTyping();
+                reportTyping.stopTyping();
+            }
+        },
+    });
 
     useEffect(() => {
         if (leftTab !== "Parent" || !selectedReport || selectedReport.detailsLoaded) return;
@@ -996,6 +1042,9 @@ function ReportsPageContent() {
 
     useEffect(() => {
         if (leftTab !== "Parent" || !selectedReportId) return;
+        const shouldFollowLatest = lastScrolledReportIdRef.current !== selectedReportId || reportWasAtBottomRef.current;
+        lastScrolledReportIdRef.current = selectedReportId;
+        if (!shouldFollowLatest) return;
         requestAnimationFrame(() => {
             const el = parentMessagesRef.current;
             if (el) el.scrollTop = el.scrollHeight;
@@ -1020,12 +1069,12 @@ function ReportsPageContent() {
     });
 
     // ── Actions ───────────────────────────────────────────────────────────
-    async function markReportStatus(id: number, status: ReportStatus) {
+    async function markReportStatus(id: number, status?: ReportStatus, markRead = false) {
         setActionError("");
         const res = await fetch(`/api/reports/parent-adviser/${id}/status`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status }),
+            body: JSON.stringify({ ...(status ? { status } : {}), ...(markRead ? { markRead: true } : {}) }),
         });
         const data = await res.json().catch(() => null);
         if (!res.ok) {
@@ -1037,7 +1086,9 @@ function ReportsPageContent() {
 
         const updatedReport = (data?.report ?? null) as Report | null;
         const applyStatus = (items: Report[]) =>
-            items.map(r => r.id === id ? (updatedReport ?? { ...r, status, hasUnreadForAdviser: false }) : r);
+            items.map(r => r.id === id
+                ? (updatedReport ?? { ...r, ...(status ? { status } : {}), hasUnreadForAdviser: false })
+                : r);
 
         let nextReports: Report[] = [];
         setReports(prev => {
@@ -1048,7 +1099,9 @@ function ReportsPageContent() {
             if (!current) return current;
             return groupByParent(nextReports).find(g => g.parent_name === current.parent_name) ?? current;
         });
-        if (selectedReport?.id === id) setSelectedReport(prev => prev ? (updatedReport ?? { ...prev, status }) : prev);
+        if (selectedReport?.id === id) setSelectedReport(prev => prev
+            ? (updatedReport ?? { ...prev, ...(status ? { status } : {}), hasUnreadForAdviser: false })
+            : prev);
         // When a parent report is resolved, also resolve the linked student concern
         if (status === "Resolved") {
             const report = reports.find(r => r.id === id);
@@ -1189,9 +1242,11 @@ function ReportsPageContent() {
                     : m
                 ));
                 setSelectedAdminMsg(prev => prev ? { ...prev, status: "Replied", replies: [...(prev.replies ?? []), newReply] } : prev);
-                await loadAdminMessages().catch(() => null);
                 setReplyText("");
                 setReplyAttachments([]);
+                void loadAdminMessages().catch((refreshError) => {
+                    console.warn("Unable to refresh the adviser message inbox after replying:", refreshError);
+                });
                 return;
             }
 
@@ -1208,24 +1263,18 @@ function ReportsPageContent() {
                     setActionError(message);
                     return;
                 }
-                // The report subscription can fetch the persisted row before
-                // this POST resolves. Only add the local acknowledgement when
-                // that snapshot has not already supplied the same message.
-                const hasPersistedReply = (replies: typeof selectedReport.replies | undefined) =>
-                    (replies ?? []).some((reply) =>
-                        reply.sender === "Adviser" &&
-                        reply.message === newReply.message &&
-                        (reply.attachments?.length ?? 0) === newReply.attachments.length
-                    );
-                setReports(prev => prev.map(r =>
-                    r.id === selectedReport.id && !hasPersistedReply(r.replies)
-                        ? { ...r, replies: [...(r.replies ?? []), newReply] }
-                        : r
-                ));
-                setSelectedReport(prev => prev && !hasPersistedReply(prev.replies)
-                    ? { ...prev, replies: [...(prev.replies ?? []), newReply] }
-                    : prev
-                );
+                const reportId = selectedReport.id;
+                setReplyText("");
+                setReplyAttachments([]);
+                reportTyping.stopTyping();
+                // Use only the server-mapped message (with its saved Manila
+                // timestamp). This makes a simultaneous Broadcast idempotent.
+                // Do not keep the composer disabled while the nonessential
+                // list/detail refresh is running.
+                void Promise.all([loadReports(), loadReportDetail(reportId)]).catch((refreshError) => {
+                    console.warn("Unable to refresh the adviser report after replying:", refreshError);
+                });
+                return;
             }
 
             if (selectedStudRep) {
@@ -1724,9 +1773,13 @@ function ReportsPageContent() {
                                                 <button
                                                     onClick={() => {
                                                         setUnlockedReports(prev => new Set(prev).add(selectedReport.id));
-                                                        if (selectedReport.status !== "Resolved" && selectedReport.status !== "Ongoing") {
-                                                            markReportStatus(selectedReport.id, "Ongoing");
-                                                        }
+                                                        // Viewing a new report starts review. Reopening a replied
+                                                        // conversation must never rewrite it back to Ongoing.
+                                                        void markReportStatus(
+                                                            selectedReport.id,
+                                                            selectedReport.status === "New" || selectedReport.status === "Read" ? "Ongoing" : undefined,
+                                                            true,
+                                                        );
                                                     }}
                                                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition shadow-md w-full justify-center"
                                                 >
@@ -1781,7 +1834,14 @@ function ReportsPageContent() {
                                     </div>
 
                                     {/* Message body */}
-                                    <div ref={parentMessagesRef} className="flex-1 overflow-y-auto px-6 py-5">
+                                    <div
+                                      ref={parentMessagesRef}
+                                      onScroll={(event) => {
+                                        const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+                                        reportWasAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 48;
+                                      }}
+                                      className="flex-1 overflow-y-auto px-6 py-5"
+                                    >
                                         {/* Opening report message — hidden for adviser-forwarded student concerns */}
                                         {selectedReport.message && !selectedReport.subject.startsWith("[Student Concern] ") && (
                                           <div className="flex items-start gap-3 mb-5">
@@ -1830,6 +1890,12 @@ function ReportsPageContent() {
 
                                     {/* Actions + Reply */}
                                     <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
+                                        {reportTyping.isOtherParticipantTyping && leftTab === "Parent" && (
+                                            <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                                <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:300ms]" /></span>
+                                                The other participant is typing…
+                                            </div>
+                                        )}
                                         {isResolved || isEscalatedAway ? (
                                             /* ── Adviser locked out after Guidance escalation ── */
                                             <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200">
@@ -1889,7 +1955,7 @@ function ReportsPageContent() {
                                                 {/* Reply box */}
                                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                                                     <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 transition overflow-hidden bg-slate-50">
-                                                        <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
+                                                        <textarea value={replyText} onChange={e => { setReplyText(e.target.value); reportTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                                                             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
                                                             placeholder={`Reply to ${selectedReport.parent_name}... (Enter to send)`}
                                                             rows={2}
@@ -2088,7 +2154,13 @@ function ReportsPageContent() {
 
                                     {/* Original message */}
                                     {(() => {
-                                        const adviserSent = selectedAdminMsg.conversationId?.startsWith("adviser-sent-principal:");
+                                        const standaloneConversation = selectedAdminMsg.conversationId?.startsWith("staff-message:");
+                                        const adviserSent = standaloneConversation
+                                            ? Boolean(selectedAdminMsg.message_sender_is_current)
+                                            : selectedAdminMsg.conversationId?.startsWith("adviser-sent-principal:");
+                                        const originalSenderName = adviserSent
+                                            ? "You"
+                                            : selectedAdminMsg.message_sender_name || selectedAdminMsg.sender_name;
                                         return (
                                             <div className={`flex items-start gap-3 mb-5 ${adviserSent ? "flex-row-reverse" : ""}`}>
                                                 <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${adviserSent ? "bg-emerald-500" : "bg-violet-600"}`}>
@@ -2096,7 +2168,7 @@ function ReportsPageContent() {
                                                 </div>
                                                 <div className={`flex-1 flex flex-col ${adviserSent ? "items-end" : "items-start"}`}>
                                                     <div className="flex items-center gap-2 mb-1">
-                                                        <p className="text-xs font-bold text-slate-800">{adviserSent ? "You" : selectedAdminMsg.sender_name}</p>
+                                                        <p className="text-xs font-bold text-slate-800">{originalSenderName}</p>
                                                         <span className="text-[10px] text-slate-400">{selectedAdminMsg.sent_at}</span>
                                                     </div>
                                                     <div className={`px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap rounded-2xl max-w-[85%] ${adviserSent ? "bg-emerald-500 text-white rounded-tr-none" : "bg-white text-slate-700 border border-slate-100 rounded-tl-none"}`}>
@@ -2110,7 +2182,7 @@ function ReportsPageContent() {
 
                                     {/* Conversation replies */}
                                     {selectedAdminMsg.replies?.map((reply, i) => {
-                                        const mine = reply.sender === "Adviser";
+                                        const mine = reply.is_current_user ?? reply.sender === "Adviser";
                                         return (
                                             <div key={i} className={`flex items-start gap-3 mb-4 ${mine ? "flex-row-reverse" : ""}`}>
                                                 <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-extrabold shrink-0 mt-0.5 ${mine ? "bg-emerald-500" : "bg-violet-600"}`}>
@@ -2119,7 +2191,7 @@ function ReportsPageContent() {
                                                 <div className={`flex-1 flex flex-col ${mine ? "items-end" : "items-start"}`}>
                                                     <div className="flex items-center gap-2 mb-1">
                                                         {mine && <span className="text-[10px] text-slate-400">{reply.sent_at}</span>}
-                                                        <p className="text-xs font-bold text-slate-800">{mine ? "You" : "Principal"}</p>
+                                                        <p className="text-xs font-bold text-slate-800">{mine ? "You" : reply.sender_name || reply.sender}</p>
                                                         {!mine && <span className="text-[10px] text-slate-400">{reply.sent_at}</span>}
                                                     </div>
                                                     <div className={`rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed max-w-[85%] ${mine ? "bg-emerald-500 text-white rounded-tr-none" : "bg-white text-slate-700 border border-slate-100 rounded-tl-none"}`}>
@@ -2213,9 +2285,17 @@ function ReportsPageContent() {
             />
             {showNewMessage && (
                 <NewMessageModal
-                    mode={leftTab === "Principal" ? "message" : "concern"}
                     onClose={() => setShowNewMessage(false)}
-                    onSent={async () => { await Promise.all([loadReports(), loadAdminMessages()]); }}
+                    onSent={(conversationId) => {
+                        setLeftTab("Principal");
+                        setViewStep("detail");
+                        void loadAdminMessages().then((messages) => {
+                            const sentConversation = messages.find((message) => adminMessageKey(message) === conversationId);
+                            setSelectedAdminMsg(sentConversation ?? null);
+                        }).catch((refreshError) => {
+                            console.warn("Unable to load the sent adviser message:", refreshError);
+                        });
+                    }}
                 />
             )}
 

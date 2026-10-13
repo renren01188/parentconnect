@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
 
@@ -282,6 +283,7 @@ export async function PATCH(req: NextRequest) {
       path: "/",
     });
 
+    await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
     return NextResponse.json({
       success: true,
       principal: {
@@ -398,6 +400,7 @@ export async function PUT(req: NextRequest) {
       path: "/",
     });
 
+    await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
     return NextResponse.json({
       success: true,
       message: "Password updated successfully.",

@@ -7,6 +7,7 @@ type ParentContact = {
   contact_number: string | null;
   status: string | null;
   archive_status: string | null;
+  attendance_sms_notifications: boolean | null;
 };
 
 type LinkedParentRow = {
@@ -54,15 +55,16 @@ export function buildAttendanceSmsMessage(input: Pick<AttendanceSmsInput, "stude
   return `PConnect: Your child, ${input.studentName}, recorded attendance at Santiago Elementary School on ${formatAttendanceSmsDate(input.attendanceDate)} at ${formatAttendanceSmsTime(input.timeLogged)}.`;
 }
 
-function registeredParent(rows: ParentContact[]) {
+function registeredParents(rows: ParentContact[]) {
   const unique = new Map<number, ParentContact>();
   for (const row of rows) {
-    if (!parentAccountCanAccess(row)) continue;
+    if (!parentAccountCanAccess(row) || !row.attendance_sms_notifications) continue;
     const phone = normalizePhilippineMobile(row.contact_number);
     if (phone) unique.set(row.id, row);
   }
-  const parent = [...unique.values()].sort((left, right) => left.id - right.id)[0];
-  return parent ? { parentId: parent.id, phone: normalizePhilippineMobile(parent.contact_number) } : null;
+  return [...unique.values()]
+    .sort((left, right) => left.id - right.id)
+    .map((parent) => ({ parentId: parent.id, phone: normalizePhilippineMobile(parent.contact_number) }));
 }
 
 /**
@@ -79,11 +81,11 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
   const [directParentsResult, linkedParentsResult] = await Promise.all([
     supabase
       .from("parents")
-      .select("id, contact_number, status, archive_status")
+      .select("id, contact_number, status, archive_status, attendance_sms_notifications")
       .eq("student_id", input.studentId),
     supabase
       .from("parent_student_links")
-      .select("parents!inner(id, contact_number, status, archive_status)")
+      .select("parents!inner(id, contact_number, status, archive_status, attendance_sms_notifications)")
       .eq("student_id", input.studentId),
   ]);
 
@@ -94,41 +96,27 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
     const parent = (row as LinkedParentRow).parents;
     return Array.isArray(parent) ? parent : parent ? [parent] : [];
   });
-  const parent = registeredParent([
+  const parents = registeredParents([
     ...((directParentsResult.data ?? []) as ParentContact[]),
     ...linkedParents,
   ]);
   const message = buildAttendanceSmsMessage(input);
-  if (parent) {
+  if (parents.length > 0) {
     const { error } = await supabase
       .from("attendance_sms_jobs")
-      .upsert({
-      attendance_log_id: input.attendanceLogId,
-      parent_id: parent.parentId,
-      recipient_phone: parent.phone,
-      recipient_key: `attendance-log:${input.attendanceLogId}`,
-      message,
-      status: "pending",
-      available_at: new Date().toISOString(),
-      last_error: null,
-      }, { onConflict: "attendance_log_id", ignoreDuplicates: true });
+      .upsert(parents.map((parent) => ({
+        attendance_log_id: input.attendanceLogId,
+        parent_id: parent.parentId,
+        recipient_phone: parent.phone,
+        recipient_key: `attendance-log:${input.attendanceLogId}:parent:${parent.parentId}`,
+        message,
+        status: "pending",
+        available_at: new Date().toISOString(),
+        last_error: null,
+      })), { onConflict: "attendance_log_id,parent_id", ignoreDuplicates: true });
     if (error) throw error;
-    return { queued: 1, skipped: false, disabled: false };
+    return { queued: parents.length, skipped: false, disabled: false };
   }
-
-  const { error } = await supabase
-    .from("attendance_sms_jobs")
-    .upsert({
-      attendance_log_id: input.attendanceLogId,
-      parent_id: null,
-      recipient_phone: null,
-      recipient_key: `attendance-log:${input.attendanceLogId}`,
-      message,
-      status: "skipped",
-      available_at: new Date().toISOString(),
-      last_error: "No eligible parent or guardian account has a valid Philippine contact number.",
-    }, { onConflict: "attendance_log_id", ignoreDuplicates: true });
-  if (error) throw error;
 
   return { queued: 0, skipped: true, disabled: false };
 }

@@ -500,7 +500,7 @@ export default function ICTInboxPage() {
     loadMessages();
   }, [loadMessages]);
 
-  const liveUpdateNotice = useStaffMessagesRealtime("ict-inbox-messages", loadMessages);
+  const liveUpdateNotice = useStaffMessagesRealtime(loadMessages);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {

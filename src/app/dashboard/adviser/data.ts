@@ -4,7 +4,7 @@
 // so every badge count is derived from real data — no magic numbers.
 
 // ─── Report types ─────────────────────────────────────────────────────────────
-export type ReportStatus = "New" | "Read" | "Ongoing" | "Resolved" | "Escalated";
+export type ReportStatus = "New" | "Read" | "Ongoing" | "Replied" | "Resolved" | "Escalated";
 export type ReportCategory = "Academic Concern" | "Request" | "Absence Excuse" | "Behavioral" | "Other";
 
 /**
@@ -196,7 +196,7 @@ export const MOCK_STUDENT_REPORTS: StudentReport[] = [
 ];
 
 // ─── Admin message types ──────────────────────────────────────────────────────
-export type AdminSender = "Principal" | "Guidance" | "Adviser" | "ICT";
+export type AdminSender = "Parent" | "Principal" | "Guidance" | "Adviser" | "ICT";
 export type AdminMsgStatus = "New" | "Read" | "Replied";
 
 export interface AdminMessage {

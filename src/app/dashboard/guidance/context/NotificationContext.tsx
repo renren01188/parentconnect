@@ -56,28 +56,32 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         ticketsRes.json().catch(() => null),
       ]);
 
-      const allReports = (reportsData?.reports ?? []) as Array<{ hasUnreadForGuidance?: boolean; status?: string; guidanceSeen?: boolean; ticketStatus?: string | null }>;
-      const pendingTicketCount = ticketsRes.ok
-        ? ((ticketsData?.tickets ?? []) as Array<{ status?: string }>).filter((ticket) => ticket.status === "pending").length
-        : 0;
-      const reportCount = reportsRes.ok
-        ? allReports.filter(r => r.hasUnreadForGuidance).length
-        : 0;
+      const allReports = (reportsData?.reports ?? []) as Array<{ id?: number; hasUnreadForGuidance?: boolean; status?: string; guidanceSeen?: boolean; ticketStatus?: string | null }>;
+      const tickets = ticketsRes.ok
+        ? ((ticketsData?.tickets ?? []) as Array<{ report_id?: number; status?: string; isAssignedToCurrentGuidance?: boolean; isReadByCurrentGuidance?: boolean }>)
+        : [];
+      const pendingTicketCount = tickets.filter((ticket) => ticket.status === "pending").length;
+      const unreadAcceptedTicketReportIds = new Set(tickets
+        .filter((ticket) => ticket.status === "accepted" && ticket.isAssignedToCurrentGuidance && !ticket.isReadByCurrentGuidance)
+        .map((ticket) => Number(ticket.report_id))
+        .filter((reportId) => Number.isSafeInteger(reportId) && reportId > 0));
+      const isUnreadReport = (report: typeof allReports[number]) => Boolean(
+        report.hasUnreadForGuidance
+        || (report.status === "Escalated" && !report.guidanceSeen)
+        || (report.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(Number(report.id)))
+      );
+      const reportCount = reportsRes.ok ? allReports.filter(isUnreadReport).length : 0;
       const staffCount = staffRes.ok
         ? ((staffData?.messages ?? []) as Array<{ status?: string }>).filter(m => m.status === "New").length
         : 0;
       const nextCount = reportCount + staffCount + pendingTicketCount;
       setUnreadCount(nextCount);
-      setReportsUnreadCount(
-        (reportsRes.ok
-          ? allReports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen) || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length
-          : 0) + staffCount + pendingTicketCount
-      );
+      setReportsUnreadCount(reportCount + staffCount + pendingTicketCount);
       // notifUnreadCount is intentionally NOT set here — the Notifications
       // nav item tracks its own separate source, not parent-adviser replies.
       // Track escalated reports separately for the sidebar panel
       const nextEscalatedCount = reportsRes.ok
-        ? allReports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length + pendingTicketCount
+        ? allReports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(Number(r.id)))).length + pendingTicketCount
         : pendingTicketCount;
       setEscalatedCount(nextEscalatedCount);
     } catch {
@@ -138,7 +142,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       await refreshNotificationCounts();
       return;
     }
-    await Promise.all([refreshGuidanceCounts(), loadIctCount(), refreshNotificationCounts()]);
+    // Only a reconnect needs a complete badge reconciliation. Account/profile
+    // changes do not affect these three independent count sources.
+    if (!scope) await Promise.all([refreshGuidanceCounts(), loadIctCount(), refreshNotificationCounts()]);
   });
 
   const markAnnouncementRead = useCallback((notifKey: string) => {

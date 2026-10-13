@@ -43,6 +43,8 @@ const REPORT_SELECT = [
   "status",
   "escalated_to_guidance",
   "escalated_to_principal",
+  "cancelled_at",
+  "cancelled_by_parent_id",
   "guidance_seen_at",
   "parent_seen_at",
   "status_updated_at",
@@ -108,6 +110,22 @@ function isMissingColumn(error: { message?: string; code?: string } | null, colu
       error.message?.toLowerCase().includes(column.toLowerCase()) ||
       error.message?.toLowerCase().includes("schema cache"))
   );
+}
+
+async function getParentReportCooldownUntil(parentId: number) {
+  const { data, error } = await supabase
+    .from("parents")
+    .select("report_submission_cooldown_until")
+    .eq("id", parentId)
+    .maybeSingle();
+  if (error) throw error;
+  const value = typeof data?.report_submission_cooldown_until === "string"
+    ? data.report_submission_cooldown_until
+    : null;
+  const timestamp = Date.parse(value ?? "");
+  return Number.isFinite(timestamp) && timestamp > Date.now()
+    ? new Date(timestamp).toISOString()
+    : null;
 }
 
 function studentFromRelation(value: unknown) {
@@ -287,9 +305,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    const linkedStudentIds = await getLinkedStudentIds(parent.id);
+    const [linkedStudentIds, reportSubmissionCooldownUntil] = await Promise.all([
+      getLinkedStudentIds(parent.id),
+      getParentReportCooldownUntil(parent.id),
+    ]);
     if (linkedStudentIds.length === 0) {
-      return NextResponse.json({ success: true, reports: [] });
+      return NextResponse.json({ success: true, reports: [], reportSubmissionCooldownUntil });
     }
 
     let query = supabase
@@ -297,6 +318,7 @@ export async function GET(req: NextRequest) {
       .select(REPORT_SELECT)
       .eq("parent_id", parent.id)
       .in("student_id", linkedStudentIds)
+      .is("cancelled_at", null)
       .order("last_message_at", { ascending: false });
     if (reportId) query = query.eq("id", reportId);
     const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);
@@ -310,6 +332,7 @@ export async function GET(req: NextRequest) {
     ]);
     return NextResponse.json({
       success: true,
+      reportSubmissionCooldownUntil,
       reports: rows.map((row) => summary
         ? toParentReportSummary(row, messages.get(row.id) ?? [], tickets.get(row.id))
         : { ...toParentReport(row, messages.get(row.id) ?? [], tickets.get(row.id)), detailsLoaded: true }),
@@ -325,6 +348,15 @@ export async function POST(req: NextRequest) {
     const parent = await getParentSession();
     if (!parent) {
       return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+    }
+
+    const reportSubmissionCooldownUntil = await getParentReportCooldownUntil(parent.id);
+    if (reportSubmissionCooldownUntil) {
+      return NextResponse.json({
+        success: false,
+        message: "You must wait before submitting another report.",
+        reportSubmissionCooldownUntil,
+      }, { status: 429 });
     }
 
     const { adviserId, studentId, subject, categories, concernLevel, message, attachments, allowHistoryAccess, termsAccepted } = await req.json();
@@ -550,7 +582,7 @@ export async function POST(req: NextRequest) {
       module:          "Reports",
     });
 
-    await publishReportRealtimeInvalidation({ parentId: parent.id, adviserId: adviser.id });
+    await publishReportRealtimeInvalidation({ parentId: parent.id, adviserId: adviser.id, reportId: report.id, kind: "status" });
 
     const messages = await listMessages([report.id]);
     return NextResponse.json({

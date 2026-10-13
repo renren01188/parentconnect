@@ -11,7 +11,7 @@ import {
   ChevronDown, CheckCircle2, ArrowDownCircle, Upload,
 } from "lucide-react";
 import Link from "next/link";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import type { ReadyTransferSummary } from "./TransferFromStandbyModal";
 
 // These modal workflows are only needed after a user clicks an action. Loading
@@ -403,7 +403,7 @@ function AdviserStudentsPageContent() {
   // ── Receive Transfer modal (incoming) ──
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [readyTransferSummary, setReadyTransferSummary] = useState<ReadyTransferSummary | null>(null);
-  const readyTransferRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readyTransferRefreshTimer = useRef<number | null>(null);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [rfidTarget, setRfidTarget] = useState<Student | null>(null);
@@ -467,26 +467,17 @@ function AdviserStudentsPageContent() {
 
   useEffect(() => { void refreshReadyTransferSummary(); }, [refreshReadyTransferSummary]);
 
-  useEffect(() => {
-    const realtimeClient = supabaseBrowser;
-    if (!realtimeClient) return;
+  useSessionInvalidation((event) => {
+    if (event.scope !== "students" && event.scope !== "accounts") return;
+    if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
+    readyTransferRefreshTimer.current = window.setTimeout(() => {
+      void refreshReadyTransferSummary();
+    }, 150);
+  });
 
-    const scheduleRefresh = () => {
-      if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
-      readyTransferRefreshTimer.current = setTimeout(() => {
-        void refreshReadyTransferSummary();
-      }, 150);
-    };
-    const channel = realtimeClient
-      .channel("adviser-ready-transfer-count")
-      .on("postgres_changes", { event: "*", schema: "public", table: "students" }, scheduleRefresh)
-      .subscribe();
-
-    return () => {
-      if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
-      void realtimeClient.removeChannel(channel);
-    };
-  }, [refreshReadyTransferSummary]);
+  useEffect(() => () => {
+    if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
+  }, []);
 
   const handleOpenDelete = async (s: Student) => {
     if (s.parent_email !== undefined) { setDeleteTarget(s); return; }

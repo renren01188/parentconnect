@@ -15,6 +15,7 @@ function effectiveAdviserReportStatus(report) {
   if (status === "resolved") return "Resolved";
   if (status === "escalated" || report?.escalatedToPrincipal || report?.escalatedToGuidance) return "Escalated";
   if (status === "ongoing") return "Ongoing";
+  if (status === "replied") return "Replied";
   if (status === "read") return "Read";
   return "New";
 }
@@ -22,6 +23,7 @@ function effectiveAdviserReportStatus(report) {
 function adviserReportStatusCategory(report) {
   switch (effectiveAdviserReportStatus(report)) {
     case "Ongoing": return "ongoing";
+    case "Replied": return "ongoing";
     case "Escalated": return "escalated";
     case "Resolved": return "resolved";
     default: return "pending";

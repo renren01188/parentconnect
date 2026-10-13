@@ -1,5 +1,7 @@
+import { after } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { normalizeAuditRole } from "@/lib/audit-filter-options";
+import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 export interface AuditPayload {
   action: string;
@@ -85,6 +87,15 @@ export async function logAudit(payload: AuditPayload): Promise<void> {
     }));
   }
   if (error) throw new Error(`Audit log write failed: ${error.message}`);
+
+  // SSE is useful within one application instance, but it does not cross
+  // serverless instances. A protected Broadcast makes the ICT and Principal
+  // audit screens converge everywhere without putting audit content on a
+  // Realtime channel.
+  after(async () => {
+    const recipients = await recipientsForRoles(["ict", "principal"]);
+    await publishRealtimeInvalidation(recipients, "audit");
+  });
 }
 
 /** Records authentication failures without ever recording credentials. */

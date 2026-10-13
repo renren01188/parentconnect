@@ -40,6 +40,9 @@ export async function PATCH(
     if (!existing) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
+    if (String(existing.status ?? "").toLowerCase() === "cancelled") {
+      return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });
+    }
     if (normalized === "resolved" && String(existing.status ?? "").toLowerCase() === "resolved") {
       return NextResponse.json({ success: false, message: "This report has already been resolved." }, { status: 409 });
     }
@@ -58,7 +61,8 @@ export async function PATCH(
           updated_at: now,
           status_updated_at: now,
         })
-        .eq("id", reportId);
+        .eq("id", reportId)
+        .neq("status", "cancelled");
 
       if (updateError) throw updateError;
     }
@@ -97,6 +101,8 @@ export async function PATCH(
       parentId: report.parent_id,
       adviserId: report.adviser_id,
       includeGuidance: Boolean(report.escalated_to_guidance),
+      reportId,
+      kind: "status",
     });
 
     return NextResponse.json({

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendAdviserParentMessageEmail, sendAdviserPrincipalMessageEmail } from "@/lib/mailer";
-import { listMessages, toAdviserReport } from "../parent-adviser/_lib";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { logAudit } from "@/lib/audit";
 
 type PrincipalRow = {
@@ -74,26 +74,6 @@ function displayParentName(studentName: string) {
 
 function studentFromRelation(students: ParentRow["students"]) {
   return Array.isArray(students) ? students[0] : students;
-}
-
-function concernLevel(categories: string[]) {
-  const weights: Record<string, number> = {
-    "Academic Concern": 100,
-    "Health/Medical": 90,
-    "Behavioral Issue": 80,
-    Attendance: 75,
-    Other: 50,
-    "Permission Request": 35,
-    "General Inquiry": 15,
-  };
-
-  return Math.min(
-    100,
-    categories.reduce((total, category) => {
-      const key = category.startsWith("Other:") ? "Other" : category;
-      return total + (weights[key] ?? 0);
-    }, 0)
-  );
 }
 
 function cleanAttachments(value: unknown): MessageAttachment[] {
@@ -338,14 +318,17 @@ export async function POST(req: NextRequest) {
       ? categories.map((category) => String(category).trim()).filter(Boolean)
       : [];
 
-    if (!recipientId || !trimmedSubject || selectedCategories.length === 0 || (!trimmedMessage && cleanedAttachments.length === 0)) {
+    if (!recipientId || !trimmedSubject || (!trimmedMessage && cleanedAttachments.length === 0)) {
       return NextResponse.json(
-        { success: false, message: "Recipient, subject, category, and message or attachment are required." },
+        { success: false, message: "Recipient, subject, and message or attachment are required." },
         { status: 400 }
       );
     }
 
     const [kind, rawId, studentId] = String(recipientId).split(":");
+    if (kind !== "parent" && selectedCategories.length === 0) {
+      return NextResponse.json({ success: false, message: "A category is required for staff-to-staff concerns." }, { status: 400 });
+    }
     if (kind === "principal") {
       return createPrincipalMessage({
         principalId: Number(rawId),
@@ -363,7 +346,6 @@ export async function POST(req: NextRequest) {
         studentId,
         adviser,
         subject: trimmedSubject,
-        categories: selectedCategories,
         message: trimmedMessage,
         attachments: cleanedAttachments,
       });
@@ -577,7 +559,6 @@ async function createParentReport({
   studentId,
   adviser,
   subject,
-  categories,
   message,
   attachments,
 }: {
@@ -585,7 +566,6 @@ async function createParentReport({
   studentId: string;
   adviser: NonNullable<Awaited<ReturnType<typeof getAdviserFromToken>>>;
   subject: string;
-  categories: string[];
   message: string;
   attachments: MessageAttachment[];
 }) {
@@ -622,7 +602,6 @@ async function createParentReport({
     );
   }
 
-  const now = new Date().toISOString();
   const adviserName = fullName([adviser.first_name, adviser.last_name]);
   const studentName = fullName([student.first_name, student.middle_name, student.last_name, student.suffix]);
   const typedParentRow = parentRow as unknown as ParentRow;
@@ -634,73 +613,28 @@ async function createParentReport({
   ]);
   const parentName = displayParentName(studentName);
 
-  const reportPayload: Record<string, string | number | string[] | null> = {
-    parent_id: parentRow.id,
-    parent_email: parentRow.email,
-    parent_name: parentName,
-    adviser_id: adviser.id,
-    adviser_name: adviserName,
-    student_id: student.student_id,
-    student_name: studentName,
-    grade: student.grade ?? "",
-    section: student.section ?? "",
-    subject,
-    categories,
-    concern_level: concernLevel(categories),
-    status: "ongoing",
-    status_updated_at: now,
-    updated_at: now,
-    last_message_at: now,
-  };
-
-  let reportResult = await supabase
-    .from("parent_adviser_reports")
-    .insert(reportPayload)
+  // The legacy endpoint remains for existing clients, but direct staff
+  // messages are stored in staff_messages and never create report workflow.
+  const { data: createdMessage, error: messageError } = await supabase
+    .from("staff_messages")
+    .insert({
+      sender_type: "adviser",
+      sender_id: Number(adviser.id),
+      sender_name: adviserName,
+      sender_email: String(adviser.email ?? ""),
+      recipient_type: "parent",
+      recipient_id: Number(parentRow.id),
+      recipient_name: actualParentName || parentName,
+      recipient_email: parentRow.email,
+      subject,
+      categories: ["Message"],
+      body: message,
+      attachments,
+      status: "unread",
+    })
     .select("*")
     .single();
-
-  if (reportResult.error && reportResult.error.message.includes("status_updated_at")) {
-    delete reportPayload.status_updated_at;
-    reportResult = await supabase
-      .from("parent_adviser_reports")
-      .insert(reportPayload)
-      .select("*")
-      .single();
-  }
-
-  const { data: report, error: reportError } = reportResult;
-  if (reportError) throw reportError;
-
-  let messageResult = await supabase
-    .from("parent_adviser_report_messages")
-    .insert({
-      report_id: report.id,
-      sender_role: "adviser",
-      sender_name: adviserName,
-      body: message,
-      thread_type: "adviser",
-      attachments,
-      read_by_adviser: true,
-      read_by_parent: false,
-    });
-
-  if (messageResult.error && isMissingAttachmentsColumn(messageResult.error)) {
-    if (attachments.length > 0) {
-      throw new Error("Attachment support is not migrated yet. Please run parent_report_message_attachments_migration.sql in Supabase.");
-    }
-    messageResult = await supabase
-      .from("parent_adviser_report_messages")
-      .insert({
-        report_id: report.id,
-        sender_role: "adviser",
-        sender_name: adviserName,
-        body: message,
-        read_by_adviser: true,
-        read_by_parent: false,
-      });
-  }
-
-  if (messageResult.error) throw messageResult.error;
+  if (messageError) throw messageError;
 
   await sendAdviserParentMessageEmail({
     parentEmail: parentRow.email,
@@ -712,6 +646,11 @@ async function createParentReport({
     hasAttachments: attachments.length > 0,
   });
 
+  await publishRealtimeInvalidation([
+    { role: "adviser", id: Number(adviser.id) },
+    { role: "parent", id: Number(parentRow.id) },
+  ], "staff-messages");
+
   // ── Audit log ──
   await logAudit({
     action:          "Message",
@@ -719,15 +658,14 @@ async function createParentReport({
     performedByRole: "Adviser",
     targetUser:      actualParentName || parentName,
     targetRole:      "Parent",
-    details:         `Adviser sent a report/message to parent: "${subject}".`,
+    details:         `Adviser sent a direct message to parent: "${subject}".`,
     module:          "Reports",
   });
 
-  const messages = await listMessages([report.id]);
   return NextResponse.json({
     success: true,
     target: "parent",
-    report: toAdviserReport(report, messages.get(report.id) ?? []),
+    message: createdMessage,
   }, { status: 201 });
 }
 

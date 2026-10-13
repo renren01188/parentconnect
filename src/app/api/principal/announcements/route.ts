@@ -4,6 +4,7 @@ import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
 import { normalizePrincipalAnnouncementAudience } from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 export async function GET() {
   try {
@@ -105,8 +106,8 @@ export async function POST(req: Request) {
     if (scheduledAt && (typeof scheduledAt !== "string" || Number.isNaN(Date.parse(scheduledAt)))) {
       return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
     }
-    if (scheduledAt && scheduledAt.slice(0, 10) < new Date().toISOString().slice(0, 10)) {
-      return NextResponse.json({ success: false, message: "Schedule date cannot be in the past." }, { status: 400 });
+    if (scheduledAt && !isFutureSchoolCalendarDay(scheduledAt)) {
+      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
     }
 
     const status = scheduledAt ? "Scheduled" : "Published";

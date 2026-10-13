@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const report = await getReportForParent(reportId, parent.id);
     if (!report) return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
-    if (report.status === "resolved") return NextResponse.json({ success: false, message: "Resolved reports cannot be submitted to Guidance." }, { status: 403 });
+    if (["resolved", "cancelled"].includes(String(report.status ?? "").toLowerCase())) return NextResponse.json({ success: false, message: "Closed reports cannot be submitted to Guidance." }, { status: 403 });
 
     const { data: existing, error: existingError } = await supabase
       .from("parent_report_guidance_tickets")
@@ -85,6 +85,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       parentId: report.parent_id ?? parent.id,
       adviserId: report.adviser_id,
       includeGuidance: true,
+      reportId,
+      kind: "status",
     });
 
     // A counselor is assigned only when the ticket is accepted, so a new

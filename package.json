@@ -23,7 +23,20 @@
     "test:guardian-terms": "node scripts/test-guardian-signup-terms.cjs",
     "test:report-submission-terms": "node scripts/test-report-submission-terms.cjs",
     "test:logout-confirmation": "node scripts/test-logout-confirmation.cjs",
-    "test:adviser-report-statuses": "node scripts/test-adviser-report-statuses.cjs"
+    "test:adviser-report-statuses": "node scripts/test-adviser-report-statuses.cjs",
+    "test:adviser-report-inbox-state": "node scripts/test-adviser-report-inbox-state.cjs",
+    "test:report-realtime": "node scripts/test-report-realtime.cjs",
+    "test:parent-report-cancellation": "node scripts/test-parent-report-cancellation.cjs",
+    "test:guidance-ticket-read-state": "node scripts/test-guidance-ticket-read-state.cjs",
+    "test:student-report-submission": "node scripts/test-student-report-submission.cjs",
+    "test:notification-realtime": "node scripts/test-notification-realtime.cjs",
+    "test:announcement-schedule": "node scripts/test-announcement-schedule.cjs",
+    "test:excuse-letter-attachments": "node scripts/test-excuse-letter-attachments.cjs",
+    "test:ict-user-management-account-update": "node scripts/test-ict-user-management-account-update.cjs",
+    "test:guidance-reports-export": "node scripts/test-guidance-reports-export.cjs",
+    "test:staff-direct-messages": "node scripts/test-staff-direct-messages.cjs",
+    "test:parent-report-list-filters": "node scripts/test-parent-report-list-filters.cjs",
+    "test:dashboard-realtime": "node scripts/test-dashboard-realtime.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

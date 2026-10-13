@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { Save, X, Pencil } from "lucide-react";
 
 type IctProfileForm = {
@@ -45,6 +46,7 @@ export default function ICTProfilePage() {
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState("");
   const [success,      setSuccess]      = useState("");
+  const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
   const initials = [form.firstName, form.lastName]
     .filter(Boolean)
@@ -112,7 +114,11 @@ export default function ICTProfilePage() {
     return () => {
       isMounted = false;
     };
-  }, [router]);
+  }, [router, profileRefreshKey]);
+
+  useSessionInvalidation((event) => {
+    if (event.scope === "accounts" && !isEditing) setProfileRefreshKey((key) => key + 1);
+  });
 
   const handleSave = async () => {
     try {

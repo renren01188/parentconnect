@@ -10,6 +10,7 @@ import {
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
 import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Theme ───────────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -298,8 +299,8 @@ export default function AuditTrailPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Fetch ──
-  const fetchEvents = useCallback(async () => {
-    setLoading(true);
+  const fetchEvents = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
@@ -326,11 +327,14 @@ export default function AuditTrailPage() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [page, perPage, query, actionFilter, roleFilter, moduleFilter, statusFilter, dateFilter, archiveFilter, refreshKey]); // eslint-disable-line
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
+  useSessionInvalidation((event) => {
+    if (event.scope === "audit") return fetchEvents({ background: true });
+  });
 
   useEffect(() => {
     liveStateRef.current = { query, actionFilter, roleFilter, dateFilter, archiveFilter, page, perPage };

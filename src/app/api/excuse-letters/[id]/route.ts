@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendExcuseLetterStatusEmail } from "@/lib/mailer";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "Server error.";
@@ -92,6 +93,11 @@ export async function PATCH(
                 declineReason,
             }).catch((mailError) => console.error("Parent status email failed:", mailError));
         }
+
+        // The decision and any related attendance adjustment are already
+        // stored by the RPC. Notify only accounts whose authorized attendance
+        // view can include this student; the broadcast itself has no details.
+        await publishAttendanceRealtimeInvalidation({ studentId: decision.student_id });
 
         return NextResponse.json({
             success: true,

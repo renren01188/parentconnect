@@ -3,8 +3,8 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, Users } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
-import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 type Tab = "all-staffs" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled" | "Draft" | "Resolved";
@@ -87,6 +87,14 @@ function PrincipalAnnouncementsPageContent() {
   const [staffAnnouncements, setStaffAnnouncements] = useState<StaffAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [realtimeRevision, setRealtimeRevision] = useState(0);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "announcements") {
+      setRealtimeRevision((revision) => revision + 1);
+    }
+  });
 
   const isFormReady = form.title.trim() && form.body.trim();
 
@@ -97,11 +105,13 @@ function PrincipalAnnouncementsPageContent() {
 
   // ── Fetch my (principal) announcements + realtime ─────────────────────────
   useEffect(() => {
+    let active = true;
     const loadAnnouncements = async () => {
       try {
         const annRes = await fetch("/api/principal/announcements");
         const data = await annRes.json();
 
+        if (!active) return;
         if (data.success) {
           const normalized: Announcement[] = (data.announcements ?? []).map((a: any) => ({
             ...a,
@@ -125,7 +135,7 @@ function PrincipalAnnouncementsPageContent() {
           );
         }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
 
@@ -141,35 +151,13 @@ function PrincipalAnnouncementsPageContent() {
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", refreshWhenVisible);
 
-    const client = supabaseBrowser;
-    if (!client) {
-      return () => {
-        window.clearInterval(fallbackRefresh);
-        document.removeEventListener("visibilitychange", refreshWhenVisible);
-        window.removeEventListener("focus", refreshWhenVisible);
-      };
-    }
-
-    let disposed = false;
-    let sessionChannel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
-    void subscribeRealtimeInvalidations(client, ({ scope }) => {
-      if (!scope || scope === "announcements") void loadAnnouncements();
-    }).then((connectedChannel) => {
-      if (disposed) {
-        if (connectedChannel) void client.removeChannel(connectedChannel);
-        return;
-      }
-      sessionChannel = connectedChannel;
-    });
-
     return () => {
-      disposed = true;
+      active = false;
       window.clearInterval(fallbackRefresh);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", refreshWhenVisible);
-      if (sessionChannel) void client.removeChannel(sessionChannel);
     };
-  }, []);
+  }, [realtimeRevision]);
 
 
 
@@ -178,6 +166,7 @@ function PrincipalAnnouncementsPageContent() {
   const openNewAnnouncement = () => {
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -189,6 +178,7 @@ function PrincipalAnnouncementsPageContent() {
       audience: ann.audience,
       scheduleDate: ann.status === "Scheduled" ? toDateInputValue(ann.scheduled_at) : "",
     });
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -196,10 +186,15 @@ function PrincipalAnnouncementsPageContent() {
     setShowCompose(false);
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
   };
 
   const handleSaveAnnouncement = async () => {
     if (!isFormReady || saving) return;
+    if (form.scheduleDate && !isFutureSchoolCalendarDay(form.scheduleDate)) {
+      setScheduleError("Choose a calendar day after today in Asia/Manila.");
+      return;
+    }
     setSaving(true);
 
     const payload = {
@@ -222,6 +217,7 @@ function PrincipalAnnouncementsPageContent() {
     const data = await res.json();
     setSaving(false);
     if (!data.success) {
+      setScheduleError(data.message ?? "Unable to save this announcement.");
       console.error("Failed to save principal announcement:", data.message ?? data);
       return;
     }
@@ -481,11 +477,12 @@ function PrincipalAnnouncementsPageContent() {
                     type="date"
                     className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-700 outline-none transition"
                     value={form.scheduleDate}
-                    min={new Date().toISOString().slice(0, 10)}
-                    onChange={(e) => setForm({ ...form, scheduleDate: e.target.value })}
+                    min={nextSchoolCalendarDay()}
+                    onChange={(e) => { setForm({ ...form, scheduleDate: e.target.value }); setScheduleError(null); }}
                     onFocus={(e) => { e.target.style.borderColor = "#522081"; }}
                     onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; }}
                   />
+                  {scheduleError && <p className="text-xs font-medium text-red-600">{scheduleError}</p>}
                 </div>
               </div>
             </div>

@@ -22,6 +22,13 @@ import {
 
 import Sidebar from "../components/Sidebar";
 import ParentAttendanceGuide from "../components/ParentAttendanceGuide";
+import { useParentSession } from "../ParentSessionGate";
+import {
+    EXCUSE_LETTER_FILE_INPUT_ACCEPT,
+    validateExcuseLetterAttachmentMetadata,
+} from "@/lib/excuseLetterAttachment";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -82,18 +89,6 @@ interface AttachmentPayload {
 }
 
 const MAX_ATTACHMENTS = 1;
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-const ACCEPTED_ATTACHMENT_TYPES = new Set([
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -170,6 +165,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     const [submitError, setSubmitError] = useState("");
     const [trackedRequests, setTrackedRequests] = useState<ExcuseTrackerItem[]>([]);
     const [loadingLetters, setLoadingLetters] = useState(true);
+    const [lettersRefreshKey, setLettersRefreshKey] = useState(0);
 
     const selectedStudent = students.find(s => s.id === studentId) ?? students[0];
     const totalDays = (() => {
@@ -232,7 +228,13 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
             window.clearInterval(refreshTimer);
             document.removeEventListener("visibilitychange", refreshWhenVisible);
         };
-    }, [students]);
+    }, [students, lettersRefreshKey]);
+
+    // While the modal is open, show an adviser decision without asking the
+    // parent to close/reopen it. The event carries no decision content.
+    useSessionInvalidation((event) => {
+        if (event.scope === "attendance") setLettersRefreshKey((key) => key + 1);
+    });
 
     async function handleSubmitRequest() {
         if (!canSubmit) return;
@@ -244,11 +246,23 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
             const attachmentPayloads: AttachmentPayload[] = await Promise.all(
                 attachments.map(file => new Promise<AttachmentPayload>((resolve, reject) => {
                     const reader = new FileReader();
-                    reader.onload = () => resolve({
-                        file_name: file.name,
-                        file_data: (reader.result as string).split(",")[1],
-                        file_type: file.type,
-                    });
+                    reader.onload = () => {
+                        const validation = validateExcuseLetterAttachmentMetadata(file.name, file.type, file.size);
+                        if (!validation.ok) {
+                            reject(new Error(validation.message));
+                            return;
+                        }
+                        const base64Data = typeof reader.result === "string" ? reader.result.split(",")[1] : "";
+                        if (!base64Data) {
+                            reject(new Error("File read failed"));
+                            return;
+                        }
+                        resolve({
+                            file_name: file.name,
+                            file_data: base64Data,
+                            file_type: validation.attachment.file_type,
+                        });
+                    };
                     reader.onerror = () => reject(new Error("File read failed"));
                     reader.readAsDataURL(file);
                 }))
@@ -287,12 +301,9 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                 setAttachmentError("Each excuse letter allows exactly one attachment.");
                 break;
             }
-            if (!ACCEPTED_ATTACHMENT_TYPES.has(file.type)) {
-                setAttachmentError("Use JPG, PNG, WEBP, PDF, DOC, or DOCX files only.");
-                continue;
-            }
-            if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
-                setAttachmentError("Each attachment must be 5 MB or smaller.");
+            const validation = validateExcuseLetterAttachmentMetadata(file.name, file.type, file.size);
+            if (!validation.ok) {
+                setAttachmentError(validation.message);
                 continue;
             }
             acceptedFiles.push(file);
@@ -430,7 +441,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                     id="excuse-file-input"   // ← add this
                                     ref={fileInputRef}
                                     type="file"
-                                    accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx"
+                                    accept={EXCUSE_LETTER_FILE_INPUT_ACCEPT}
                                     style={{ display: "none" }}   // ← change this
                                     onChange={(e) => {
                                         const files = Array.from(e.target.files ?? []);
@@ -518,6 +529,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ParentAttendancePage() {
+    const { session, refreshSession } = useParentSession();
     const [students, setStudents] = useState<StudentData[]>([]);
     const [selectedId, setSelectedId] = useState<string>("");
     const [studentDrop, setStudentDrop] = useState(false);
@@ -531,22 +543,21 @@ export default function ParentAttendancePage() {
     const studentDropRef = useRef<HTMLDivElement>(null);
     const monthDropRef = useRef<HTMLDivElement>(null);
 
-    const fetchAttendance = useCallback(async () => {
+    const fetchAttendance = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
         try {
-            setIsLoading(true);
+            if (!background) setIsLoading(true);
             setError("");
-            const res = await fetch("/api/parents/me", { cache: "no-store" });
-            const data = await res.json();
-
-            if (!data.success) {
-                setError(data.message || "Failed to load data.");
+            if (!session?.success) {
+                setError("Failed to load data.");
                 return;
             }
 
+            const sessionStudents = (session.students ?? [session.student]) as Array<{
+                id: number; lrn: string; name: string; grade: string; section: string;
+            }>;
+
             const apiStudents: StudentData[] = await Promise.all(
-                (data.students || [data.student]).map(async (s: {
-                    id: number; lrn: string; name: string; grade: string; section: string;
-                }) => {
+                sessionStudents.map(async (s) => {
                     const attRes = await fetch(`/api/attendance/parent-history?student_id=${s.lrn}`, { cache: "no-store" });
                     const attData = await attRes.json();
 
@@ -595,15 +606,35 @@ export default function ParentAttendancePage() {
             );
 
             setStudents(apiStudents);
-            setSelectedId(apiStudents[0]?.id ?? "");
+            // A background Realtime refresh must not throw a parent back to
+            // their first child or month while they are reading a record.
+            setSelectedId((current) => apiStudents.some((student) => student.id === current)
+                ? current
+                : apiStudents[0]?.id ?? "");
         } catch {
             setError("Failed to connect to server.");
         } finally {
-            setIsLoading(false);
+            if (!background) setIsLoading(false);
         }
-    }, []);
+    }, [session]);
 
     useEffect(() => { fetchAttendance(); }, [fetchAttendance]);
+
+    // RFID, manual corrections, automatic absences, and excuse decisions are
+    // delivered as data-free events to this parent only. Refresh the existing
+    // API snapshot in place so the page never performs a route reload.
+    const scheduleAttendanceRefresh = useDebouncedRealtimeRefresh(
+        () => fetchAttendance({ background: true }),
+    );
+    useSessionInvalidation((event) => {
+        if (event.scope === "students" || event.scope === "accounts") {
+            void refreshSession();
+            return;
+        }
+        if (event.scope === "attendance") {
+            scheduleAttendanceRefresh();
+        }
+    });
 
     useEffect(() => {
         function handleOutsideClick(e: MouseEvent) {
@@ -654,7 +685,7 @@ export default function ParentAttendancePage() {
                     <div className="flex flex-col items-center gap-3 text-red-500">
                         <AlertCircle className="w-8 h-8" />
                         <p className="text-sm">{error}</p>
-                        <button onClick={fetchAttendance} className="mt-2 px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-bold">Retry</button>
+                        <button onClick={() => void fetchAttendance()} className="mt-2 px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-bold">Retry</button>
                     </div>
                 </main>
             </div>

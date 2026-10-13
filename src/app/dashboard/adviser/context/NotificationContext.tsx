@@ -4,8 +4,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
-import { subscribeRealtimeInvalidations } from "@/lib/subscribeRealtimeInvalidations";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 
 interface NotifContextType {
@@ -40,6 +39,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
   const hasLoadedInitialCounts = useRef(false);
+  const refreshByScopeRef = useRef<(scope: string | null) => void>(() => {});
 
   useEffect(() => {
     // Each count has its own single-flight guard. A report save can update the
@@ -151,26 +151,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", refreshWhenVisible);
 
-    const client = supabaseBrowser;
-    if (!client) {
-      return () => {
-        window.clearInterval(fallbackRefresh);
-        document.removeEventListener("visibilitychange", refreshWhenVisible);
-        window.removeEventListener("focus", refreshWhenVisible);
-      };
-    }
-
-    // Server-side invalidations are the only realtime source here. Keeping the
-    // old postgres_changes subscription as well caused duplicate refresh bursts
-    // for the same update, and it was not authorized by the custom session.
+    // The layout and active page share useSessionInvalidation's one account
+    // channel. This provider owns only badge refresh decisions.
     const notifyNotificationChange = () => {
       void loadNotifCount();
       window.dispatchEvent(new Event("adviser-notifications-changed"));
     };
-
-    let disposed = false;
-    let sessionChannel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
-    void subscribeRealtimeInvalidations(client, ({ scope }) => {
+    const handleInvalidation = ({ scope }: { scope: string | null }) => {
       if (scope === "staff-messages") {
         void loadIctCount();
         return;
@@ -184,24 +171,26 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         notifyNotificationChange();
         return;
       }
-      void refreshAllCounts();
-      window.dispatchEvent(new Event("adviser-notifications-changed"));
-    }).then((connectedChannel) => {
-      if (disposed) {
-        if (connectedChannel) void client.removeChannel(connectedChannel);
-        return;
+      // A null scope is emitted after the shared channel recovers. It is the
+      // only non-content event that needs a complete badge reconciliation.
+      if (!scope) {
+        void refreshAllCounts();
+        window.dispatchEvent(new Event("adviser-notifications-changed"));
       }
-      sessionChannel = connectedChannel;
-    });
+    };
+    refreshByScopeRef.current = (scope) => handleInvalidation({ scope });
 
     return () => {
-      disposed = true;
+      refreshByScopeRef.current = () => {};
       window.clearInterval(fallbackRefresh);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", refreshWhenVisible);
-      if (sessionChannel) void client.removeChannel(sessionChannel);
     };
   }, []);
+
+  useSessionInvalidation(({ scope }) => {
+    refreshByScopeRef.current(scope);
+  });
 
   return (
     <NotifContext.Provider value={{

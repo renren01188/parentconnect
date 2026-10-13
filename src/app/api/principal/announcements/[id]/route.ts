@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
 import { normalizePrincipalAnnouncementAudience } from "@/lib/principalAnnouncementAudience";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 export async function PATCH(
   req: NextRequest,
@@ -27,8 +28,8 @@ export async function PATCH(
     if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
       return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
     }
-    if (scheduled_at && scheduled_at.slice(0, 10) < new Date().toISOString().slice(0, 10)) {
-      return NextResponse.json({ success: false, message: "Schedule date cannot be in the past." }, { status: 400 });
+    if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
+      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
     }
     const status = scheduled_at ? "Scheduled" : "Published";
 

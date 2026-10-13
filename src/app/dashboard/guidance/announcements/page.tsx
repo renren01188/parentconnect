@@ -5,6 +5,7 @@ import { Bell, Calendar, Clock, Edit2, Eye, Monitor, Plus, Trash2, UserRound, X 
 import { useNotifContext } from "../context/NotificationContext";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 type Tab = "incoming" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -71,6 +72,7 @@ export default function AnnouncementsPage() {
   const [incomingAnnouncements, setIncomingAnnouncements] = useState<IncomingAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const isFormReady = Boolean(form.title.trim() && form.body.trim());
 
   const loadMyAnnouncements = useCallback(async () => {
@@ -115,6 +117,7 @@ export default function AnnouncementsPage() {
   const openNewAnnouncement = () => {
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -126,6 +129,7 @@ export default function AnnouncementsPage() {
       audience: announcement.audience,
       scheduleDate: announcement.status === "Scheduled" ? toDateInputValue(announcement.scheduled_at) : "",
     });
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -133,10 +137,15 @@ export default function AnnouncementsPage() {
     setShowCompose(false);
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
   };
 
   const handleSaveAnnouncement = async () => {
     if (!isFormReady || saving) return;
+    if (form.scheduleDate && !isFutureSchoolCalendarDay(form.scheduleDate)) {
+      setScheduleError("Choose a calendar day after today in Asia/Manila.");
+      return;
+    }
     setSaving(true);
     try {
       const response = await fetch(
@@ -153,7 +162,10 @@ export default function AnnouncementsPage() {
         },
       );
       const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.success) return;
+      if (!response.ok || !data?.success) {
+        setScheduleError(data?.message ?? "Unable to save this announcement.");
+        return;
+      }
 
       if (editingAnnouncement) {
         setMyAnnouncements((current) => current.map((item) => item.id === editingAnnouncement.id ? data.announcement : item));
@@ -237,7 +249,7 @@ export default function AnnouncementsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 backdrop-blur-[2px] sm:p-4" onClick={closeCompose}>
           <div role="dialog" aria-modal="true" aria-labelledby="guidance-compose-title" className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6"><h2 id="guidance-compose-title" className="text-base font-bold text-slate-800">{editingAnnouncement ? "Edit Announcement" : "New Announcement"}</h2><button type="button" aria-label="Close announcement form" onClick={closeCompose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div>
-            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Title<input className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Announcement title..." /></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Message<textarea className="mt-1.5 min-h-32 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="Write your announcement here..." rows={5} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Audience<select className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.audience} onChange={(event) => setForm({ ...form, audience: event.target.value })}><option value="Both">Parents & Class Advisers</option><option value="Parents">Parents Only</option><option value="Class Advisers">Class Advisers Only</option></select></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Schedule Date<input type="date" className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.scheduleDate} onChange={(event) => setForm({ ...form, scheduleDate: event.target.value })} /></label></div></div>
+            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Title<input className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Announcement title..." /></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Message<textarea className="mt-1.5 min-h-32 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="Write your announcement here..." rows={5} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Audience<select className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.audience} onChange={(event) => setForm({ ...form, audience: event.target.value })}><option value="Both">Parents & Class Advisers</option><option value="Parents">Parents Only</option><option value="Class Advisers">Class Advisers Only</option></select></label><label className="block text-xs font-bold uppercase tracking-wide text-slate-500">Schedule Date<input type="date" min={nextSchoolCalendarDay()} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white" value={form.scheduleDate} onChange={(event) => { setForm({ ...form, scheduleDate: event.target.value }); setScheduleError(null); }} /></label></div>{scheduleError && <p className="text-xs font-medium text-red-600">{scheduleError}</p>}</div>
             <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-4 py-3 sm:flex-row sm:justify-end sm:px-6"><button type="button" onClick={closeCompose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">Cancel</button><button type="button" disabled={!isFormReady || saving} onClick={handleSaveAnnouncement} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="h-4 w-4" />{saving ? "Saving..." : editingAnnouncement ? "Save Changes" : form.scheduleDate ? "Schedule" : "Publish Now"}</button></div>
           </div>
         </div>

@@ -6,10 +6,11 @@ import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeI
 type ParentRecipientRow = {
   parent_id: number;
   student_id: string;
-  students: {
-    grade: string | null;
-    section: string | null;
-  } | null;
+};
+
+type DirectParentRecipientRow = {
+  id: number;
+  student_id: string;
 };
 
 function adviserFullName(adviser: {
@@ -77,20 +78,37 @@ export async function POST(req: NextRequest) {
 
     if (announcementError) throw announcementError;
 
-    const { data: parentRows, error: parentError } = await supabase
-      .from("parent_student_links")
-      .select(`
-        parent_id,
-        student_id,
-        students!inner (
-          grade,
-          section
-        )
-      `)
-      .eq("students.grade", adviser.grade)
-      .in("students.section", adviserSections);
+    // A Parent may still be linked through the legacy primary `student_id`
+    // column while newer households use parent_student_links. Both forms are
+    // authorized recipient relationships and must receive the same persisted
+    // delivery row before the Realtime invalidation is sent.
+    const { data: targetStudents, error: targetStudentsError } = await supabase
+      .from("students")
+      .select("student_id, grade, section")
+      .eq("grade", adviser.grade)
+      .in("section", adviserSections);
+    if (targetStudentsError) throw targetStudentsError;
 
-    if (parentError) throw parentError;
+    const studentById = new Map(
+      (targetStudents ?? []).map((student) => [String(student.student_id), {
+        grade: student.grade ?? null,
+        section: student.section ?? null,
+      }]),
+    );
+    const targetStudentIds = [...studentById.keys()];
+    const [linkedParents, directParents] = targetStudentIds.length ? await Promise.all([
+      supabase
+        .from("parent_student_links")
+        .select("parent_id, student_id")
+        .in("student_id", targetStudentIds),
+      supabase
+        .from("parents")
+        .select("id, student_id")
+        .in("student_id", targetStudentIds),
+    ]) : [{ data: [], error: null }, { data: [], error: null }];
+
+    if (linkedParents.error) throw linkedParents.error;
+    if (directParents.error) throw directParents.error;
 
     const recipientsByParent = new Map<number, {
       source: string;
@@ -101,15 +119,28 @@ export async function POST(req: NextRequest) {
       section: string | null;
     }>();
 
-    for (const row of (parentRows ?? []) as unknown as ParentRecipientRow[]) {
-      if (!row.students || recipientsByParent.has(row.parent_id)) continue;
+    for (const row of (linkedParents.data ?? []) as unknown as ParentRecipientRow[]) {
+      const student = studentById.get(String(row.student_id));
+      if (!student || recipientsByParent.has(row.parent_id)) continue;
       recipientsByParent.set(row.parent_id, {
         source: "adviser",
         announcement_id: announcementRows.id,
         parent_id: row.parent_id,
         student_id: row.student_id,
-        grade: row.students?.grade ?? null,
-        section: row.students?.section ?? null,
+        grade: student.grade,
+        section: student.section,
+      });
+    }
+    for (const row of (directParents.data ?? []) as unknown as DirectParentRecipientRow[]) {
+      const student = studentById.get(String(row.student_id));
+      if (!student || recipientsByParent.has(row.id)) continue;
+      recipientsByParent.set(row.id, {
+        source: "adviser",
+        announcement_id: announcementRows.id,
+        parent_id: row.id,
+        student_id: row.student_id,
+        grade: student.grade,
+        section: student.section,
       });
     }
 

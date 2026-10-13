@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import {
 import { useNotifContext } from "../context/NotificationContext";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { mergeNotificationFeed } from "@/lib/notificationFeed";
 
 type GuidanceNotification = {
   id: string;
@@ -99,13 +100,15 @@ export default function GuidanceNotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [filterOpen, setFilterOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotificationFilter>("all");
+  const fetchSequence = useRef(0);
 
-  const loadNotifications = useCallback(() => fetch("/api/guidance/notifications", { cache: "no-store" })
+  const loadNotifications = useCallback(() => {
+    const requestId = ++fetchSequence.current;
+    return fetch("/api/guidance/notifications", { cache: "no-store" })
     .then(r => r.json())
     .then(data => {
-      if (data.success) {
-        setNotifications(
-          ((data.notifications ?? []) as GuidanceNotificationResponseRow[]).map((n) => ({
+      if (requestId === fetchSequence.current && data.success) {
+        const snapshot: GuidanceNotification[] = ((data.notifications ?? []) as GuidanceNotificationResponseRow[]).map((n) => ({
             ...n,
             type: n.type === "ticket"
               ? "ticket"
@@ -113,16 +116,20 @@ export default function GuidanceNotificationsPage() {
                 ? "resolved"
                 : "escalated",
             date: getDateBucket(n.time),
-          }))
-        );
-        setNotifUnreadCount(data.unreadCount ?? 0);
+          }));
+        // Merge rather than replace: a Realtime refresh and an initial fetch
+        // can finish in either order, and an optimistic click must stay read.
+        setNotifications((current) => mergeNotificationFeed(current, snapshot));
       }
     })
-    .finally(() => setLoading(false)), [setNotifUnreadCount]);
+    .finally(() => {
+      if (requestId === fetchSequence.current) setLoading(false);
+    });
+  }, []);
 
   useVisibleRefresh(loadNotifications);
   useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "reports" || scope === "notifications") return loadNotifications();
+    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") return loadNotifications();
   });
 
   useEffect(() => {
@@ -131,6 +138,9 @@ export default function GuidanceNotificationsPage() {
   }, [loadNotifications]);
 
   const unread = notifications.filter((notification) => !notification.read).length;
+  useEffect(() => {
+    setNotifUnreadCount(unread);
+  }, [setNotifUnreadCount, unread]);
   const filteredNotifications = notifications.filter((notification) => {
     if (activeFilter === "unread") return !notification.read;
     if (activeFilter === "reports") return notification.type === "escalated" || notification.type === "resolved" || notification.type === "ticket";
@@ -184,14 +194,6 @@ export default function GuidanceNotificationsPage() {
       body: JSON.stringify({ notif_key: id }),
     });
   }, [notifications, setNotifUnreadCount]);
-
-  // Viewing this page acknowledges all notifications currently shown. Defer the
-  // update until after paint so the effect remains a subscription boundary.
-  useEffect(() => {
-    if (loading || !notifications.some(n => !n.read)) return;
-    const timer = window.setTimeout(() => { void markAll(); }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loading, markAll, notifications]);
 
   const handleNotifClick = useCallback(
     (notification: GuidanceNotification) => {

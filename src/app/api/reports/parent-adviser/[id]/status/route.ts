@@ -26,60 +26,77 @@ export async function PATCH(
 
     const { id } = await params;
     const reportId = Number(id);
-    const { status } = await req.json();
+    const { status, markRead } = await req.json();
 
     const report = await getReportForAdviser(reportId, adviser.id);
     if (!report) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
+    if (String(report.status ?? "").toLowerCase() === "cancelled") {
+      return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });
+    }
 
-    const normalized = statusFromAdviser(status);
-    if (normalized === "resolved" && String(report.status ?? "").toLowerCase() === "resolved") {
+    const hasStatusChange = typeof status === "string" && status.trim().length > 0;
+    const shouldMarkRead = markRead === true || hasStatusChange;
+    if (!hasStatusChange && !shouldMarkRead) {
+      return NextResponse.json({ success: false, message: "A report status or read receipt is required." }, { status: 400 });
+    }
+
+    const normalized = hasStatusChange ? statusFromAdviser(status) : String(report.status ?? "").toLowerCase();
+    if (hasStatusChange && normalized === "resolved" && String(report.status ?? "").toLowerCase() === "resolved") {
       return NextResponse.json({ success: false, message: "This report has already been resolved." }, { status: 409 });
     }
-    if (normalized === "resolved" && report.escalated_to_guidance) {
+    if (hasStatusChange && normalized === "resolved" && report.escalated_to_guidance) {
       return NextResponse.json({ success: false, message: "Guidance owns this escalated report and must resolve it." }, { status: 403 });
     }
     const now = new Date().toISOString();
-    const updatePayload: Record<string, string | boolean> = {
-      status: normalized,
-      escalated_to_guidance: normalized === "escalated" ? true : report.escalated_to_guidance,
-      status_updated_at: now,
-      updated_at: now,
-    };
-    let { error } = await supabase
-      .from("parent_adviser_reports")
-      .update(updatePayload)
-      .eq("id", reportId)
-      .eq("adviser_id", adviser.id);
-
-    if (error && error.message.includes("status_updated_at")) {
-      const fallbackPayload = { ...updatePayload };
-      delete fallbackPayload.status_updated_at;
-      const fallback = await supabase
+    if (hasStatusChange) {
+      const updatePayload: Record<string, string | boolean> = {
+        status: normalized,
+        escalated_to_guidance: normalized === "escalated" ? true : report.escalated_to_guidance,
+        status_updated_at: now,
+        updated_at: now,
+      };
+      let { error } = await supabase
         .from("parent_adviser_reports")
-        .update(fallbackPayload)
+        .update(updatePayload)
         .eq("id", reportId)
         .eq("adviser_id", adviser.id);
-      error = fallback.error;
+
+      if (error && error.message.includes("status_updated_at")) {
+        const fallbackPayload = { ...updatePayload };
+        delete fallbackPayload.status_updated_at;
+        const fallback = await supabase
+          .from("parent_adviser_reports")
+          .update(fallbackPayload)
+          .eq("id", reportId)
+          .eq("adviser_id", adviser.id);
+        error = fallback.error;
+      }
+
+      if (error) throw error;
     }
 
-    if (error) throw error;
+    if (shouldMarkRead) {
+      const { error: readError } = await supabase
+        .from("parent_adviser_report_messages")
+        .update({ read_by_adviser: true })
+        .eq("report_id", reportId)
+        .in("sender_role", ["parent", "subject_teacher"]);
 
-    const { error: readError } = await supabase
-      .from("parent_adviser_report_messages")
-      .update({ read_by_adviser: true })
-      .eq("report_id", reportId)
-      .in("sender_role", ["parent", "subject_teacher"]);
+      if (readError) throw readError;
+    }
 
-    if (readError) throw readError;
-
-    await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "escalated" ? "Escalated to Guidance" : "Report Status Updated", performedById: adviser.id, performedBy: [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser", performedByRole: "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, relatedStudentId: report.student_id, previousStatus: report.status, newStatus: normalized, module: "Reports", details: normalized === "escalated" ? `Escalated report #${reportId} from Adviser to Guidance.` : `Changed report #${reportId} from ${report.status} to ${normalized}.` });
+    if (hasStatusChange) {
+      await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "escalated" ? "Escalated to Guidance" : "Report Status Updated", performedById: adviser.id, performedBy: [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser", performedByRole: "Adviser", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, relatedStudentId: report.student_id, previousStatus: report.status, newStatus: normalized, module: "Reports", details: normalized === "escalated" ? `Escalated report #${reportId} from Adviser to Guidance.` : `Changed report #${reportId} from ${report.status} to ${normalized}.` });
+    }
 
     await publishReportRealtimeInvalidation({
       parentId: report.parent_id,
       adviserId: adviser.id,
       includeGuidance: normalized === "escalated" || Boolean(report.escalated_to_guidance),
+      reportId,
+      kind: "status",
     });
 
     const updatedReport = await getReportForAdviser(reportId, adviser.id);

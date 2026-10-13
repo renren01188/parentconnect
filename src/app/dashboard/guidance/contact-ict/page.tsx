@@ -341,7 +341,7 @@ export default function ContactICTPage() {
         void loadMessages();
     }, [loadMessages]);
 
-    const liveUpdateError = useStaffMessagesRealtime("guidance-ict-messages", loadMessages);
+    const liveUpdateError = useStaffMessagesRealtime(loadMessages);
 
     useEffect(() => {
         threadEndRef.current?.scrollIntoView({ behavior: "smooth" });

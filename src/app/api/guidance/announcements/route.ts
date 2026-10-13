@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
 import { sendGuidanceAnnouncementEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 // ── GET — fetch all announcements by this guidance counselor ──────────────────
 export async function GET() {
@@ -34,7 +35,14 @@ export async function POST(req: NextRequest) {
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const audience = typeof body.audience === "string" ? body.audience : "Both";
-    const scheduledAt = body.scheduled_at ? new Date(body.scheduled_at).toISOString() : null;
+    const scheduledInput = body.scheduled_at;
+    if (scheduledInput && (typeof scheduledInput !== "string" || Number.isNaN(Date.parse(scheduledInput)))) {
+      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
+    }
+    if (scheduledInput && !isFutureSchoolCalendarDay(scheduledInput)) {
+      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
+    }
+    const scheduledAt = scheduledInput ? new Date(scheduledInput).toISOString() : null;
 
     if (!title || !message) {
       return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });

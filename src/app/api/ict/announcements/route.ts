@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendIctAnnouncementEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 export async function GET() {
     try {
@@ -42,6 +43,12 @@ export async function POST(req: Request) {
         }
         if (!Array.isArray(audience) || audience.length === 0) {
             return NextResponse.json({ success: false, message: "Select at least one audience." }, { status: 400 });
+        }
+        if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
+            return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
+        }
+        if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
+            return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
         }
 
         const senderName = [ict.first_name, ict.last_name].filter(Boolean).join(" ").trim() || "ICT Office";
@@ -88,26 +95,38 @@ async function fanOutIctAnnouncement(ann: any, senderName: string) {
 
     // ── Parents ────────────────────────────────────────────────────────────────
     if (audience.includes("Parents")) {
-        const { data: links } = await supabase
-            .from("parent_student_links")
-            .select("parent_id, student_id");
+        const [linksResult, directParentsResult] = await Promise.all([
+            supabase
+                .from("parent_student_links")
+                .select("parent_id, student_id"),
+            // Legacy parent accounts may have only their primary student_id.
+            // Include them before broadcasting so every intended Parent has a
+            // durable delivery row, not just a transient socket event.
+            supabase
+                .from("parents")
+                .select("id, student_id"),
+        ]);
+        const seen = new Set<number>();
+        const recipients = [
+            ...((linksResult.data ?? []) as { parent_id: number; student_id: string }[])
+                .map((link) => ({ parentId: link.parent_id, studentId: link.student_id })),
+            ...((directParentsResult.data ?? []) as { id: number; student_id: string | null }[])
+                .filter((parent) => parent.student_id !== null)
+                .map((parent) => ({ parentId: parent.id, studentId: parent.student_id as string })),
+        ].filter((recipient) => !seen.has(recipient.parentId) && seen.add(recipient.parentId));
+        const rows = recipients.map((recipient) => ({
+            source: "ict",
+            announcement_id: ann.id,
+            parent_id: recipient.parentId,
+            student_id: String(recipient.studentId),
+            title: ann.title,
+            message: ann.message,
+            sender_name: senderName,
+            tab: "ICT",
+            unread: true,
+        }));
 
-        if (links?.length) {
-            const seen = new Set<number>();
-            const rows = (links as { parent_id: number; student_id: string }[])
-                .filter(l => !seen.has(l.parent_id) && seen.add(l.parent_id))
-                .map(l => ({
-                    source: "ict",
-                    announcement_id: ann.id,
-                    parent_id: l.parent_id,
-                    student_id: String(l.student_id),
-                    title: ann.title,
-                    message: ann.message,
-                    sender_name: senderName,
-                    tab: "ICT",
-                    unread: true,
-                }));
-
+        if (rows.length) {
             const { error } = await supabase
                 .from("parent_announcement_notifications")
                 .upsert(rows, { onConflict: "source,announcement_id,parent_id" });

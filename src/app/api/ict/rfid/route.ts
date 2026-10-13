@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { logAudit } from "@/lib/audit";
 import { normalizeRfidCard } from "@/lib/rfid";
+import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -71,6 +72,7 @@ export async function PATCH(req: NextRequest) {
         throw new Error("RFID assignment could not be verified.");
       }
       await logAudit({ action: "RFID Assigned", performedById: String(ict.id ?? ""), performedBy: [ict.first_name, ict.last_name].filter(Boolean).join(" ") || "ICT Admin", performedByRole: "ICT Admin", targetUser: updatedStudent.student_id, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, newStatus: "Assigned", module: "RFID", details: `Assigned RFID to student ${updatedStudent.student_id}.` });
+      await publishStudentRealtimeInvalidation({ studentDbId: updatedStudent.id });
 
       return NextResponse.json({ success: true, student: updatedStudent }, { headers: noStoreHeaders });
 
@@ -86,6 +88,7 @@ export async function PATCH(req: NextRequest) {
         throw new Error("RFID removal could not be verified.");
       }
       await logAudit({ action: "RFID Revoked", performedById: String(ict.id ?? ""), performedBy: [ict.first_name, ict.last_name].filter(Boolean).join(" ") || "ICT Admin", performedByRole: "ICT Admin", targetUser: updatedStudent.student_id, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, previousStatus: "Assigned", newStatus: "Unassigned", module: "RFID", details: `Removed RFID from student ${updatedStudent.student_id}.` });
+      await publishStudentRealtimeInvalidation({ studentDbId: updatedStudent.id });
 
       return NextResponse.json({ success: true, student: updatedStudent }, { headers: noStoreHeaders });
 

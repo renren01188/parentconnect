@@ -1,4 +1,4 @@
-export type AdviserReportStatus = "New" | "Read" | "Ongoing" | "Escalated" | "Resolved";
+export type AdviserReportStatus = "New" | "Read" | "Ongoing" | "Replied" | "Escalated" | "Resolved";
 export type AdviserReportStatusCategory = "pending" | "ongoing" | "escalated" | "resolved";
 
 export interface AdviserReportStatusInput {

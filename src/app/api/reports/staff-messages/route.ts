@@ -1,18 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
-import { sendGuidanceMessageEmail, sendStaffMessageEmail } from "@/lib/mailer";
-import { publishRealtimeInvalidation, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { sendStaffMessageEmail } from "@/lib/mailer";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
   getGuidanceSession,
+  getParentSession,
   getPrincipalSession,
-  listMessages,
-  toParentReport,
 } from "../parent-adviser/_lib";
 
 type StaffRole = "adviser" | "guidance" | "principal" | "ict";
+type ParticipantRole = StaffRole | "parent";
 type MessageAttachment = { name: string; type: string; size: number; dataUrl: string };
 
 const SECRET = new TextEncoder().encode(
@@ -20,17 +20,31 @@ const SECRET = new TextEncoder().encode(
 );
 
 function errorMessage(error: unknown) {
+  const databaseError = error as { code?: string; message?: string } | null;
+  if (
+    databaseError?.code === "23514" &&
+    databaseError.message?.includes("staff_messages_recipient_type_check")
+  ) {
+    // This can only occur in an environment that has not deployed the
+    // Parent-recipient constraint migration yet. Do not expose raw database
+    // details to the sender, and do not retry the insert.
+    return "Parent messaging is being set up. Please apply the latest database migration, then try again.";
+  }
+  if (
+    databaseError?.code === "23514" &&
+    databaseError.message?.includes("staff_messages_sender_type_check")
+  ) {
+    return "Parent conversation replies are being set up. Please apply the latest database migration, then try again.";
+  }
   if (isTransientConnectionError(error)) {
     return "Staff messages are temporarily unavailable. Please try again shortly.";
   }
   return error instanceof Error ? error.message : "Server error.";
 }
-
 function isTransientConnectionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|EHOSTUNREACH|ENETUNREACH/i.test(message);
 }
-
 function fullName(parts: Array<string | null | undefined>) {
   return parts.filter(Boolean).join(" ").trim();
 }
@@ -41,6 +55,7 @@ function displayParentName(studentName: string) {
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("en-US", {
+    timeZone: "Asia/Manila",
     month: "long",
     day: "numeric",
     year: "numeric",
@@ -69,6 +84,10 @@ function isMissingTableError(error: { code?: string; message?: string } | null) 
 
 function parseRole(value: unknown): StaffRole | null {
   return value === "adviser" || value === "guidance" || value === "principal" || value === "ict" ? value : null;
+}
+
+function parseParticipantRole(value: unknown): ParticipantRole | null {
+  return value === "parent" ? "parent" : parseRole(value);
 }
 
 async function resolveStaffByRole(role: StaffRole) {
@@ -133,6 +152,15 @@ async function currentStaff(preferredRole?: StaffRole | null) {
   return null;
 }
 
+async function currentParticipant(preferredRole?: ParticipantRole | null) {
+  if (preferredRole === "parent") {
+    const parent = await getParentSession();
+    return parent ? { type: "parent" as const, ...parent } : null;
+  }
+
+  return currentStaff(preferredRole ?? null);
+}
+
 async function staffRecipients(current: NonNullable<Awaited<ReturnType<typeof currentStaff>>>) {
   const [advisers, guidanceRows, principals] = await Promise.all([
     supabase.from("advisers").select("id, first_name, middle_name, last_name, suffix, email, grade, section").eq("status", "active"),
@@ -174,6 +202,33 @@ async function staffRecipients(current: NonNullable<Awaited<ReturnType<typeof cu
   return Array.from(new Map(recipients.map((recipient) => [recipient.id, recipient])).values());
 }
 
+function toParentRecipient(parent: Record<string, unknown>) {
+  const studentRaw = parent.students;
+  const student = Array.isArray(studentRaw) ? studentRaw[0] : studentRaw;
+  const row = student && typeof student === "object" ? student as Record<string, unknown> : {};
+  const studentName = fullName([row.first_name as string, row.middle_name as string | null, row.last_name as string, row.suffix as string | null]);
+  const actualParentName = fullName([
+    parent.parent_first_name as string | null,
+    parent.parent_middle_name as string | null,
+    parent.parent_last_name as string | null,
+    parent.parent_suffix as string | null,
+  ]);
+  const studentId = String(row.student_id ?? parent.student_id ?? "");
+
+  return {
+    id: `parent:${parent.id}:${studentId}`,
+    type: "parent" as const,
+    parentId: Number(parent.id),
+    parentEmail: String(parent.email ?? ""),
+    name: actualParentName || (studentName ? displayParentName(studentName) : "Registered Parent"),
+    actualParentName: actualParentName || "Registered Parent",
+    studentId,
+    student: studentName || studentId || "No linked student",
+    gradeLevel: String(row.grade ?? "").trim() || "No grade level",
+    section: String(row.section ?? "").trim() || "No section",
+  };
+}
+
 async function parentRecipients() {
   const { data, error } = await supabase
     .from("parents")
@@ -184,34 +239,51 @@ async function parentRecipients() {
     .order("parent_last_name", { ascending: true });
   if (error) throw error;
 
-  return ((data ?? []) as Array<Record<string, unknown>>).flatMap((parent) => {
-    const studentRaw = parent.students;
-    const student = Array.isArray(studentRaw) ? studentRaw[0] : studentRaw;
-    const row = student && typeof student === "object" ? student as Record<string, unknown> : {};
-    const studentName = fullName([row.first_name as string, row.middle_name as string | null, row.last_name as string, row.suffix as string | null]);
-    const actualParentName = fullName([
-      parent.parent_first_name as string | null,
-      parent.parent_middle_name as string | null,
-      parent.parent_last_name as string | null,
-      parent.parent_suffix as string | null,
-    ]);
-    const studentId = String(row.student_id ?? parent.student_id ?? "");
-    return {
-      id: `parent:${parent.id}:${studentId}`,
-      type: "parent" as const,
-      parentId: Number(parent.id),
-      parentEmail: String(parent.email ?? ""),
-      name: actualParentName || (studentName ? displayParentName(studentName) : "Registered Parent"),
-      actualParentName: actualParentName || "Registered Parent",
-      studentId,
-      student: studentName || studentId || "No linked student",
-      gradeLevel: String(row.grade ?? "").trim() || "No grade level",
-      section: String(row.section ?? "").trim() || "No section",
-    };
-  }).filter((parent) => parent.parentEmail && parent.studentId);
+  return ((data ?? []) as Array<Record<string, unknown>>)
+    .map(toParentRecipient)
+    .filter((parent) => parent.parentEmail && parent.studentId);
+}
+
+async function findParentRecipient(parentId: number, studentId: string) {
+  const { data, error } = await supabase
+    .from("parents")
+    .select(`
+      id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
+      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+    `)
+    .eq("id", parentId)
+    .eq("student_id", studentId)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+
+  const recipient = toParentRecipient(data as Record<string, unknown>);
+  return recipient.parentEmail && recipient.studentId ? recipient : null;
+}
+
+async function adviserMayMessageParent(parentId: number, studentId: string) {
+  const adviser = await getAdviserFromToken();
+  if (!adviser) return false;
+  const sections = Array.isArray(adviser.sections) && adviser.sections.length > 0
+    ? adviser.sections
+    : adviser.section ? [adviser.section] : [];
+  if (!adviser.grade || sections.length === 0) return false;
+  const { data, error } = await supabase
+    .from("parents")
+    .select("id, students!inner ( student_id, grade, section )")
+    .eq("id", parentId)
+    .eq("students.student_id", studentId)
+    .eq("students.grade", adviser.grade)
+    .in("students.section", sections)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
 }
 
 function roleLabel(type: string) {
+  if (type === "parent") return "Parent";
   if (type === "principal") return "Principal";
   if (type === "guidance") return "Guidance";
   if (type === "ict") return "ICT";
@@ -220,11 +292,73 @@ function roleLabel(type: string) {
 
 export async function GET(req: NextRequest) {
   try {
-    const current = await currentStaff(parseRole(req.nextUrl.searchParams.get("role")));
+    const current = await currentParticipant(parseParticipantRole(req.nextUrl.searchParams.get("role")));
     if (!current) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+
+    // Parents can fetch only messages addressed to their own account.  This
+    // endpoint is intentionally server-session authenticated; no browser RLS
+    // policy is widened for the standalone-message inbox.
+    if (current.type === "parent") {
+      const { data, error } = await supabase
+        .from("staff_messages")
+        .select("*")
+        // Parents can see a thread sent to them and their own replies in that
+        // exact thread. The server still verifies the session before either
+        // direction is returned.
+        .or(`and(recipient_type.eq.parent,recipient_id.eq.${current.id}),and(sender_type.eq.parent,sender_id.eq.${current.id})`)
+        .order("created_at", { ascending: true });
+      if (error && !isMissingTableError(error)) throw error;
+
+      const rows = error ? [] : ((data ?? []) as Array<Record<string, unknown>>);
+      const roots = rows.filter((row) => !Number(row.source_message_id));
+      const repliesByRootId = new Map<number, Array<Record<string, unknown>>>();
+      for (const row of rows) {
+        const rootId = Number(row.source_message_id);
+        if (!rootId) continue;
+        const replies = repliesByRootId.get(rootId) ?? [];
+        replies.push(row);
+        repliesByRootId.set(rootId, replies);
+      }
+
+      const messages = roots.map((root) => {
+        const rootId = Number(root.id);
+        const replies = (repliesByRootId.get(rootId) ?? [])
+          .sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)));
+        const thread = [root, ...replies];
+        const last = thread.at(-1) ?? root;
+        const unread =
+          last.recipient_type === "parent" &&
+          Number(last.recipient_id) === current.id &&
+          String(last.status ?? "").toLowerCase() === "unread";
+        return {
+          id: rootId,
+          conversationId: `staff-message:${rootId}`,
+          senderRole: roleLabel(String(root.sender_type)),
+          senderName: String(root.sender_name ?? "School Staff"),
+          subject: String(root.subject ?? ""),
+          message: String(root.body ?? ""),
+          attachments: cleanAttachments(root.attachments),
+          sentAt: formatDate(String(root.created_at)),
+          unread,
+          replies: replies.map((reply) => ({
+            id: Number(reply.id),
+            senderRole: roleLabel(String(reply.sender_type)),
+            senderName: String(reply.sender_name ?? "School Staff"),
+            message: String(reply.body ?? ""),
+            attachments: cleanAttachments(reply.attachments),
+            sentAt: formatDate(String(reply.created_at)),
+          })),
+          sortAt: Date.parse(String(last.created_at ?? root.created_at)),
+        };
+      }).sort((a, b) => b.sortAt - a.sortAt);
+
+      return NextResponse.json({ success: true, recipients: [], parents: [], messages });
+    }
 
     const [recipients, parents, messagesResult] = await Promise.all([
       staffRecipients(current),
+      // Adviser and Principal recipient pickers retain their scoped legacy
+      // queries.  Do not return the school-wide parent directory to them.
       current.type === "guidance" ? parentRecipients() : Promise.resolve([]),
       supabase
         .from("staff_messages")
@@ -301,18 +435,75 @@ export async function POST(req: NextRequest) {
     const current = await currentStaff(parseRole(payload?.role));
     if (!current) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
 
-    const { recipientId, conversationId, subject, categories, message, attachments } = payload;
+    const { recipientId, conversationId, subject, message, attachments } = payload;
     const trimmedSubject = String(subject ?? "").trim();
     const trimmedMessage = String(message ?? "").trim();
     const cleanedAttachments = cleanAttachments(attachments);
-    const selectedCategories = Array.isArray(categories) ? categories.map(String).filter(Boolean) : [];
-    if (!recipientId || !trimmedSubject || selectedCategories.length === 0 || (!trimmedMessage && cleanedAttachments.length === 0)) {
-      return NextResponse.json({ success: false, message: "Recipient, subject, category, and message or attachment are required." }, { status: 400 });
+    if (!recipientId || !trimmedSubject || (!trimmedMessage && cleanedAttachments.length === 0)) {
+      return NextResponse.json({ success: false, message: "Recipient, subject, and message or attachment are required." }, { status: 400 });
     }
 
     if (String(recipientId).startsWith("parent:")) {
-      if (current.type !== "guidance") return NextResponse.json({ success: false, message: "Only Guidance can message parents from this route." }, { status: 403 });
-      return sendGuidanceToParent({ current, recipientId: String(recipientId), subject: trimmedSubject, categories: selectedCategories, message: trimmedMessage, attachments: cleanedAttachments });
+      const [, rawParentId, studentId] = String(recipientId).split(":");
+      const parentId = Number(rawParentId);
+      if (!Number.isSafeInteger(parentId) || parentId < 1 || !studentId) {
+        return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
+      }
+      // Look up the chosen parent only. Re-reading the entire school parent
+      // directory before every send made the send path slower than the write.
+      const recipient = await findParentRecipient(parentId, studentId);
+      if (!recipient) return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
+      if (current.type === "adviser" && !await adviserMayMessageParent(recipient.parentId, recipient.studentId)) {
+        // Do not reveal whether an out-of-class parent exists.
+        return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
+      }
+
+      const { data: createdMessage, error } = await supabase.from("staff_messages").insert({
+        sender_type: current.type,
+        sender_id: current.id,
+        sender_name: current.name,
+        sender_email: current.email,
+        recipient_type: "parent",
+        recipient_id: recipient.parentId,
+        recipient_name: recipient.actualParentName,
+        recipient_email: recipient.parentEmail,
+        subject: trimmedSubject,
+        // The legacy table makes categories non-null.  This internal marker is
+        // never shown as a concern category and never creates a report.
+        categories: ["Message"],
+        body: trimmedMessage,
+        attachments: cleanedAttachments,
+        source_message_id: null,
+        status: "unread",
+      }).select("*").single();
+      if (error) throw error;
+
+      // Broadcast the small, data-free invalidation while this request is
+      // still alive. Deferring it with after() made local/dev sends succeed
+      // without reliably waking an already-open Parent Reports inbox.
+      await publishRealtimeInvalidation([
+        { role: current.type, id: current.id },
+        { role: "parent", id: recipient.parentId },
+      ], "staff-messages");
+
+      // Email is independent of the durable message and the live UI signal.
+      // It remains post-response so a slow mail provider cannot block send.
+      if (recipient.parentEmail) after(async () => {
+        try {
+          await sendStaffMessageEmail({
+            recipientEmail: recipient.parentEmail,
+            recipientName: recipient.actualParentName,
+            senderName: current.name,
+            senderRole: roleLabel(current.type),
+            subject: trimmedSubject,
+            message: trimmedMessage,
+            hasAttachments: cleanedAttachments.length > 0,
+          });
+        } catch (error) {
+          console.error("Staff message email delivery failed:", error);
+        }
+      });
+      return NextResponse.json({ success: true, message: createdMessage }, { status: 201 });
     }
 
     const [recipientType, rawRecipientId] = String(recipientId).split(":") as [StaffRole, string];
@@ -337,7 +528,7 @@ export async function POST(req: NextRequest) {
       recipient_name: recipient.name,
       recipient_email: recipient.email,
       subject: trimmedSubject,
-      categories: selectedCategories,
+      categories: ["Message"],
       body: trimmedMessage,
       attachments: cleanedAttachments,
       source_message_id: sourceMessageId || null,
@@ -345,7 +536,16 @@ export async function POST(req: NextRequest) {
     }).select("*").single();
     if (error) throw error;
 
-    if (recipient.email) {
+    // The recipient's open message list must be refreshed immediately after
+    // its saved row is committed. Keep this live signal on the response path;
+    // publishRealtimeInvalidation handles delivery failures without failing
+    // the stored message.
+    await publishRealtimeInvalidation([
+      { role: current.type, id: current.id },
+      { role: recipientType, id: Number(rawRecipientId) },
+    ], "staff-messages");
+
+    if (recipient.email) after(async () => {
       try {
         await sendStaffMessageEmail({
           recipientEmail: recipient.email,
@@ -356,17 +556,10 @@ export async function POST(req: NextRequest) {
           message: trimmedMessage,
           hasAttachments: cleanedAttachments.length > 0,
         });
-      } catch (emailError) {
-        // The message is already stored; a mail delivery problem must not make
-        // the client retry and create a duplicate conversation.
-        console.error("Staff message email notification failed:", emailError);
+      } catch (error) {
+        console.error("Staff message email delivery failed:", error);
       }
-    }
-
-    await publishRealtimeInvalidation([
-      { role: current.type, id: current.id },
-      { role: recipientType, id: Number(rawRecipientId) },
-    ], "staff-messages");
+    });
 
     return NextResponse.json({ success: true, message: createdMessage }, { status: 201 });
   } catch (error: unknown) {
@@ -374,11 +567,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
   }
 }
-
 export async function PATCH(req: NextRequest) {
   try {
     const payload = await req.json();
-    const current = await currentStaff(parseRole(payload?.role));
+    const current = await currentParticipant(parseParticipantRole(payload?.role));
     if (!current) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
 
     const { conversationId, status, reply, attachments } = payload;
@@ -441,7 +633,7 @@ export async function PATCH(req: NextRequest) {
       // Only new conversations (POST) trigger an email notification.
       await publishRealtimeInvalidation([
         { role: current.type, id: current.id },
-        { role: recipientType as StaffRole, id: recipientId },
+        { role: recipientType as ParticipantRole, id: recipientId },
       ], "staff-messages");
       return NextResponse.json({ success: true, message: createdMessage });
     } else {
@@ -463,6 +655,23 @@ export async function PATCH(req: NextRequest) {
         .eq("recipient_id", current.id)
         .eq("status", "unread");
       if (repliesReadError) throw repliesReadError;
+
+      const recipients: Array<{ role: ParticipantRole; id: number }> = [
+        { role: current.type, id: current.id },
+      ];
+      const senderRole = parseParticipantRole(root.sender_type);
+      const recipientRole = parseParticipantRole(root.recipient_type);
+      const senderId = Number(root.sender_id);
+      const recipientId = Number(root.recipient_id);
+      if (senderRole && Number.isSafeInteger(senderId) && senderId > 0) {
+        recipients.push({ role: senderRole, id: senderId });
+      }
+      if (recipientRole && Number.isSafeInteger(recipientId) && recipientId > 0) {
+        recipients.push({ role: recipientRole, id: recipientId });
+      }
+      // A read acknowledgement is persisted conversation state. Notify only
+      // its verified participants so open sidebar counts update in place.
+      await publishRealtimeInvalidation(recipients, "staff-messages");
     }
 
     return NextResponse.json({ success: true });
@@ -470,89 +679,4 @@ export async function PATCH(req: NextRequest) {
     console.error("PATCH /api/reports/staff-messages error:", error);
     return NextResponse.json({ success: false, message: errorMessage(error) }, { status: 500 });
   }
-}
-
-async function sendGuidanceToParent({
-  current,
-  recipientId,
-  subject,
-  categories,
-  message,
-  attachments,
-}: {
-  current: { type: "guidance"; id: number; name: string; email: string };
-  recipientId: string;
-  subject: string;
-  categories: string[];
-  message: string;
-  attachments: MessageAttachment[];
-}) {
-  const [, rawParentId, studentId] = recipientId.split(":");
-  const { data: parentRow, error } = await supabase
-    .from("parents")
-    .select(`
-      id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students ( student_id, first_name, middle_name, last_name, suffix, grade, section )
-    `)
-    .eq("id", Number(rawParentId))
-    .eq("student_id", studentId)
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  if (!parentRow) return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
-
-  const parent = parentRow as Record<string, unknown>;
-  const studentRaw = parent.students;
-  const student = ((Array.isArray(studentRaw) ? studentRaw[0] : studentRaw) ?? {}) as Record<string, unknown>;
-  const studentName = fullName([student.first_name as string, student.middle_name as string | null, student.last_name as string, student.suffix as string | null]);
-  const parentName = fullName([parent.parent_first_name as string | null, parent.parent_middle_name as string | null, parent.parent_last_name as string | null, parent.parent_suffix as string | null]) || displayParentName(studentName);
-  const now = new Date().toISOString();
-
-  const { data: report, error: reportError } = await supabase.from("parent_adviser_reports").insert({
-    parent_id: Number(parent.id),
-    parent_email: String(parent.email ?? ""),
-    parent_name: parentName,
-    adviser_id: null,
-    adviser_name: current.name,
-    student_id: String(student.student_id ?? parent.student_id ?? ""),
-    student_name: studentName || String(parent.student_id ?? "No linked student"),
-    grade: String(student.grade ?? "").trim() || "No grade level",
-    section: String(student.section ?? "").trim() || "No section",
-    subject,
-    categories,
-    concern_level: 50,
-    status: "ongoing",
-    escalated_to_guidance: false,
-    escalated_to_principal: false,
-    status_updated_at: now,
-    updated_at: now,
-    last_message_at: now,
-  }).select("*").single();
-  if (reportError) throw reportError;
-
-  const { error: messageError } = await supabase.from("parent_adviser_report_messages").insert({
-    report_id: report.id,
-    sender_role: "guidance",
-    sender_name: current.name,
-    body: message,
-    thread_type: "guidance",
-    attachments,
-    read_by_parent: false,
-    read_by_adviser: true,
-  });
-  if (messageError) throw messageError;
-
-  await sendGuidanceMessageEmail({
-    recipientEmail: String(parent.email ?? ""),
-    recipientName: parentName,
-    recipientRole: "Parent",
-    guidanceName: current.name,
-    subject,
-    message,
-    hasAttachments: attachments.length > 0,
-  });
-
-  const messages = await listMessages([report.id]);
-  await publishReportRealtimeInvalidation({ parentId: Number(parent.id), includeGuidance: true });
-  return NextResponse.json({ success: true, report: toParentReport(report, messages.get(report.id) ?? []) }, { status: 201 });
 }

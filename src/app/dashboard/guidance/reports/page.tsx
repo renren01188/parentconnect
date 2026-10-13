@@ -17,6 +17,14 @@ import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { useReportTyping } from "@/hooks/useReportTyping";
+import {
+    createGuidanceReportsExcel as buildGuidanceReportsExcel,
+    createGuidanceReportsPdf as buildGuidanceReportsPdf,
+    filterGuidanceReports,
+    guidanceExportFilterLabels,
+    type GuidanceReportExportContext,
+} from "@/lib/guidanceReportExport";
 import GuidanceReportsGuide from "../components/GuidanceReportsGuide";
 
 /* eslint-disable react-hooks/exhaustive-deps */
@@ -33,7 +41,7 @@ interface ParentGroup {
 }
 type GuidanceTicket = {
     id: number; report_id: number; concern: string; message: string; status: "pending" | "accepted" | "rejected";
-    rejection_reason?: string | null; attachments?: MessageAttachment[]; created_at: string;
+    rejection_reason?: string | null; attachments?: MessageAttachment[]; created_at: string; isAssignedToCurrentGuidance?: boolean; isReadByCurrentGuidance?: boolean;
     report?: { parent_name?: string; student_name?: string; adviser_name?: string; subject?: string } | null;
 };
 type TicketStatus = GuidanceTicket["status"];
@@ -55,6 +63,7 @@ function getStatusStyle(status: ReportStatus | "ResolvedByPrincipal") {
         case "New": return "bg-sky-500 text-white";
         case "Read": return "bg-slate-200 text-slate-600";
         case "Ongoing": return "bg-blue-100 text-blue-600";
+        case "Replied": return "bg-indigo-100 text-indigo-700";
         case "Resolved": return "bg-sky-100 text-sky-700";
         case "Escalated": return "bg-red-100 text-red-600";
         case "ResolvedByPrincipal": return "bg-sky-100 text-sky-700";
@@ -172,231 +181,17 @@ function downloadBlob(blob: Blob, filename: string) {
     URL.revokeObjectURL(url);
 }
 
-function reportExportRows(items: Report[]) {
-    return items.map((report) => ({
-        id: report.id,
-        parent: report.parent_name,
-        student: report.student_name,
-        subject: report.subject,
-        categories: report.categories.join(", "),
-        concernLevel: `${report.concernLevel}%`,
-        status: report.status,
-        submittedAt: report.submitted_at,
-        attachment: report.attachment ?? "None",
-        message: report.message,
-    }));
-}
-
-async function exportReportsToExcel(items: Report[], filename: string) {
-    const { default: ExcelJS } = await import("exceljs");
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = "ParentConnect";
-    workbook.created = new Date();
-
-    const sheet = workbook.addWorksheet("Guidance Reports");
-    sheet.columns = [
-        { header: "ID", key: "id", width: 8 },
-        { header: "Parent", key: "parent", width: 28 },
-        { header: "Student", key: "student", width: 24 },
-        { header: "Subject", key: "subject", width: 36 },
-        { header: "Categories", key: "categories", width: 34 },
-        { header: "Concern Level", key: "concernLevel", width: 16 },
-        { header: "Status", key: "status", width: 14 },
-        { header: "Submitted At", key: "submittedAt", width: 24 },
-        { header: "Attachment", key: "attachment", width: 20 },
-        { header: "Message", key: "message", width: 64 },
-    ];
-    sheet.addRows(reportExportRows(items));
-
-    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-    sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0284C7" } };
-    sheet.getRow(1).alignment = { vertical: "middle", horizontal: "center" };
-    sheet.getRow(1).height = 22;
-    sheet.views = [{ state: "frozen", ySplit: 1 }];
-    sheet.eachRow((row) => {
-        row.eachCell((cell) => {
-            cell.border = {
-                top: { style: "thin", color: { argb: "FFE2E8F0" } },
-                left: { style: "thin", color: { argb: "FFE2E8F0" } },
-                bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
-                right: { style: "thin", color: { argb: "FFE2E8F0" } },
-            };
-            cell.alignment = { vertical: "top", wrapText: true };
-        });
-    });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    downloadBlob(
-        new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-        `${filename}.xlsx`,
-    );
-}
-
-function pdfSafe(value: string) {
-    return value
-        .replace(/[\\()]/g, "\\$&")
-        .replace(/[^\x20-\x7E]/g, " ");
-}
-
-function wrapPdfText(value: string, maxLength = 92) {
-    const words = value.replace(/\s+/g, " ").trim().split(" ");
-    const lines: string[] = [];
-    let line = "";
-    for (const word of words) {
-        const next = line ? `${line} ${word}` : word;
-        if (next.length > maxLength && line) {
-            lines.push(line);
-            line = word;
-        } else {
-            line = next;
-        }
-    }
-    if (line) lines.push(line);
-    return lines.length ? lines : [""];
-}
-
-function makePdfText(text: string, x: number, y: number, size = 10, bold = false) {
-    return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${pdfSafe(text)}) Tj ET`;
-}
-
-function makePdfLine(x1: number, y1: number, x2: number, y2: number, gray = 0.82) {
-    return `q ${gray} G ${x1} ${y1} m ${x2} ${y2} l S Q`;
-}
-
-function makePdfRect(x: number, y: number, width: number, height: number, gray = 0.96) {
-    return `q ${gray} g ${x} ${y} ${width} ${height} re f Q`;
-}
-
-function createGuidanceReportsPdf(items: Report[]) {
-    const pageWidth = 612;
-    const pageHeight = 792;
-    const left = 44;
-    const right = 568;
-    const pages: string[][] = [];
-    let commands: string[] = [];
-    let y = 0;
-
-    function startPage() {
-        commands = [];
-        pages.push(commands);
-        commands.push(makePdfRect(0, pageHeight - 64, pageWidth, 64, 0.93));
-        commands.push(makePdfText("ParentConnect", left, 758, 9, true));
-        commands.push(makePdfText("Guidance Reports Export", left, 738, 18, true));
-        commands.push(makePdfText("Santiago Elementary - Guidance Office", left, 722, 10));
-        commands.push(makePdfText(`Generated: ${new Date().toLocaleString()}`, 386, 746, 9));
-        y = 688;
-    }
-
-    function finishDocumentObjects() {
-        pages.forEach((page, index) => {
-            page.push(makePdfLine(left, 46, right, 46, 0.82));
-            page.push(makePdfText(`Page ${index + 1} of ${pages.length}`, 500, 28, 8));
-            page.push(makePdfText("Confidential guidance concern export", left, 28, 8));
-        });
-
-        const objects: string[] = [];
-        objects.push("<< /Type /Catalog /Pages 2 0 R >>");
-        const kids = pages.map((_, index) => `${3 + index * 2} 0 R`).join(" ");
-        objects.push(`<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>`);
-
-        pages.forEach((page, index) => {
-            const pageObj = 3 + index * 2;
-            const contentObj = pageObj + 1;
-            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Contents ${contentObj} 0 R >>`);
-            const body = page.join("\n");
-            objects.push(`<< /Length ${body.length} >>\nstream\n${body}\nendstream`);
-        });
-
-        let pdf = "%PDF-1.4\n";
-        const offsets: number[] = [0];
-        objects.forEach((object, index) => {
-            offsets.push(pdf.length);
-            pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-        });
-        const xrefOffset = pdf.length;
-        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-        offsets.slice(1).forEach((offset) => {
-            pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
-        });
-        pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-        return new Blob([pdf], { type: "application/pdf" });
-    }
-
-    function ensureSpace(height: number) {
-        if (y - height < 76) startPage();
-    }
-
-    startPage();
-    commands.push(makePdfText("Export Summary", left, y, 12, true));
-    y -= 18;
-    commands.push(makePdfRect(left, y - 24, right - left, 36, 0.97));
-    commands.push(makePdfText("Total Concerns", left + 14, y - 2, 9, true));
-    commands.push(makePdfText(String(items.length), left + 14, y - 17, 12, true));
-    commands.push(makePdfText("Included Scope", left + 150, y - 2, 9, true));
-    commands.push(makePdfText(items.length === 1 ? "Specific concern" : "All concerns", left + 150, y - 17, 10));
-    commands.push(makePdfText("Export Format", left + 330, y - 2, 9, true));
-    commands.push(makePdfText("PDF", left + 330, y - 17, 10));
-    y -= 58;
-
-    items.forEach((report, index) => {
-        const messageLines = wrapPdfText(report.message, 86);
-        const cardHeight = 132 + messageLines.length * 11;
-        ensureSpace(cardHeight);
-
-        commands.push(makePdfRect(left, y - cardHeight + 10, right - left, cardHeight, 0.985));
-        commands.push(makePdfRect(left, y - 18, right - left, 28, 0.91));
-        commands.push(makePdfText(`${index + 1}. ${report.subject}`, left + 14, y - 8, 11, true));
-        commands.push(makePdfText(report.status, right - 90, y - 8, 9, true));
-        y -= 40;
-
-        const labelX = left + 14;
-        const valueX = left + 112;
-        const secondLabelX = left + 310;
-        const secondValueX = left + 408;
-        const rowGap = 16;
-
-        commands.push(makePdfText("Parent", labelX, y, 9, true));
-        commands.push(makePdfText(report.parent_name, valueX, y, 9));
-        commands.push(makePdfText("Student", secondLabelX, y, 9, true));
-        commands.push(makePdfText(report.student_name, secondValueX, y, 9));
-        y -= rowGap;
-        commands.push(makePdfText("Submitted", labelX, y, 9, true));
-        commands.push(makePdfText(report.submitted_at, valueX, y, 9));
-        commands.push(makePdfText("Concern Level", secondLabelX, y, 9, true));
-        commands.push(makePdfText(`${report.concernLevel}%`, secondValueX, y, 9));
-        y -= rowGap;
-        commands.push(makePdfText("Categories", labelX, y, 9, true));
-        commands.push(makePdfText(report.categories.join(", "), valueX, y, 9));
-        y -= rowGap;
-        commands.push(makePdfText("Attachment", labelX, y, 9, true));
-        commands.push(makePdfText(report.attachment ?? "None", valueX, y, 9));
-        y -= 20;
-        commands.push(makePdfLine(left + 14, y + 8, right - 14, y + 8, 0.86));
-        commands.push(makePdfText("Concern Message", labelX, y - 6, 9, true));
-        y -= 22;
-        messageLines.forEach((line) => {
-            commands.push(makePdfText(line, labelX, y, 9));
-            y -= 11;
-        });
-        y -= 18;
-    });
-
-    return finishDocumentObjects();
-}
-
-function exportReportsToPdf(items: Report[], filename: string) {
-    downloadBlob(createGuidanceReportsPdf(items), `${filename}.pdf`);
-}
-
 function ExportReportsModal({
     reports,
     selectedReport,
     loadReportsForExport,
+    filters,
     onClose,
 }: {
     reports: Report[];
     selectedReport: Report | null;
     loadReportsForExport: (ids: number[]) => Promise<Report[]>;
+    filters: string[];
     onClose: () => void;
 }) {
     const [format, setFormat] = useState<ExportFormat>("excel");
@@ -405,6 +200,13 @@ function ExportReportsModal({
     const [exporting, setExporting] = useState(false);
     const selectedExportReport = reports.find((report) => report.id === reportId) ?? null;
     const canExport = scope === "all" ? reports.length > 0 : !!selectedExportReport;
+
+    useEffect(() => {
+        if (reports.some((report) => report.id === reportId)) return;
+        setReportId(selectedReport && reports.some((report) => report.id === selectedReport.id)
+            ? selectedReport.id
+            : reports[0]?.id ?? 0);
+    }, [reports, reportId, selectedReport]);
 
     async function handleExport() {
         if (!canExport) return;
@@ -420,8 +222,15 @@ function ExportReportsModal({
             // Exporting is an explicit user action, so it is the right time
             // to load the complete records without slowing the inbox itself.
             const items = await loadReportsForExport(reportIds);
-            if (format === "excel") await exportReportsToExcel(items, baseName);
-            else exportReportsToPdf(items, baseName);
+            const context: GuidanceReportExportContext = {
+                scopeLabel: scope === "all" ? "All matching report results" : "Selected report",
+                filters,
+            };
+            if (format === "excel") {
+                downloadBlob(await buildGuidanceReportsExcel(items, context), `${baseName}.xlsx`);
+            } else {
+                downloadBlob(buildGuidanceReportsPdf(items, context), `${baseName}.pdf`);
+            }
             onClose();
         } finally {
             setExporting(false);
@@ -494,11 +303,12 @@ function ExportReportsModal({
                     <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
                         <p className="text-xs font-semibold text-slate-500">
                             {scope === "all"
-                                ? `This will export all ${reports.length} guidance concern records.`
+                                ? `This will export all ${reports.length} guidance concern records matching the active filters.`
                                 : selectedExportReport
                                     ? `This will export: ${selectedExportReport.subject}`
                                     : "Choose a concern to export."}
                         </p>
+                        <p className="mt-1 text-[11px] text-slate-400">{filters.join(" · ")}</p>
                     </div>
                 </div>
 
@@ -524,13 +334,11 @@ function NewMessageModal({
     onMessageSent,
     staffRecipients,
     parentRecipients,
-    mode = "concern",
 }: {
     onClose: () => void;
     onMessageSent?: (payload: NewMessagePayload) => Promise<void> | void;
     staffRecipients: StaffRecipient[];
     parentRecipients: ParentRecipient[];
-    mode?: "concern" | "message";
 }) {
     const [recipientId, setRecipientId] = useState("");
     const [recipientOpen, setRecipientOpen] = useState(false);
@@ -565,7 +373,8 @@ function NewMessageModal({
     });
     const concernLevel = computeAdviserLevel(selectedCats);
     const otherSelected = selectedCats.includes("Other");
-    const isMessageMode = mode === "message";
+    // Direct messages do not carry report categories or concern levels.
+    const isMessageMode = true;
     const canSubmit = recipientId && subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) && (message.trim() || attachments.length > 0) && !sending;
     function toggleCat(name: string) { setSelectedCats(p => p.includes(name) ? p.filter(c => c !== name) : [...p, name]); }
     const barColor = concernLevel >= 100 ? "#ef4444" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#10b981";
@@ -623,7 +432,7 @@ function NewMessageModal({
             <div className="guidance-new-message-modal bg-white rounded-2xl shadow-2xl w-[480px] max-h-[calc(100vh-40px)] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
                     <div>
-                        <h2 className="text-xl font-extrabold text-slate-900">{isMessageMode ? "Send Message" : "Send a Concern"}</h2>
+                        <h2 className="text-xl font-extrabold text-slate-900">Send a Concern</h2>
                         <p className="text-sm text-slate-400 mt-1">Send a message about an escalated case</p>
                     </div>
                     <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400"><X className="w-4 h-4" /></button>
@@ -650,11 +459,11 @@ function NewMessageModal({
                                     {selectedRecipient ? (
                                         <><RecipientAvatar r={selectedRecipient} />
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.name}</p>
+                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.type === "parent" ? selectedRecipient.student : selectedRecipient.name}</p>
                                                 <p className="text-xs text-slate-400 truncate">
                                                     {selectedRecipient.type === "staff"
                                                         ? `${selectedRecipient.role} - ${selectedRecipient.email}`
-                                                        : `Student: ${selectedRecipient.student} · ${selectedRecipient.gradeLevel}, ${selectedRecipient.section}`}
+                                                        : `Parent: ${selectedRecipient.actualParentName || selectedRecipient.name}`}
                                                 </p>
                                             </div></>
                                     ) : <p className="text-sm text-slate-400 flex-1">Select a recipient...</p>}
@@ -767,8 +576,8 @@ function NewMessageModal({
                                                         className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 transition ${recipientId === p.id ? "bg-sky-50" : ""}`}>
                                                         <div className={`w-8 h-8 rounded-full ${getAvatarColor(p.name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>{getInitials(p.name)}</div>
                                                         <div className="min-w-0 flex-1">
-                                                            <p className="text-sm font-semibold text-slate-800 truncate">{p.name}</p>
-                                                            <p className="text-xs text-slate-400 truncate">Student: {p.student} · {p.gradeLevel}, {p.section}</p>
+                                                            <p className="text-sm font-semibold text-slate-800 truncate">{p.student}</p>
+                                                            <p className="text-xs text-slate-400 truncate">Parent: {p.actualParentName || p.name}</p>
                                                         </div>
                                                         {recipientId === p.id && <CheckCircle className="w-4 h-4 text-sky-500 ml-auto shrink-0" />}
                                                     </button>
@@ -780,8 +589,8 @@ function NewMessageModal({
                             </div>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1.5">{isMessageMode ? "Topic" : "Subject"} <span className="text-red-500">*</span></label>
-                            <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder={isMessageMode ? "Enter topic..." : "Enter subject..."}
+                            <label className="block text-xs font-bold text-slate-700 mb-1.5">Subject <span className="text-red-500">*</span></label>
+                            <input type="text" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Enter subject..."
                                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 transition" />
                         </div>
                         {!isMessageMode && <div>
@@ -934,6 +743,7 @@ function ReportsPageContent() {
     const escalationInFlightRef = useRef<Set<number>>(new Set());
     const ticketLoadInFlightRef = useRef<Promise<GuidanceTicket[]> | null>(null);
     const ticketDecisionInFlightRef = useRef<Set<number>>(new Set());
+    const acceptedTicketReadAttemptsRef = useRef<Set<number>>(new Set());
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
 
     // Guidance escalation local state (keyed by report id)
@@ -944,7 +754,12 @@ function ReportsPageContent() {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load guidance reports.");
         const nextReports = (data?.reports ?? []) as Report[];
-        setReports(nextReports);
+        setReports((current) => nextReports.map((report) => {
+            const loaded = current.find((item) => item.id === report.id);
+            return loaded?.detailsLoaded
+                ? { ...report, message: loaded.message, attachments: loaded.attachments, replies: loaded.replies, detailsLoaded: true }
+                : report;
+        }));
         setGuidanceEscalated(Object.fromEntries(nextReports.map((report) => [report.id, report.escalatedToGuidance ?? false])));
         setPrincipalEscalated(Object.fromEntries(nextReports.map((report) => [report.id, report.escalatedToPrincipal ?? false])));
         setUnlockedReports((prev) => {
@@ -954,11 +769,20 @@ function ReportsPageContent() {
             });
             return next;
         });
-        setGuidanceReplies(Object.fromEntries(nextReports.map((report) => [
-            report.id,
-            (report.replies ?? []).filter((reply) => reply.sender === "Guidance" || reply.sender === report.parent_name),
-        ])));
-        setSelectedReport((current) => current ? nextReports.find((report) => report.id === current.id) ?? null : null);
+        setGuidanceReplies((current) => Object.fromEntries(nextReports.map((report) => {
+            const existing = current[report.id] ?? [];
+            return [report.id, existing.length > 0
+                ? existing
+                : (report.replies ?? []).filter((reply) => reply.sender === "Guidance" || reply.sender === report.parent_name)];
+        })));
+        setSelectedReport((current) => {
+            if (!current) return current;
+            const summary = nextReports.find((report) => report.id === current.id);
+            if (!summary) return current;
+            return current.detailsLoaded
+                ? { ...summary, message: current.message, attachments: current.attachments, replies: current.replies, detailsLoaded: true }
+                : summary;
+        });
         setSelectedParent((current) => {
             if (!current) return current;
             return groupByParent(nextReports).find((group) => group.parent_name === current.parent_name) ?? current;
@@ -1028,6 +852,42 @@ function ReportsPageContent() {
     }
 
     const pendingTicketCount = tickets.filter((ticket) => ticket.status === "pending").length;
+    const unreadAcceptedTicketReportIds = new Set(tickets
+        .filter((ticket) => ticket.status === "accepted" && ticket.isAssignedToCurrentGuidance && !ticket.isReadByCurrentGuidance)
+        .map((ticket) => ticket.report_id));
+
+    // Opening this screen acknowledges accepted tickets assigned to this
+    // counselor. The API validates assignment and persists a receipt; other
+    // counselors' or still-pending tickets remain unread.
+    useEffect(() => {
+        if (!hasLoadedTickets) return;
+        const candidateIds = tickets
+            .filter((ticket) => ticket.status === "accepted" && ticket.isAssignedToCurrentGuidance && !ticket.isReadByCurrentGuidance)
+            .map((ticket) => ticket.id)
+            .filter((ticketId) => !acceptedTicketReadAttemptsRef.current.has(ticketId));
+        if (candidateIds.length === 0) return;
+        candidateIds.forEach((ticketId) => acceptedTicketReadAttemptsRef.current.add(ticketId));
+
+        void (async () => {
+            try {
+                const res = await fetch("/api/reports/guidance/tickets/read", { method: "PATCH", cache: "no-store" });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.message || "Unable to mark accepted Guidance tickets as viewed.");
+                const viewedIds = new Set(
+                    (Array.isArray(data?.ticketIds) ? data.ticketIds : [])
+                        .map((ticketId: unknown) => Number(ticketId))
+                        .filter((ticketId: number) => Number.isSafeInteger(ticketId) && ticketId > 0),
+                );
+                if (viewedIds.size > 0) {
+                    setTickets((current) => current.map((ticket) => viewedIds.has(ticket.id)
+                        ? { ...ticket, isReadByCurrentGuidance: true }
+                        : ticket));
+                }
+            } catch (error) {
+                console.warn("Unable to persist accepted Guidance ticket view state:", error);
+            }
+        })();
+    }, [hasLoadedTickets, tickets]);
 
     async function decideTicket(ticketId: number, status: "accepted" | "rejected") {
         if (status === "rejected" && !rejectionReason.trim()) { setTicketError("A rejection reason is required."); return; }
@@ -1126,11 +986,6 @@ function ReportsPageContent() {
         loadGuidanceStaffMessages().catch((error) => console.warn("Unable to load guidance staff messages:", error));
     }, []);
 
-    // The same coalesced Supabase lifecycle used by Contact ICT. It keeps the
-    // selected report mounted while its messages, counts, previews and status
-    // update from a fresh persisted snapshot.
-    const liveUpdateNotice = useReportMessagesRealtime("guidance-reports-live-list", loadGuidanceReports);
-
     // All categories across escalated parent reports (for dropdown)
     const allReportCategories = Array.from(
         new Set(reports.flatMap(r => r.categories))
@@ -1154,14 +1009,16 @@ function ReportsPageContent() {
 
     // ── Keep sidebar Reports badge live ───────────────────────────────────
     useEffect(() => {
-        const newParent = reports.filter(r => r.hasUnreadForGuidance).length;
+        const unreadReportCount = reports.filter((report) => (
+            report.hasUnreadForGuidance
+            || (report.status === "Escalated" && !report.guidanceSeen)
+            || (report.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(report.id))
+        )).length;
         const newPrincipal = adminMsgs.filter(m => m.status === "New").length;
-        setUnreadCount(newParent + newPrincipal + pendingTicketCount);
-        setEscalatedCount(reports.filter(r => (r.status === "Escalated" || r.ticketStatus === "accepted") && !r.guidanceSeen).length + pendingTicketCount);
-        setReportsUnreadCount(
-            reports.filter(r => r.hasUnreadForGuidance || (r.status === "Escalated" && !r.guidanceSeen) || (r.ticketStatus === "accepted" && !r.guidanceSeen)).length + newPrincipal + pendingTicketCount
-        );
-    }, [reports, adminMsgs, pendingTicketCount, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
+        setUnreadCount(unreadReportCount + newPrincipal + pendingTicketCount);
+        setEscalatedCount(reports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(r.id))).length + pendingTicketCount);
+        setReportsUnreadCount(unreadReportCount + newPrincipal + pendingTicketCount);
+    }, [reports, adminMsgs, tickets, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
     const parentGroups = groupByParent(reports)
@@ -1175,6 +1032,27 @@ function ReportsPageContent() {
     const selectedAdminConversationId = selectedAdminMsg?.conversationId ?? String(selectedAdminMsg?.id ?? "");
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminLastReply = selectedAdminMsg?.replies?.at(-1);
+    const reportTyping = useReportTyping(selectedReportId, "guidance");
+
+    const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
+        reportTyping.onRealtimeEvent(event);
+        if (event.kind === "typing") return;
+        await Promise.all([
+            loadGuidanceReports(),
+            refreshTickets("background"),
+            event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+        ]);
+    }, [loadGuidanceReports, loadReportDetail, reportTyping, selectedReportId]);
+
+    const liveUpdateNotice = useReportMessagesRealtime(loadGuidanceReports, {
+        onReportUpdate: handleLiveReportUpdate,
+        onConnectionStatus: (status) => {
+            if (status === "CLOSED") {
+                reportTyping.clearOtherTyping();
+                reportTyping.stopTyping();
+            }
+        },
+    });
 
     useEffect(() => {
         if (leftTab !== "Parent" || !selectedReport || selectedReport.detailsLoaded) return;
@@ -1234,6 +1112,8 @@ function ReportsPageContent() {
         if (categoryFilter !== "All") if (!g.reports.some(r => r.categories.includes(categoryFilter))) return false;
         return true;
     });
+    const exportableReports = filterGuidanceReports(reports, filterTab, categoryFilter);
+    const exportFilters = guidanceExportFilterLabels(filterTab, categoryFilter);
 
     // ── Actions ───────────────────────────────────────────────────────────
     async function markReportStatus(id: number, status: ReportStatus) {
@@ -1359,22 +1239,13 @@ function ReportsPageContent() {
 
         try {
             const cleanedAttachments = await filesToAttachments(attachmentsToSend);
-            const newReply = { sender: "Guidance", message: textToSend, sent_at: new Date().toLocaleString(), attachments: cleanedAttachments };
-
             if (selectedAdminMsg) {
                 // ... keep existing selectedAdminMsg block unchanged ...
             }
 
             if (selectedReport && !selectedAdminMsg) {
-                setGuidanceReplies(prev => ({
-                    ...prev,
-                    [selectedReport.id]: [...(prev[selectedReport.id] ?? []), newReply],
-                }));
                 try {
 
-                    if (selectedReport.status === "New" || selectedReport.status === "Read") {
-                        await markReportStatus(selectedReport.id, "Ongoing");
-                    }
                     const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/messages`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
@@ -1388,7 +1259,13 @@ function ReportsPageContent() {
                         const data = await res.json().catch(() => null);
                         throw new Error(data?.message || "Unable to send guidance reply.");
                     }
-                    await loadGuidanceReports();
+                    reportTyping.stopTyping();
+                    // The message endpoint persists the Replied status with
+                    // the message. Avoid an extra status request and do the
+                    // authoritative refresh outside the send interaction.
+                    void Promise.all([loadGuidanceReports(), loadReportDetail(selectedReport.id)]).catch((refreshError) => {
+                        console.warn("Unable to refresh the guidance report after replying:", refreshError);
+                    });
                 } catch (error) {
                     console.error("Unable to send guidance reply:", error);
                     await loadGuidanceReports().catch(() => null);
@@ -1415,11 +1292,15 @@ function ReportsPageContent() {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to send message.");
 
-        await Promise.all([loadGuidanceReports(), loadGuidanceStaffMessages()]);
         setLeftTab("Principal");
         setSelectedAdminMsg(null);
         setSelectedReport(null);
         setViewStep("list");
+        // The write already succeeded. Fetch the authoritative lists in the
+        // background so the send confirmation is shown immediately.
+        void Promise.all([loadGuidanceReports(), loadGuidanceStaffMessages()]).catch((refreshError) => {
+            console.warn("Unable to refresh guidance messages after sending:", refreshError);
+        });
     }
 
     // When a report is selected, auto-mark as Read
@@ -1930,6 +1811,12 @@ function ReportsPageContent() {
 
                                     {/* Actions + Reply */}
                                     <div className="px-6 py-4 bg-white border-t border-slate-100">
+                                        {reportTyping.isOtherParticipantTyping && (
+                                            <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                                <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:300ms]" /></span>
+                                                The other participant is typing…
+                                            </div>
+                                        )}
                                         {isPrincipalEscalated ? (
                                             /* ── Guidance locked out after Principal escalation ── */
                                             <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200">
@@ -1998,7 +1885,7 @@ function ReportsPageContent() {
                                                 {/* Reply box */}
                                                 <div className="guidance-reports-composer flex items-end gap-3">
                                                     <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 transition overflow-hidden bg-white">
-                                                        <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
+                                                        <textarea value={replyText} onChange={e => { setReplyText(e.target.value); reportTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                                                             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
                                                             placeholder="Write a reply to the parent... (Enter to send)"
                                                             rows={2}
@@ -2239,10 +2126,9 @@ function ReportsPageContent() {
                     </div>
                 );
             })()}
-            {showExportModal && <ExportReportsModal reports={reports} selectedReport={selectedReport} loadReportsForExport={loadReportsForExport} onClose={() => setShowExportModal(false)} />}
+            {showExportModal && <ExportReportsModal reports={exportableReports} selectedReport={selectedReport} loadReportsForExport={loadReportsForExport} filters={exportFilters} onClose={() => setShowExportModal(false)} />}
             {showNewMessage && (
                 <NewMessageModal
-                    mode={leftTab === "Principal" ? "message" : "concern"}
                     onClose={() => setShowNewMessage(false)}
                     onMessageSent={handleNewMessageSent}
                     staffRecipients={staffRecipients}

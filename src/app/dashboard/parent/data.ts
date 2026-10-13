@@ -8,6 +8,7 @@ export type MessageStatus = "Pending Response" | "Resolved" | "Read" | "Unread";
 export type ReportStatus =
   | "Pending"
   | "In Review"
+  | "Replied"
   | "Resolved"
   | "Escalated";
 
@@ -80,10 +81,17 @@ export interface Report {
   ticketId?: number | null;
   ticketStatus?: "pending" | "accepted" | "rejected" | null;
   ticketRejectionReason?: string | null;
+  /** Only reports originally submitted by this Parent can be cancelled. */
+  canCancel?: boolean;
   /** Conversation data has been fetched for this report. */
   detailsLoaded?: boolean;
   /** Used by list filters before the complete message history is downloaded. */
   threadTypes?: ("adviser" | "guidance" | "principal")[];
+  /** The most recent actual Adviser, Guidance, or Principal sender. */
+  latestStaffRole?: "adviser" | "guidance" | "principal";
+  /** A standalone staff message stored in staff_messages, never a report. */
+  isStandaloneStaffMessage?: boolean;
+  standaloneMessageId?: number;
 }
 
 export const INITIAL_REPORTS: Report[] = [
@@ -199,7 +207,7 @@ export const INITIAL_REPORTS: Report[] = [
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 export type NotifType = "alert" | "message" | "event";
-export type FilterTab = "All" | "Unread" | "Principal" | "Teacher" | "Guidance" | "Attendance" | "Account";
+export type FilterTab = "All" | "Unread" | "Principal" | "Teacher" | "Guidance" | "ICT" | "Attendance" | "Account";
 
 export interface Notification {
   id: number;

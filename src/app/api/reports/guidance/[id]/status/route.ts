@@ -38,6 +38,9 @@ export async function PATCH(
       .maybeSingle();
     if (currentReportError) throw currentReportError;
     if (!currentReport) return NextResponse.json({ success: false, message: "Escalated report not found." }, { status: 404 });
+    if (String(currentReport.status ?? "").toLowerCase() === "cancelled") {
+      return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });
+    }
     if (requested === "resolved" && String(currentReport.status ?? "").toLowerCase() === "resolved") {
       return NextResponse.json({ success: false, message: "This report has already been resolved." }, { status: 409 });
     }
@@ -59,7 +62,8 @@ export async function PATCH(
         })
         .eq("id", reportId)
         .eq("escalated_to_guidance", true)
-        .neq("status", "resolved");
+        .neq("status", "resolved")
+        .neq("status", "cancelled");
 
       if (error) throw error;
 
@@ -91,6 +95,8 @@ export async function PATCH(
         parentId: report.parent_id,
         adviserId: report.adviser_id,
         includeGuidance: true,
+        reportId,
+        kind: "status",
       });
       return NextResponse.json({
         success: true,
@@ -126,6 +132,7 @@ export async function PATCH(
       .update(updatePayload)
       .eq("id", reportId)
       .eq("escalated_to_guidance", true)
+      .neq("status", "cancelled")
       .select("id")
       .maybeSingle();
     let error = updateResult.error;
@@ -138,6 +145,7 @@ export async function PATCH(
         .update(fallbackPayload)
         .eq("id", reportId)
         .eq("escalated_to_guidance", true)
+        .neq("status", "cancelled")
         .select("id")
         .maybeSingle();
       error = updateResult.error;
@@ -193,6 +201,8 @@ export async function PATCH(
       parentId: report.parent_id,
       adviserId: report.adviser_id,
       includeGuidance: true,
+      reportId,
+      kind: "status",
     });
 
     const messages = await listMessages([reportId]);

@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { sendExcuseLetterToAdviserEmail } from "@/lib/mailer";
+import { validateExcuseLetterAttachmentPayload } from "@/lib/excuseLetterAttachment";
 
 const SECRET = new TextEncoder().encode(
     process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -12,42 +13,13 @@ function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "Server error.";
 }
 
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-const ALLOWED_ATTACHMENT_TYPES = new Set([
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-type AttachmentPayload = {
-    file_name?: unknown;
-    file_type?: unknown;
-    file_data?: unknown;
-};
-
 function validateSingleAttachment(value: unknown) {
     if (!Array.isArray(value) || value.length !== 1) {
         throw new Error("Exactly one attachment is required for each excuse letter.");
     }
-    const attachment = value[0] as AttachmentPayload;
-    const fileName = typeof attachment?.file_name === "string" ? attachment.file_name.trim() : "";
-    const fileType = typeof attachment?.file_type === "string" ? attachment.file_type.trim().toLowerCase() : "";
-    const fileData = typeof attachment?.file_data === "string" ? attachment.file_data : "";
-
-    if (!fileName || fileName.length > 180 || !ALLOWED_ATTACHMENT_TYPES.has(fileType)) {
-        throw new Error("The attachment must be a JPG, PNG, WEBP, PDF, DOC, or DOCX file.");
-    }
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(fileData) || fileData.length % 4 !== 0) {
-        throw new Error("The attachment is not valid base64 data.");
-    }
-    const byteLength = Buffer.byteLength(fileData, "base64");
-    if (byteLength === 0 || byteLength > MAX_ATTACHMENT_BYTES) {
-        throw new Error("The attachment must be 5 MB or smaller.");
-    }
-    return { file_name: fileName, file_type: fileType, file_data: fileData };
+    const validated = validateExcuseLetterAttachmentPayload(value[0]);
+    if (!validated.ok) throw new Error(validated.message);
+    return validated.attachment;
 }
 
 // ── GET: fetch all excuse letters for the logged-in parent ────────────────────

@@ -26,8 +26,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .eq("id", ticket.report_id)
       .maybeSingle();
     if (reportLookupError) throw reportLookupError;
-    if (!report || String(report.status ?? "").toLowerCase() === "resolved") {
-      return NextResponse.json({ success: false, message: "Resolved or missing reports cannot be routed through a Guidance ticket." }, { status: 409 });
+    if (!report || ["resolved", "cancelled"].includes(String(report.status ?? "").toLowerCase())) {
+      return NextResponse.json({ success: false, message: "Closed or missing reports cannot be routed through a Guidance ticket." }, { status: 409 });
     }
     const now = new Date().toISOString();
     const { data: decidedTicket, error: updateTicketError } = await supabase
@@ -45,7 +45,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         .from("parent_adviser_reports")
         .update({ escalated_to_guidance: true, status_updated_at: now, updated_at: now, last_message_at: now })
         .eq("id", ticket.report_id)
-        .neq("status", "resolved");
+        .neq("status", "resolved")
+        .neq("status", "cancelled");
       if (reportError) throw reportError;
     } else {
       // Tickets are not published to the browser realtime publication. Nudge
@@ -62,6 +63,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       parentId: report.parent_id,
       adviserId: report.adviser_id,
       includeGuidance: true,
+      reportId: ticket.report_id,
+      kind: "status",
     });
     return NextResponse.json({ success: true, ticketId, reportId: ticket.report_id, status: nextStatus });
   } catch (error) {

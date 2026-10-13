@@ -230,11 +230,12 @@ export default function ReportPage() {
     window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
-    // Realtime makes changes from Manage Class Sessions appear immediately.
-    // The focus refresh remains a fallback if database realtime is unavailable.
+    // This form is public, so it cannot subscribe to a protected account
+    // channel. Sections use a data-free public catalog Broadcast instead of
+    // postgres_changes (the sections table is protected by RLS).
     const channel = supabaseBrowser
-      ?.channel("report-section-options")
-      .on("postgres_changes", { event: "*", schema: "public", table: "sections" }, () => void loadOptions())
+      ?.channel("parentconnect-public-sections")
+      .on("broadcast", { event: "refresh" }, () => void loadOptions())
       .subscribe();
 
     return () => {
@@ -442,6 +443,7 @@ export default function ReportPage() {
                       <input
                         type="text" name="middleName" value={form.middleName}
                         onChange={handleChange} placeholder="e.g. Santos"
+                        aria-describedby="report-name-disambiguation"
                         className={inputCls}
                       />
                     </div>
@@ -458,6 +460,9 @@ export default function ReportPage() {
                       />
                     </div>
                   </div>
+                  <p id="report-name-disambiguation" className="mt-2 text-xs text-slate-400">
+                    Middle name and suffix are optional, but can help identify a student when classmates share the same first and last name.
+                  </p>
                 </div>
 
                 {/* ── Grade Level ── */}

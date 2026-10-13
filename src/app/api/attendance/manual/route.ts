@@ -8,10 +8,11 @@
 //   Fix: build a section OR filter across all adviser.sections, same
 //   pattern used in the DELETE handler above.
 
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
+import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type ManualBody = {
   student_id: string;
@@ -252,6 +253,7 @@ export async function POST(req: NextRequest) {
       if (correctionError) throw correctionError;
 
       await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Late", newStatus: "On Time", details: `Corrected Late ${body.type} to Present for ${buildFullName(student)} (${student.student_id}) without changing the attendance event.` });
+      after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
 
       return NextResponse.json({
         success: true,
@@ -299,6 +301,7 @@ export async function POST(req: NextRequest) {
       if (correctionError) throw correctionError;
 
       await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: computedStatus, details: `Corrected automatic absence to manual ${body.type} for ${buildFullName(student)} (${student.student_id}).` });
+      after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
       return NextResponse.json({
         success: true,
         message: "Automatic absence corrected with a manual Time In",
@@ -344,6 +347,7 @@ export async function POST(req: NextRequest) {
     if (insertError) throw insertError;
 
     await logAudit({ action: "Attendance Recorded", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, newStatus: computedStatus, details: `Recorded manual ${body.type} for ${buildFullName(student)} (${student.student_id}).` });
+    after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
     return NextResponse.json({
       success: true,
       message: "Manual attendance saved",

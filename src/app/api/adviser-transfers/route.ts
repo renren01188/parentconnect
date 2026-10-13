@@ -3,6 +3,7 @@ import { getActiveIct } from "@/lib/apiAuthorization";
 import { logAudit } from "@/lib/audit";
 import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type AdviserRecord = {
   id: number;
@@ -177,6 +178,7 @@ export async function POST(request: NextRequest) {
       }
       if (!data) return NextResponse.json({ success: false, message: "This transfer is no longer scheduled." }, { status: 409 });
       await logAudit({ action: "Adviser Transfer Cancelled", performedById: auth.ict.id, performedBy: `ICT ${auth.ict.id}`, performedByRole: "ICT", targetUser: `Grade ${data.grade} - ${data.section}`, targetRole: "Adviser", targetType: "adviser_transfer", targetId: id, module: "User Management", details: "Cancelled the scheduled adviser handover before its effective date." });
+      await publishAccountRealtimeInvalidation();
       return NextResponse.json({ success: true });
     }
 
@@ -243,6 +245,10 @@ export async function POST(request: NextRequest) {
         const failed = results.find((item) => !item.completed);
         if (failed) return NextResponse.json({ success: false, message: failed.failure_reason || "The transfer could not be completed." }, { status: 409 });
         if (results.length === conflicts.length && results.every((item) => item.completed)) {
+          await publishAccountRealtimeInvalidation([
+            { role: "adviser", id: incoming.id },
+            ...outgoingIds.map((id) => ({ role: "adviser" as const, id })),
+          ]);
           return NextResponse.json({ success: true, immediate: true, transferIds: results.map((item) => item.transfer_id) });
         }
         if (!processed.unavailable) throw new Error("The immediate transfer was not confirmed by the database.");
@@ -261,6 +267,10 @@ export async function POST(request: NextRequest) {
         if (historyUpdateError) throw historyUpdateError;
       }
       await logAudit({ action: "Adviser Transfer Completed", performedById: auth.ict.id, performedBy: `ICT ${auth.ict.id}`, performedByRole: "ICT", targetUser: `Grade ${grade} - ${targetSections.join(", ")}`, targetRole: "Adviser", targetType: "adviser_transfer", targetId: incoming.id, module: "User Management", details: `Immediately transferred Grade ${grade} - ${targetSections.join(", ")} from ${outgoingNames} to ${adviserName(incoming)}.${relocationDetail}`, metadata: { outgoingAdviserIds: outgoingIds, incomingAdviserId: incoming.id, immediate: true, releasedAssignment: relocation } });
+      await publishAccountRealtimeInvalidation([
+        { role: "adviser", id: incoming.id },
+        ...outgoingIds.map((id) => ({ role: "adviser" as const, id })),
+      ]);
       return NextResponse.json({ success: true, immediate: true, transferIds: historyIds });
     }
 
@@ -281,6 +291,10 @@ export async function POST(request: NextRequest) {
     }
     const transferIds = (data ?? []).map((item) => item.id);
     await logAudit({ action: "Adviser Transfer Scheduled", performedById: auth.ict.id, performedBy: `ICT ${auth.ict.id}`, performedByRole: "ICT", targetUser: `Grade ${grade} - ${targetSections.join(", ")}`, targetRole: "Adviser", targetType: "adviser_transfer", targetId: transferIds[0], module: "User Management", details: `Scheduled transfer of Grade ${grade} - ${targetSections.join(", ")} from ${outgoingNames} to ${adviserName(incoming)} for ${effectiveDate}.${relocationDetail}`, metadata: { outgoingAdviserIds: outgoingIds, incomingAdviserId: incoming.id, effectiveAt: effectiveAt.toISOString(), releasedAssignment: relocation } });
+    await publishAccountRealtimeInvalidation([
+      { role: "adviser", id: incoming.id },
+      ...outgoingIds.map((id) => ({ role: "adviser" as const, id })),
+    ]);
     return NextResponse.json({ success: true, immediate: false, transferIds });
   } catch (error) {
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Unable to process the adviser transfer." }, { status: 500 });

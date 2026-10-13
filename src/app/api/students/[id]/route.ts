@@ -7,6 +7,7 @@ import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -312,6 +313,7 @@ export async function PATCH(
     }
 
     await reconcileParentStudentLinks({ studentDbId: Number(existing.id) });
+    await publishStudentRealtimeInvalidation({ studentDbId: Number(existing.id) });
 
     return NextResponse.json({ success: true, message: "Student updated successfully." });
 

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 
 // ─── Color Palette ───────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -366,8 +368,8 @@ export default function Page() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const loadDashboard = useCallback(async () => {
-    setLoading(true);
+  const loadDashboard = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/principal/dashboard", { cache: "no-store" });
@@ -382,13 +384,22 @@ export default function Page() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load the dashboard.");
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard]);
+  const scheduleDashboardRefresh = useDebouncedRealtimeRefresh(
+    () => loadDashboard({ background: true }),
+    300,
+  );
+  useSessionInvalidation((event) => {
+    if (["attendance", "students", "accounts", "reports", "announcements", "dashboard"].includes(event.scope ?? "")) {
+      scheduleDashboardRefresh();
+    }
+  });
 
   return (
     <div className="pd-wrap">

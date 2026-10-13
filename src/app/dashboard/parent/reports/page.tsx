@@ -8,6 +8,8 @@ import { useNotifContext } from "../context/NotificationContext";
 import { DEFAULT_CATEGORIES, CONCERN_PERCENTAGES, computeConcernLevel, type ChatMessage, type Report, type MessageAttachment, type MessageStatus, type ReportStatus } from "../data";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
+import { useReportTyping } from "@/hooks/useReportTyping";
+import { countParentReportTabs, filterParentReportConversations } from "@/lib/parentReportList";
 import {
   canSubmitConfirmedReport,
   createReportSubmissionConfirmation,
@@ -32,7 +34,77 @@ type AdviserRecipient = {
 
 type FilterTab = "All Messages" | "Unread" | "Principal" | "Adviser" | "Guidance";
 
+type StandaloneStaffMessage = {
+  id: number;
+  senderRole: "Parent" | "Adviser" | "Guidance" | "Principal" | "ICT";
+  senderName: string;
+  subject: string;
+  message: string;
+  attachments?: MessageAttachment[];
+  sentAt: string;
+  unread: boolean;
+  replies?: Array<{
+    id: number;
+    senderRole: "Parent" | "Adviser" | "Guidance" | "Principal" | "ICT";
+    senderName: string;
+    message: string;
+    attachments?: MessageAttachment[];
+    sentAt: string;
+  }>;
+};
+
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+function standaloneThreadType(role: StandaloneStaffMessage["senderRole"]): ChatMessage["threadType"] {
+  if (role === "Principal") return "principal";
+  if (role === "Guidance") return "guidance";
+  if (role === "Adviser") return "adviser";
+  return undefined;
+}
+
+function standaloneMessageToReport(message: StandaloneStaffMessage): Report {
+  const lastReply = message.replies?.at(-1);
+  const last = lastReply ?? message;
+  const thread = [message, ...(message.replies ?? [])];
+  const latestStaffMessage = [...thread].reverse().find((entry) => entry.senderRole !== "Parent") ?? message;
+  const latestStaffRole = standaloneThreadType(latestStaffMessage.senderRole);
+  const color = message.senderRole === "Principal" ? "#7c3aed" : message.senderRole === "Guidance" ? "#0ea5e9" : message.senderRole === "Adviser" ? "#f59e0b" : "#334155";
+  const toChatMessage = (entry: {
+    id: number; senderRole: StandaloneStaffMessage["senderRole"]; senderName: string; message: string; attachments?: MessageAttachment[]; sentAt: string;
+  }): ChatMessage => ({
+    id: entry.id,
+    sender: entry.senderRole === "Parent" ? "parent" : "staff",
+    senderName: entry.senderRole === "Parent" ? "You" : entry.senderName,
+    timestamp: entry.sentAt,
+    text: entry.message,
+    threadType: standaloneThreadType(entry.senderRole),
+    attachments: entry.attachments ?? [],
+  });
+  return {
+    // Negative client IDs prevent a collision with an actual report ID and
+    // make it impossible to accidentally call a report workflow endpoint.
+    id: -message.id,
+    standaloneMessageId: message.id,
+    isStandaloneStaffMessage: true,
+    recipientName: message.senderName,
+    recipientRole: message.senderRole,
+    recipientInitials: message.senderName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "SM",
+    recipientColor: color,
+    subject: message.subject,
+    preview: last.message.trim() || "An attachment was sent.",
+    status: message.unread ? "Unread" : "Read",
+    reportStatus: null,
+    hasReportStatus: false,
+    time: last.sentAt,
+    unread: message.unread,
+    messages: [toChatMessage(message), ...(message.replies ?? []).map(toChatMessage)],
+    categories: [],
+    concernLevel: 0,
+    detailsLoaded: true,
+    latestStaffRole,
+    threadTypes: latestStaffRole ? [latestStaffRole] : [],
+  };
+}
 
 function fileToAttachment(file: File): Promise<MessageAttachment> {
   return new Promise((resolve, reject) => {
@@ -56,6 +128,19 @@ async function filesToAttachments(fileList: FileList | File[]) {
 function formatAttachmentSize(size: number) {
   if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function reportCooldownMessage(cooldownUntil: string | null, now: number) {
+  if (!cooldownUntil) return null;
+  const remainingMs = new Date(cooldownUntil).getTime() - now;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const remaining = minutes > 0
+    ? `${minutes}m ${String(seconds).padStart(2, "0")}s`
+    : `${seconds}s`;
+  return `You can submit another report in ${remaining}.`;
 }
 
 function AttachmentChips({ attachments, onRemove }: { attachments?: MessageAttachment[]; onRemove?: (index: number) => void }) {
@@ -125,6 +210,7 @@ function ReportStatusBadge({ status, label = status }: { status: ReportStatus; l
   const cfg: Record<ReportStatus, { bg: string; color: string; border: string; icon: React.ReactNode }> = {
     "Pending": { bg: "#fefce8", color: "#a16207", border: "#fef08a", icon: <Clock style={{ width: 11, height: 11 }} /> },
     "In Review": { bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe", icon: <AlertCircle style={{ width: 11, height: 11 }} /> },
+    "Replied": { bg: "#eef2ff", color: "#4f46e5", border: "#c7d2fe", icon: <Send style={{ width: 11, height: 11 }} /> },
     "Resolved": { bg: "#f0fdf4", color: "#15803d", border: "#bbf7d0", icon: <CheckCircle style={{ width: 11, height: 11 }} /> },
     "Escalated": { bg: "#fff1f2", color: "#be123c", border: "#fecdd3", icon: <AlertTriangle style={{ width: 11, height: 11 }} /> },
   };
@@ -165,6 +251,7 @@ function StatusTimeline({ status }: { status: ReportStatus }) {
   const STEPS: { key: ReportStatus; label: string; color: string; bg: string }[] = [
     { key: "Pending", label: "Pending", color: "#f59e0b", bg: "#fef3c7" },
     { key: "In Review", label: "In Review", color: "#3b82f6", bg: "#dbeafe" },
+    { key: "Replied", label: "Replied", color: "#4f46e5", bg: "#e0e7ff" },
     { key: "Escalated", label: "Escalated", color: "#ef4444", bg: "#fee2e2" },
     { key: "Resolved", label: "Resolved", color: "#10b981", bg: "#d1fae5" },
   ];
@@ -208,7 +295,7 @@ function StatusTimeline({ status }: { status: ReportStatus }) {
 }
 
 // ── New Report Modal ──────────────────────────────────────────────────────────
-function NewReportModal({ onClose, onSubmit, advisers }: {
+function NewReportModal({ onClose, onSubmit, advisers, cooldownMessage }: {
   onClose: () => void;
   onSubmit: (data: {
     adviserId: number;
@@ -222,6 +309,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
     termsAccepted: boolean;
   }) => Promise<void>;
   advisers: AdviserRecipient[];
+  cooldownMessage: string | null;
 }) {
   const [adviserIdx, setAdviserIdx] = useState(0);
   const [adviserOpen, setAdviserOpen] = useState(false);
@@ -295,6 +383,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
   }
 
   function openConfirmationModal() {
+    if (cooldownMessage) return;
     setConfirmation(createReportSubmissionConfirmation());
     setShowConsent(true);
   }
@@ -334,7 +423,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
   }
 
   const otherSelected = selectedCats.includes("Other");
-  const canSubmit = !!adviser && !isSubmitting && subject.trim() && (message.trim() || attachments.length > 0) && selectedCats.length > 0 && (!otherSelected || otherText.trim());
+  const canSubmit = !cooldownMessage && !!adviser && !isSubmitting && subject.trim() && (message.trim() || attachments.length > 0) && selectedCats.length > 0 && (!otherSelected || otherText.trim());
 
 
   async function handleSubmit() {
@@ -342,7 +431,7 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
     // prior conversation history private unless a separate consent flow sets it.
     const allowHistoryAccess = false;
     const termsAccepted = confirmation.termsAccepted;
-    if (!canSubmit || !adviser || !canSubmitConfirmedReport(confirmation) || !termsAccepted) return;
+    if (cooldownMessage || !canSubmit || !adviser || !canSubmitConfirmedReport(confirmation) || !termsAccepted) return;
     // Close the consent prompt immediately; the report submission can continue in the background.
     closeConfirmationModal();
     // Replace generic "Other" with the typed description if provided
@@ -409,6 +498,11 @@ function NewReportModal({ onClose, onSubmit, advisers }: {
           </div>
         ) : (
           <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+            {cooldownMessage && (
+              <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-xs font-semibold text-amber-800">
+                {cooldownMessage} A cancelled report is kept for authorized staff and audit history.
+              </div>
+            )}
             {submitError && (
               <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700">
                 {submitError}
@@ -678,6 +772,39 @@ function GuidanceTicketModal({ report, onClose, onSubmitted }: { report: Report;
   </div>;
 }
 
+function CancelReportModal({ report, onClose, onConfirm, cancelling, error }: {
+  report: Report;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+  cancelling: boolean;
+  error: string;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4"
+      onClick={() => { if (!cancelling) onClose(); }}
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="cancel-parent-report-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="cancel-parent-report-title" className="text-lg font-extrabold text-slate-900">Cancel this report?</h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              <strong>{report.subject}</strong> will be removed from your active reports. Authorized school staff will retain it for follow-up and audit history.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-amber-800">After cancellation, you must wait 5 minutes before submitting another report.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={cancelling} aria-label="Keep report" className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed"><X className="h-5 w-5" /></button>
+        </div>
+        {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={cancelling} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed">Keep Report</button>
+          <button type="button" onClick={() => void onConfirm()} disabled={cancelling} className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300">{cancelling ? "Cancelling..." : "Yes, Cancel Report"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StudentConcernConsent({ onConfirm }: { onConfirm: (allowHistoryAccess: boolean) => Promise<void> }) {
   const [choice, setChoice] = useState<boolean | null>(null);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -734,6 +861,11 @@ function ParentReportsPageContent() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [showTicketModal, setShowTicketModal] = useState(false);
+  const [cancelTargetId, setCancelTargetId] = useState<number | null>(null);
+  const [cancellingReport, setCancellingReport] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const [reportSubmissionCooldownUntil, setReportSubmissionCooldownUntil] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<MessageAttachment[]>([]);
   const [sendingReply, setSendingReply] = useState(false);
@@ -742,6 +874,10 @@ function ParentReportsPageContent() {
   const pendingMessagesRef = useRef<Map<number, ChatMessage[]>>(new Map());
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const messagesRef = useRef<HTMLDivElement>(null);
+  const wasAtBottomRef = useRef(true);
+  const lastScrolledReportIdRef = useRef<number | null>(null);
+  const cooldownMessage = reportCooldownMessage(reportSubmissionCooldownUntil, currentTime);
+  const cancelTarget = reports.find((report) => report.id === cancelTargetId) ?? null;
 
   // All categories derived from all reports (for the pill row)
   const allUsedCategories = Array.from(
@@ -775,15 +911,37 @@ function ParentReportsPageContent() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!reportSubmissionCooldownUntil) return;
+    setCurrentTime(Date.now());
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [reportSubmissionCooldownUntil]);
+
   const loadReports = useCallback(async () => {
-    const res = await fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" });
-    const data = await res.json().catch(() => null);
+    const [res, staffMessagesRes] = await Promise.all([
+      fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
+      fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
+    ]);
+    const [data, staffMessagesData] = await Promise.all([
+      res.json().catch(() => null),
+      staffMessagesRes.json().catch(() => null),
+    ]);
     if (!res.ok) {
       const message = data?.message || "Unable to load reports.";
       setLoadError(message);
       throw new Error(message);
     }
-    const rawReports = mergePendingMessages((data.reports ?? []) as Report[]);
+    setReportSubmissionCooldownUntil(
+      typeof data?.reportSubmissionCooldownUntil === "string" ? data.reportSubmissionCooldownUntil : null,
+    );
+    const standaloneMessages = staffMessagesRes.ok
+      ? ((staffMessagesData?.messages ?? []) as StandaloneStaffMessage[]).map(standaloneMessageToReport)
+      : [];
+    const rawReports = mergePendingMessages([
+      ...((data.reports ?? []) as Report[]),
+      ...standaloneMessages,
+    ]);
     // Deduplicate by id in case of race conditions
     const seen = new Set<number>();
     const nextReports = rawReports.filter(r => {
@@ -791,12 +949,19 @@ function ParentReportsPageContent() {
       seen.add(r.id);
       return true;
     });
-    setReports(nextReports);
+    setReports((current) => nextReports.map((report) => {
+      const loaded = current.find((item) => item.id === report.id);
+      // A list refresh carries current badges and status, but it deliberately
+      // omits conversation contents. Keep an already open thread intact until
+      // its one-report request supplies the canonical persisted messages.
+      return loaded?.detailsLoaded ? { ...report, messages: loaded.messages, detailsLoaded: true } : report;
+    }));
     setLoadError("");
     setSelectedId((current) => current ?? nextReports[0]?.id ?? null);
   }, [mergePendingMessages]);
 
   const loadReportDetail = useCallback(async (id: number) => {
+    if (id < 0) return;
     const inFlight = detailRequestsRef.current.get(id);
     if (inFlight) return inFlight;
 
@@ -826,13 +991,15 @@ function ParentReportsPageContent() {
       try {
         setLoading(true);
         setLoadError("");
-        const [reportsRes, advisersRes] = await Promise.all([
+        const [reportsRes, advisersRes, staffMessagesRes] = await Promise.all([
           fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
           fetch("/api/reports/parent-adviser/advisers", { cache: "no-store" }),
+          fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
         ]);
-        const [reportsData, advisersData] = await Promise.all([
+        const [reportsData, advisersData, staffMessagesData] = await Promise.all([
           reportsRes.json().catch(() => null),
           advisersRes.json().catch(() => null),
+          staffMessagesRes.json().catch(() => null),
         ]);
 
         if (!isMounted) return;
@@ -840,8 +1007,18 @@ function ParentReportsPageContent() {
         if (!reportsRes.ok) {
           setLoadError(reportsData?.message || "Unable to load reports.");
         }
-        const nextReports = reportsRes.ok ? mergePendingMessages((reportsData?.reports ?? []) as Report[]) : [];
+        const standaloneMessages = staffMessagesRes.ok
+          ? ((staffMessagesData?.messages ?? []) as StandaloneStaffMessage[]).map(standaloneMessageToReport)
+          : [];
+        const nextReports = reportsRes.ok
+          ? mergePendingMessages([...(reportsData?.reports ?? []) as Report[], ...standaloneMessages])
+          : standaloneMessages;
         setReports(nextReports);
+        setReportSubmissionCooldownUntil(
+          reportsRes.ok && typeof reportsData?.reportSubmissionCooldownUntil === "string"
+            ? reportsData.reportSubmissionCooldownUntil
+            : null,
+        );
         setAdvisers(advisersRes.ok ? ((advisersData?.advisers ?? []) as AdviserRecipient[]) : []);
         setSelectedId(nextReports[0]?.id ?? null);
       } catch (error) {
@@ -860,10 +1037,6 @@ function ParentReportsPageContent() {
     };
   }, [loadReports, mergePendingMessages]);
 
-  // Matches Contact ICT: refresh in place without replacing the active
-  // conversation or its draft with a page-level loading state.
-  const liveUpdateNotice = useReportMessagesRealtime("parent-reports-live-list", loadReports);
-
   // Sync sidebar Reports badge — only truly unread reports
   useEffect(() => {
     const count = reports.filter(r => r.unread).length;
@@ -871,6 +1044,7 @@ function ParentReportsPageContent() {
   }, [reports, setUnreadReportsCount]);
 
   const markReportRead = useCallback(async (id: number) => {
+    if (id < 0) return;
     if (markingReadIds.current.has(id)) return;
     markingReadIds.current.add(id);
     setReports(prev => prev.map(r => r.id === id ? { ...r, unread: false } : r));
@@ -889,15 +1063,36 @@ function ParentReportsPageContent() {
     }
   }, [loadReports]);
 
+  const markStandaloneMessageRead = useCallback(async (report: Report) => {
+    const messageId = report.standaloneMessageId;
+    if (!messageId || markingReadIds.current.has(report.id)) return;
+    markingReadIds.current.add(report.id);
+    setReports((current) => current.map((item) => item.id === report.id ? { ...item, unread: false, status: "Read" } : item));
+    try {
+      const res = await fetch("/api/reports/staff-messages", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "parent", conversationId: `staff-message:${messageId}`, status: "read" }),
+      });
+      if (res.ok) await loadReports();
+    } finally {
+      markingReadIds.current.delete(report.id);
+    }
+  }, [loadReports]);
+
   // Mark unread staff messages only when the parent deliberately opens the conversation.
   function handleSelect(id: number) {
     setSelectedId(id);
     setReplyText("");
     setReplyAttachments([]);
+    const selected = reports.find(r => r.id === id);
+    if (selected?.isStandaloneStaffMessage) {
+      if (selected.unread) void markStandaloneMessageRead(selected);
+      return;
+    }
     void loadReportDetail(id).catch((error) => {
       setLoadError(error instanceof Error ? error.message : "Unable to load this conversation.");
     });
-    const selected = reports.find(r => r.id === id);
     if (!selected?.unread || selected.reportStatus === "Resolved") return;
     markReportRead(id).catch(() => null);
   }
@@ -905,7 +1100,11 @@ function ParentReportsPageContent() {
   useEffect(() => {
     const reportIdParam = Number(searchParams.get("reportId"));
     const teacherParam = searchParams.get("teacher");
-    const match = Number.isSafeInteger(reportIdParam) && reportIdParam > 0
+    const conversationParam = searchParams.get("conversation");
+    const standaloneConversationId = /^staff-message:(\d+)$/.exec(conversationParam ?? "")?.[1];
+    const match = standaloneConversationId
+      ? reports.find((report) => report.isStandaloneStaffMessage && report.standaloneMessageId === Number(standaloneConversationId))
+      : Number.isSafeInteger(reportIdParam) && reportIdParam > 0
       ? reports.find(r => r.id === reportIdParam)
       : teacherParam
         ? reports.find(r => r.recipientName.toLowerCase() === teacherParam.toLowerCase())
@@ -914,16 +1113,18 @@ function ParentReportsPageContent() {
       setSelectedId(match.id);
       setReplyText("");
       setReplyAttachments([]);
-      if (match.unread && match.reportStatus !== "Resolved") {
+      if (match.isStandaloneStaffMessage) {
+        if (match.unread) void markStandaloneMessageRead(match);
+      } else if (match.unread && match.reportStatus !== "Resolved") {
         markReportRead(match.id).catch(() => null);
       }
     }
-  }, [reports, searchParams, markReportRead]);
+  }, [reports, searchParams, markReportRead, markStandaloneMessageRead]);
 
   const selectedReport = reports.find(r => r.id === selectedId) ?? reports[0] ?? null;
 
   useEffect(() => {
-    if (!selectedReport || selectedReport.detailsLoaded) return;
+    if (!selectedReport || selectedReport.isStandaloneStaffMessage || selectedReport.detailsLoaded) return;
     void loadReportDetail(selectedReport.id).catch((error) => {
       setLoadError(error instanceof Error ? error.message : "Unable to load this conversation.");
     });
@@ -932,90 +1133,97 @@ function ParentReportsPageContent() {
     selectedReport?.subject.startsWith("[Student Concern] ") &&
     selectedReport.allowHistoryAccess === null
   );
-  const selectedReportId = selectedReport?.id ?? null;
+  const selectedReportId = selectedReport?.isStandaloneStaffMessage ? null : selectedReport?.id ?? null;
   const selectedMessageCount = selectedReport?.messages.length ?? 0;
+  const reportTyping = useReportTyping(selectedReportId, "parent");
+
+  const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
+    reportTyping.onRealtimeEvent(event);
+    if (event.kind === "typing") return;
+    // Refresh badges/status for every affected report. Only load messages for
+    // the open report, leaving its selected ID and draft untouched.
+    await Promise.all([
+      loadReports(),
+      event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+    ]);
+  }, [loadReportDetail, loadReports, reportTyping, selectedReportId]);
+
+  // Matches Contact ICT's lifecycle while applying selected-report updates in
+  // place instead of replacing the conversation with an inbox summary.
+  const liveUpdateNotice = useReportMessagesRealtime(loadReports, {
+    onReportUpdate: handleLiveReportUpdate,
+    onConnectionStatus: (status) => {
+      if (status === "CLOSED") {
+        reportTyping.clearOtherTyping();
+        reportTyping.stopTyping();
+      }
+    },
+  });
 
   useEffect(() => {
     if (!selectedReportId) return;
-    const timer = setTimeout(() => {
+    const shouldFollowLatest = lastScrolledReportIdRef.current !== selectedReportId || wasAtBottomRef.current;
+    lastScrolledReportIdRef.current = selectedReportId;
+    if (!shouldFollowLatest) return;
+    const timer = window.setTimeout(() => {
       const el = messagesRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }, 50);
-    return () => clearTimeout(timer);
+    return () => window.clearTimeout(timer);
   }, [selectedReportId, selectedMessageCount]);
 
-  const filteredReports = reports.filter(r => {
-    if (activeFilter === "Unread") if (!r.unread) return false;
-    if (activeFilter === "Principal") if (r.recipientRole !== "Principal" && !r.threadTypes?.includes("principal") && !r.messages.some(message => message.threadType === "principal")) return false;
-    if (activeFilter === "Adviser") if (r.recipientRole !== "Class Adviser" && !r.threadTypes?.includes("adviser") && !r.messages.some(message => message.threadType === "adviser")) return false;
-    if (activeFilter === "Guidance") if (r.recipientRole !== "Guidance" && !r.threadTypes?.includes("guidance") && !r.messages.some(message => message.threadType === "guidance")) return false;
-    if (categoryFilter !== "All") if (!r.categories.includes(categoryFilter)) return false;
-    return true;
+  // Role tabs are assigned from the latest actual staff sender, not the
+  // report's current owner or escalation flags. This keeps each conversation
+  // in one staff tab and makes every badge mean exactly what its list shows.
+  const filteredReports = filterParentReportConversations(reports, {
+    tab: activeFilter,
+    category: categoryFilter,
   });
-
-  // Count each active report once, under its current handler. Historic
-  // conversation threads never keep a count after an escalation.
-  const activeReports = reports.filter((report) => report.reportStatus !== "Resolved");
-  const currentHandler = (report: Report): "Adviser" | "Guidance" | "Principal" => {
-    if (report.escalatedToPrincipal) return "Principal";
-    if (report.escalatedToGuidance) return "Guidance";
-    return "Adviser";
-  };
-  const counts: Record<FilterTab, number> = {
-    "All Messages": activeReports.length,
-    "Unread": activeReports.filter((report) => report.unread).length,
-    "Principal": activeReports.filter((report) => currentHandler(report) === "Principal").length,
-    "Adviser": activeReports.filter((report) => currentHandler(report) === "Adviser").length,
-    "Guidance": activeReports.filter((report) => currentHandler(report) === "Guidance").length,
-  };
+  const counts: Record<FilterTab, number> = countParentReportTabs(reports, {
+    category: categoryFilter,
+  });
   const guideHighlight = (target: string) => guideTarget === target
     ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-slate-100"
     : "";
 
 
   async function handleSendReply() {
-    if (sendingReply || (!replyText.trim() && replyAttachments.length === 0) || !selectedReport || selectedReport.reportStatus === "Resolved") return;
+    if (sendingReply || (!replyText.trim() && replyAttachments.length === 0) || !selectedReport || (!selectedReport.isStandaloneStaffMessage && selectedReport.reportStatus === "Resolved")) return;
     const reportId = selectedReport.id;
     const sentText = replyText.trim();
     const sentAttachments = replyAttachments;
-    const tempMessageId = -Date.now();
-    const replyThreadType = selectedReport.recipientRole === "Principal" ? "principal" : selectedReport.recipientRole === "Guidance" ? "guidance" : "adviser";
-    const optimisticMessage = {
-      id: tempMessageId,
-      sender: "parent" as const,
-      senderName: "You",
-      timestamp: new Date().toLocaleString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }),
-      text: sentText,
-      threadType: replyThreadType as ChatMessage["threadType"],
-      attachments: sentAttachments,
-    };
 
     try {
       setSendingReply(true);
-      pendingMessagesRef.current.set(reportId, [
-        ...(pendingMessagesRef.current.get(reportId) ?? []),
-        optimisticMessage,
-      ]);
-      setReports(prev => prev.map(report =>
-        report.id === reportId
-          ? {
-            ...report,
-            preview: sentText || report.preview,
-            unread: false,
-            parentRepliedAfterPrincipalEscalation: report.escalatedToPrincipal || report.parentRepliedAfterPrincipalEscalation,
-            parentRepliedAfterAcceptedGuidanceTicket: report.ticketStatus === "accepted" || report.parentRepliedAfterAcceptedGuidanceTicket,
-            messages: [...report.messages, optimisticMessage],
-          }
-          : report
-      ));
       setReplyText("");
       setReplyAttachments([]);
+      reportTyping.stopTyping();
+
+      if (selectedReport.isStandaloneStaffMessage) {
+        const messageId = selectedReport.standaloneMessageId;
+        if (!messageId) throw new Error("Unable to identify this conversation.");
+        const res = await fetch("/api/reports/staff-messages", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            role: "parent",
+            conversationId: `staff-message:${messageId}`,
+            status: "replied",
+            reply: sentText,
+            attachments: sentAttachments,
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          setReplyText(sentText);
+          setReplyAttachments(sentAttachments);
+          throw new Error(data?.message || "Unable to send your reply.");
+        }
+        await loadReports();
+        return;
+      }
+
+      const replyThreadType = selectedReport.recipientRole === "Principal" ? "principal" : selectedReport.recipientRole === "Guidance" ? "guidance" : "adviser";
 
       const res = await fetch(`/api/reports/parent-adviser/${reportId}/messages`, {
         method: "POST",
@@ -1030,22 +1238,15 @@ function ParentReportsPageContent() {
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         console.error("Unable to send parent report reply:", data?.message || res.statusText);
-        const pending = pendingMessagesRef.current.get(reportId) ?? [];
-        const nextPending = pending.filter(message => message.id !== tempMessageId);
-        if (nextPending.length > 0) pendingMessagesRef.current.set(reportId, nextPending);
-        else pendingMessagesRef.current.delete(reportId);
-        setReports(prev => prev.map(report =>
-          report.id === reportId
-            ? { ...report, messages: report.messages.filter(message => message.id !== tempMessageId) }
-            : report
-        ));
         setReplyText(sentText);
         setReplyAttachments(sentAttachments);
+        reportTyping.onDraftChange(true);
         return;
       }
-      // Reload after the server write so persisted handoff acknowledgements and
-      // current-handler counts update even when realtime is briefly unavailable.
-      await loadReports();
+      // Use the returned, durable row rather than a local timestamped stub.
+      // Realtime may have already completed this request; reloading by ID is
+      // idempotent and cannot create a duplicate message.
+      await Promise.all([loadReports(), loadReportDetail(reportId)]);
     } finally {
       setSendingReply(false);
     }
@@ -1083,6 +1284,9 @@ function ParentReportsPageContent() {
     });
     const result = await res.json().catch(() => null);
     if (!res.ok) {
+      if (typeof result?.reportSubmissionCooldownUntil === "string") {
+        setReportSubmissionCooldownUntil(result.reportSubmissionCooldownUntil);
+      }
       throw new Error(result?.message || "Unable to submit report.");
     }
     if (res.ok && result?.report) {
@@ -1096,6 +1300,35 @@ function ParentReportsPageContent() {
     setShowModal(false);
   }
 
+  async function handleCancelReport() {
+    if (!cancelTarget || cancellingReport) return;
+    setCancellingReport(true);
+    setCancelError("");
+    try {
+      const res = await fetch(`/api/reports/parent-adviser/${cancelTarget.id}/cancel`, {
+        method: "PATCH",
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to cancel this report.");
+
+      if (typeof data?.reportSubmissionCooldownUntil === "string") {
+        setReportSubmissionCooldownUntil(data.reportSubmissionCooldownUntil);
+      }
+      setReports((current) => current.filter((report) => report.id !== cancelTarget.id));
+      setSelectedId((current) => current === cancelTarget.id ? null : current);
+      setCancelTargetId(null);
+      setShowTicketModal(false);
+      await loadReports().catch((error) => {
+        console.error("Unable to refresh parent reports after cancellation:", error);
+      });
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : "Unable to cancel this report.");
+    } finally {
+      setCancellingReport(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col overflow-x-clip bg-slate-100 font-sans md:flex-row xl:h-screen xl:overflow-hidden">
       <Sidebar />
@@ -1106,14 +1339,15 @@ function ParentReportsPageContent() {
           <div className="min-w-0">
             <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Reports &amp; Concerns</h1>
             <p className="text-slate-500 text-sm mt-0.5">Submit and monitor your concerns with your class adviser</p>
+            {cooldownMessage && <p role="status" className="mt-2 text-xs font-bold text-amber-700">{cooldownMessage}</p>}
           </div>
-          <button onClick={() => setShowModal(true)}
+          <button onClick={() => setShowModal(true)} disabled={Boolean(cooldownMessage)}
             data-parent-guide="new-report"
             className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold shadow-sm transition-colors sm:w-auto ${guideHighlight("new-report")}`}
-            style={{ background: "#2563eb", color: "#fff" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "#1d4ed8")}
-            onMouseLeave={e => (e.currentTarget.style.background = "#2563eb")}>
-            <Plus className="w-4 h-4" /> New Report
+            style={{ background: cooldownMessage ? "#93c5fd" : "#2563eb", color: "#fff", cursor: cooldownMessage ? "not-allowed" : "pointer" }}
+            onMouseEnter={e => { if (!cooldownMessage) e.currentTarget.style.background = "#1d4ed8"; }}
+            onMouseLeave={e => { if (!cooldownMessage) e.currentTarget.style.background = "#2563eb"; }}>
+            <Plus className="w-4 h-4" /> {cooldownMessage ? "New Report Unavailable" : "New Report"}
           </button>
         </div>
 
@@ -1238,9 +1472,14 @@ function ParentReportsPageContent() {
                       <p className="break-words text-base font-extrabold text-slate-800">{selectedReport.recipientName}</p>
                       <p className="break-words text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
                     </div>
-                    {!selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && (
-                      <button type="button" onClick={() => setShowTicketModal(true)} className="min-h-11 w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100 sm:ml-auto sm:w-auto">Submit Ticket to Guidance</button>
-                    )}
+                    <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
+                      {!selectedReport.isStandaloneStaffMessage && !selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && (
+                        <button type="button" onClick={() => setShowTicketModal(true)} className="min-h-11 flex-1 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100 sm:flex-none">Submit Ticket to Guidance</button>
+                      )}
+                      {selectedReport.canCancel && selectedReport.reportStatus !== "Resolved" && (
+                        <button type="button" onClick={() => { setCancelError(""); setCancelTargetId(selectedReport.id); }} className="min-h-11 flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 sm:flex-none">Cancel Report</button>
+                      )}
+                    </div>
                     {selectedReport.ticketStatus === "pending" && <span className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">Guidance ticket pending review.</span>}
                   </div>
 
@@ -1258,11 +1497,11 @@ function ParentReportsPageContent() {
                   )}
 
                   {/* Category tags */}
-                  <div className="flex flex-wrap gap-1.5">
+                  {!selectedReport.isStandaloneStaffMessage && <div className="flex flex-wrap gap-1.5">
                     {selectedReport.categories.map(cat => (
                       <span key={cat} style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}>{cat}</span>
                     ))}
-                  </div>
+                  </div>}
 
 
                   {/* Status timeline */}
@@ -1303,7 +1542,14 @@ function ParentReportsPageContent() {
                 </div>
 
                 {/* Messages */}
-                <div ref={messagesRef} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-6">
+                <div
+                  ref={messagesRef}
+                  onScroll={(event) => {
+                    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+                    wasAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 48;
+                  }}
+                  className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5 sm:px-6"
+                >
                   {[...selectedReport.messages]
                     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
                     .map(msg => {
@@ -1333,11 +1579,16 @@ function ParentReportsPageContent() {
                     })}
                 </div>
 
-                {/* Reply box */}
                 <div className="shrink-0 border-t border-slate-100 px-4 pb-4 pt-3 sm:px-5">
-                  {requiresStudentConcernConsent ? (
+                  {!selectedReport.isStandaloneStaffMessage && reportTyping.isOtherParticipantTyping && (
+                    <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                      <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" /></span>
+                      The other participant is typing…
+                    </div>
+                  )}
+                  {!selectedReport.isStandaloneStaffMessage && requiresStudentConcernConsent ? (
                     <StudentConcernConsent onConfirm={saveStudentConcernConsent} />
-                  ) : selectedReport.reportStatus === "Resolved" ? (
+                  ) : !selectedReport.isStandaloneStaffMessage && selectedReport.reportStatus === "Resolved" ? (
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
                       This report has been resolved. Messaging is unavailable.
                     </div>
@@ -1377,7 +1628,7 @@ function ParentReportsPageContent() {
                   </div>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                     <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
-                      <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
+                      <textarea value={replyText} onChange={e => { setReplyText(e.target.value); if (!selectedReport.isStandaloneStaffMessage) reportTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                         onKeyDown={e => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
@@ -1405,8 +1656,9 @@ function ParentReportsPageContent() {
         </div>
       </div>
 
-      {showModal && <NewReportModal advisers={advisers} onClose={() => setShowModal(false)} onSubmit={handleNewReport} />}
+      {showModal && <NewReportModal advisers={advisers} cooldownMessage={cooldownMessage} onClose={() => setShowModal(false)} onSubmit={handleNewReport} />}
       {showTicketModal && selectedReport && <GuidanceTicketModal report={selectedReport} onClose={() => setShowTicketModal(false)} onSubmitted={loadReports} />}
+      {cancelTarget && <CancelReportModal report={cancelTarget} cancelling={cancellingReport} error={cancelError} onClose={() => { if (!cancellingReport) setCancelTargetId(null); }} onConfirm={handleCancelReport} />}
       <ParentReportsGuide onStepChange={setGuideTarget} />
     </div>
   );

@@ -1,12 +1,27 @@
 "use client";
 
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import type { ReportRealtimeEventKind } from "@/lib/realtimeInvalidation";
 
-type ChannelStatus = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
-export type RealtimeInvalidationScope = "reports" | "staff-messages" | "notifications" | "announcements";
+export type ChannelStatus = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
+export type RealtimeInvalidationScope =
+  | "reports"
+  | "staff-messages"
+  | "notifications"
+  | "announcements"
+  | "attendance"
+  | "accounts"
+  | "students"
+  | "dashboard"
+  | "audit";
 
 export type RealtimeInvalidation = {
   scope: RealtimeInvalidationScope | null;
+  reportId: number | null;
+  kind: ReportRealtimeEventKind | null;
+  messageId: number | null;
+  actorKey: string | null;
+  active: boolean | null;
 };
 
 /** Opens the current account's opaque, data-free broadcast channel. */
@@ -23,10 +38,25 @@ export async function subscribeRealtimeInvalidations(
     return client
       .channel(data.topic)
       .on("broadcast", { event: "invalidate" }, ({ payload }) => {
-        const scope = typeof payload?.scope === "string" && ["reports", "staff-messages", "notifications", "announcements"].includes(payload.scope)
+        const scope = typeof payload?.scope === "string" && ["reports", "staff-messages", "notifications", "announcements", "attendance", "accounts", "students", "dashboard", "audit"].includes(payload.scope)
           ? payload.scope as RealtimeInvalidationScope
           : null;
-        onInvalidate({ scope });
+        const reportId = Number(payload?.reportId);
+        const messageId = Number(payload?.messageId);
+        const kind = typeof payload?.kind === "string" && ["message", "status", "typing"].includes(payload.kind)
+          ? payload.kind as ReportRealtimeEventKind
+          : null;
+        const actorKey = typeof payload?.actorKey === "string" && /^[a-zA-Z0-9-]{16,128}$/.test(payload.actorKey)
+          ? payload.actorKey
+          : null;
+        onInvalidate({
+          scope,
+          reportId: Number.isSafeInteger(reportId) && reportId > 0 ? reportId : null,
+          kind,
+          messageId: Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null,
+          actorKey,
+          active: typeof payload?.active === "boolean" ? payload.active : null,
+        });
       })
       .subscribe((status) => onStatus?.(status));
   } catch {

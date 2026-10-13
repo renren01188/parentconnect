@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
@@ -297,6 +298,7 @@ export async function PATCH(req: NextRequest) {
       details: "Submitted a profile update request for ICT approval.",
       changes,
     });
+    await publishAccountRealtimeInvalidation([{ role: "adviser", id: Number(adviser.id) }]);
 
     return NextResponse.json({
       success: true,

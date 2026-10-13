@@ -9,12 +9,13 @@ import {
     Eye, EyeOff, Upload,
 } from "lucide-react";
 import Sidebar from "../components/Sidebar";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+function Toggle({ enabled, onChange, disabled, label }: { enabled: boolean; onChange: () => void; disabled?: boolean; label: string }) {
     return (
-        <button onClick={onChange}
-            className="relative inline-flex h-11 w-12 items-center rounded-full transition-colors shrink-0"
+        <button type="button" onClick={onChange} disabled={disabled} aria-label={label} aria-pressed={enabled}
+            className="relative inline-flex h-11 w-12 shrink-0 items-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
             style={{ background: enabled ? "#2563eb" : "#cbd5e1" }}>
             <span className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform"
                 style={{ transform: enabled ? "translateX(22px)" : "translateX(2px)" }} />
@@ -566,9 +567,13 @@ export default function ProfilePage() {
     const [students, setStudents] = useState<LinkedStudent[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState("");
+    const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
     const [emailNotif,   setEmailNotif]   = useState(true);
     const [smsNotif,     setSmsNotif]     = useState(false);
+    const [savingNotificationPreferences, setSavingNotificationPreferences] = useState(false);
+    const [notificationPreferencesError, setNotificationPreferencesError] = useState("");
+    const [notificationPreferencesNotice, setNotificationPreferencesNotice] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [settingsTab,  setSettingsTab]  = useState<"profile" | "password">("profile");
 
@@ -599,6 +604,18 @@ export default function ProfilePage() {
                     profilePicture: data.parent.profilePicture || "",
                 });
                 setStudents(data.students ?? []);
+
+                try {
+                    const preferencesRes = await fetch("/api/parents/attendance-notification-preferences", { cache: "no-store" });
+                    const preferencesData = await preferencesRes.json();
+                    if (!preferencesRes.ok || !preferencesData.success) {
+                        throw new Error(preferencesData.message || "Unable to load attendance notification preferences.");
+                    }
+                    setEmailNotif(Boolean(preferencesData.preferences?.emailEnabled));
+                    setSmsNotif(Boolean(preferencesData.preferences?.smsEnabled));
+                } catch (preferencesError) {
+                    setNotificationPreferencesError(preferencesError instanceof Error ? preferencesError.message : "Unable to load attendance notification preferences.");
+                }
             } catch {
                 setLoadError("Unable to load your profile. Please try again.");
             } finally {
@@ -607,7 +624,11 @@ export default function ProfilePage() {
         }
 
         loadProfile();
-    }, [router]);
+    }, [router, profileRefreshKey]);
+
+    useSessionInvalidation((event) => {
+        if (event.scope === "accounts" && !showSettings) setProfileRefreshKey((key) => key + 1);
+    });
 
     async function saveProfile(updated: ProfileData, currentPassword: string) {
         const res = await fetch("/api/parents/me", {
@@ -623,6 +644,29 @@ export default function ProfilePage() {
 
         setProfile(data.parent ?? updated);
         window.dispatchEvent(new Event("parent-profile-updated"));
+    }
+
+    async function saveNotificationPreferences(nextEmailEnabled: boolean, nextSmsEnabled: boolean) {
+        setSavingNotificationPreferences(true);
+        setNotificationPreferencesError("");
+        setNotificationPreferencesNotice("");
+        try {
+            const res = await fetch("/api/parents/attendance-notification-preferences", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ emailEnabled: nextEmailEnabled, smsEnabled: nextSmsEnabled }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.message || "Unable to save attendance notification preferences.");
+
+            setEmailNotif(Boolean(data.preferences?.emailEnabled));
+            setSmsNotif(Boolean(data.preferences?.smsEnabled));
+            setNotificationPreferencesNotice("Attendance notification preferences saved.");
+        } catch (preferencesError) {
+            setNotificationPreferencesError(preferencesError instanceof Error ? preferencesError.message : "Unable to save attendance notification preferences.");
+        } finally {
+            setSavingNotificationPreferences(false);
+        }
     }
 
     const fullName = getFullName(profile);
@@ -775,22 +819,25 @@ export default function ProfilePage() {
                         {/* Notifications */}
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">Notifications</h2>
-                            <p className="text-xs text-slate-400 mb-4">Choose what you want to be notified about</p>
+                            <p className="text-xs text-slate-400 mb-4">Choose how to receive RFID attendance alerts for your child.</p>
                             <div className="flex flex-col gap-4">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <p className="text-xs font-semibold text-slate-700">Email Notifications</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">Get alerts via email</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">Send attendance alerts to your email address</p>
                                     </div>
-                                    <Toggle enabled={emailNotif} onChange={() => setEmailNotif(p => !p)} />
+                                    <Toggle enabled={emailNotif} onChange={() => void saveNotificationPreferences(!emailNotif, smsNotif)} disabled={savingNotificationPreferences} label="Toggle attendance email notifications" />
                                 </div>
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <p className="text-xs font-semibold text-slate-700">SMS Notifications</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">Get alerts via text message</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">Send attendance alerts to your mobile number</p>
                                     </div>
-                                    <Toggle enabled={smsNotif} onChange={() => setSmsNotif(p => !p)} />
+                                    <Toggle enabled={smsNotif} onChange={() => void saveNotificationPreferences(emailNotif, !smsNotif)} disabled={savingNotificationPreferences} label="Toggle attendance SMS notifications" />
                                 </div>
+                                {savingNotificationPreferences && <p className="text-[10px] text-slate-400">Saving attendance notification preferences…</p>}
+                                {notificationPreferencesNotice && <p className="text-[10px] font-semibold text-emerald-600">{notificationPreferencesNotice}</p>}
+                                {notificationPreferencesError && <p className="text-[10px] font-semibold text-red-600">{notificationPreferencesError}</p>}
                             </div>
                         </div>
                     </div>

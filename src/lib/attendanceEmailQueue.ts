@@ -8,6 +8,7 @@ type ParentContact = {
   email: string | null;
   status: string | null;
   archive_status: string | null;
+  attendance_email_notifications: boolean | null;
 };
 
 type LinkedParentRow = {
@@ -19,14 +20,15 @@ function normalizeEmail(value: unknown) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
 }
 
-function registeredParent(rows: ParentContact[]) {
+function registeredParents(rows: ParentContact[]) {
   const unique = new Map<number, ParentContact>();
   for (const row of rows) {
-    if (!parentAccountCanAccess(row) || !normalizeEmail(row.email)) continue;
+    if (!parentAccountCanAccess(row) || !row.attendance_email_notifications || !normalizeEmail(row.email)) continue;
     unique.set(row.id, row);
   }
-  const parent = [...unique.values()].sort((left, right) => left.id - right.id)[0];
-  return parent ? { parentId: parent.id, email: normalizeEmail(parent.email) } : null;
+  return [...unique.values()]
+    .sort((left, right) => left.id - right.id)
+    .map((parent) => ({ parentId: parent.id, email: normalizeEmail(parent.email) }));
 }
 
 export function buildAttendanceEmail(input: Pick<AttendanceSmsInput, "studentName" | "attendanceDate" | "timeLogged">) {
@@ -46,11 +48,11 @@ export async function enqueueAttendanceEmail(input: AttendanceSmsInput) {
   const [directParentsResult, linkedParentsResult] = await Promise.all([
     supabase
       .from("parents")
-      .select("id, email, status, archive_status")
+      .select("id, email, status, archive_status, attendance_email_notifications")
       .eq("student_id", input.studentId),
     supabase
       .from("parent_student_links")
-      .select("parents!inner(id, email, status, archive_status)")
+      .select("parents!inner(id, email, status, archive_status, attendance_email_notifications)")
       .eq("student_id", input.studentId),
   ]);
 
@@ -61,26 +63,28 @@ export async function enqueueAttendanceEmail(input: AttendanceSmsInput) {
     const parent = (row as LinkedParentRow).parents;
     return Array.isArray(parent) ? parent : parent ? [parent] : [];
   });
-  const parent = registeredParent([
+  const parents = registeredParents([
     ...((directParentsResult.data ?? []) as ParentContact[]),
     ...linkedParents,
   ]);
   const message = buildAttendanceEmail(input);
 
+  if (parents.length === 0) return { queued: 0, skipped: true, disabled: false };
+
   const { error } = await supabase
     .from("attendance_email_jobs")
-    .upsert({
+    .upsert(parents.map((parent) => ({
       attendance_log_id: input.attendanceLogId,
-      parent_id: parent?.parentId ?? null,
-      recipient_email: parent?.email ?? null,
-      recipient_key: `attendance-log:${input.attendanceLogId}`,
+      parent_id: parent.parentId,
+      recipient_email: parent.email,
+      recipient_key: `attendance-log:${input.attendanceLogId}:parent:${parent.parentId}`,
       subject: "Attendance recorded",
       message,
-      status: parent ? "pending" : "skipped",
+      status: "pending",
       available_at: new Date().toISOString(),
-      last_error: parent ? null : "No eligible parent or guardian account has a valid email address.",
-    }, { onConflict: "attendance_log_id", ignoreDuplicates: true });
+      last_error: null,
+    })), { onConflict: "attendance_log_id,parent_id", ignoreDuplicates: true });
 
   if (error) throw error;
-  return { queued: parent ? 1 : 0, skipped: !parent, disabled: false };
+  return { queued: parents.length, skipped: false, disabled: false };
 }

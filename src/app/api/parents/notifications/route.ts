@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { notificationRetentionStart } from "@/lib/notificationRetention";
 import { PRINCIPAL_PARENT_AUDIENCE_VALUES } from "@/lib/principalAnnouncementAudience";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -62,6 +63,18 @@ type ParentDeletionNotification = {
   created_at: string;
 };
 
+type StaffMessageNotification = {
+  id: number;
+  source_message_id: number | null;
+  sender_type: "adviser" | "guidance" | "principal" | "ict";
+  sender_name: string | null;
+  subject: string;
+  body: string;
+  attachments: unknown;
+  status: string;
+  created_at: string;
+};
+
 type ScheduledParentDeletion = {
   id: number;
   delete_after: string | null;
@@ -77,6 +90,30 @@ function notificationSource(value: string | null): AnnouncementSource {
 
 function announcementKey(source: AnnouncementSource, id: number) {
   return `${source}:${id}`;
+}
+
+function staffRoleLabel(role: StaffMessageNotification["sender_type"]) {
+  if (role === "principal") return "Principal";
+  if (role === "guidance") return "Guidance";
+  if (role === "ict") return "ICT";
+  return "Adviser";
+}
+
+function staffRoleNotificationTab(role: StaffMessageNotification["sender_type"]) {
+  if (role === "principal") return "Principal" as const;
+  if (role === "guidance") return "Guidance" as const;
+  if (role === "ict") return "ICT" as const;
+  // The existing Parent navigation labels the Adviser tab as Teacher.
+  return "Teacher" as const;
+}
+
+function messageNotificationText(message: StaffMessageNotification, senderName: string, senderRole: string) {
+  const body = String(message.body ?? "").trim();
+  if (body) return body;
+  const subject = String(message.subject ?? "").trim();
+  return subject
+    ? `${senderName} sent an attachment about: ${subject}`
+    : `${senderName} (${senderRole}) sent an attachment.`;
 }
 
 /**
@@ -252,19 +289,35 @@ export async function GET() {
     // Subject Teacher reports remain in the existing report workflow. Their
     // notification is derived from that source row, so it cannot duplicate or
     // drift from the report sidebar's read state.
-    const subjectTeacherReportsResult = studentNames.size > 0
-      ? await supabase
-        .from("parent_adviser_reports")
-        .select("id, student_name, subject, created_at, parent_seen_at")
-        .in("parent_id", parentIds)
-        .in("student_id", [...studentNames.keys()])
-        .contains("categories", ["Subject Teacher"])
+    const [subjectTeacherReportsResult, staffMessagesResult] = await Promise.all([
+      studentNames.size > 0
+        ? supabase
+          .from("parent_adviser_reports")
+          .select("id, student_name, subject, created_at, parent_seen_at")
+          .in("parent_id", parentIds)
+          .in("student_id", [...studentNames.keys()])
+          .contains("categories", ["Subject Teacher"])
+          .gte("created_at", retentionStart)
+          .order("created_at", { ascending: false })
+          .limit(100)
+        : Promise.resolve({ data: [] as SubjectTeacherReportNotification[], error: null }),
+      // Direct staff-to-parent messages use their own durable unread state in
+      // staff_messages. This keeps the Parent notification and report inboxes
+      // in agreement without a second, potentially drifting notification row.
+      supabase
+        .from("staff_messages")
+        .select("id, source_message_id, sender_type, sender_name, subject, body, attachments, status, created_at")
+        .eq("recipient_type", "parent")
+        .eq("recipient_id", session.id)
+        .in("sender_type", ["adviser", "guidance", "principal", "ict"])
         .gte("created_at", retentionStart)
         .order("created_at", { ascending: false })
-        .limit(100)
-      : { data: [] as SubjectTeacherReportNotification[], error: null };
+        .limit(100),
+    ]);
     const { data: subjectTeacherReportRows, error: subjectTeacherReportsError } = subjectTeacherReportsResult;
     if (subjectTeacherReportsError) throw subjectTeacherReportsError;
+    if (staffMessagesResult.error) throw staffMessagesResult.error;
+    const staffMessageRows = (staffMessagesResult.data ?? []) as StaffMessageNotification[];
 
     const notifications = collapseAnnouncementNotifications(
       (notificationRows ?? []) as ParentNotificationRow[],
@@ -484,7 +537,42 @@ export async function GET() {
       }]
       : [];
 
-    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows]
+    const staffMessageNotificationRows = staffMessageRows
+      .map((message) => {
+        const messageId = Number(message.id);
+        if (!Number.isSafeInteger(messageId) || messageId <= 0) return null;
+        const conversationId = Number(message.source_message_id) || messageId;
+        const senderRole = staffRoleLabel(message.sender_type);
+        const senderName = String(message.sender_name ?? "").trim() || senderRole;
+        const unread = String(message.status ?? "").toLowerCase() === "unread";
+        return {
+          // This namespace cannot collide with announcement IDs. The original
+          // message ID stays on the item for secure read acknowledgement.
+          id: 1_500_000_000 + messageId,
+          staffMessageId: messageId,
+          staffMessageConversationId: conversationId,
+          type: "message" as const,
+          // Keep the sender account explicit even when two staff members have
+          // similar names. The role is also retained as the filter/category.
+          title: `New message from ${senderName} (${senderRole})`,
+          msg: messageNotificationText(message, senderName, senderRole),
+          time: timeLabel(message.created_at),
+          category: senderRole,
+          unread,
+          tab: [
+            "All",
+            ...(unread ? ["Unread" as const] : []),
+            staffRoleNotificationTab(message.sender_type),
+          ],
+          teacherName: senderName,
+          senderName,
+          senderRole,
+          createdAt: message.created_at,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...staffMessageNotificationRows]
       .concat(((subjectTeacherReportRows ?? []) as SubjectTeacherReportNotification[]).map((report) => {
         const unread = !report.parent_seen_at;
         return {
@@ -563,6 +651,14 @@ export async function PATCH(req: NextRequest) {
       ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
       ...(Array.isArray(body.reportIds) ? body.reportIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0) : []),
     ];
+    const staffMessageConversationIds = [
+      ...(Number.isSafeInteger(Number(body.staffMessageConversationId)) && Number(body.staffMessageConversationId) > 0
+        ? [Number(body.staffMessageConversationId)]
+        : []),
+      ...(Array.isArray(body.staffMessageConversationIds)
+        ? body.staffMessageConversationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
+        : []),
+    ];
 
     if (notificationId || notificationIds.length > 0) {
       let query = supabase
@@ -611,6 +707,30 @@ export async function PATCH(req: NextRequest) {
         if (reportUpdate.error) throw reportUpdate.error;
         if (messageUpdate.error) throw messageUpdate.error;
       }
+    }
+
+    if (staffMessageConversationIds.length > 0) {
+      const conversationIds = [...new Set(staffMessageConversationIds)];
+      const now = new Date().toISOString();
+      // A Parent may only acknowledge messages that are addressed to that
+      // exact account. source_message_id groups follow-up messages with their
+      // standalone root conversation, so opening it clears every incoming
+      // unread message in that one thread and nothing else.
+      const { error } = await supabase
+        .from("staff_messages")
+        .update({ status: "read", updated_at: now })
+        .eq("recipient_type", "parent")
+        .eq("recipient_id", session.id)
+        .eq("status", "unread")
+        .or([
+          `id.in.(${conversationIds.join(",")})`,
+          `source_message_id.in.(${conversationIds.join(",")})`,
+        ].join(","));
+      if (error) throw error;
+
+      // The payload remains data-free. Any other open Parent tab reloads its
+      // already-authorized snapshots in place rather than navigating/reloading.
+      await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "staff-messages");
     }
 
     const logsToMarkRead = attendanceLogId ? [attendanceLogId] : attendanceLogIds;

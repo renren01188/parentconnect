@@ -19,6 +19,11 @@ import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import {
+  uppercaseFamilyName,
+  validateUserManagementPasswordChange,
+} from "@/lib/ictUserManagementAccountUpdate";
+import { publishAccountRealtimeInvalidation, publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -220,17 +225,22 @@ function familyDetailsForParent(
 
 function familyMembersFromDetails(details: FamilyDetails) {
   return [
-    { role: "Father", first_name: details.fatherFirstName?.trim() || null, middle_name: details.fatherMiddleName?.trim() || null, last_name: details.fatherLastName?.trim() || null, suffix: details.fatherSuffix?.trim() || null, relationship: "Father" },
-    { role: "Mother", first_name: details.motherFirstName?.trim() || null, middle_name: details.motherMiddleName?.trim() || null, last_name: details.motherLastName?.trim() || null, suffix: null, relationship: "Mother" },
+    { role: "Father", first_name: normalizeFamilyName(details.fatherFirstName), middle_name: normalizeFamilyName(details.fatherMiddleName), last_name: normalizeFamilyName(details.fatherLastName), suffix: details.fatherSuffix?.trim() || null, relationship: "Father" },
+    { role: "Mother", first_name: normalizeFamilyName(details.motherFirstName), middle_name: normalizeFamilyName(details.motherMiddleName), last_name: normalizeFamilyName(details.motherLastName), suffix: null, relationship: "Mother" },
     {
       role: "Guardian",
-      first_name: details.guardianFirstName?.trim() || null,
-      middle_name: details.guardianMiddleName?.trim() || null,
-      last_name: details.guardianLastName?.trim() || null,
+      first_name: normalizeFamilyName(details.guardianFirstName),
+      middle_name: normalizeFamilyName(details.guardianMiddleName),
+      last_name: normalizeFamilyName(details.guardianLastName),
       suffix: details.guardianSuffix?.trim() || null,
       relationship: guardianRelationshipForStorage(details.guardianRelationship, details.guardianRelationshipOther),
     },
   ] as const;
+}
+
+function normalizeFamilyName(value: unknown) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? uppercaseFamilyName(normalized) : null;
 }
 
 function accountHolderFromFamily(details: FamilyDetails | undefined, relationship: unknown) {
@@ -636,6 +646,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const completedUpdateSteps: string[] = [];
   try {
     const auth = await requireIct();
     if ("error" in auth) return auth.error;
@@ -773,6 +784,7 @@ export async function PATCH(req: NextRequest) {
     const user = body?.user as UserRow | undefined;
     const currentPassword = body?.currentPassword;
     const newPassword = body?.newPassword;
+    const confirmPassword = body?.confirmPassword;
 
     if (!user?.id || !user.role) {
       return NextResponse.json(
@@ -781,20 +793,20 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const hasPasswordChange = newPassword !== undefined;
+    const passwordValidation = validateUserManagementPasswordChange(newPassword, confirmPassword);
+    if (!passwordValidation.ok) {
+      return NextResponse.json({ success: false, message: passwordValidation.message }, { status: 400 });
+    }
+    const hasPasswordChange = passwordValidation.changeRequested;
+    const requestedPassword = passwordValidation.changeRequested ? passwordValidation.newPassword : undefined;
     let passwordPatch: { password_hash: string; password_set: true } | Record<string, never> = {};
+    let parentPasswordPatch: { password: string; password_set: number; temp_password: null; temporary_password_expires_at: null } | Record<string, never> = {};
 
     if (hasPasswordChange) {
       if (user.status === "Pending Activation") {
         return NextResponse.json(
           { success: false, message: "Pending accounts must receive credentials through “Send a new temporary password”." },
           { status: 409 },
-        );
-      }
-      if (typeof newPassword !== "string" || newPassword.length < 8) {
-        return NextResponse.json(
-          { success: false, message: "New password must be at least 8 characters." },
-          { status: 400 }
         );
       }
       if (!currentPassword || typeof currentPassword !== "string") {
@@ -819,7 +831,14 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
-      passwordPatch = { password_hash: await bcrypt.hash(newPassword, 10), password_set: true };
+      const passwordHash = await bcrypt.hash(requestedPassword!, 10);
+      passwordPatch = { password_hash: passwordHash, password_set: true };
+      parentPasswordPatch = {
+        password: passwordHash,
+        password_set: 1,
+        temp_password: null,
+        temporary_password_expires_at: null,
+      };
     }
 
     if (user.role === "ICT") {
@@ -843,9 +862,11 @@ export async function PATCH(req: NextRequest) {
         .single();
 
       if (error) throw error;
-      if (hasPasswordChange && !await bcrypt.compare(newPassword, data.password_hash)) {
+      completedUpdateSteps.push("ICT account details");
+      if (hasPasswordChange && !await bcrypt.compare(requestedPassword!, data.password_hash)) {
         throw new Error("The ICT password update could not be verified.");
       }
+      await publishAccountRealtimeInvalidation([{ role: "ict", id: Number(data.id) }]);
       return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
@@ -873,9 +894,11 @@ export async function PATCH(req: NextRequest) {
         .single();
 
       if (error) throw error;
-      if (hasPasswordChange && !await bcrypt.compare(newPassword, data.password_hash)) {
+      completedUpdateSteps.push("Guidance account details");
+      if (hasPasswordChange && !await bcrypt.compare(requestedPassword!, data.password_hash)) {
         throw new Error("The Guidance password update could not be verified.");
       }
+      await publishAccountRealtimeInvalidation([{ role: "guidance", id: Number(data.id) }]);
       return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
@@ -898,6 +921,9 @@ export async function PATCH(req: NextRequest) {
       const ids = user.accountIds?.length ? user.accountIds : [Number(user.id.replace("parent-", ""))];
       const parentAccountIds = ids.filter(Number.isFinite);
       const wasPendingParent = isPreSignupParentRecord(parentAccountIds, user.parentAccountPasswordSet);
+      if (hasPasswordChange && (wasPendingParent || parentAccountIds.length === 0)) {
+        return NextResponse.json({ success: false, message: "A password can be changed only after the Parent account is activated." }, { status: 409 });
+      }
       const normalizedParentEmail = normalizeParentEmail(user.email);
       const normalizedParentPhone = normalizeParentPhone(user.phone);
       const sharedFamilyMembers = !wasPendingParent && user.sharedFamilyDetailsChanged && user.familyDetails
@@ -941,11 +967,27 @@ export async function PATCH(req: NextRequest) {
               relationship: user.relationship?.trim() || "Guardian",
               address: user.address?.trim() || "",
               status: toDbStatus(user.status),
-              ...passwordPatch,
+              ...parentPasswordPatch,
             })
             .in("id", parentAccountIds);
 
           if (error) throw error;
+          completedUpdateSteps.push("Parent account details");
+          if (hasPasswordChange) completedUpdateSteps.push("Parent password");
+        }
+      }
+
+      if (hasPasswordChange) {
+        const { data: passwordRows, error: passwordRowsError } = await supabase
+          .from("parents")
+          .select("id, password")
+          .in("id", parentAccountIds);
+        if (passwordRowsError || !passwordRows || passwordRows.length !== parentAccountIds.length) {
+          throw new Error("The Parent password update could not be verified.");
+        }
+        const verified = await Promise.all(passwordRows.map((parent) => bcrypt.compare(requestedPassword!, parent.password)));
+        if (verified.some((isMatch) => !isMatch)) {
+          throw new Error("The Parent password update could not be verified.");
         }
       }
 
@@ -1001,16 +1043,17 @@ export async function PATCH(req: NextRequest) {
           })
           .eq("id", storedStudent.id);
         if (studentUpdateError) throw studentUpdateError;
+        completedUpdateSteps.push("student profile details");
 
         const studentRow = { id: Number(storedStudent.id), student_id: currentStudentId };
         const verificationMembers = [
-          { role: "Father" as const, first_name: student.fatherFirstName?.trim() || null, middle_name: student.fatherMiddleName?.trim() || null, last_name: student.fatherLastName?.trim() || null, suffix: student.fatherSuffix?.trim() || null, relationship: "Father" },
-          { role: "Mother" as const, first_name: student.motherFirstName?.trim() || null, middle_name: student.motherMiddleName?.trim() || null, last_name: student.motherLastName?.trim() || null, suffix: null, relationship: "Mother" },
+          { role: "Father" as const, first_name: normalizeFamilyName(student.fatherFirstName), middle_name: normalizeFamilyName(student.fatherMiddleName), last_name: normalizeFamilyName(student.fatherLastName), suffix: student.fatherSuffix?.trim() || null, relationship: "Father" },
+          { role: "Mother" as const, first_name: normalizeFamilyName(student.motherFirstName), middle_name: normalizeFamilyName(student.motherMiddleName), last_name: normalizeFamilyName(student.motherLastName), suffix: null, relationship: "Mother" },
           {
             role: "Guardian" as const,
-            first_name: student.guardianFirstName?.trim() || null,
-            middle_name: student.guardianMiddleName?.trim() || null,
-            last_name: student.guardianLastName?.trim() || null,
+            first_name: normalizeFamilyName(student.guardianFirstName),
+            middle_name: normalizeFamilyName(student.guardianMiddleName),
+            last_name: normalizeFamilyName(student.guardianLastName),
             suffix: student.guardianSuffix?.trim() || null,
             relationship: guardianRelationshipForStorage(student.guardianRelationship, student.guardianRelationshipOther),
           },
@@ -1020,6 +1063,7 @@ export async function PATCH(req: NextRequest) {
           verificationMembers,
           student.contactNumber?.trim() || null,
         );
+        completedUpdateSteps.push("student family verification records");
         reconciledStudentIds.add(Number(studentRow.id));
       }
 
@@ -1031,6 +1075,7 @@ export async function PATCH(req: NextRequest) {
           sharedFamilyMembers,
           normalizedParentPhone || null,
         );
+        completedUpdateSteps.push("shared family records");
       }
 
       // Pre-sign-up records must remain unlinked until the parent completes
@@ -1041,6 +1086,7 @@ export async function PATCH(req: NextRequest) {
           ...[...reconciledStudentIds].map((id) => reconcileParentStudentLinks({ studentDbId: id })),
           ...parentAccountIds.map((id) => reconcileParentStudentLinks({ parentId: id })),
         ]);
+        completedUpdateSteps.push("Parent and student links");
       }
 
       if (lrnCorrections.length > 0) {
@@ -1060,7 +1106,9 @@ export async function PATCH(req: NextRequest) {
         })));
       }
 
-      return NextResponse.json({ success: true, ids: parentAccountIds });
+      await publishAccountRealtimeInvalidation(parentAccountIds.map((id) => ({ role: "parent" as const, id: Number(id) })));
+      await Promise.all([...reconciledStudentIds].map((studentDbId) => publishStudentRealtimeInvalidation({ studentDbId })));
+      return NextResponse.json({ success: true, ids: parentAccountIds, passwordUpdated: hasPasswordChange });
     }
 
     if (user.role === "Adviser") {
@@ -1125,9 +1173,11 @@ export async function PATCH(req: NextRequest) {
         .single();
 
       if (error) throw error;
-      if (hasPasswordChange && !(await bcrypt.compare(newPassword, data.password_hash))) {
+      completedUpdateSteps.push("Adviser account details");
+      if (hasPasswordChange && !(await bcrypt.compare(requestedPassword!, data.password_hash))) {
         throw new Error("The adviser password update could not be verified.");
       }
+      await publishAccountRealtimeInvalidation([{ role: "adviser", id: Number(data.id) }]);
       return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
@@ -1136,7 +1186,22 @@ export async function PATCH(req: NextRequest) {
       { status: 400 }
     );
   } catch (error: unknown) {
-    console.error("PATCH /api/ict/user-management error:", error);
+    const completed = [...new Set(completedUpdateSteps)];
+    if (completed.length > 0) {
+      // Do not log request data: it can include password fields. The client
+      // receives only the durable writes that completed before the failure.
+      console.error("PATCH /api/ict/user-management partially completed:", completed.join(", "));
+      return NextResponse.json(
+        {
+          success: false,
+          partial: true,
+          completed,
+          message: `Some changes were saved (${completed.join(", ")}), but the remaining update failed. Refresh this account before making another change.`,
+        },
+        { status: 500 },
+      );
+    }
+    console.error("PATCH /api/ict/user-management failed.");
     return NextResponse.json(
       { success: false, message: error instanceof Error ? error.message : "Server error." },
       { status: 500 }

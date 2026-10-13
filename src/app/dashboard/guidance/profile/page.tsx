@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   CheckCircle2,
   CreditCard,
@@ -86,6 +87,7 @@ export default function ProfilePage() {
   const [passwordSaved, setPasswordSaved] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
   const fullName = getGuidanceFullName(profile);
   const initials = getGuidanceInitials(profile);
@@ -138,7 +140,11 @@ export default function ProfilePage() {
       });
 
     return () => { isMounted = false; };
-  }, []);
+  }, [profileRefreshKey]);
+
+  useSessionInvalidation((event) => {
+    if (event.scope === "accounts" && !settingsOpen) setProfileRefreshKey((key) => key + 1);
+  });
 
   const sendApprovalRequest = async () => {
     if (!approvalUnlocked || !canSendApproval) return;

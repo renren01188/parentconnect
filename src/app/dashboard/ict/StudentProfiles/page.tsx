@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   Search, ChevronDown, Eye, Pencil, UserPlus,
   X, CheckCircle, AlertTriangle, CreditCard,
@@ -1943,6 +1944,14 @@ export default function StudentManagementPage() {
     }
     fetchStudents();
   }, [gradeFilter, sectionFilter, query, rfidStatusFilter, studentRefreshKey]);
+
+  // Keep the active filters and modal state intact while refetching the
+  // protected ICT student snapshot after an authorized profile/RFID change.
+  useSessionInvalidation((event) => {
+    if (event.scope === "students" || event.scope === "accounts") {
+      setStudentRefreshKey((key) => key + 1);
+    }
+  });
 
 
   const availSecs = sections;

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
 import { useNotifContext } from "../context/NotificationContext";
+import { useParentSession } from "../ParentSessionGate";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard/parent", badgeKey: "" },
@@ -43,34 +44,32 @@ function getInitials(parent: ParentSummary | null) {
 export default function Sidebar() {
   const pathname = usePathname();
   const { unreadCount, unreadReportsCount } = useNotifContext();
+  const { session, refreshSession } = useParentSession();
   const [parent, setParent] = useState<ParentSummary | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-    async function loadParent() {
-      try {
-        const res = await fetch("/api/parents/me", { cache: "no-store" });
-        const data = await res.json().catch(() => null);
-        if (!isMounted || !res.ok || !data?.parent) return;
+    const loadParent = () => {
+      const data = session;
+      if (!data?.parent) {
+        setParent(null);
+        return;
+      }
         setParent({
           name: data.parent.name || "Parent",
           firstName: data.parent.firstName,
           lastName: data.parent.lastName,
           profilePicture: data.parent.profilePicture,
         });
-      } catch {
-        if (isMounted) setParent(null);
-      }
-    }
-    loadParent();
-    window.addEventListener("parent-profile-updated", loadParent);
-    return () => {
-      isMounted = false;
-      window.removeEventListener("parent-profile-updated", loadParent);
     };
-  }, []);
+    loadParent();
+    const refreshAfterProfileUpdate = () => { void refreshSession(); };
+    window.addEventListener("parent-profile-updated", refreshAfterProfileUpdate);
+    return () => {
+      window.removeEventListener("parent-profile-updated", refreshAfterProfileUpdate);
+    };
+  }, [refreshSession, session]);
 
   useEffect(() => {
     const handleGuideTarget = (event: Event) => {

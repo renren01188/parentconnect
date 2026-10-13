@@ -5,6 +5,7 @@ import { useNotifications } from "@/app/dashboard/ict/context/NotificationContex
 import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, UserRound } from "lucide-react";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 type Tab = "principal" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -105,6 +106,7 @@ export default function ICTAnnouncementsPage() {
   const [principalAnnouncements, setPrincipalAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [readKeys, setReadKeys] = useState<Set<string>>(new Set());
   const { refreshCounts, annUnreadCount, setAnnUnreadCount } = useNotifications();
   const loadAnnouncements = useCallback(async () => {
@@ -159,6 +161,7 @@ export default function ICTAnnouncementsPage() {
   const openNewAnnouncement = () => {
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -170,6 +173,7 @@ export default function ICTAnnouncementsPage() {
       audience: announcement.audience.find((audience) => ICT_AUDIENCES.includes(audience as typeof ICT_AUDIENCES[number])) ?? "",
       scheduleDate: announcement.status === "Scheduled" ? toDateInputValue(announcement.scheduled_at) : "",
     });
+    setScheduleError(null);
     setShowCompose(true);
   };
 
@@ -177,10 +181,15 @@ export default function ICTAnnouncementsPage() {
     setShowCompose(false);
     setEditingAnnouncement(null);
     setForm(emptyForm);
+    setScheduleError(null);
   };
 
   const handleSaveAnnouncement = async () => {
     if (!isFormReady || saving) return;
+    if (form.scheduleDate && !isFutureSchoolCalendarDay(form.scheduleDate)) {
+      setScheduleError("Choose a calendar day after today in Asia/Manila.");
+      return;
+    }
     setSaving(true);
 
     const payload = {
@@ -202,7 +211,10 @@ export default function ICTAnnouncementsPage() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!data.success) return;
+      if (!data.success) {
+        setScheduleError(data.message ?? "Unable to save this announcement.");
+        return;
+      }
 
       const shaped: Announcement = {
         ...data.announcement,
@@ -459,8 +471,10 @@ export default function ICTAnnouncementsPage() {
                     type="date"
                     className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition"
                     value={form.scheduleDate}
-                    onChange={(e) => setForm({ ...form, scheduleDate: e.target.value })}
+                    min={nextSchoolCalendarDay()}
+                    onChange={(e) => { setForm({ ...form, scheduleDate: e.target.value }); setScheduleError(null); }}
                   />
+                  {scheduleError && <p className="text-xs font-medium text-red-600">{scheduleError}</p>}
                 </div>
               </div>
             </div>

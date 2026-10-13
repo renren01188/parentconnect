@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type ExcelJS from "exceljs";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { resolveRfidScanValue } from "@/lib/rfid";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
 import {
     CreditCard, UserPlus, History, Check,
@@ -1321,6 +1322,9 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
     }, [adviserGrade]);
 
     useEffect(() => { fetchRequests(); }, [fetchRequests]);
+    useSessionInvalidation((event) => {
+        if (event.scope === "attendance") return fetchRequests();
+    });
 
     async function handleApprove(id: number) {
         if (actionInFlightRef.current.has(id)) return;
@@ -1876,6 +1880,24 @@ export default function AdviserAttendancePage() {
         loadStudents();
     }, [loadClassSession, loadStudents, loadTodayLogs]);
 
+    // Attendance and roster changes are fetched through the normal adviser
+    // APIs after a targeted Broadcast. This preserves RLS/custom-session
+    // authorization and does not reset an open attendance screen.
+    const scheduleAttendanceRefresh = useDebouncedRealtimeRefresh(async () => {
+        await loadTodayLogs();
+        if (showHistory) await loadHistory(historyDate);
+    });
+    const scheduleStudentsRefresh = useDebouncedRealtimeRefresh(() => loadStudents());
+    useSessionInvalidation((event) => {
+        if (event.scope === "attendance") {
+            scheduleAttendanceRefresh();
+        }
+        if (event.scope === "students" || event.scope === "accounts") {
+            scheduleStudentsRefresh();
+        }
+        if (event.scope === "dashboard") void loadClassSession();
+    });
+
     // Keep the screen aligned with ICT's configured start/end times even when
     // the Adviser leaves this page open while a session changes state.
     useEffect(() => {
@@ -1888,20 +1910,6 @@ export default function AdviserAttendancePage() {
             window.clearInterval(timer);
             document.removeEventListener("visibilitychange", refreshWhenVisible);
         };
-    }, [loadClassSession]);
-
-    // ICT schedule edits are reflected immediately; polling remains as a
-    // safe fallback for deployments that have not enabled this table yet.
-    useEffect(() => {
-        const client = supabaseBrowser;
-        if (!client) return;
-        const channel = client
-            .channel("adviser-attendance-class-schedule")
-            .on("postgres_changes", { event: "*", schema: "public", table: "class_sessions" }, () => {
-                void loadClassSession();
-            })
-            .subscribe();
-        return () => { void client.removeChannel(channel); };
     }, [loadClassSession]);
 
     useEffect(() => {

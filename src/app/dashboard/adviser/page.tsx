@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import AdviserDashboardGuide from "./components/AdviserDashboardGuide";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 
 interface RfidLog {
   id: number;
@@ -93,8 +95,7 @@ export default function AdviserDashboardPage() {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 
-  useEffect(() => {
-    async function loadDashboard() {
+  const loadDashboard = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
       try {
         const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
         const [logsRes, stuRes, reportsRes] = await Promise.all([
@@ -140,11 +141,19 @@ export default function AdviserDashboardPage() {
       } catch (e) {
         console.error("Dashboard load error:", e);
       } finally {
-        setLoading(false);
+        if (!background) setLoading(false);
       }
-    }
-    loadDashboard();
   }, [activeSection]);
+
+  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  const scheduleDashboardRefresh = useDebouncedRealtimeRefresh(
+    () => loadDashboard({ background: true }),
+  );
+  useSessionInvalidation((event) => {
+    if (["attendance", "students", "accounts", "reports", "dashboard"].includes(event.scope ?? "")) {
+      scheduleDashboardRefresh();
+    }
+  });
 
   const sectionLabel = adviser?.grade && adviser?.section
     ? `${formatGradeLabel(adviser.grade)} · ${adviser.section}`

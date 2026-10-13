@@ -78,7 +78,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (scope === "staff-messages") {
       return Promise.all([refreshAdviserMessages(), refreshIctMessages()]).then(() => undefined);
     }
-    return refreshCounts();
+    // Reconcile all counters after a recovered channel only; attendance and
+    // account invalidations should not refetch unrelated message lists.
+    if (!scope) return refreshCounts();
   });
 
   useEffect(() => {

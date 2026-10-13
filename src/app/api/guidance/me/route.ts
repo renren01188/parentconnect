@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
@@ -87,6 +88,7 @@ export async function PATCH(req: NextRequest) {
       details: "Submitted a profile update request for ICT approval.",
       changes,
     });
+    await publishAccountRealtimeInvalidation([{ role: "guidance", id: Number(session.id) }]);
     return NextResponse.json({ success: true, message: "Approval request submitted to ICT." });
   } catch (error: unknown) {
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Server error." }, { status: 500 });

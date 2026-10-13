@@ -10,10 +10,10 @@ import { getPrincipalSession } from "../reports/parent-adviser/_lib";
 import {
   findAssignedAdviser,
   fullName,
-  normalize,
   toAdviserStudentReport,
   type StudentReportRow,
 } from "./_lib";
+import { matchPublicReportStudent, type PublicReportStudent } from "@/lib/publicStudentReportIdentity";
 
 function errorMessage(error: unknown) {
   if (error instanceof TypeError && /fetch failed/i.test(error.message)) {
@@ -206,31 +206,32 @@ export async function POST(req: NextRequest) {
 
     if (studentError) throw studentError;
 
-    const matchingStudents = (students ?? []).filter((student) =>
-      normalize(student.first_name) === normalize(trimmedFirstName)
-      && normalize(student.last_name) === normalize(trimmedLastName)
-      && normalize(student.grade) === normalize(trimmedGradeLevel)
-      && normalize(student.section) === normalize(trimmedSection)
-      // Middle name and suffix are optional. When supplied, they still help
-      // distinguish students with the same first and last name.
-      && (!trimmedMiddleName || normalize(student.middle_name) === normalize(trimmedMiddleName))
-      && (!trimmedSuffix || normalize(student.suffix) === normalize(trimmedSuffix))
+    const studentMatch = matchPublicReportStudent(
+      (students ?? []) as PublicReportStudent[],
+      {
+        firstName: trimmedFirstName,
+        middleName: trimmedMiddleName,
+        lastName: trimmedLastName,
+        suffix: trimmedSuffix,
+        gradeLevel: trimmedGradeLevel,
+        section: trimmedSection,
+      },
     );
-    const matchingStudent = matchingStudents[0];
 
-    if (!matchingStudent) {
+    if (studentMatch.kind === "not-found") {
       return NextResponse.json(
         { success: false, message: "We could not find a student matching that name, grade level, and section. Please check the student record and try again." },
         { status: 404 }
       );
     }
 
-    if (matchingStudents.length > 1) {
+    if (studentMatch.kind === "ambiguous") {
       return NextResponse.json(
         { success: false, message: "More than one student matches that first name, last name, grade level, and section. Please include the middle name or suffix." },
         { status: 409 }
       );
     }
+    const matchingStudent = studentMatch.student;
 
     const adviser = await findAssignedAdviser(matchingStudent.grade, matchingStudent.section);
     if (!adviser) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -13,8 +13,7 @@ import {
 
 import Sidebar from "../components/Sidebar";
 import { useNotifContext } from "../context/NotificationContext";
-import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
-import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { mergeNotificationFeed } from "@/lib/notificationFeed";
 import {
   type FilterTab,
   type Notification,
@@ -29,6 +28,10 @@ type PageNotification = Notification & {
   senderName?: string;
   senderRole?: "Principal" | "Adviser" | "Guidance" | "ICT";
   reportId?: number;
+  /** Actual incoming staff_messages row ID used only for client deduplication. */
+  staffMessageId?: number;
+  /** Root standalone staff_messages ID used for an authorized thread read. */
+  staffMessageConversationId?: number;
   parentDeletionNotificationId?: number;
   deleteAfter?: string | null;
   createdAt?: string;
@@ -83,36 +86,26 @@ function announcementDateLabel(value?: string) {
 function NotificationsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { setUnreadCount } = useNotifContext();
+  const { setUnreadCount, notificationRefreshVersion } = useNotifContext();
 
   const [notifications, setNotifications] = useState<PageNotification[]>([]);
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
   const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<PageNotification | null>(null);
+  const fetchSequence = useRef(0);
 
   const loadNotifications = useCallback(async () => {
+    const requestId = ++fetchSequence.current;
     const res = await fetch("/api/parents/notifications", { cache: "no-store" });
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.success || !Array.isArray(data.notifications)) return;
+    if (requestId !== fetchSequence.current || !res.ok || !data?.success || !Array.isArray(data.notifications)) return;
 
-    const unique = new Map<string, PageNotification>();
-    for (const notif of data.notifications as PageNotification[]) {
-      const key = notif.announcementId
-        ? "announcement:" + (notif.senderRole ?? notif.category) + ":" + notif.announcementId
-        : "notification:" + notif.id;
-      if (!unique.has(key)) {
-        unique.set(key, { ...notif, source: "database" as const });
-      }
-    }
-    setNotifications([...unique.values()]);
+    const snapshot = (data.notifications as PageNotification[])
+      .map((notification) => ({ ...notification, source: "database" as const }));
+    // A late initial response must not erase an announcement that arrived via
+    // the account's Realtime invalidation a moment later.
+    setNotifications((current) => mergeNotificationFeed(current, snapshot));
   }, []);
-
-  useVisibleRefresh(loadNotifications);
-  useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") {
-      return loadNotifications();
-    }
-  });
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
@@ -123,6 +116,17 @@ function NotificationsPageContent() {
       window.clearTimeout(initialLoad);
     };
   }, [loadNotifications]);
+
+  // The layout-level provider owns the single authorized Realtime channel for
+  // this Parent. A version bump asks this page for a fresh server snapshot in
+  // place, avoiding a second subscription and any router/page refresh cycle.
+  useEffect(() => {
+    if (notificationRefreshVersion === 0) return;
+    const refresh = window.setTimeout(() => {
+      void loadNotifications();
+    }, 0);
+    return () => window.clearTimeout(refresh);
+  }, [notificationRefreshVersion, loadNotifications]);
 
   useEffect(() => {
     setUnreadCount(notifications.filter((notif) => notif.unread).length);
@@ -149,6 +153,9 @@ function NotificationsPageContent() {
     Guidance: notifications.filter((notif) =>
       notif.tab.includes("Guidance") && notif.unread
     ).length,
+    ICT: notifications.filter((notif) =>
+      notif.tab.includes("ICT") && notif.unread
+    ).length,
     Attendance: notifications.filter((notif) =>
       notif.tab.includes("Attendance") && notif.unread
     ).length,
@@ -169,8 +176,11 @@ function NotificationsPageContent() {
       body: JSON.stringify({
         attendanceLogIds: notifications.filter((notif) => notif.id < 0).map((notif) => -notif.id),
         reportIds: notifications.flatMap((notif) => notif.reportId ? [notif.reportId] : []),
+        staffMessageConversationIds: [...new Set(notifications.flatMap((notif) =>
+          notif.staffMessageConversationId ? [notif.staffMessageConversationId] : []
+        ))],
         notificationIds: notifications
-          .filter((notif) => notif.source === "database" && !notif.reportId && notif.id > 0)
+          .filter((notif) => notif.source === "database" && !notif.reportId && !notif.staffMessageConversationId && notif.id > 0)
           .filter((notif) => !notif.parentDeletionNotificationId)
           .flatMap((notif) => notif.notificationIds ?? [notif.id]),
         parentDeletionNotificationIds: notifications
@@ -178,13 +188,6 @@ function NotificationsPageContent() {
       }),
     }).catch(() => null);
   }, [notifications]);
-
-  // Clear the sidebar badge once the Notifications page is opened.
-  useEffect(() => {
-    if (!notifications.some((notif) => notif.unread)) return;
-    const timer = window.setTimeout(() => { void markAllRead(); }, 0);
-    return () => window.clearTimeout(timer);
-  }, [notifications, markAllRead]);
 
   function handleClick(notif: PageNotification) {
     setNotifications((prev) =>
@@ -198,7 +201,9 @@ function NotificationsPageContent() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          notif.reportId
+          notif.staffMessageConversationId
+            ? { staffMessageConversationId: notif.staffMessageConversationId }
+            : notif.reportId
             ? { reportId: notif.reportId }
             : notif.parentDeletionNotificationId
               ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
@@ -227,6 +232,13 @@ function NotificationsPageContent() {
 
     if (notif.reportId) {
       router.push(`/dashboard/parent/reports?reportId=${notif.reportId}`);
+      return;
+    }
+
+    if (notif.staffMessageConversationId) {
+      router.push(
+        `/dashboard/parent/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`
+      );
       return;
     }
 
@@ -276,7 +288,7 @@ function NotificationsPageContent() {
           className="mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
           style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
         >
-          {(["All", "Unread", "Principal", "Teacher", "Guidance", "Attendance", "Account"] as FilterTab[]).map(
+          {(["All", "Unread", "Principal", "Teacher", "Guidance", "ICT", "Attendance", "Account"] as FilterTab[]).map(
             (tab) => {
               const isActive = activeTab === tab;
               const count = tabCounts[tab];

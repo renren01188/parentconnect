@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
 
@@ -235,6 +236,7 @@ export async function PATCH(req: NextRequest) {
       path: "/",
     });
 
+    await publishAccountRealtimeInvalidation([{ role: "ict", id: session.ictId }]);
     return NextResponse.json({
       success: true,
       ict: {

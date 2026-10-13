@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { sendPrincipalParentMessageEmail, sendPrincipalStaffMessageEmail } from "@/lib/mailer";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -138,20 +139,6 @@ function displayParentName(studentName: string) {
 
 function studentFromRelation(students: ParentRow["students"]) {
   return Array.isArray(students) ? students[0] : students;
-}
-
-function concernLevel(categories: string[]) {
-  const weights: Record<string, number> = {
-    "Academic Concern": 100,
-    "Health/Medical": 90,
-    "Behavioral Issue": 80,
-    Attendance: 75,
-    Directive: 65,
-    Other: 50,
-    "Permission Request": 35,
-    "General Inquiry": 15,
-  };
-  return Math.min(100, categories.reduce((sum, category) => sum + (weights[category.startsWith("Other:") ? "Other" : category] ?? 0), 0));
 }
 
 function createdAtMs(row: Record<string, unknown>) {
@@ -690,11 +677,14 @@ export async function POST(req: NextRequest) {
     const cleanedAttachments = cleanAttachments(attachments);
     const selectedCategories = Array.isArray(categories) ? categories.map((category) => String(category).trim()).filter(Boolean) : [];
 
-    if (!recipientId || !trimmedSubject || selectedCategories.length === 0 || (!trimmedMessage && cleanedAttachments.length === 0)) {
-      return NextResponse.json({ success: false, message: "Recipient, subject, category, and message or attachment are required." }, { status: 400 });
+    if (!recipientId || !trimmedSubject || (!trimmedMessage && cleanedAttachments.length === 0)) {
+      return NextResponse.json({ success: false, message: "Recipient, subject, and message or attachment are required." }, { status: 400 });
     }
 
     const [kind, rawId, studentId] = String(recipientId).split(":");
+    if (kind !== "parent" && selectedCategories.length === 0) {
+      return NextResponse.json({ success: false, message: "A category is required for staff-to-staff concerns." }, { status: 400 });
+    }
     if (kind === "parent") {
       const rawConversationId = String(conversationId ?? "");
       if (rawConversationId.startsWith("parent-report:")) {
@@ -711,7 +701,6 @@ export async function POST(req: NextRequest) {
         parentId: Number(rawId),
         studentId,
         subject: trimmedSubject,
-        categories: selectedCategories,
         message: trimmedMessage,
         attachments: cleanedAttachments,
       });
@@ -1049,15 +1038,21 @@ async function sendToStaff({
   if (result.error && !isMissingTableError(result.error)) throw result.error;
 
   if (notifyByEmail) {
-    await sendPrincipalStaffMessageEmail({
-      staffEmail: recipientEmail,
-      staffName: recipientName,
-      staffRole: recipientType === "adviser" ? "Adviser" : "Guidance",
-      principalName: principal.name,
-      subject,
-      categories,
-      message,
-      hasAttachments: attachments.length > 0,
+    after(async () => {
+      try {
+        await sendPrincipalStaffMessageEmail({
+          staffEmail: recipientEmail,
+          staffName: recipientName,
+          staffRole: recipientType === "adviser" ? "Adviser" : "Guidance",
+          principalName: principal.name,
+          subject,
+          categories,
+          message,
+          hasAttachments: attachments.length > 0,
+        });
+      } catch (error) {
+        console.error("Principal staff-message email delivery failed:", error);
+      }
     });
   }
 
@@ -1132,15 +1127,21 @@ async function sendUnifiedStaffMessage({
 
   if (error) throw error;
 
-  await sendPrincipalStaffMessageEmail({
-    staffEmail: recipientEmail,
-    staffName: recipientName,
-    staffRole: recipientType === "adviser" ? "Adviser" : "Guidance",
-    principalName: principal.name,
-    subject,
-    categories,
-    message,
-    hasAttachments: attachments.length > 0,
+  after(async () => {
+    try {
+      await sendPrincipalStaffMessageEmail({
+        staffEmail: recipientEmail,
+        staffName: recipientName,
+        staffRole: recipientType === "adviser" ? "Adviser" : "Guidance",
+        principalName: principal.name,
+        subject,
+        categories,
+        message,
+        hasAttachments: attachments.length > 0,
+      });
+    } catch (error) {
+      console.error("Principal staff-message email delivery failed:", error);
+    }
   });
 
   return NextResponse.json({
@@ -1205,15 +1206,21 @@ async function replyToUnifiedStaffConversation({
   if (error) throw error;
 
   if (recipientEmail) {
-    await sendPrincipalStaffMessageEmail({
-      staffEmail: recipientEmail,
-      staffName: recipientName || "School Staff",
-      staffRole: roleLabel(recipientType),
-      principalName: principal.name,
-      subject: String(root.subject ?? ""),
-      categories: Array.isArray(root.categories) ? root.categories.map(String) : [],
-      message,
-      hasAttachments: attachments.length > 0,
+    after(async () => {
+      try {
+        await sendPrincipalStaffMessageEmail({
+          staffEmail: recipientEmail,
+          staffName: recipientName || "School Staff",
+          staffRole: roleLabel(recipientType),
+          principalName: principal.name,
+          subject: String(root.subject ?? ""),
+          categories: Array.isArray(root.categories) ? root.categories.map(String) : [],
+          message,
+          hasAttachments: attachments.length > 0,
+        });
+      } catch (error) {
+        console.error("Principal staff-message email delivery failed:", error);
+      }
     });
   }
 
@@ -1277,7 +1284,7 @@ async function replyToParentConversation({
   const now = new Date().toISOString();
   const { error: updateError } = await supabase
     .from("parent_adviser_reports")
-    .update({ updated_at: now, last_message_at: now })
+    .update({ status: "replied", status_updated_at: now, updated_at: now, last_message_at: now })
     .eq("id", reportId);
 
   if (updateError) throw updateError;
@@ -1299,7 +1306,6 @@ async function sendToParent({
   parentId,
   studentId,
   subject,
-  categories,
   message,
   attachments,
 }: {
@@ -1307,7 +1313,6 @@ async function sendToParent({
   parentId: number;
   studentId: string;
   subject: string;
-  categories: string[];
   message: string;
   attachments: MessageAttachment[];
 }) {
@@ -1334,85 +1339,51 @@ async function sendToParent({
   }
   const studentName = fullName([student.first_name, student.middle_name, student.last_name, student.suffix]);
   const parentName = fullName([parent.parent_first_name, parent.parent_middle_name, parent.parent_last_name, parent.parent_suffix]) || displayParentName(studentName);
-  const now = new Date().toISOString();
-
-  const reportPayload: Record<string, string | number | string[] | null> = {
-    parent_id: parent.id,
-    parent_email: parent.email,
-    parent_name: displayParentName(studentName),
-    adviser_id: null,
-    adviser_name: principal.name,
-    student_id: student.student_id,
-    student_name: studentName,
-    grade: student.grade ?? "",
-    section: student.section ?? "",
-    subject,
-    categories,
-    concern_level: concernLevel(categories),
-    status: "ongoing",
-    status_updated_at: now,
-    updated_at: now,
-    last_message_at: now,
-  };
-
-  let reportResult = await supabase
-    .from("parent_adviser_reports")
-    .insert(reportPayload)
-    .select("id")
-    .single();
-
-  if (reportResult.error && reportResult.error.message.includes("status_updated_at")) {
-    delete reportPayload.status_updated_at;
-    reportResult = await supabase
-      .from("parent_adviser_reports")
-      .insert(reportPayload)
-      .select("id")
-      .single();
-  }
-
-  if (reportResult.error) throw reportResult.error;
-
-  let messageResult = await supabase
-    .from("parent_adviser_report_messages")
+  // This legacy endpoint must preserve direct-message semantics too: it
+  // never creates a Parent Report when the Principal contacts a parent.
+  const { data: createdMessage, error: messageError } = await supabase
+    .from("staff_messages")
     .insert({
-      report_id: reportResult.data.id,
-      sender_role: "principal",
+      sender_type: "principal",
+      sender_id: principal.id,
       sender_name: principal.name,
+      sender_email: principal.email,
+      recipient_type: "parent",
+      recipient_id: parent.id,
+      recipient_name: parentName,
+      recipient_email: parent.email,
+      subject,
+      categories: ["Message"],
       body: message,
       attachments,
-      read_by_parent: false,
-      read_by_adviser: true,
-    });
+      status: "unread",
+    })
+    .select("*")
+    .single();
+  if (messageError) throw messageError;
 
-  if (messageResult.error && isMissingAttachmentsColumn(messageResult.error)) {
-    if (attachments.length > 0) {
-      throw new Error("Attachment support is not migrated yet. Please run parent_report_message_attachments_migration.sql in Supabase.");
+  after(async () => {
+    const outcomes = await Promise.allSettled([
+      sendPrincipalParentMessageEmail({
+        parentEmail: parent.email,
+        parentName,
+        studentName,
+        principalName: principal.name,
+        subject,
+        message,
+        hasAttachments: attachments.length > 0,
+      }),
+      publishRealtimeInvalidation([
+        { role: "principal", id: principal.id },
+        { role: "parent", id: parent.id },
+      ], "staff-messages"),
+    ]);
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") console.error("Principal message post-send delivery failed:", outcome.reason);
     }
-    messageResult = await supabase
-      .from("parent_adviser_report_messages")
-      .insert({
-        report_id: reportResult.data.id,
-        sender_role: "principal",
-        sender_name: principal.name,
-        body: message,
-        read_by_parent: false,
-        read_by_adviser: true,
-      });
-  }
-
-  if (messageResult.error) throw messageResult.error;
-
-  await sendPrincipalParentMessageEmail({
-    parentEmail: parent.email,
-    parentName,
-    studentName,
-    principalName: principal.name,
-    subject,
-    message,
-    hasAttachments: attachments.length > 0,
   });
 
-  return NextResponse.json({ success: true, target: "parent", reportId: reportResult.data.id }, { status: 201 });
+  return NextResponse.json({ success: true, target: "parent", message: createdMessage }, { status: 201 });
 }
 
 function initials(name: string) {

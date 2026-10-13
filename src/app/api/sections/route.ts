@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getActiveAdviser, getActiveIct } from "@/lib/apiAuthorization";
+import { publishPublicSectionsInvalidation, publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 export async function GET(req: NextRequest) {
   try {
@@ -111,6 +112,11 @@ export async function POST(req: NextRequest) {
       }, { onConflict: "grade,name" });
     if (error) throw error;
 
+    await Promise.all([
+      publishPublicSectionsInvalidation(),
+      recipientsForRoles(["ict", "adviser"]).then((recipients) => publishRealtimeInvalidation(recipients, "accounts")),
+    ]);
+
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     return NextResponse.json(
@@ -168,6 +174,11 @@ export async function DELETE(req: NextRequest) {
         )
       );
     }
+
+    await Promise.all([
+      publishPublicSectionsInvalidation(),
+      recipientsForRoles(["ict", "adviser"]).then((recipients) => publishRealtimeInvalidation(recipients, "accounts")),
+    ]);
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {

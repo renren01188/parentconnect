@@ -9,6 +9,7 @@ import { enqueueAttendanceEmail } from "@/lib/attendanceEmailQueue";
 import { processAttendanceEmailJobs } from "@/lib/attendanceEmailWorker";
 import { settleAttendanceNotificationTasks } from "@/lib/attendanceNotificationDispatch";
 import { normalizeRfidCard } from "@/lib/rfid";
+import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type ScanBody = {
   rfid_card: string;
@@ -146,7 +147,7 @@ function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAtten
           // preserves existing installations; its conflict key keeps it idempotent.
           await enqueueAttendanceSms(input);
           if (!SCHEDULED_ATTENDANCE_SMS_WORKER) {
-            await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 1, concurrency: 1 });
+            await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
           }
         },
       },
@@ -155,7 +156,7 @@ function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAtten
         run: async () => {
           await enqueueAttendanceEmail(input);
           if (!SCHEDULED_ATTENDANCE_EMAIL_WORKER) {
-            await processAttendanceEmailJobs({ attendanceLogId: input.attendanceLogId, batchSize: 1 });
+            await processAttendanceEmailJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
           }
         },
       },
@@ -425,6 +426,12 @@ export async function POST(req: NextRequest) {
     }
 
     await logAudit({ action: "Attendance Recorded", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, newStatus: logStatus, details: `Recorded ${nextType} via RFID for ${buildFullName(student)} (${student.student_id}).` });
+    // The attendance record is committed before this data-free signal is
+    // emitted. A linked parent, relevant adviser, or principal re-reads only
+    // their already-authorized attendance view.
+    // The row is durable already. Fan-out can run just after the response so
+    // an RFID scanner is not held up by recipient lookup plus Broadcast I/O.
+    after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
     queueNotificationsAfterAttendance({
       attendanceLogId: log.id,
       studentId: student.student_id,

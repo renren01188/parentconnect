@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
+import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -9,6 +10,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const { id } = await params;
 
     const { title, message, audience, scheduled_at } = await req.json();
+    if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
+      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
+    }
+    if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
+      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
+    }
     const status = scheduled_at ? "Scheduled" : "Published";
 
     const { data: ann, error } = await supabase

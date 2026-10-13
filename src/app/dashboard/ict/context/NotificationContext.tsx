@@ -130,7 +130,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useSessionInvalidation(({ scope }) => {
     if (scope === "staff-messages") return refreshInboxCount();
     if (scope === "announcements" || scope === "notifications") return refreshAnnouncementCount();
-    return refreshCounts();
+    // A null scope is emitted after reconnect. Other scopes are intentionally
+    // ignored here because they do not change the ICT inbox or announcement badge.
+    if (!scope) return refreshCounts();
   });
 
   useEffect(() => {

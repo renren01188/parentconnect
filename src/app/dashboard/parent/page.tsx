@@ -9,6 +9,9 @@ import {
 import Link from "next/link";
 import Sidebar from "./components/Sidebar";
 import ParentDashboardGuide from "./components/ParentDashboardGuide";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { useParentSession } from "./ParentSessionGate";
 
 interface StudentInfo {
     id: string;
@@ -25,7 +28,7 @@ interface StudentInfo {
         attendanceRate: string; rateLabel: string;
     };
     attendance: {
-        date: string; day: string; status: string;
+        attendanceDate?: string; date: string; day: string; status: string;
         timeIn: string; timeOut: string; rfid: string;
     }[];
     checkInTime: string;
@@ -101,6 +104,17 @@ function scheduledDeletionDateLabel(value: string | null) {
     return date.toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
 }
 
+function parentReportDateLabel(value: unknown) {
+    const date = typeof value === "string" || typeof value === "number" ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return "Recently";
+    return date.toLocaleDateString("en-US", {
+        timeZone: "Asia/Manila",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
+}
+
 /*
 const REMOVED_REPORT_SAMPLE = [
     { title: "Q2 Progress Report", meta: "New · Nov 15, 2026", isNew: true },
@@ -118,25 +132,57 @@ const REMOVED_MESSAGE_SAMPLE = [
 */
 
 const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const MANILA_TIME_ZONE = "Asia/Manila";
+
+function manilaDateKey(value = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: MANILA_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(value);
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function shiftDateKey(dateKey: string, days: number) {
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day + days));
+    return date.toISOString().slice(0, 10);
+}
+
+function manilaSchoolWeek() {
+    const today = manilaDateKey();
+    const [year, month, day] = today.split("-").map(Number);
+    // Date-only attendance values are school-calendar dates. UTC avoids a
+    // browser's timezone changing which weekday that saved date represents.
+    const sundayFirstDay = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    const monday = shiftDateKey(today, -((sundayFirstDay + 6) % 7));
+    return WEEK_DAYS.map((label, index) => ({ label, dateKey: shiftDateKey(monday, index) }));
+}
 
 function WeekDots({ attendance }: { attendance: StudentInfo["attendance"] }) {
-    // Map last 5 records to M-F
-    const statusMap: Record<string, string> = {};
-    [...attendance].reverse().slice(0, 5).forEach((a) => {
-        statusMap[a.day.slice(0, 3)] = a.status;
-    });
+    const attendanceByDate = new Map(attendance.flatMap((record) =>
+        record.attendanceDate ? [[record.attendanceDate, record.status] as const] : [],
+    ));
+    const schoolWeek = manilaSchoolWeek();
     return (
         <div className="flex gap-2 mt-3">
-            {WEEK_DAYS.map((d) => {
-                const s = statusMap[d];
+            {schoolWeek.map(({ label, dateKey }) => {
+                const status = attendanceByDate.get(dateKey);
                 let bg = "bg-slate-200"; let icon = "–";
-                if (s === "Present") { bg = "bg-teal-400"; icon = "✓"; }
-                else if (s === "Late") { bg = "bg-yellow-400"; icon = "–"; }
-                else if (s === "Absent") { bg = "bg-red-400"; icon = "–"; }
+                if (status === "Present") { bg = "bg-teal-400"; icon = "✓"; }
+                else if (status === "Late") { bg = "bg-yellow-400"; icon = "–"; }
+                else if (status === "Absent") { bg = "bg-red-400"; icon = "–"; }
+                else if (status === "Excused") { bg = "bg-sky-400"; icon = "✓"; }
                 return (
-                    <div key={d} className="flex flex-col items-center gap-1">
-                        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${bg}`}>{icon}</span>
-                        <span className="text-[10px] text-slate-400">{d}</span>
+                    <div key={dateKey} className="flex flex-col items-center gap-1">
+                        <span
+                            aria-label={`${label}: ${status ?? "No attendance record"}`}
+                            title={`${label}: ${status ?? "No attendance record"}`}
+                            className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${bg}`}
+                        >{icon}</span>
+                        <span className="text-[10px] text-slate-400">{label}</span>
                     </div>
                 );
             })}
@@ -146,6 +192,7 @@ function WeekDots({ attendance }: { attendance: StudentInfo["attendance"] }) {
 
 export default function ParentDashboard() {
     const router = useRouter();
+    const { session, refreshSession } = useParentSession();
     const [notifs, setNotifs] = useState<ParentNotificationPreview[]>([]);
     const [scheduledDeletionNotice, setScheduledDeletionNotice] = useState<ParentScheduledDeletionNotice | null>(null);
     const [students, setStudents] = useState<StudentInfo[]>([]);
@@ -156,24 +203,22 @@ export default function ParentDashboard() {
     const [messagesData, setMessagesData] = useState<{ initials: string; name: string; preview: string; color: string }[]>([]);
     const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
-    useEffect(() => {
-        async function loadParentStudent() {
+    const loadParentStudent = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
             try {
-                const res = await fetch("/api/parents/me");
-                const data = await res.json();
-
-                if (!data.success) {
+                const data = session;
+                if (!data?.success) {
                     router.push("/login/guardian");
                     return;
                 }
 
-                const linkedStudents: StudentInfo[] = (data.students ?? [data.student]).map((studentRow: {
+                const linkedStudentRows = (data.students ?? [data.student]) as Array<{
                     id: number;
                     name: string;
                     lrn: string;
                     grade: string;
                     section: string;
-                }, index: number) => {
+                }>;
+                const linkedStudents: StudentInfo[] = linkedStudentRows.map((studentRow, index: number) => {
                     const template = FALLBACK_STUDENTS[index % FALLBACK_STUDENTS.length];
                     const name = studentRow.name || "Student";
                     const initials = name
@@ -197,15 +242,28 @@ export default function ParentDashboard() {
                 const firstStudent = linkedStudents[0];
                 setParentName(data.parent.name || "Parent");
                 setStudents(linkedStudents);
-                setSelectedId(firstStudent.id);
+                setSelectedId((current) => linkedStudents.some((student) => student.id === current)
+                    ? current
+                    : firstStudent?.id ?? "");
 
-                const attendanceResults = await Promise.all(
-                    linkedStudents.map(s =>
-                        fetch(`/api/attendance/parent-history?student_id=${s.studentId}`, { cache: "no-store" })
-                            .then(r => r.json())
-                            .catch(() => null)
-                    )
-                );
+                // These snapshots are independent. Starting them together
+                // removes a deployed network waterfall without weakening the
+                // server-side authorization each endpoint performs.
+                const [attendanceResults, notificationResult, reportsResult] = await Promise.all([
+                    Promise.all(
+                        linkedStudents.map(s =>
+                            fetch(`/api/attendance/parent-history?student_id=${s.studentId}`, { cache: "no-store" })
+                                .then(r => r.json())
+                                .catch(() => null)
+                        )
+                    ),
+                    fetch("/api/parents/notifications", { cache: "no-store" })
+                        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
+                        .catch(() => ({ ok: false, data: null })),
+                    fetch("/api/reports/parent-adviser?role=parent", { cache: "no-store" })
+                        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
+                        .catch(() => ({ ok: false, data: null })),
+                ]);
 
                 linkedStudents.forEach((s, i) => {
                     const data = attendanceResults[i];
@@ -225,12 +283,14 @@ export default function ParentDashboard() {
                         attendanceRate: `${rate}%`,
                         rateLabel: Number(rate) >= 95 ? "Excellent" : Number(rate) >= 85 ? "Good" : "Needs Attention",
                     };
-                    // Build attendance records for "this week" dots
-                    s.attendance = data.records.slice(0, 5).map((r: any) => {
-                        const dateObj = new Date(r.attendance_date + "T00:00:00");
+                    // Keep every saved date for the overall stats, then let
+                    // WeekDots select only the current Manila school week.
+                    s.attendance = data.records.map((r: any) => {
+                        const dateObj = new Date(`${r.attendance_date}T00:00:00Z`);
                         return {
-                            date: dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-                            day: dateObj.toLocaleDateString("en-US", { weekday: "long" }),
+                            attendanceDate: r.attendance_date,
+                            date: dateObj.toLocaleDateString("en-US", { timeZone: MANILA_TIME_ZONE, month: "short", day: "numeric", year: "numeric" }),
+                            day: dateObj.toLocaleDateString("en-US", { timeZone: MANILA_TIME_ZONE, weekday: "long" }),
                             status: r.status === "On Time" ? "Present" : r.status,
                             timeIn: r.time_in ?? "—",
                             timeOut: r.time_out ?? "—",
@@ -238,7 +298,7 @@ export default function ParentDashboard() {
                         };
                     });
                     // Check-in info from today's record
-                    const todayIso = new Date().toISOString().slice(0, 10);
+                    const todayIso = manilaDateKey();
                     const todayRecord = data.records.find((r: any) => r.attendance_date === todayIso);
                     s.isAtSchool = !!todayRecord?.time_in;
                     s.checkInTime = todayRecord?.time_in
@@ -252,8 +312,7 @@ export default function ParentDashboard() {
                     s.checkInDay = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
                 });
 
-                const notifRes = await fetch("/api/parents/notifications", { cache: "no-store" });
-                const notifData = await notifRes.json().catch(() => null);
+                const notifData = notificationResult.data;
                 const realNotifications = Array.isArray(notifData?.notifications) ? notifData.notifications : [];
                 setScheduledDeletionNotice(notifData?.scheduledDeletionNotice ?? null);
                 setNotifs(realNotifications.slice(0, 3).map((notif: {
@@ -277,13 +336,12 @@ export default function ParentDashboard() {
                     announcementId: notif.announcementId,
                     parentDeletionNotificationId: notif.parentDeletionNotificationId,
                 })));
-                const reportsRes = await fetch("/api/reports/parent-adviser?role=parent", { cache: "no-store" });
-                const reportsJson = await reportsRes.json().catch(() => null);
-                if (reportsJson?.success) {
+                const reportsJson = reportsResult.data;
+                if (reportsResult.ok && reportsJson?.success) {
                     const reports = (reportsJson.reports ?? []).slice(0, 3);
                     setReportsData(reports.map((r: any) => ({
                         title: r.subject,
-                        meta: `${r.status === "New" ? "New" : "Viewed"} · ${new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
+                        meta: `${r.status === "New" ? "New" : "Viewed"} · ${parentReportDateLabel(r.createdAt ?? r.created_at ?? r.submittedAt)}`,
                         isNew: r.status === "New",
                     })));
                     setMessagesData(reports.slice(0, 3).map((r: any) => ({
@@ -296,12 +354,27 @@ export default function ParentDashboard() {
             } catch {
                 router.push("/login/guardian");
             } finally {
-                setProfileLoading(false);
+                if (!background) setProfileLoading(false);
             }
-        }
+    }, [router, session]);
 
-        loadParentStudent();
-    }, [router]);
+    useEffect(() => { void loadParentStudent(); }, [loadParentStudent]);
+
+    // Dashboard cards are a view of protected parent, attendance, report,
+    // and notification APIs. Re-read them in place after the account's
+    // data-free invalidation; never navigate or reset the selected child.
+    const scheduleDashboardRefresh = useDebouncedRealtimeRefresh(
+        () => loadParentStudent({ background: true }),
+    );
+    useSessionInvalidation((event) => {
+        if (event.scope === "students" || event.scope === "accounts") {
+            void refreshSession();
+            return;
+        }
+        if (["attendance", "reports", "notifications", "announcements", "staff-messages"].includes(event.scope ?? "")) {
+            scheduleDashboardRefresh();
+        }
+    });
 
 
     const student = students.find(s => s.id === selectedId) ?? students[0];

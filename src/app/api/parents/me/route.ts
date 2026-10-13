@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { logAudit } from "@/lib/audit";
 
@@ -328,6 +329,7 @@ export async function PATCH(req: NextRequest) {
       path: "/",
     });
 
+    await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
     return NextResponse.json({
       success: true,
       parent: {
@@ -410,6 +412,7 @@ export async function PUT(req: NextRequest) {
 
     if (updateError) throw updateError;
 
+    await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
     return NextResponse.json({
       success: true,
       message: "Password updated successfully.",
