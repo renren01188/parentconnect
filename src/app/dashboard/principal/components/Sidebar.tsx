@@ -199,7 +199,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
             logoutEndpoint="/api/auth/principal/logout"
             redirectTo="/login/principal"
             onLogoutStarted={onClose}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-red-600"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-purple-300/30 bg-[#6b2fa0] px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-[#522081] focus:outline-none focus:ring-2 focus:ring-white/80 focus:ring-offset-2 focus:ring-offset-[#522081]"
           />
         </div>
       </aside>

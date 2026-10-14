@@ -36,16 +36,27 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notificationRefreshVersion, setNotificationRefreshVersion] = useState(0);
   const notificationCountRequest = useRef<Promise<void> | null>(null);
   const reportCountRequest = useRef<Promise<void> | null>(null);
+  // A Realtime event can arrive while the initial dashboard badge snapshot is
+  // still being read. Remember that event so the request cannot settle with a
+  // pre-message count and leave the Parent sidebar stale until Reports opens.
+  const notificationCountRefreshQueued = useRef(false);
+  const reportCountRefreshQueued = useRef(false);
 
   const refreshUnreadNotificationsCount = useCallback(async () => {
-    if (notificationCountRequest.current) return notificationCountRequest.current;
+    if (notificationCountRequest.current) {
+      notificationCountRefreshQueued.current = true;
+      return notificationCountRequest.current;
+    }
     const request = (async () => {
-      const res = await fetch("/api/parents/notifications", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json().catch(() => null);
-      if (typeof data?.unreadCount === "number") {
-        setUnreadCount(data.unreadCount);
-      }
+      do {
+        notificationCountRefreshQueued.current = false;
+        const res = await fetch("/api/parents/notifications", { cache: "no-store" });
+        if (!res.ok) continue;
+        const data = await res.json().catch(() => null);
+        if (typeof data?.unreadCount === "number") {
+          setUnreadCount(data.unreadCount);
+        }
+      } while (notificationCountRefreshQueued.current);
     })();
     notificationCountRequest.current = request;
     try {
@@ -56,23 +67,29 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUnreadReportsCount = useCallback(async () => {
-    if (reportCountRequest.current) return reportCountRequest.current;
+    if (reportCountRequest.current) {
+      reportCountRefreshQueued.current = true;
+      return reportCountRequest.current;
+    }
     const request = (async () => {
-      const [reportsRes, staffMessagesRes] = await Promise.all([
-        fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
-        fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
-      ]);
-      const [reportsData, staffMessagesData] = await Promise.all([
-        reportsRes.json().catch(() => null),
-        staffMessagesRes.json().catch(() => null),
-      ]);
-      const reports = reportsRes.ok && Array.isArray(reportsData?.reports) ? reportsData.reports : [];
-      const staffMessages = staffMessagesRes.ok && Array.isArray(staffMessagesData?.messages)
-        ? staffMessagesData.messages
-        : [];
-      const unreadReports = reports.filter((report: { unread?: boolean }) => Boolean(report.unread)).length;
-      const unreadStaffConversations = staffMessages.filter((message: { unread?: boolean }) => Boolean(message.unread)).length;
-      setUnreadReportsCount(unreadReports + unreadStaffConversations);
+      do {
+        reportCountRefreshQueued.current = false;
+        const [reportsRes, staffMessagesRes] = await Promise.all([
+          fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
+          fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
+        ]);
+        const [reportsData, staffMessagesData] = await Promise.all([
+          reportsRes.json().catch(() => null),
+          staffMessagesRes.json().catch(() => null),
+        ]);
+        const reports = reportsRes.ok && Array.isArray(reportsData?.reports) ? reportsData.reports : [];
+        const staffMessages = staffMessagesRes.ok && Array.isArray(staffMessagesData?.messages)
+          ? staffMessagesData.messages
+          : [];
+        const unreadReports = reports.filter((report: { unread?: boolean }) => Boolean(report.unread)).length;
+        const unreadStaffConversations = staffMessages.filter((message: { unread?: boolean }) => Boolean(message.unread)).length;
+        setUnreadReportsCount(unreadReports + unreadStaffConversations);
+      } while (reportCountRefreshQueued.current);
     })();
     reportCountRequest.current = request;
     try {
@@ -101,7 +118,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       await Promise.all([refreshUnreadReportsCount(), refreshNotificationFeed()]);
       return;
     }
-    if (scope === "notifications" || scope === "announcements" || scope === "staff-messages") {
+    if (scope === "notifications" || scope === "announcements" || scope === "staff-messages" || scope === "attendance") {
       await Promise.all([refreshUnreadReportsCount(), refreshNotificationFeed()]);
       return;
     }

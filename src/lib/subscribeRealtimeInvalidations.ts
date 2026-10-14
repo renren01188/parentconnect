@@ -24,6 +24,7 @@ export type RealtimeInvalidation = {
   messageId: number | null;
   actorKey: string | null;
   active: boolean | null;
+  sessionRevoked: boolean;
 };
 
 /** Opens the current account's opaque, data-free broadcast channel. */
@@ -62,6 +63,7 @@ export async function subscribeRealtimeInvalidations(
           messageId: Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null,
           actorKey,
           active: typeof payload?.active === "boolean" ? payload.active : null,
+          sessionRevoked: payload?.sessionRevoked === true,
         });
       })
       .subscribe((status) => onStatus?.(status));

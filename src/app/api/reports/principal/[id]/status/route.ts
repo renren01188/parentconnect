@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getPrincipalSession, listGuidanceTickets, listMessages, toPrincipalReport } from "../../../parent-adviser/_lib";
+import { getPrincipalSession, isPrincipalVisibleReport, listGuidanceTickets, listMessages, toPrincipalReport } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
@@ -38,6 +38,9 @@ export async function PATCH(
 
     if (existingError) throw existingError;
     if (!existing) {
+      return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
+    }
+    if (!isPrincipalVisibleReport(existing)) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
     if (String(existing.status ?? "").toLowerCase() === "cancelled") {

@@ -5,6 +5,7 @@ import { Activity, AlertTriangle, ArrowRight, Bell, ClipboardList, Download, Gra
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import IctDashboardGuide from "./components/IctDashboardGuide";
 
 type IctProfile = { name: string; employeeId: string; email: string };
@@ -100,8 +101,11 @@ export default function DashboardPage() {
   }, []);
 
   useVisibleRefresh(() => loadDashboard(true));
+  const scheduleDashboardRefresh = useDebouncedRealtimeRefresh(() => loadDashboard(true));
   useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "announcements") return loadDashboard(true);
+    if (!scope || ["accounts", "students", "audit", "announcements", "dashboard"].includes(scope)) {
+      scheduleDashboardRefresh();
+    }
   });
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
+import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -33,7 +34,9 @@ export async function POST(req: NextRequest) {
     let adviserId: number;
     try {
       const { payload } = await jwtVerify(token, SECRET);
-      adviserId = payload.id as number;
+      if (payload.role !== "adviser") throw new Error("Invalid role.");
+      adviserId = Number(payload.id);
+      if (await isPasswordSessionRevoked({ role: "adviser", accountId: adviserId, payload })) throw new Error("Session revoked.");
     } catch {
       return NextResponse.json(
         { success: false, message: "Session expired. Please log in again." },

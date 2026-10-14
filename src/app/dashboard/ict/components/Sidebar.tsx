@@ -111,7 +111,7 @@ export default function Sidebar() {
             logoutEndpoint="/api/auth/ict/logout"
             redirectTo="/login/ict"
             onLogoutStarted={closeMenu}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/10"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#274e13] px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-[#1a3a0a] focus:outline-none focus:ring-2 focus:ring-white/80 focus:ring-offset-2 focus:ring-offset-[#1a3a0a]"
           />
         </div>
       </aside>

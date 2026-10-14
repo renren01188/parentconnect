@@ -5,6 +5,7 @@ import { effectiveAdviserReportStatus } from "@/lib/adviserReportStatusSummary";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { hasUnreadForPrincipal as hasUnreadPrincipalReport } from "@/lib/principalReportReadState.cjs";
+import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -133,6 +134,7 @@ export async function getParentSession() {
       .eq("id", id)
       .maybeSingle();
     if (!parent || !parentAccountCanAccess(parent)) return null;
+    if (await isPasswordSessionRevoked({ role: "parent", accountId: id, payload })) return null;
     const currentName = [
       parent.parent_first_name,
       parent.parent_middle_name,
@@ -194,6 +196,20 @@ export function parentReportStatus(status: string): "Pending" | "In Review" | "R
   if (status === "replied") return "Replied";
   if (status === "ongoing" || status === "read") return "In Review";
   return "Pending";
+}
+
+/** A public student submission becomes a Parent Report after Adviser forwarding. */
+export function isStudentConcernReport(row: Pick<ReportRow, "subject">) {
+  return /^\[Student Concern\]\s*/i.test(String(row.subject ?? ""));
+}
+
+/**
+ * Student concerns are withheld from Principal monitoring until the linked
+ * parent accepts the conversation agreement. Other report types keep their
+ * existing monitoring visibility.
+ */
+export function isPrincipalVisibleReport(row: Pick<ReportRow, "subject" | "allow_history_access">) {
+  return !isStudentConcernReport(row) || row.allow_history_access === true;
 }
 
 export function adviserReportStatus(status: string): "New" | "Read" | "Ongoing" | "Replied" | "Resolved" | "Escalated" {
@@ -276,6 +292,11 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   };
   const recipientName = isPrincipalConversation ? principalName : isGuidanceConversation ? guidanceName : row.adviser_name;
   const subjectTeacherOpeningMessage = messages.find((msg) => msg.sender_role === "subject_teacher");
+  // Student concerns are created by the public /report form and become a
+  // Parent Report only after the assigned Adviser forwards the concern.
+  // A category is not sufficient to identify them because students can select
+  // any supported concern category.
+  const isStudentSubmittedConcern = isStudentConcernReport(row);
   const canCancel = !isResolved && row.status !== "cancelled" && !row.cancelled_at && messages[0]?.sender_role === "parent";
 
   return {
@@ -298,6 +319,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     grade: row.grade ?? "",
     section: row.section ?? "",
     studentName: row.student_name,
+    isStudentSubmittedConcern,
     submittedByName: subjectTeacherOpeningMessage?.sender_name,
     submittedByRole: subjectTeacherOpeningMessage ? "Subject Teacher" : undefined,
     submittedAt: subjectTeacherOpeningMessage ? formatDate(subjectTeacherOpeningMessage.created_at) : undefined,
@@ -536,6 +558,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     status: row.status,
     principalHasRead,
     messages: threadMessages,
+    isStudentConcern: isStudentConcernReport(row) && row.allow_history_access === true,
   });
 
   return {
@@ -589,7 +612,7 @@ export async function listGuidanceTickets(reportIds: number[], includeAttachment
     .from("parent_report_guidance_tickets")
     .select(includeAttachments
       ? "id, report_id, parent_id, student_id, adviser_id, concern, message, attachments, status, rejection_reason, assigned_guidance_id, created_at, decided_at"
-      : "id, report_id, status, rejection_reason, decided_at")
+      : "id, report_id, status, rejection_reason, assigned_guidance_id, decided_at")
     .in("report_id", ids);
   if (error) throw error;
   return new Map(((data ?? []) as unknown as GuidanceTicketRow[]).map((ticket) => [ticket.report_id, ticket]));
@@ -726,6 +749,7 @@ export async function getGuidanceSession() {
       .eq("id", id)
       .maybeSingle();
     if (!data || data.status !== "active" || data.archive_status === "archived") return null;
+    if (await isPasswordSessionRevoked({ role: "guidance", accountId: id, payload: verified.payload })) return null;
     return {
       id,
       name: [data.first_name, data.middle_name, data.last_name, data.suffix].filter(Boolean).join(" ") || "Guidance Counselor",

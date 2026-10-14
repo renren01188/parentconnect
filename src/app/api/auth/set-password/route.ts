@@ -160,10 +160,11 @@ export async function POST(req: NextRequest) {
       console.error("Registration confirmation email failed:", mailError);
     }
 
-    const newPayload: Record<string, unknown> = { ...payload, passwordSet: true, temporaryPasswordVerified: true };
+    const newPayload: Record<string, unknown> = { ...payload, passwordSet: true, temporaryPasswordVerified: true, sessionIssuedAt: Date.now() };
     delete newPayload.temporaryPasswordExpiresAt;
     const newToken = await new SignJWT(newPayload)
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
       .setExpirationTime("24h")
       .sign(SECRET);
 

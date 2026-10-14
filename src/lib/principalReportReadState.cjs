@@ -11,11 +11,14 @@ function principalReportReadKey(reportId) {
   return `principal-report-read-${id}`;
 }
 
-function hasUnreadForPrincipal({ status, principalHasRead, messages }) {
+function hasUnreadForPrincipal({ status, principalHasRead, messages, isStudentConcern = false }) {
   return (
     String(status ?? "").toLowerCase() !== "resolved" &&
     !principalHasRead &&
-    messages.some((message) => message.sender_role === "parent")
+    // A student concern opens with the Adviser-forwarded notification rather
+    // than a parent-authored message. Once its agreement is accepted, that
+    // newly visible conversation is unread for the Principal until opened.
+    (isStudentConcern || messages.some((message) => message.sender_role === "parent"))
   );
 }
 

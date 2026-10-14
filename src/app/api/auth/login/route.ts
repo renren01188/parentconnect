@@ -145,6 +145,7 @@ export async function POST(req: NextRequest) {
       section:     student.section,
       role:        "parent",
       passwordSet,
+      sessionIssuedAt: Date.now(),
       temporaryPasswordVerified: passwordSet,
       ...(temporaryPasswordExpirySeconds ? {
         temporaryPasswordExpiresAt: new Date(temporaryPasswordExpirySeconds * 1_000).toISOString(),
@@ -153,6 +154,7 @@ export async function POST(req: NextRequest) {
 
     const token = await new SignJWT(payload)
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
       .setExpirationTime(temporaryPasswordExpirySeconds ?? "24h")
       .sign(SECRET);
 

@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
+import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -50,20 +51,29 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
+    const adviserId = Number(payload.id);
+    if (payload.role !== "adviser" || (await isPasswordSessionRevoked({ role: "adviser", accountId: adviserId, payload }))) {
+      cookieStore.delete("adviser_token");
+      return NextResponse.json(
+        { success: false, message: "Your password was changed. Please log in again." },
+        { status: 401 },
+      );
+    }
 
     const hashed = await bcrypt.hash(newPassword, 10);
 
     const { error } = await supabase
       .from("advisers")
       .update({ password_hash: hashed, password_set: true, status: "active" })
-      .eq("id", payload.id);
+      .eq("id", adviserId);
 
     if (error) throw error;
 
     // Re-issue token with passwordSet: true
-    const newPayload = { ...payload, passwordSet: true };
+    const newPayload = { ...payload, passwordSet: true, sessionIssuedAt: Date.now() };
     const newToken = await new SignJWT(newPayload)
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
       .setExpirationTime("8h")
       .sign(SECRET);
 

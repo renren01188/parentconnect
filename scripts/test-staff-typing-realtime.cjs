@@ -15,6 +15,7 @@ const parentReports = read("src/app/dashboard/parent/reports/page.tsx");
 const guidanceReports = read("src/app/dashboard/guidance/reports/page.tsx");
 const principalReports = read("src/app/dashboard/principal/reports/page.tsx");
 const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
+const ictInbox = read("src/app/dashboard/ict/inbox/page.tsx");
 
 assert.match(realtime, /conversationId: string \| null/);
 assert.match(realtime, /(?:staff-message\|adviser-ict\|guidance-ict\|principal-ict)/);
@@ -80,5 +81,15 @@ assert.match(parentReports, /selectedStandaloneConversationId/);
 assert.match(parentReports, /onStaffMessageUpdate: staffConversationTyping\.onRealtimeEvent/);
 assert.match(parentReports, /staffConversationTyping\.onDraftChange\(hasDraft\)/);
 assert.match(parentReports, /staffConversationTyping\.clearOtherTyping\(\)/);
+
+// All four message panels render the same live status before their attachment
+// controls. New ICT threads are selected immediately so typing is scoped to
+// the newly created conversation without a page refresh.
+for (const source of [adviserReports, guidanceReports, principalReports, ictInbox]) {
+  assert.match(source, /aria-label="The other participant is typing…"/);
+  assert.match(source, /The other participant is typing…/);
+}
+assert.match(ictInbox, /setSelectedId\(conversation\.conversationId\)/);
+assert.match(ictInbox, /setMobileThreadOpen\(true\)/);
 
 console.log("staff typing realtime checks passed");

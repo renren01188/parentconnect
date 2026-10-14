@@ -806,42 +806,23 @@ function CancelReportModal({ report, onClose, onConfirm, cancelling, error }: {
   );
 }
 
-function StudentConcernConsent({ onConfirm }: { onConfirm: (allowHistoryAccess: boolean) => Promise<void> }) {
-  const [choice, setChoice] = useState<boolean | null>(null);
+function StudentConcernConsent({ onConfirm }: { onConfirm: () => Promise<void> }) {
   const [termsAccepted, setTermsAccepted] = useState(false);
-  const [showTerms, setShowTerms] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  if (showTerms) return (
-    <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-slate-700">
-      <h3 className="mb-2 font-extrabold text-slate-900">Terms and Agreement</h3>
-      <p className="mb-2">Your Student Concern is first handled by the Class Adviser and may be escalated to Guidance, then the Principal.</p>
-      <p className="mb-2">Choosing <strong>Yes</strong> permits the Principal to read the earlier Parent, Adviser, and Guidance conversation history if this concern is escalated to the Principal.</p>
-      <p className="mb-3">Choosing <strong>No</strong> keeps that earlier history private. The Principal may still see the concern details and messages addressed to the Principal after escalation.</p>
-      <button type="button" onClick={() => setShowTerms(false)} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Back</button>
-    </div>
-  );
 
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
       <h3 className="text-sm font-extrabold text-slate-900">Before you start this conversation</h3>
-      <p className="mt-1 text-xs leading-relaxed text-slate-600">Choose whether higher authorities may view this conversation history if the Student Concern is escalated.</p>
-      <div className="mt-3 space-y-2">
-        {[{ value: false, label: "No, I do not want the higher authorities to read our conversation." }, { value: true, label: "Yes, I want the higher authorities to read our conversation." }].map((option) => (
-          <label key={String(option.value)} className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-2.5 text-xs text-slate-700 ring-1 ring-slate-200">
-            <input type="radio" name="student-concern-history-consent" checked={choice === option.value} onChange={() => setChoice(option.value)} className="mt-0.5" />
-            <span>{option.label}</span>
-          </label>
-        ))}
-      </div>
+      <p className="mt-3 text-xs font-extrabold text-slate-800">Conversation Visibility</p>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">The Principal may review this conversation to monitor the student concern.</p>
       <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-slate-600">
-        <input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} className="mt-0.5" />
-        <span>I accept the <button type="button" onClick={() => setShowTerms(true)} className="font-bold text-blue-600 underline">Terms and Agreement</button>.</span>
+        <input id="student-concern-visibility" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-blue-600" />
+        <span>I understand that the Principal can view this conversation.</span>
       </label>
-      <button type="button" disabled={choice === null || !termsAccepted || saving} onClick={async () => {
-        if (choice === null) return;
+      <button type="button" disabled={!termsAccepted || saving} onClick={async () => {
+        if (!termsAccepted) return;
         setSaving(true);
-        try { await onConfirm(choice); } finally { setSaving(false); }
+        try { await onConfirm(); } finally { setSaving(false); }
       }} className="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-blue-300">
         {saving ? "Saving..." : "Confirm and Start Conversation"}
       </button>
@@ -874,6 +855,8 @@ function ParentReportsPageContent() {
   const markingReadIds = useRef<Set<number>>(new Set());
   const pendingMessagesRef = useRef<Map<number, ChatMessage[]>>(new Map());
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const detailRefreshQueuedRef = useRef<Set<number>>(new Set());
+  const reportListRequestVersion = useRef(0);
   const messagesRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const lastScrolledConversationRef = useRef<string | null>(null);
@@ -920,6 +903,7 @@ function ParentReportsPageContent() {
   }, [reportSubmissionCooldownUntil]);
 
   const loadReports = useCallback(async () => {
+    const requestVersion = ++reportListRequestVersion.current;
     const [res, staffMessagesRes] = await Promise.all([
       fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
       fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
@@ -928,6 +912,10 @@ function ParentReportsPageContent() {
       res.json().catch(() => null),
       staffMessagesRes.json().catch(() => null),
     ]);
+    // The Realtime refresh may have started a newer authorized snapshot while
+    // this request was in flight. Never let the older response hide a message
+    // that was just delivered to this open Reports page.
+    if (requestVersion !== reportListRequestVersion.current) return;
     if (!res.ok) {
       const message = data?.message || "Unable to load reports.";
       setLoadError(message);
@@ -971,17 +959,26 @@ function ParentReportsPageContent() {
   const loadReportDetail = useCallback(async (id: number) => {
     if (id < 0) return;
     const inFlight = detailRequestsRef.current.get(id);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      // A message can be committed between an initial detail request and its
+      // response. Re-read once it settles so the event cannot be overwritten
+      // by that older server snapshot.
+      detailRefreshQueuedRef.current.add(id);
+      return inFlight;
+    }
 
     const request = (async () => {
-      const res = await fetch(`/api/reports/parent-adviser?reportId=${id}`, { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
-      const report = (data?.reports?.[0] ?? null) as Report | null;
-      if (!report) return;
-      const [mergedReport] = mergePendingMessages([report]);
-      setReports((current) => current.map((item) => item.id === id ? mergedReport : item));
-      setLoadError("");
+      do {
+        detailRefreshQueuedRef.current.delete(id);
+        const res = await fetch(`/api/reports/parent-adviser?reportId=${id}`, { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+        const report = (data?.reports?.[0] ?? null) as Report | null;
+        if (!report) continue;
+        const [mergedReport] = mergePendingMessages([report]);
+        setReports((current) => current.map((item) => item.id === id ? mergedReport : item));
+        setLoadError("");
+      } while (detailRefreshQueuedRef.current.has(id));
     })();
 
     detailRequestsRef.current.set(id, request);
@@ -989,6 +986,7 @@ function ParentReportsPageContent() {
       await request;
     } finally {
       detailRequestsRef.current.delete(id);
+      detailRefreshQueuedRef.current.delete(id);
     }
   }, [mergePendingMessages]);
 
@@ -996,6 +994,7 @@ function ParentReportsPageContent() {
     let isMounted = true;
 
     async function loadInitialData() {
+      const requestVersion = ++reportListRequestVersion.current;
       try {
         setLoading(true);
         setLoadError("");
@@ -1010,7 +1009,7 @@ function ParentReportsPageContent() {
           staffMessagesRes.json().catch(() => null),
         ]);
 
-        if (!isMounted) return;
+        if (!isMounted || requestVersion !== reportListRequestVersion.current) return;
 
         if (!reportsRes.ok) {
           setLoadError(reportsData?.message || "Unable to load reports.");
@@ -1139,7 +1138,7 @@ function ParentReportsPageContent() {
   }, [selectedReport, loadReportDetail]);
   const requiresStudentConcernConsent = Boolean(
     selectedReport?.subject.startsWith("[Student Concern] ") &&
-    selectedReport.allowHistoryAccess === null
+    selectedReport.allowHistoryAccess !== true
   );
   const selectedReportId = selectedReport?.isStandaloneStaffMessage ? null : selectedReport?.id ?? null;
   const selectedStandaloneConversationId = selectedReport?.isStandaloneStaffMessage && selectedReport.standaloneMessageId
@@ -1161,10 +1160,22 @@ function ParentReportsPageContent() {
     ]);
   }, [loadReportDetail, loadReports, reportTyping, selectedReportId]);
 
+  const handleLiveReportStatusUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
+    if (event.kind !== "status") return;
+    // A status handoff is not a message preview update. Re-read the Parent's
+    // authorized inbox immediately so the selected card, timeline, guidance
+    // banner, and reply ownership change together without a page refresh.
+    await Promise.all([
+      loadReports(),
+      event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+    ]);
+  }, [loadReportDetail, loadReports, selectedReportId]);
+
   // Matches Contact ICT's lifecycle while applying selected-report updates in
   // place instead of replacing the conversation with an inbox summary.
   const liveUpdateNotice = useReportMessagesRealtime(loadReports, {
     onReportUpdate: handleLiveReportUpdate,
+    onReportStatusUpdate: handleLiveReportStatusUpdate,
     onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
     onConnectionStatus: (status) => {
       if (status === "CLOSED") {
@@ -1270,17 +1281,17 @@ function ParentReportsPageContent() {
     }
   }
 
-  async function saveStudentConcernConsent(allowHistoryAccess: boolean) {
+  async function saveStudentConcernConsent() {
     if (!selectedReport) return;
     const res = await fetch(`/api/reports/parent-adviser/${selectedReport.id}/consent`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ allowHistoryAccess }),
+      body: JSON.stringify({ termsAccepted: true }),
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.message || "Unable to save your consent choice.");
+    if (!res.ok) throw new Error(data?.message || "Unable to save your agreement.");
     setReports((current) => current.map((report) =>
-      report.id === selectedReport.id ? { ...report, allowHistoryAccess } : report
+      report.id === selectedReport.id ? { ...report, allowHistoryAccess: true } : report
     ));
   }
 
@@ -1445,9 +1456,12 @@ function ParentReportsPageContent() {
                   <div className="flex items-center gap-2.5">
                     <span style={{ width: 36, height: 36, minWidth: 36, borderRadius: "50%", background: r.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{r.recipientInitials}</span>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
+                      <div className="flex min-w-0 items-center gap-2 mb-0.5">
                         {r.unread && <span style={{ width: 7, height: 7, minWidth: 7, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />}
-                        <p className={`text-sm truncate ${r.unread ? "font-bold text-slate-800" : "font-semibold text-slate-700"}`}>{r.subject}</p>
+                        <p className={`min-w-0 flex-1 text-sm truncate ${r.unread ? "font-bold text-slate-800" : "font-semibold text-slate-700"}`}>{r.subject}</p>
+                        {r.isStudentSubmittedConcern && (
+                          <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">Student concern</span>
+                        )}
                       </div>
                       <p className="text-[11px] text-slate-400 truncate">{r.preview}</p>
                     </div>
@@ -1511,6 +1525,14 @@ function ParentReportsPageContent() {
                       <p><strong>Submitted by:</strong> {selectedReport.submittedByName} · Subject Teacher</p>
                       <p className="mt-0.5"><strong>Student:</strong> {selectedReport.studentName} · {selectedReport.grade} - {selectedReport.section}</p>
                       <p className="mt-0.5"><strong>Report date:</strong> {selectedReport.submittedAt}</p>
+                    </div>
+                  )}
+
+                  {selectedReport.isStudentSubmittedConcern && (
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-700">
+                      <p><strong>Student-submitted concern</strong></p>
+                      <p className="mt-0.5"><strong>Student:</strong> {selectedReport.studentName} · {selectedReport.grade} - {selectedReport.section}</p>
+                      <p className="mt-0.5">This concern was submitted by the student and forwarded to you by the Class Adviser.</p>
                     </div>
                   )}
 

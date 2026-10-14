@@ -34,6 +34,12 @@ const LOGIN_GUARD_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid email, employee ID, or password.";
 const LOCKOUT_MESSAGE = "Too many failed attempts. Please try again later.";
 
+function invalidCredentialsMessage(role: ProtectedLoginRole) {
+  // Parent/Guardian authentication accepts an email address only. Keep the
+  // staff-specific Employee ID guidance for the roles that support it.
+  return role === "parent" ? "Invalid email or password." : INVALID_CREDENTIALS_MESSAGE;
+}
+
 function hmac(value: string) {
   return createHmac("sha256", getJwtSecret()).update(value).digest("hex");
 }
@@ -233,7 +239,7 @@ export async function failedLoginResult(
   }
   return {
     status: 401,
-    message: INVALID_CREDENTIALS_MESSAGE,
+    message: invalidCredentialsMessage(role),
     captchaRequired: guard.captchaRequired,
     lockedUntil: null,
   };

@@ -2,6 +2,7 @@ import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
+import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = getJwtSecret();
 
@@ -36,6 +37,7 @@ export async function getAdviserFromToken(): Promise<AdviserPayload | null> {
       .maybeSingle();
 
     if (error || !data || data.status !== "active" || data.archive_status === "archived") return null;
+    if (await isPasswordSessionRevoked({ role: "adviser", accountId: data.id, payload })) return null;
 
     const sections = Array.isArray(data.sections) && data.sections.length > 0
       ? data.sections

@@ -84,6 +84,8 @@ export default function ProfilePage() {
   const [activePanel, setActivePanel] = useState<"profile" | "password" | "photo">("profile");
   const [photoMessage, setPhotoMessage] = useState("");
   const [approvalSent, setApprovalSent] = useState(false);
+  const [approvalSaving, setApprovalSaving] = useState(false);
+  const [approvalError, setApprovalError] = useState("");
   const [passwordSaved, setPasswordSaved] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
@@ -116,6 +118,7 @@ export default function ProfilePage() {
   const updateRequestForm = (key: keyof GuidanceProfile) => (value: string) => {
     setRequestForm((prev) => ({ ...prev, [key]: value }));
     setApprovalSent(false);
+    setApprovalError("");
   };
 
   useEffect(() => {
@@ -147,13 +150,24 @@ export default function ProfilePage() {
   });
 
   const sendApprovalRequest = async () => {
-    if (!approvalUnlocked || !canSendApproval) return;
-    const res = await fetch("/api/guidance/me", {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...requestForm, currentPassword: approvalPassword }),
-    });
-    const data = await res.json();
-    if (data.success) setApprovalSent(true);
+    if (!approvalUnlocked || !canSendApproval || approvalSaving) return;
+    setApprovalError("");
+    setApprovalSaving(true);
+    try {
+      const res = await fetch("/api/guidance/me", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...requestForm, currentPassword: approvalPassword }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || "Unable to send the approval request.");
+      }
+      setApprovalSent(true);
+    } catch (error: unknown) {
+      setApprovalError(error instanceof Error ? error.message : "Unable to send the approval request.");
+    } finally {
+      setApprovalSaving(false);
+    }
   };
 
   const updatePassword = async () => {
@@ -197,6 +211,8 @@ export default function ProfilePage() {
     setRequestForm(profile);
     setSettingsOpen(true);
     setApprovalSent(false);
+    setApprovalSaving(false);
+    setApprovalError("");
     setPasswordSaved(false);
     setPasswordSaving(false);
     setPasswordError("");
@@ -358,12 +374,13 @@ export default function ProfilePage() {
                     Approval request sent to the ICT Coordinator.
                   </div>
                 ) : null}
+                {approvalError ? <div className="error-note" role="alert">{approvalError}</div> : null}
 
                 <div className="modal-actions">
                   <button className="btn-secondary" onClick={() => setSettingsOpen(false)}>Cancel</button>
-                  <button className="btn-primary" onClick={sendApprovalRequest} disabled={!approvalUnlocked || !canSendApproval}>
+                  <button className="btn-primary" onClick={sendApprovalRequest} disabled={!approvalUnlocked || !canSendApproval || approvalSaving || approvalSent}>
                     <Save size={15} />
-                    Send Approval
+                    {approvalSaving ? "Sending..." : approvalSent ? "Request Sent" : "Send Approval"}
                   </button>
                 </div>
               </div>

@@ -43,6 +43,8 @@ export type RealtimeInvalidationPayload = {
   messageId?: number;
   actorKey?: string;
   active?: boolean;
+  /** True only for the account whose ICT-managed password just changed. */
+  sessionRevoked?: boolean;
 };
 
 const realtimeRecipientTable: Record<RealtimeRecipientRole, string> = {
@@ -194,9 +196,19 @@ export async function publishStudentRealtimeInvalidation(input: { studentDbId?: 
  * additionally refresh the affected account. Callers never need to expose an
  * account's details in a Realtime payload.
  */
-export async function publishAccountRealtimeInvalidation(targets: RealtimeRecipient[] = []) {
+export async function publishAccountRealtimeInvalidation(
+  targets: RealtimeRecipient[] = [],
+  options: { sessionRevoked?: boolean } = {},
+) {
   const ictRecipients = await recipientsForRoles(["ict"]);
-  await publishRealtimeInvalidation([...ictRecipients, ...targets], "accounts");
+  // ICT must refresh its list, but it is never a recipient of a password
+  // reset logout event.  The affected account receives a separate, targeted
+  // signal after the durable revocation marker has been written.
+  await publishRealtimeInvalidation(ictRecipients, "accounts");
+  await publishRealtimeInvalidation(
+    targets,
+    options.sessionRevoked ? { scope: "accounts", sessionRevoked: true } : "accounts",
+  );
 }
 
 function channelSecret() {

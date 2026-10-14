@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import {
+  ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+  isTokenRevokedByPasswordChange,
+  passwordSessionAuditRole,
+  type PasswordSessionRole,
+} from "@/lib/passwordSessionRevocation";
 
 const SECRET = getJwtSecret();
 
@@ -99,6 +105,38 @@ async function parentCanAccess(parentId: number) {
   return Array.isArray(rows) && rows.length === 1 && parentAccountCanAccess(rows[0]);
 }
 
+/** Edge-safe read of the durable ICT password-revocation marker. */
+async function passwordSessionCanAccess(
+  role: PasswordSessionRole,
+  accountId: number,
+  payload: { sessionIssuedAt?: unknown; iat?: unknown; exp?: unknown },
+) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseKey || !Number.isSafeInteger(accountId) || accountId <= 0) return false;
+
+  try {
+    const endpoint = new URL("/rest/v1/audit_log", supabaseUrl);
+    endpoint.searchParams.set("select", "created_at");
+    endpoint.searchParams.set("action", `eq.${ICT_PASSWORD_SESSION_REVOCATION_ACTION}`);
+    endpoint.searchParams.set("target_type", "eq.user");
+    endpoint.searchParams.set("target_id", `eq.${accountId}`);
+    endpoint.searchParams.set("target_role", `eq.${passwordSessionAuditRole(role)}`);
+    endpoint.searchParams.set("order", "created_at.desc");
+    endpoint.searchParams.set("limit", "1");
+    const response = await fetch(endpoint, {
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const rows = await response.json();
+    const latest = Array.isArray(rows) ? rows[0] as { created_at?: string } | undefined : undefined;
+    return !latest?.created_at || !isTokenRevokedByPasswordChange(payload, role, latest.created_at);
+  } catch {
+    return false;
+  }
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -122,7 +160,8 @@ export async function middleware(req: NextRequest) {
         return parentApiAuthFailure("Not authenticated.", 401, true);
       }
       const parentId = Number(verified.payload.id);
-      if (!Number.isSafeInteger(parentId) || parentId <= 0 || !(await parentCanAccess(parentId))) {
+      if (!Number.isSafeInteger(parentId) || parentId <= 0 || !(await parentCanAccess(parentId))
+        || !(await passwordSessionCanAccess("parent", parentId, verified.payload))) {
         return parentApiAuthFailure("This guardian account is temporarily unavailable while deletion is pending.", 403, true);
       }
     } catch {
@@ -142,6 +181,8 @@ export async function middleware(req: NextRequest) {
     try {
       const verified = await jwtVerify(token, SECRET);
       if (verified.payload.role !== "adviser") throw new Error("Invalid role");
+      const adviserId = Number(verified.payload.id);
+      if (!(await passwordSessionCanAccess("adviser", adviserId, verified.payload))) throw new Error("Session revoked");
       if (adviserPasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
@@ -168,6 +209,8 @@ export async function middleware(req: NextRequest) {
     try {
       const verified = await jwtVerify(token, SECRET);
       if (verified.payload.role !== "guidance") throw new Error("Invalid role");
+      const guidanceId = Number(verified.payload.id);
+      if (!(await passwordSessionCanAccess("guidance", guidanceId, verified.payload))) throw new Error("Session revoked");
       if (guidancePasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
@@ -276,7 +319,8 @@ export async function middleware(req: NextRequest) {
         return NextResponse.redirect(new URL("/login/guardian/set-password", req.url));
       }
       const parentId = Number(verified.payload.id);
-      if (!Number.isSafeInteger(parentId) || parentId <= 0 || !(await parentCanAccess(parentId))) {
+      if (!Number.isSafeInteger(parentId) || parentId <= 0 || !(await parentCanAccess(parentId))
+        || !(await passwordSessionCanAccess("parent", parentId, verified.payload))) {
         return redirectToAuthorizedDashboardOrLogin(req, "parent", true);
       }
       return NextResponse.next();

@@ -64,6 +64,8 @@ export interface Report {
   grade?: string;
   section?: string;
   studentName?: string;
+  /** An Adviser-forwarded concern submitted by the linked student at /report. */
+  isStudentSubmittedConcern?: boolean;
   submittedByName?: string;
   submittedByRole?: "Subject Teacher";
   submittedAt?: string;
@@ -76,7 +78,7 @@ export interface Report {
   /** A parent reply after the related handoff permanently acknowledges its banner. */
   parentRepliedAfterPrincipalEscalation?: boolean;
   parentRepliedAfterAcceptedGuidanceTicket?: boolean;
-  /** Parent's explicit decision on whether Principal may view pre-escalation history. */
+  /** Parent agreement required before Principal may monitor a Student Concern. */
   allowHistoryAccess?: boolean | null;
   ticketId?: number | null;
   ticketStatus?: "pending" | "accepted" | "rejected" | null;

@@ -102,7 +102,7 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
             logoutEndpoint="/api/auth/guidance/logout"
             redirectTo="/"
             onLogoutStarted={closeMenu}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-red-600"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-sky-400/35 bg-sky-800 px-3 py-2.5 text-xs font-bold text-white transition-colors hover:bg-sky-900 focus:outline-none focus:ring-2 focus:ring-white/80 focus:ring-offset-2 focus:ring-offset-sky-700"
           />
         </div>
       </aside>

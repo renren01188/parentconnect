@@ -221,6 +221,16 @@ export interface AdminMessage {
   status: AdminMsgStatus;
   attachment?: string;
   attachments?: MessageAttachment[];
+  /**
+   * Inbox-card metadata for direct staff conversations. The original root
+   * message stays in `message` for the detail view.
+   */
+  latest_message?: string;
+  latest_sender?: AdminSender;
+  latest_sender_name?: string;
+  latest_sender_is_current?: boolean;
+  latest_sent_at?: string;
+  latest_created_at?: string;
   priority?: "High" | "Normal";
   replies?: { sender: string; message: string; sent_at: string; attachments?: MessageAttachment[]; sender_name?: string; sender_email?: string; is_current_user?: boolean }[];
 }

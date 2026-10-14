@@ -11,6 +11,8 @@ const staffMessages = read("src/app/api/reports/staff-messages/route.ts");
 const notificationContext = read("src/app/dashboard/principal/context/NotificationContext.tsx");
 const principalReports = read("src/app/dashboard/principal/reports/page.tsx");
 const parentReports = read("src/app/dashboard/parent/reports/page.tsx");
+const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
+const adviserData = read("src/app/dashboard/adviser/data.ts");
 
 // A direct parent conversation must retain the real participant role rather
 // than falling through to the Adviser label used by legacy staff messages.
@@ -24,6 +26,11 @@ assert.match(principalMessages, /status: unread \? "New Message" as const : late
 assert.doesNotMatch(principalMessages, /latestFromPrincipal \? "Replied"/);
 assert.match(principalReports, /status: "New Message" \| "Unread" \| "Read" \| "Sent" \| "Replied" \| null/);
 assert.match(principalReports, /status: "Sent" as const/);
+assert.match(principalReports, /School Messages/);
+assert.match(principalReports, /border-violet-100 bg-violet-50\/60/);
+assert.doesNotMatch(principalReports, /uppercase tracking-widest text-slate-400">Received/);
+assert.match(adviserReports, /School Messages/);
+assert.match(adviserReports, /border-emerald-100 bg-emerald-50\/60/);
 
 // Stored timestamps use the application's configured timezone on both the
 // Principal endpoint and its short optimistic display before it is refreshed.
@@ -42,6 +49,14 @@ assert.match(principalReports, /await loadPrincipalMessages\(conversationId\);/)
 assert.match(notificationContext, /conversation\.status === "New Message" \|\| conversation\.status === "Unread"/);
 assert.match(principalReports, /const unreadMessageCount = conversations\.filter\(\(conversation\) => conversation\.status === "New Message" \|\| conversation\.status === "Unread"\)\.length/);
 
+// The direct-message header is intentionally focused on the participant and
+// subject. Workflow/status labels still remain available in the message list.
+assert.match(principalReports, /overflow-hidden bg-slate-50 font-sans/);
+assert.match(principalReports, /text-sm font-extrabold leading-snug text-slate-800/);
+assert.match(principalReports, /text-sm font-bold text-slate-600/);
+assert.doesNotMatch(principalReports, /selectedConversation\.category\}<\/span>/);
+assert.doesNotMatch(principalReports, /selectedConversation\.status &&/);
+
 // The direct-message write broadcasts to both authenticated participants;
 // their existing pages reload only their authorized inbox snapshots.
 assert.match(staffMessages, /\{ role: current\.type, id: current\.id \},[\s\S]*?\{ role: "parent", id: recipient\.parentId \}/);
@@ -52,5 +67,28 @@ assert.match(principalReports, /useReportMessagesRealtime\(refreshPrincipalInbox
 assert.match(principalReports, /grid-cols-\[minmax\(0,1fr\)_auto\]/);
 assert.match(principalReports, /aria-label="Send message"/);
 assert.match(principalReports, /h-\[52px\] w-\[52px\] shrink-0/);
+
+// Direct staff threads preserve the root for the detail view but expose the
+// real final row for an inbox card. This keeps the Adviser conversation's
+// sender, preview, timestamp, and ordering correct after every reply.
+assert.match(staffMessages, /latest_message: String\(last\.body \?\? ""\)/);
+assert.match(staffMessages, /latest_sender_name: String\(last\.sender_name \?\? ""\)/);
+assert.match(staffMessages, /latest_created_at: String\(last\.created_at \?\? root\.created_at\)/);
+assert.match(adviserData, /latest_message\?: string/);
+assert.match(adviserReports, /function getLatestAdminPreview/);
+assert.match(adviserReports, /message\.latest_message \?\? latestReply\?\.message \?\? message\.message/);
+assert.match(adviserReports, /a\.latest_created_at \?\? a\.sent_at/);
+assert.match(adviserReports, /\{preview\.senderName\} · \{preview\.senderRole\}:/);
+assert.match(adviserReports, /if \(!res\.ok && !staffRes\.ok\)/);
+assert.match(principalReports, /\{latestSenderName\} · \{latestSenderRole\}:/);
+assert.match(principalReports, /staffConversationTyping\.isOtherParticipantTyping[\s\S]*?The other participant is typing…/);
+assert.match(adviserReports, /staffConversationTyping\.isOtherParticipantTyping[\s\S]*?The other participant is typing…/);
+
+// Both message composers reserve a fixed send action and allow the draft
+// column to shrink, so no input or control can extend off-screen.
+assert.match(adviserReports, /grid-cols-\[minmax\(0,1fr\)_auto\]/);
+assert.match(adviserReports, /aria-label="Send message"/);
+assert.match(adviserReports, /h-\[52px\] w-\[52px\] shrink-0/);
+assert.match(principalReports, /min-w-0 w-full flex-col overflow-hidden bg-slate-50/);
 
 console.log("principal message panel checks passed");

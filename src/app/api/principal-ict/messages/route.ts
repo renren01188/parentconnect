@@ -128,13 +128,18 @@ function isIncoming(row: StaffMessageRow, session: Session) {
 }
 
 function conversationId(id: number) {
-    return `principal-ict:${id}`;
+    // Contact ICT and the ICT Inbox must refer to the same saved root with
+    // one opaque identifier so Realtime typing events match on both pages.
+    return `staff-message:${id}`;
 }
 
 function rootIdFromConversationId(value: unknown) {
     const raw = String(value ?? "");
-    if (!raw.startsWith("principal-ict:")) return null;
-    const id = Number(raw.replace("principal-ict:", ""));
+    // Keep the former route-specific key readable for an already-open tab,
+    // but issue the shared staff-message key for every new response.
+    const match = raw.match(/^(?:staff-message|principal-ict):([1-9][0-9]*)$/);
+    if (!match) return null;
+    const id = Number(match[1]);
     return Number.isFinite(id) && id > 0 ? id : null;
 }
 

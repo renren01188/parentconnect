@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
+import { isPrincipalVisibleReport } from "@/app/api/reports/parent-adviser/_lib";
 
 export async function GET() {
     try {
@@ -17,7 +18,7 @@ export async function GET() {
                 .eq("principal_id", principal.id),
             supabase
                 .from("parent_adviser_reports")
-                .select("id, parent_name, student_name, subject, status, created_at, status_updated_at, escalated_to_principal")
+                .select("id, parent_name, student_name, subject, status, created_at, status_updated_at, escalated_to_principal, allow_history_access")
                 .order("created_at", { ascending: false }),
             supabase
                 .from("parent_report_guidance_tickets")
@@ -45,7 +46,7 @@ export async function GET() {
             read: boolean;
         }[] = [];
 
-        const reports = reportsRes.data ?? [];
+        const reports = (reportsRes.data ?? []).filter(isPrincipalVisibleReport);
         const reportsById = new Map(reports.map((report) => [report.id, report]));
 
         // These event keys are deterministic. The report/ticket rows are the source of

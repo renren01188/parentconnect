@@ -441,6 +441,9 @@ export default function ICTInboxPage() {
   const [showCompose, setShowCompose] = useState(false);
   const [mobileThreadOpen, setMobileThreadOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  // A Realtime invalidation can arrive while the initial inbox request is
+  // still loading. Only the newest authorized snapshot may update the UI.
+  const messagesRequestVersionRef = useRef(0);
 
   const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
   const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "ict");
@@ -468,11 +471,16 @@ export default function ICTInboxPage() {
   }, [conversations, filterTab, search]);
 
   const loadMessages = useCallback(async (background = false): Promise<boolean> => {
+    const requestVersion = ++messagesRequestVersionRef.current;
     if (!background) setLoading(true);
     if (!background) setError(null);
     try {
       const { response: res, data } = await fetchJsonWithRetry<StaffMessagesResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" });
       if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load staff messages.");
+
+      // Never let the pre-message response erase a conversation or reply
+      // loaded by the subsequent Realtime-triggered request.
+      if (requestVersion !== messagesRequestVersionRef.current) return true;
 
       const nextConversations = ((data.messages ?? []) as StaffApiMessage[]).map(normalizeStaffConversation);
       setRecipients(((data.recipients ?? []) as StaffApiRecipient[]).map((recipient) => ({
@@ -488,13 +496,14 @@ export default function ICTInboxPage() {
       setError(null);
       return true;
     } catch (err) {
+      if (requestVersion !== messagesRequestVersionRef.current) return true;
       if (!background) {
         setError(err instanceof Error ? err.message : "Unable to load staff messages.");
         setConversations([]);
       }
       return false;
     } finally {
-      if (!background) setLoading(false);
+      if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
     }
   }, []);
 
@@ -572,6 +581,8 @@ export default function ICTInboxPage() {
       }],
     };
     setConversations((current) => mergeConversations(current, [conversation, ...current]));
+    setSelectedId(conversation.conversationId);
+    setMobileThreadOpen(true);
     void loadMessages(true);
   }
 
@@ -794,7 +805,7 @@ export default function ICTInboxPage() {
                   <Reply className="h-3.5 w-3.5" /> Reply to {selected.otherName}
                 </div>
                 {conversationTyping.isOtherParticipantTyping && (
-                  <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500">
+                  <div aria-live="polite" aria-label="The other participant is typing…" className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500">
                     <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13] [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13] [animation-delay:300ms]" /></span>
                     The other participant is typing…
                   </div>

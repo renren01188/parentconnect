@@ -88,6 +88,9 @@ type ParentNotificationPreview = {
     color: string;
     iconColor: string;
     announcementId?: number;
+    notificationIds?: number[];
+    reportId?: number;
+    staffMessageConversationId?: number;
     parentDeletionNotificationId?: number;
 };
 
@@ -322,6 +325,9 @@ export default function ParentDashboard() {
                     time: string;
                     unread: boolean;
                     announcementId?: number;
+                    notificationIds?: number[];
+                    reportId?: number;
+                    staffMessageConversationId?: number;
                     parentDeletionNotificationId?: number;
                 }) => ({
                     id: notif.id,
@@ -334,6 +340,9 @@ export default function ParentDashboard() {
                     color: notif.unread ? "bg-blue-50 border-blue-200" : "bg-slate-50 border-slate-200",
                     iconColor: "bg-blue-500",
                     announcementId: notif.announcementId,
+                    notificationIds: notif.notificationIds,
+                    reportId: notif.reportId,
+                    staffMessageConversationId: notif.staffMessageConversationId,
                     parentDeletionNotificationId: notif.parentDeletionNotificationId,
                 })));
                 const reportsJson = reportsResult.data;
@@ -341,12 +350,12 @@ export default function ParentDashboard() {
                     const reports = (reportsJson.reports ?? []).slice(0, 3);
                     setReportsData(reports.map((r: any) => ({
                         title: r.subject,
-                        meta: `${r.status === "New" ? "New" : "Viewed"} · ${parentReportDateLabel(r.createdAt ?? r.created_at ?? r.submittedAt)}`,
-                        isNew: r.status === "New",
+                        meta: `${r.isStudentSubmittedConcern ? "Student concern" : r.unread ? "New" : "Viewed"} · ${parentReportDateLabel(r.createdAt ?? r.created_at ?? r.submittedAt)}`,
+                        isNew: Boolean(r.unread),
                     })));
                     setMessagesData(reports.slice(0, 3).map((r: any) => ({
-                        initials: r.adviser_name?.split(" ").map((p: string) => p[0]).join("").slice(0, 2).toUpperCase() ?? "AD",
-                        name: r.adviser_name ?? "Class Adviser",
+                        initials: (r.recipientName ?? r.adviser_name ?? "Class Adviser").split(" ").map((p: string) => p[0]).join("").slice(0, 2).toUpperCase(),
+                        name: r.recipientName ?? r.adviser_name ?? "Class Adviser",
                         preview: (r.subject ?? "").slice(0, 18) + "...",
                         color: "#6366f1",
                     })));
@@ -392,6 +401,15 @@ export default function ParentDashboard() {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                attendanceLogIds: notifs.filter(notif => notif.id < 0).map(notif => -notif.id),
+                reportIds: notifs.flatMap(notif => notif.reportId ? [notif.reportId] : []),
+                staffMessageConversationIds: [...new Set(notifs.flatMap(notif =>
+                    notif.staffMessageConversationId ? [notif.staffMessageConversationId] : []
+                ))],
+                notificationIds: notifs
+                    .filter(notif => !notif.reportId && !notif.staffMessageConversationId && notif.id > 0)
+                    .filter(notif => !notif.parentDeletionNotificationId)
+                    .flatMap(notif => notif.notificationIds ?? [notif.id]),
                 parentDeletionNotificationIds: notifs.flatMap(notif =>
                     notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []
                 ),
@@ -408,10 +426,28 @@ export default function ParentDashboard() {
         fetch("/api/parents/notifications", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(notif.parentDeletionNotificationId
-                ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
-                : { notificationId: notif.id }),
+            body: JSON.stringify(
+                notif.staffMessageConversationId
+                    ? { staffMessageConversationId: notif.staffMessageConversationId }
+                    : notif.reportId
+                        ? { reportId: notif.reportId }
+                        : notif.parentDeletionNotificationId
+                            ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
+                            : notif.announcementId
+                                ? { notificationIds: notif.notificationIds ?? [notif.id] }
+                                : notif.id < 0
+                                    ? { attendanceLogId: -notif.id }
+                                    : { notificationId: notif.id }
+            ),
         }).catch(() => null);
+        if (notif.staffMessageConversationId) {
+            router.push(`/dashboard/parent/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`);
+            return;
+        }
+        if (notif.reportId) {
+            router.push(`/dashboard/parent/reports?reportId=${notif.reportId}`);
+            return;
+        }
         router.push("/dashboard/parent/notifications");
     }
 

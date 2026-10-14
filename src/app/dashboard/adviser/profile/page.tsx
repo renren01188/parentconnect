@@ -282,10 +282,17 @@ function SettingsModal({
                     currentPassword: verifiedPw,
                 }),
             });
-            const json = await res.json();
-            if (!json.success) {
-                if (res.status === 409) setApprovalSent(true);
-                throw new Error(json.message);
+            const json = await res.json().catch(() => null);
+            if (res.status === 409) {
+                // The previous request is already waiting for ICT. Do not
+                // show this as a failed save or let the user submit a second.
+                setApprovalSent(true);
+                setApprovalMsg(json?.message || "Your profile update request is already pending ICT approval.");
+                onProfileUpdated();
+                return;
+            }
+            if (!res.ok || !json?.success) {
+                throw new Error(json?.message || "Unable to send the approval request.");
             }
             setApprovalSent(true);
             setApprovalMsg("Approval request sent! Your changes will be applied once ICT approves.");

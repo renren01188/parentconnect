@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit";
 import { getIctFromToken } from "@/lib/getIctFromToken";
+import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type StudentRow = {
   id: number;
@@ -224,6 +225,7 @@ export async function POST(req: NextRequest) {
     let totalMarked = 0;
     let alreadyRecorded = 0;
     const failedStudentIds: string[] = [];
+    const affectedStudentDbIds = new Set<number>();
     for (let i = 0; i < absentInserts.length; i += 50) {
       const batch = absentInserts.slice(i, i + 50);
       const { error: insertError } = await supabase
@@ -237,6 +239,7 @@ export async function POST(req: NextRequest) {
             .insert(absentRecord);
           if (!rowError) {
             totalMarked += 1;
+            affectedStudentDbIds.add(Number(absentRecord.student_db_id));
           } else if (rowError.code === "23505") {
             // The unique student/date/session/type index means another worker
             // or RFID scan completed this record first. It is reconciled, not
@@ -249,10 +252,21 @@ export async function POST(req: NextRequest) {
         }
       } else {
         totalMarked += batch.length;
+        for (const absentRecord of batch) affectedStudentDbIds.add(Number(absentRecord.student_db_id));
       }
     }
 
     if (totalMarked > 0) await logAudit({ action: "Attendance Auto-marked", performedBy: "System", performedByRole: "System", module: "Attendance", targetType: "Class Session", targetId: `${sessionDate}:${sessionType}`, targetUser: `${sessionType} session`, targetRole: "Class Session", newStatus: "Absent", details: `Auto-marked ${totalMarked} student(s) absent after the ${sessionType} session cutoff.` });
+    if (affectedStudentDbIds.size > 0) {
+      // Each recipient gets only a data-free attendance invalidation, then
+      // refreshes its own already-authorized snapshot. Run after the response
+      // because this scheduled bulk write can affect an entire class.
+      after(() => Promise.all(
+        [...affectedStudentDbIds]
+          .filter((studentDbId) => Number.isSafeInteger(studentDbId) && studentDbId > 0)
+          .map((studentDbId) => publishAttendanceRealtimeInvalidation({ studentDbId })),
+      ).then(() => undefined));
+    }
     if (failedStudentIds.length > 0) {
       return NextResponse.json({
         success: false,

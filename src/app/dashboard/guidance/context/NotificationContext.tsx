@@ -66,7 +66,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         ticketsRes.json().catch(() => null),
       ]);
 
-      const allReports = (reportsData?.reports ?? []) as Array<{ id?: number; hasUnreadForGuidance?: boolean; status?: string; guidanceSeen?: boolean; ticketStatus?: string | null }>;
+      const allReports = (reportsData?.reports ?? []) as Array<{
+        id?: number;
+        hasUnreadForGuidance?: boolean;
+        status?: string;
+        guidanceSeen?: boolean;
+        ticketStatus?: string | null;
+        escalatedToGuidance?: boolean;
+        escalatedToPrincipal?: boolean;
+      }>;
       const tickets = ticketsRes.ok
         ? ((ticketsData?.tickets ?? []) as Array<{ report_id?: number; status?: string; isAssignedToCurrentGuidance?: boolean; isReadByCurrentGuidance?: boolean }>)
         : [];
@@ -89,11 +97,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setReportsUnreadCount(reportCount + staffCount + pendingTicketCount);
       // notifUnreadCount is intentionally NOT set here — the Notifications
       // nav item tracks its own separate source, not parent-adviser replies.
-      // Track escalated reports separately for the sidebar panel
-      const nextEscalatedCount = reportsRes.ok
-        ? allReports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(Number(r.id)))).length + pendingTicketCount
-        : pendingTicketCount;
-      setEscalatedCount(nextEscalatedCount);
+      // This sidebar total is an active Guidance workload count, not an
+      // unread count. Once Guidance opens a report its display status becomes
+      // "Ongoing", but it must remain in this total until it is resolved or
+      // handed on to the Principal.
+      const activeGuidanceConcernCount = reportsRes.ok
+        ? allReports.filter((report) => (
+          report.escalatedToGuidance === true
+          && report.escalatedToPrincipal !== true
+          && report.status !== "Resolved"
+        )).length
+        : 0;
+      setEscalatedCount(activeGuidanceConcernCount + pendingTicketCount);
     } catch {
       setUnreadCount(0);
       setReportsUnreadCount(0);

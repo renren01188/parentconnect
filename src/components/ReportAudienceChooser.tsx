@@ -49,14 +49,14 @@ export default function ReportAudienceChooser({ label = "Submit a Report" }: { l
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="report-audience-title"
+          aria-label="Choose report type"
+          aria-describedby="report-audience-description"
           className="my-auto w-full max-w-md rounded-3xl bg-white p-5 shadow-[0_24px_64px_rgba(15,23,42,0.35)] sm:p-7"
           onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="mb-6 flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h2 id="report-audience-title" className="text-xl font-extrabold text-slate-800 sm:text-2xl">Are you a?</h2>
-              <p className="mt-1.5 text-sm leading-6 text-slate-500">Choose the type of report you are submitting.</p>
+              <p id="report-audience-description" className="text-sm leading-6 text-slate-500">Choose the type of report you are submitting.</p>
             </div>
             <button
               type="button"

@@ -16,18 +16,21 @@ const contactPairs = [
     page: "src/app/dashboard/adviser/contact-ict/page.tsx",
     context: "src/app/dashboard/adviser/context/NotificationContext.tsx",
     clear: "clearIctUnreadCount",
+    legacyConversationPrefix: "adviser-ict",
   },
   {
     route: "src/app/api/guidance-ict/messages/route.ts",
     page: "src/app/dashboard/guidance/contact-ict/page.tsx",
     context: "src/app/dashboard/guidance/context/NotificationContext.tsx",
     clear: "clearIctUnreadCount",
+    legacyConversationPrefix: "guidance-ict",
   },
   {
     route: "src/app/api/principal-ict/messages/route.ts",
     page: "src/app/dashboard/principal/contact-ict/page.tsx",
     context: "src/app/dashboard/principal/context/NotificationContext.tsx",
     clear: "clearIctMessageCount",
+    legacyConversationPrefix: "principal-ict",
   },
 ];
 
@@ -46,11 +49,20 @@ for (const pair of contactPairs) {
   assert.match(route, /searchParams\.get\("seenAfter"\)/);
   assert.match(route, /unreadQuery\.gt\("created_at"/);
 
+  // Contact ICT and ICT Inbox now share one canonical key for a saved root.
+  // That makes each participant accept the other's Realtime typing event.
+  assert.match(route, /return `staff-message:\$\{id\}`/);
+  assert.match(route, new RegExp(`staff-message\\|${pair.legacyConversationPrefix}`));
+
   // Opening Contact ICT dismisses only its sidebar attention count. Incoming
   // rows still retain `isUnread` until the user explicitly opens or replies.
   assert.match(page, new RegExp(`const \\{[\\s\\S]*?${pair.clear}[\\s\\S]*?\\} = useNotifContext\\(\\)`));
   assert.match(page, new RegExp(`useEffect\\(\\(\\) => \\{[\\s\\S]*?${pair.clear}\\(\\)`));
   assert.match(page, /conversation\.isUnread/);
+  // A Realtime fetch may finish before the page-load fetch. Each Contact ICT
+  // page must discard that old response rather than hiding the live thread.
+  assert.match(page, /messagesRequestVersionRef/);
+  assert.match(page, /requestVersion !== messagesRequestVersionRef\.current/);
   assert.doesNotMatch(page, /setIctUnreadCount\(Number\(data\.unreadCount/);
   assert.match(context, new RegExp(`${pair.clear}: \\(\\) => void`));
   assert.match(context, /ictBadgeVersionRef\.current \+= 1/);
@@ -75,6 +87,8 @@ assert.match(ictInbox, /\/api\/reports\/staff-messages\?role=ict/);
 assert.match(ictInbox, /useStaffMessagesRealtime\(loadMessages/);
 assert.match(ictInbox, /markInboxSeen\(\)/);
 assert.match(ictInbox, /conversation\.isUnread/);
+assert.match(ictInbox, /messagesRequestVersionRef/);
+assert.match(ictInbox, /requestVersion !== messagesRequestVersionRef\.current/);
 assert.match(sharedRoute, /\["read", "replied", "typing"\]/);
 assert.match(sharedRoute, /A reply acknowledges every inbound message/);
 assert.match(sharedRoute, /source_message_id", rootId/);

@@ -9,6 +9,7 @@ import {
     Eye, EyeOff, Upload,
 } from "lucide-react";
 import Sidebar from "../components/Sidebar";
+import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
@@ -239,9 +240,13 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
             }
             setSaving(false);
             setStep("success");
-        } catch {
-            if (tab === "profile") setAuthErr("Unable to save profile. Please try again.");
-            else setPwErr({ current: "Unable to update password. Please try again." });
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unable to save your changes. Please try again.";
+            // The authorization inputs only render on the edit step. Return
+            // there so a failed save stays in-session and shows its real error.
+            setStep("edit");
+            if (tab === "profile") setAuthErr(message);
+            else setPwErr({ current: message });
         } finally {
             setSaving(false);
         }
@@ -554,6 +559,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
 // ─── Main Profile Page ────────────────────────────────────────────────────────
 export default function ProfilePage() {
     const router = useRouter();
+    const { refreshSession } = useParentSession();
     const [profile, setProfile] = useState<ProfileData>({
         firstName:  "",
         middleName: "",
@@ -636,13 +642,17 @@ export default function ProfilePage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ...updated, currentPassword }),
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => null);
 
-        if (!data.success) {
-            throw new Error(data.message || "Unable to save profile.");
+        if (!res.ok || !data?.success) {
+            throw new Error(data?.message || "Unable to save profile.");
         }
 
         setProfile(data.parent ?? updated);
+        // The API returns a refreshed HttpOnly cookie with the saved identity
+        // claims. Refreshing this shared snapshot keeps the sidebar and other
+        // Parent pages in the same logged-in session.
+        await refreshSession();
         window.dispatchEvent(new Event("parent-profile-updated"));
     }
 

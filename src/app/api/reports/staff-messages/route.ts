@@ -395,6 +395,7 @@ export async function GET(req: NextRequest) {
       const unread = latestIncoming && String(last.status ?? "") === "unread";
       const otherIsSender = root.sender_type !== current.type || Number(root.sender_id) !== current.id;
       const rootIsCurrentUser = root.sender_type === current.type && Number(root.sender_id) === current.id;
+      const latestIsCurrentUser = latestOutgoing;
       return {
         id: Number(root.id),
         conversationId: `staff-message:${root.id}`,
@@ -410,6 +411,15 @@ export async function GET(req: NextRequest) {
         categories: Array.isArray(root.categories) ? root.categories.map(String) : [],
         attachments: cleanAttachments(root.attachments),
         sent_at: formatDate(String(root.created_at)),
+        // The thread root remains available for the detail view. Inbox cards
+        // use these explicit latest-row fields so a reply never shows stale
+        // content or the wrong sender.
+        latest_message: String(last.body ?? ""),
+        latest_sender: roleLabel(String(last.sender_type)),
+        latest_sender_name: String(last.sender_name ?? ""),
+        latest_sender_is_current: latestIsCurrentUser,
+        latest_sent_at: formatDate(String(last.created_at ?? root.created_at)),
+        latest_created_at: String(last.created_at ?? root.created_at),
         // Direct staff conversations are independent from report workflow
         // state. An outgoing final message is "Sent", never "Replied".
         status: unread ? "New" as const : latestOutgoing ? "Sent" as const : "Read" as const,

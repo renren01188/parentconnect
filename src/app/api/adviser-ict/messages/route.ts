@@ -128,13 +128,17 @@ function isIncoming(row: StaffMessageRow, session: Session) {
 }
 
 function conversationId(id: number) {
-  return `adviser-ict:${id}`;
+  // Match ICT Inbox's conversation key so an authenticated Realtime typing
+  // event identifies the same thread at each end of the conversation.
+  return `staff-message:${id}`;
 }
 
 function rootIdFromConversationId(value: unknown) {
   const raw = String(value ?? "");
-  if (!raw.startsWith("adviser-ict:")) return null;
-  const id = Number(raw.replace("adviser-ict:", ""));
+  // Accept the former route-specific ID for tabs opened before this update.
+  const match = raw.match(/^(?:staff-message|adviser-ict):([1-9][0-9]*)$/);
+  if (!match) return null;
+  const id = Number(match[1]);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 

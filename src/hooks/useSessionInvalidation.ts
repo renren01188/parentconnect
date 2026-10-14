@@ -18,6 +18,7 @@ const reconnectRefresh: RealtimeInvalidation = {
   messageId: null,
   actorKey: null,
   active: null,
+  sessionRevoked: false,
 };
 
 // A dashboard layout and its active page used to open separate connections to

@@ -338,9 +338,9 @@ export async function sendAdviserTempPasswordEmail({
     subject: "🏫 Your Adviser Account Has Been Created — Temporary Password",
     html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:16px;">
-        <div style="background:#522081;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+        <div style="background:#059669;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
           <h1 style="color:white;margin:0;font-size:22px;">ParentConnect</h1>
-          <p style="color:#ddd6fe;margin:6px 0 0;font-size:13px;">Santiago Elementary School — Adviser Portal</p>
+          <p style="color:#d1fae5;margin:6px 0 0;font-size:13px;">Santiago Elementary School — Adviser Portal</p>
         </div>
         <div style="background:white;border-radius:12px;padding:24px;margin-bottom:16px;border:1px solid #e2e8f0;">
           <p style="color:#374151;font-size:15px;margin:0 0 12px;">Hello, <strong>${adviserName}</strong>,</p>
@@ -353,8 +353,8 @@ export async function sendAdviserTempPasswordEmail({
           </p>
 
           <!-- Assignment summary -->
-          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:20px;margin:16px 0;">
-            <p style="margin:0 0 10px;font-size:12px;font-weight:700;color:#5b21b6;text-transform:uppercase;">Class Assignment</p>
+          <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:20px;margin:16px 0;">
+            <p style="margin:0 0 10px;font-size:12px;font-weight:700;color:#047857;text-transform:uppercase;">Class Assignment</p>
             <table style="width:100%;font-size:14px;">
               <tr>
                 <td style="color:#6b7280;padding:4px 0;width:160px;">Grade Level:</td>
@@ -365,8 +365,8 @@ export async function sendAdviserTempPasswordEmail({
           </div>
 
           <!-- Login credentials -->
-          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:20px;margin:16px 0;">
-            <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#5b21b6;text-transform:uppercase;">Your Login Credentials</p>
+          <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:20px;margin:16px 0;">
+            <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#047857;text-transform:uppercase;">Your Login Credentials</p>
             <table style="width:100%;font-size:14px;">
               <tr>
                 <td style="color:#6b7280;padding:4px 0;width:160px;">Email:</td>
@@ -375,7 +375,7 @@ export async function sendAdviserTempPasswordEmail({
               <tr>
                 <td style="color:#6b7280;padding:4px 0;">Temporary Password:</td>
                 <td>
-                  <span style="font-family:monospace;font-size:18px;font-weight:700;color:#5b21b6;background:#ede9fe;padding:4px 10px;border-radius:6px;letter-spacing:2px;">
+                  <span style="font-family:monospace;font-size:18px;font-weight:700;color:#047857;background:#d1fae5;padding:4px 10px;border-radius:6px;letter-spacing:2px;">
                     ${tempPassword}
                   </span>
                 </td>

@@ -1,8 +1,10 @@
 ﻿"use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type ExcelJS from "exceljs";
 import PrincipalAttendanceSummaryGuide from "../components/PrincipalAttendanceSummaryGuide";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 
 // ─── Color Palette ────────────────────────────────────────────────
@@ -1417,14 +1419,20 @@ export default function AttendanceSummaryPage() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const selectedPeriodRef = useRef<string | null>(null);
 
   useEffect(() => {
     const monthIndex = MONTHS.indexOf(selectedMonth) + 1; // convert to 1-based number
     const controller = new AbortController();
+    const periodKey = `${selectedYear}-${monthIndex}`;
+    const periodChanged = selectedPeriodRef.current !== periodKey;
+    selectedPeriodRef.current = periodKey;
 
     async function fetchSummary() {
-      setSelectedGrade(null);
-      setSelectedSection(null);
+      if (periodChanged) {
+        setSelectedGrade(null);
+        setSelectedSection(null);
+      }
       setLoading(true);
       setFetchError(null);
       try {
@@ -1436,7 +1444,16 @@ export default function AttendanceSummaryPage() {
         if (!res.ok) throw new Error(json?.message ?? "Failed to load attendance data");
         if (!json.success) throw new Error(json.message ?? "Unknown error");
         if (controller.signal.aborted) return;
-        setGradeData(json.gradeData ?? []);
+        const nextGradeData = Array.isArray(json.gradeData) ? json.gradeData as GradeLevel[] : [];
+        setGradeData(nextGradeData);
+        if (!periodChanged) {
+          setSelectedGrade((current) => current
+            ? nextGradeData.find((grade) => grade.grade === current.grade) ?? null
+            : null);
+          setSelectedSection((current) => current
+            ? nextGradeData.flatMap((grade) => grade.sections).find((section) => section.id === current.id) ?? null
+            : null);
+        }
         setSchoolDayDates(Array.isArray(json.schoolDays) ? json.schoolDays : []);
       } catch (err: unknown) {
         if (controller.signal.aborted) return;
@@ -1451,6 +1468,14 @@ export default function AttendanceSummaryPage() {
     fetchSummary();
     return () => controller.abort();
   }, [selectedMonth, selectedYear, reloadKey]);
+  const scheduleAttendanceRefresh = useDebouncedRealtimeRefresh(
+    () => setReloadKey((key) => key + 1),
+  );
+  useSessionInvalidation(({ scope }) => {
+    if (["attendance", "students", "dashboard"].includes(scope ?? "")) {
+      scheduleAttendanceRefresh();
+    }
+  });
   // ─────────────────────────────────────────────────────────────────
 
   function handleSelectGrade(g: GradeLevel) { setSelectedGrade(g); setSelectedSection(null); }

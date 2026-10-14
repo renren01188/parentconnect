@@ -30,11 +30,12 @@ assert.match(page, /monitoringDateRangeLabel\(monitoringStartDate, monitoringEnd
 assert.match(page, /items=\{filteredMonitoringEntries\}/);
 assert.match(page, /filterSummary=\{monitoringFilterSummary\}/);
 assert.match(page, /filteredMonitoringEntries\.map\(\(entry\)/);
+assert.doesNotMatch(page, /Privacy controls active/);
 
 // Small screens receive readable cards; the full table is reserved for wider
 // screens where all columns can remain visible.
 assert.match(page, /space-y-3 md:hidden/);
-assert.match(page, /hidden overflow-x-auto rounded-xl border border-slate-200 md:block/);
+assert.match(page, /hidden max-w-full overflow-x-auto rounded-xl border border-slate-200 md:block/);
 assert.match(page, /\["Date", "From → To", "Student", "Concern", "Category", "Priority", "Status"\]/);
 
 // Excel and PDF include the exact active scope. Excel has read-friendly

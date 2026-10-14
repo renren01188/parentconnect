@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendStudentConcernParentNotificationEmail } from "@/lib/mailer";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { listMessages, toAdviserReport } from "@/app/api/reports/parent-adviser/_lib";
 import type { StudentReportRow } from "../../_lib";
 
@@ -53,27 +54,6 @@ export async function POST(
     const subject = `[Student Concern] ${studentReport.title}`;
     const trimmedMessage = String(message).trim();
 
-    const { data: existingParentReport, error: existingReportError } = await supabase
-      .from("parent_adviser_reports")
-      .select("*")
-      .eq("adviser_id", adviser.id)
-      .eq("student_id", studentReport.student_id)
-      .eq("subject", subject)
-      .limit(1)
-      .maybeSingle();
-
-    if (existingReportError) throw existingReportError;
-
-    if (existingParentReport) {
-      const messages = await listMessages([existingParentReport.id]);
-      return NextResponse.json({
-        success: true,
-        alreadyNotified: true,
-        report: toAdviserReport(existingParentReport, messages.get(existingParentReport.id) ?? []),
-        message: "Parent has already been notified for this student report.",
-      });
-    }
-
     // Only notify a parent/guardian explicitly linked to this student. This
     // avoids relying on a matching email alone when a parent has several
     // children or legacy parent rows exist.
@@ -84,7 +64,11 @@ export async function POST(
 
     if (parentLookupError) throw parentLookupError;
     const parentRow = (linkedParentRows ?? [])
-      .map((link) => link.parents as unknown as { id: number; email: string | null })
+      .flatMap((link) => {
+        const relation = link.parents as unknown;
+        return Array.isArray(relation) ? relation : relation ? [relation] : [];
+      })
+      .map((parent) => parent as { id: number; email: string | null })
       .find((parent) => parent.email?.toLowerCase() === studentReport.parent_email?.toLowerCase());
 
     if (!parentRow) {
@@ -94,9 +78,51 @@ export async function POST(
       );
     }
 
+    const parentId = Number(parentRow.id);
+    if (!Number.isSafeInteger(parentId) || parentId <= 0) {
+      return NextResponse.json(
+        { success: false, message: "The linked parent or guardian is invalid." },
+        { status: 400 }
+      );
+    }
+
+    // A forwarded student concern is unique to this exact parent/student/
+    // adviser relationship. Checking the parent as well prevents a matching
+    // subject for another guardian from suppressing this parent's report.
+    const { data: existingParentReport, error: existingReportError } = await supabase
+      .from("parent_adviser_reports")
+      .select("*")
+      .eq("parent_id", parentId)
+      .eq("adviser_id", adviser.id)
+      .eq("student_id", studentReport.student_id)
+      .eq("subject", subject)
+      .limit(1)
+      .maybeSingle();
+
+    if (existingReportError) throw existingReportError;
+
+    if (existingParentReport) {
+      // A retry can refresh the same report for an already-open Parent
+      // dashboard, but never insert a duplicate conversation.
+      await publishReportRealtimeInvalidation({
+        parentId,
+        adviserId: adviser.id,
+        includePrincipals: false,
+        reportId: existingParentReport.id,
+        kind: "message",
+      });
+      const messages = await listMessages([existingParentReport.id]);
+      return NextResponse.json({
+        success: true,
+        alreadyNotified: true,
+        report: toAdviserReport(existingParentReport, messages.get(existingParentReport.id) ?? []),
+        message: "Parent has already been notified for this student report.",
+      });
+    }
+
     const now = new Date().toISOString();
     const insertPayload = {
-      parent_id: parentRow?.id ?? null,
+      parent_id: parentId,
       parent_email: studentReport.parent_email,
       parent_name: parentName,
       adviser_id: adviser.id,
@@ -108,8 +134,8 @@ export async function POST(
       subject,
       categories: [studentReport.category],
       concern_level: 50,
-      // Parent must explicitly choose before the Student Concern conversation
-      // begins; unlike parent-created reports this is initially undecided.
+      // Parent must accept the agreement before the Student Concern
+      // conversation begins; unlike parent-created reports this is undecided.
       allow_history_access: null,
       status: "ongoing",
       status_updated_at: now,
@@ -175,6 +201,17 @@ export async function POST(
 
     const messages = await listMessages([parentReport.id]);
     const adviserReport = toAdviserReport(parentReport, messages.get(parentReport.id) ?? []);
+
+    // A student concern begins as an Adviser record, but once it is forwarded
+    // the linked parent owns a report conversation too. Refresh only the
+    // authorized participants' report data without exposing its contents.
+    await publishReportRealtimeInvalidation({
+      parentId,
+      adviserId: adviser.id,
+      includePrincipals: false,
+      reportId: parentReport.id,
+      kind: "message",
+    });
 
     try {
       await sendStudentConcernParentNotificationEmail({

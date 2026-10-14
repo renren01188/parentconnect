@@ -246,6 +246,16 @@ export default function ReportPage() {
   }, [loadOptions]);
 
   useEffect(() => {
+    // Next.js deduplicates the Google script. When a visitor has already
+    // opened another page that loaded it, this page will not receive that
+    // script tag's onLoad callback, so detect the ready widget API as well.
+    const readinessTimer = window.setTimeout(() => {
+      if (typeof window.grecaptcha?.render === "function") setRecaptchaLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(readinessTimer);
+  }, []);
+
+  useEffect(() => {
     if (!recaptchaLoaded) return;
 
     // The Google loader can create window.grecaptcha before its checkbox
@@ -512,6 +522,11 @@ export default function ReportPage() {
                     ) : (
                       <div className="report-captcha-shell"><div ref={captchaContainerRef} className="report-captcha" /></div>
                     )}
+                    {RECAPTCHA_SITE_KEY && !recaptchaError && !recaptchaToken && (
+                      <p aria-live="polite" className="mt-2 text-xs font-medium text-slate-500">
+                        {recaptchaLoaded ? "Complete the CAPTCHA to enable Submit Report." : "Loading secure CAPTCHA…"}
+                      </p>
+                    )}
                     {recaptchaError && <p role="alert" className="mt-2 text-xs font-medium text-red-600">{recaptchaError}</p>}
                   </div>
                 </div>
@@ -537,7 +552,7 @@ export default function ReportPage() {
                 <button
                   type="submit"
                   disabled={!canSubmit}
-                  className="flex items-center justify-center gap-2 w-full bg-amber-400 hover:bg-amber-500 disabled:bg-amber-300 text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md shadow-amber-200 text-sm mt-1"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-400 py-3.5 text-sm font-bold text-white shadow-md shadow-amber-200 transition-all duration-200 hover:bg-amber-500 active:scale-95 disabled:cursor-not-allowed disabled:bg-amber-300 disabled:shadow-none"
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">

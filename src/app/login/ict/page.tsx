@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Monitor, ArrowLeft, ArrowRight } from "lucide-react";
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
+import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 import Link from "next/link";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
@@ -63,8 +63,13 @@ export default function ICTLoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-md w-full max-w-sm px-8 py-8">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800">
+      <LoginLandingHeader />
+
+      <main className="relative flex flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,#f8fbff_0%,#f1f7f8_100%)] px-4 py-10 sm:px-6 sm:py-14">
+        <div aria-hidden="true" className="absolute -left-24 top-12 h-64 w-64 rounded-full bg-sky-200/35 blur-3xl" />
+        <div aria-hidden="true" className="absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-emerald-200/35 blur-3xl" />
+        <div className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200/90 bg-white/95 p-5 shadow-[0_22px_60px_rgba(15,43,76,0.13)] backdrop-blur-sm sm:p-8">
 
         {/* Back link */}
         <Link
@@ -74,8 +79,6 @@ export default function ICTLoginPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to user selection
         </Link>
-
-        <LoginInstitutionLogos className="justify-center mb-6" />
 
         {/* Icon */}
         <div className="flex justify-center mb-4">
@@ -168,7 +171,12 @@ export default function ICTLoginPage() {
         <p className="text-center text-xs text-gray-400 mt-5">
           Contact school administrator for assistance
         </p>
-      </div>
+        </div>
+      </main>
+
+      <footer className="bg-[#15233f] px-4 py-5 text-center text-sm text-slate-300">
+        &copy; 2026 Santiago Elementary School. All rights reserved.
+      </footer>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import GuidanceDashboardGuide from "./components/GuidanceDashboardGuide";
 
@@ -54,8 +55,11 @@ export default function GuidanceDashboard() {
   }, []);
 
   useVisibleRefresh(loadDashboard);
+  const scheduleDashboardRefresh = useDebouncedRealtimeRefresh(loadDashboard);
   useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "reports") return loadDashboard();
+    if (!scope || ["reports", "tickets", "audit"].includes(scope)) {
+      scheduleDashboardRefresh();
+    }
   });
 
   useEffect(() => {

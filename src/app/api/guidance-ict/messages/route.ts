@@ -129,13 +129,17 @@ function isIncoming(row: StaffMessageRow, session: Session) {
 }
 
 function conversationId(id: number) {
-    return `guidance-ict:${id}`;
+    // Use the Inbox's canonical key so the two participants compare the same
+    // Realtime typing conversation identifier.
+    return `staff-message:${id}`;
 }
 
 function rootIdFromConversationId(value: unknown) {
     const raw = String(value ?? "");
-    if (!raw.startsWith("guidance-ict:")) return null;
-    const id = Number(raw.replace("guidance-ict:", ""));
+    // Existing tabs can still reply with their former route-specific key.
+    const match = raw.match(/^(?:staff-message|guidance-ict):([1-9][0-9]*)$/);
+    if (!match) return null;
+    const id = Number(match[1]);
     return Number.isFinite(id) && id > 0 ? id : null;
 }
 

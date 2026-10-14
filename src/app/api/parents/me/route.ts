@@ -10,6 +10,14 @@ const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
 
+const parentSessionCookie = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: 60 * 60 * 24,
+  path: "/",
+};
+
 function fullName(row: {
   first_name: string;
   middle_name?: string | null;
@@ -229,7 +237,9 @@ export async function PATCH(req: NextRequest) {
     if (!passwordMatch) {
       return NextResponse.json(
         { success: false, message: "Current password is incorrect." },
-        { status: 401 }
+        // The session is still valid; keep an incorrect re-authentication in
+        // the settings modal rather than treating it as a dashboard logout.
+        { status: 400 }
       );
     }
 
@@ -321,16 +331,8 @@ export async function PATCH(req: NextRequest) {
       .setExpirationTime("24h")
       .sign(SECRET);
 
-    cookieStore.set("parent_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24,
-      path: "/",
-    });
-
     await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       parent: {
         firstName: updatePayload.parent_first_name,
@@ -343,6 +345,10 @@ export async function PATCH(req: NextRequest) {
       },
       message: "Profile updated successfully.",
     });
+    // Return the refreshed token on the same response as the saved account.
+    // This preserves the current dashboard session after an email/name edit.
+    response.cookies.set("parent_token", newToken, parentSessionCookie);
+    return response;
   } catch (error: unknown) {
     console.error("PATCH /api/parents/me error:", error);
     return NextResponse.json(
@@ -400,7 +406,7 @@ export async function PUT(req: NextRequest) {
     if (!passwordMatch) {
       return NextResponse.json(
         { success: false, message: "Current password is incorrect." },
-        { status: 401 }
+        { status: 400 }
       );
     }
 

@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { sendExcuseLetterToAdviserEmail } from "@/lib/mailer";
 import { validateExcuseLetterAttachmentPayload } from "@/lib/excuseLetterAttachment";
+import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const SECRET = new TextEncoder().encode(
     process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -119,7 +120,7 @@ export async function POST(req: NextRequest) {
         // Get student info + adviser email
         const { data: studentRow, error: studentError } = await supabase
             .from("students")
-            .select("first_name, last_name, section, grade")
+            .select("id, first_name, last_name, section, grade")
             .eq("student_id", student_id)
             .single();
 
@@ -190,6 +191,11 @@ export async function POST(req: NextRequest) {
             dateTo: date_to,
             message: message.trim(),
         }).catch((e) => console.error("Adviser email failed:", e));
+
+        // The adviser’s pending-letter list and the parent’s attendance view
+        // both derive from the same student. Broadcast only a data-free
+        // invalidation to the accounts authorized for that student.
+        after(() => publishAttendanceRealtimeInvalidation({ studentDbId: Number(studentRow.id) }));
 
         return NextResponse.json({ success: true, message: "Excuse letter submitted successfully.", id: letter.id });
     } catch (error) {

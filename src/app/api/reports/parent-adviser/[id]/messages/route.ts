@@ -11,6 +11,7 @@ import {
   getPrincipalSession,
   getReportForAdviser,
   getReportForParent,
+  isStudentConcernReport,
 } from "../../_lib";
 
 function errorMessage(error: unknown) {
@@ -173,6 +174,18 @@ export async function POST(
         );
       }
 
+      // An accepted ticket belongs to one Guidance Counselor. Legacy
+      // escalations without an accepted assignment retain the established
+      // active-Guidance fallback, but an assigned conversation must not be
+      // writable by another counselor.
+      const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
+      if (assignedGuidanceId !== null && assignedGuidanceId !== guidance.id) {
+        return NextResponse.json(
+          { success: false, message: "This report is assigned to another Guidance Counselor." },
+          { status: 403 },
+        );
+      }
+
       const isFirstGuidanceReply = !report.guidance_seen_at;
       const result = await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
       if (!result.duplicate) {
@@ -249,6 +262,13 @@ export async function POST(
       );
     }
 
+    if (isStudentConcernReport(report) && report.allow_history_access !== true) {
+      return NextResponse.json(
+        { success: false, message: "Accept the Terms and Agreement before starting this Student Concern conversation." },
+        { status: 403 },
+      );
+    }
+
     // The report handoff determines the Parent's active conversation. Do not
     // let a browser-provided thread type route a reply back to an Adviser once
     // Guidance or the Principal owns the report.
@@ -274,14 +294,22 @@ async function publishReportInvalidation(report: {
   escalated_to_guidance?: boolean | null;
   escalated_to_principal?: boolean | null;
 }, reportId: number, messageId: number) {
-  const guidanceId = report.escalated_to_guidance
+  const principalConversation = Boolean(report.escalated_to_principal);
+  const guidanceConversation = !principalConversation && Boolean(report.escalated_to_guidance);
+  const guidanceId = guidanceConversation
     ? await acceptedGuidanceRecipientForReport(reportId)
     : null;
   await publishReportRealtimeInvalidation({
     parentId: report.parent_id,
-    adviserId: report.adviser_id,
-    includeGuidance: Boolean(report.escalated_to_guidance),
+    // Message invalidations belong only to the conversation owner at the
+    // current handoff stage. Durable status changes use their own broader
+    // notifications; a reply must never refresh a former participant's
+    // active message box.
+    adviserId: principalConversation || guidanceConversation ? null : report.adviser_id,
+    includeAdviser: !principalConversation && !guidanceConversation,
+    includeGuidance: guidanceConversation,
     guidanceId,
+    includePrincipals: principalConversation,
     reportId,
     kind: "message",
     messageId,

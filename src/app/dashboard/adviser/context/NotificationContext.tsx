@@ -214,6 +214,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         notifyNotificationChange();
         return;
       }
+      if (scope === "attendance" || scope === "students") {
+        notifyNotificationChange();
+        return;
+      }
       if (scope === "notifications" || scope === "announcements") {
         notifyNotificationChange();
         return;

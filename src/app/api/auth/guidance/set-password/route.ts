@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
+import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -59,6 +60,14 @@ export async function POST(req: NextRequest) {
         { status: 403 }
       );
     }
+    const guidanceId = Number(payload.id);
+    if (await isPasswordSessionRevoked({ role: "guidance", accountId: guidanceId, payload })) {
+      cookieStore.delete("guidance_token");
+      return NextResponse.json(
+        { success: false, message: "Your password was changed. Please log in again." },
+        { status: 401 },
+      );
+    }
 
     const hashed = await bcrypt.hash(newPassword, 10);
 
@@ -70,7 +79,7 @@ export async function POST(req: NextRequest) {
         status: "active",
         updated_at: new Date().toISOString(),
       })
-      .eq("id", payload.id)
+      .eq("id", guidanceId)
       .select("id, password_hash")
       .single();
 
@@ -79,8 +88,9 @@ export async function POST(req: NextRequest) {
       throw new Error("The Guidance password update could not be verified.");
     }
 
-    const newToken = await new SignJWT({ ...payload, passwordSet: true })
+    const newToken = await new SignJWT({ ...payload, passwordSet: true, sessionIssuedAt: Date.now() })
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
       .setExpirationTime("8h")
       .sign(SECRET);
 

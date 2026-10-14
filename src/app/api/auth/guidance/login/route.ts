@@ -85,10 +85,12 @@ export async function POST(req: NextRequest) {
       phone: guidance.phone,
       role: "guidance",
       passwordSet,
+      sessionIssuedAt: Date.now(),
     };
 
     const token = await new SignJWT(payload)
       .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
       .setExpirationTime("8h")
       .sign(SECRET);
 

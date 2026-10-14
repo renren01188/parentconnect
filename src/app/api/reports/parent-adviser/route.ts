@@ -10,6 +10,7 @@ import {
   getLinkedStudentIds,
   getParentSession,
   getPrincipalSession,
+  isPrincipalVisibleReport,
   listGuidanceTickets,
   listMessageSummaries,
   listMessages,
@@ -235,14 +236,18 @@ export async function GET(req: NextRequest) {
         .select(REPORT_SELECT)
         .order("last_message_at", { ascending: false });
       if (reportId) query = query.eq("id", reportId);
-      // Principal monitoring must be a complete superset of Parent Reports.
+      // Principal monitoring includes every parent report the Principal is
+      // authorized to see. Student concerns join that set after agreement.
       // Do not apply the regular inbox cap here, otherwise a new report can
       // appear in Principal Notifications while being absent from Reports.
       const { data, error } = await (reportId ? query.limit(1) : query);
 
       if (error) throw error;
 
-      const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+      // Student-submitted concerns become visible to Principal monitoring only
+      // after their linked parent accepts the conversation agreement.
+      const rows = (await resolveParentIdentities((data ?? []) as unknown as ReportRow[]))
+        .filter(isPrincipalVisibleReport);
       const [messages, tickets, principalReadsResult] = await Promise.all([
         (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
         listGuidanceTickets(rows.map((row) => row.id), !summary),
@@ -287,11 +292,21 @@ export async function GET(req: NextRequest) {
 
       if (error) throw error;
 
-      const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const [messages, tickets] = await Promise.all([
-        (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
-        listGuidanceTickets(rows.map((row) => row.id), !summary),
-      ]);
+      const candidateRows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+      const tickets = await listGuidanceTickets(candidateRows.map((row) => row.id), !summary);
+      // A report with an accepted ticket is an assigned one-counselor
+      // conversation. Keep legacy escalations with no assignment available
+      // to active Guidance accounts, matching the existing fallback used by
+      // the Realtime publisher.
+      const rows = candidateRows.filter((row) => {
+        const ticket = tickets.get(row.id);
+        const assignedGuidanceId = Number(ticket?.assigned_guidance_id);
+        return ticket?.status !== "accepted"
+          || !Number.isSafeInteger(assignedGuidanceId)
+          || assignedGuidanceId <= 0
+          || assignedGuidanceId === guidance.id;
+      });
+      const messages = await (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id));
       return NextResponse.json({
         success: true,
         reports: rows.map((row) => summary

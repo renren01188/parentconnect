@@ -1,7 +1,6 @@
 "use client";
 
-import { SchoolBackground } from "@/components/SchoolBackground";
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
+import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -71,33 +70,13 @@ export default function GuidanceLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
-      <header className="relative w-full h-48 overflow-hidden">
-        <SchoolBackground />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
-        <div className="relative z-10 flex items-center justify-between h-full px-8">
-          <div>
-            <p className="text-white/70 text-xs font-semibold tracking-widest uppercase mb-1">
-              Santiago Elementary School
-            </p>
-            <h1 className="text-white font-bold text-xl md:text-2xl">
-              ParentConnect: <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
-            </h1>
-          </div>
-          <LoginInstitutionLogos />
-        </div>
-        <nav className="absolute bottom-0 left-0 right-0 z-10 bg-black/60 backdrop-blur-sm flex justify-center gap-8 py-2">
-          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">
-            Contact us
-          </Link>
-          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">
-            About
-          </Link>
-        </nav>
-      </header>
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800">
+      <LoginLandingHeader />
 
-      <main className="flex-1 flex items-center justify-center py-12 px-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-100 w-full max-w-md p-8">
+      <main className="relative flex flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,#f8fbff_0%,#f1f7f8_100%)] px-4 py-10 sm:px-6 sm:py-14">
+        <div aria-hidden="true" className="absolute -left-24 top-12 h-64 w-64 rounded-full bg-sky-200/35 blur-3xl" />
+        <div aria-hidden="true" className="absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-emerald-200/35 blur-3xl" />
+        <div className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200/90 bg-white/95 p-5 shadow-[0_22px_60px_rgba(15,43,76,0.13)] backdrop-blur-sm sm:p-8">
           <Link href="/" className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium mb-6 transition-colors w-fit">
             <ArrowLeft className="w-4 h-4" />
             Back to user selection
@@ -190,7 +169,7 @@ export default function GuidanceLoginPage() {
         </div>
       </main>
 
-      <footer className="bg-slate-800 text-slate-400 text-center py-4 text-sm">
+      <footer className="bg-[#15233f] px-4 py-5 text-center text-sm text-slate-300">
         &copy; 2026 Santiago Elementary School. All rights reserved.
       </footer>
     </div>

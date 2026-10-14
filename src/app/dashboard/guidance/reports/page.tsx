@@ -79,6 +79,32 @@ function getAdminMsgStatusStyle(status: AdminMsgStatus) {
     }
 }
 
+function getLatestAdminPreview(message: AdminMessage) {
+    const latestReply = message.replies?.[message.replies.length - 1];
+    const latestIsCurrent = message.latest_sender_is_current
+        ?? latestReply?.is_current_user
+        ?? message.message_sender_is_current
+        ?? false;
+    const latestSenderName = latestIsCurrent
+        ? "You"
+        : message.latest_sender_name
+            || latestReply?.sender_name
+            || message.message_sender_name
+            || message.sender_name
+            || message.sender;
+    const latestSenderRole = latestIsCurrent
+        ? "Guidance"
+        : message.latest_sender || latestReply?.sender || message.message_sender || message.sender;
+    const latestBody = message.latest_message ?? latestReply?.message ?? message.message;
+
+    return {
+        body: latestBody || (message.attachments?.length || latestReply?.attachments?.length ? "Attachment" : "No message content"),
+        senderName: latestSenderName,
+        senderRole: latestSenderRole,
+        sentAt: message.latest_sent_at ?? latestReply?.sent_at ?? message.sent_at,
+    };
+}
+
 function groupByParent(reports: Report[]): ParentGroup[] {
     const map: Record<string, ParentGroup> = {};
     for (const r of reports) {
@@ -747,13 +773,19 @@ function ReportsPageContent() {
     const ticketDecisionInFlightRef = useRef<Set<number>>(new Set());
     const acceptedTicketReadAttemptsRef = useRef<Set<number>>(new Set());
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+    const reportDetailRefreshQueuedRef = useRef<Set<number>>(new Set());
+    const guidanceReportRequestVersionRef = useRef(0);
+    const staffMessageRequestVersionRef = useRef(0);
+    const preferredStaffConversationRef = useRef<string | null>(null);
 
     // Guidance escalation local state (keyed by report id)
     const [guidanceEscalated, setGuidanceEscalated] = useState<Record<number, boolean>>({});
 
     const loadGuidanceReports = useCallback(async () => {
+        const requestVersion = ++guidanceReportRequestVersionRef.current;
         const res = await fetch("/api/reports/parent-adviser?role=guidance&summary=1", { cache: "no-store" });
         const data = await res.json().catch(() => null);
+        if (requestVersion !== guidanceReportRequestVersionRef.current) return;
         if (!res.ok) throw new Error(data?.message || "Unable to load guidance reports.");
         const nextReports = (data?.reports ?? []) as Report[];
         setReports((current) => nextReports.map((report) => {
@@ -793,20 +825,26 @@ function ReportsPageContent() {
 
     const loadReportDetail = useCallback(async (id: number) => {
         const inFlight = reportDetailRequestsRef.current.get(id);
-        if (inFlight) return inFlight;
+        if (inFlight) {
+            reportDetailRefreshQueuedRef.current.add(id);
+            return inFlight;
+        }
 
         const request = (async () => {
-            const res = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${id}`, { cache: "no-store" });
-            const data = await res.json().catch(() => null);
-            if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
-            const report = (data?.reports?.[0] ?? null) as Report | null;
-            if (!report) return;
-            setReports((current) => current.map((item) => item.id === id ? report : item));
-            setGuidanceReplies((current) => ({
-                ...current,
-                [id]: (report.replies ?? []).filter((reply) => reply.sender === "Guidance" || reply.sender === report.parent_name),
-            }));
-            setSelectedReport((current) => current?.id === id ? report : current);
+            do {
+                reportDetailRefreshQueuedRef.current.delete(id);
+                const res = await fetch(`/api/reports/parent-adviser?role=guidance&reportId=${id}`, { cache: "no-store" });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+                const report = (data?.reports?.[0] ?? null) as Report | null;
+                if (!report) continue;
+                setReports((current) => current.map((item) => item.id === id ? report : item));
+                setGuidanceReplies((current) => ({
+                    ...current,
+                    [id]: (report.replies ?? []).filter((reply) => reply.sender === "Guidance" || reply.sender === report.parent_name),
+                }));
+                setSelectedReport((current) => current?.id === id ? report : current);
+            } while (reportDetailRefreshQueuedRef.current.has(id));
         })();
 
         reportDetailRequestsRef.current.set(id, request);
@@ -814,6 +852,7 @@ function ReportsPageContent() {
             await request;
         } finally {
             reportDetailRequestsRef.current.delete(id);
+            reportDetailRefreshQueuedRef.current.delete(id);
         }
     }, []);
 
@@ -949,8 +988,11 @@ function ReportsPageContent() {
     }
 
     const loadGuidanceStaffMessages = useCallback(async (preferredConversationId?: string) => {
+        if (preferredConversationId) preferredStaffConversationRef.current = preferredConversationId;
+        const requestVersion = ++staffMessageRequestVersionRef.current;
         const res = await fetch("/api/reports/staff-messages?role=guidance", { cache: "no-store" });
         const data = await res.json().catch(() => null);
+        if (requestVersion !== staffMessageRequestVersionRef.current) return [];
         if (!res.ok) {
             // Staff messages are an optional feed. A temporary backend
             // timeout must not prevent the reports page or message modal
@@ -972,10 +1014,14 @@ function ReportsPageContent() {
                 section: parent.section || "No section",
             }))
             .filter((parent, index, list) => list.findIndex((item) => item.id === parent.id) === index));
+        const requestedConversationId = preferredConversationId ?? preferredStaffConversationRef.current;
+        if (requestedConversationId && nextMessages.some((message) => (message.conversationId ?? String(message.id)) === requestedConversationId)) {
+            preferredStaffConversationRef.current = null;
+        }
         setSelectedAdminMsg((current) => {
-            const requestedConversationId = preferredConversationId ?? (current?.conversationId ?? (current ? String(current.id) : ""));
-            return requestedConversationId
-                ? nextMessages.find((message) => (message.conversationId ?? String(message.id)) === requestedConversationId) ?? current
+            const selectionId = requestedConversationId ?? (current?.conversationId ?? (current ? String(current.id) : ""));
+            return selectionId
+                ? nextMessages.find((message) => (message.conversationId ?? String(message.id)) === selectionId) ?? current
                 : current;
         });
         return nextMessages;
@@ -1583,6 +1629,7 @@ function ReportsPageContent() {
                                         const participantRole = m.message_sender_is_current ? m.sender : m.message_sender ?? m.sender;
                                         const isParentConversation = participantRole === "Parent";
                                         const ParticipantIcon = isParentConversation ? User : Shield;
+                                        const preview = getLatestAdminPreview(m);
 
                                         return (
                                             <button key={m.id} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
@@ -1595,18 +1642,20 @@ function ReportsPageContent() {
                                                     </div>
                                                     <div className="min-w-0 flex-1">
                                                         <div className="flex items-start justify-between gap-2">
-                                                            <p className="truncate text-xs font-extrabold text-slate-800">{m.subject}</p>
-                                                            {m.status === "New" && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]" aria-label="New message" />}
+                                                            <div className="min-w-0">
+                                                                <p className="truncate text-xs font-extrabold text-slate-800">{m.sender_name || m.sender}</p>
+                                                                <p className="truncate text-[11px] font-semibold text-slate-400">{m.sender} · {m.subject}</p>
+                                                            </div>
+                                                            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
                                                         </div>
-                                                        <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">
-                                                            {m.message_sender_is_current ? `To ${m.sender}` : `From ${m.sender}`} <span className="text-slate-300">·</span> {m.sender_name}
+                                                        <p className="mt-2 line-clamp-2 text-[11px] leading-relaxed text-slate-500">
+                                                            <span className="font-bold text-slate-600">{preview.senderName} · {preview.senderRole}:</span>{" "}
+                                                            {preview.body}
                                                         </p>
-                                                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{m.message}</p>
+                                                        <div className="mt-2 flex justify-end">
+                                                            <span className="text-[10px] font-medium text-slate-400">{preview.sentAt.split("·")[0].trim()}</span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2">
-                                                    <span className={`rounded-lg px-2 py-0.5 text-[10px] font-extrabold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
-                                                    <span className="text-[10px] font-medium text-slate-400">{m.sent_at.split("·")[0].trim()}</span>
                                                 </div>
                                             </button>
                                         );
@@ -1894,7 +1943,7 @@ function ReportsPageContent() {
                                     {/* Actions + Reply */}
                                     <div className="px-6 py-4 bg-white border-t border-slate-100">
                                         {reportTyping.isOtherParticipantTyping && (
-                                            <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                            <div aria-live="polite" aria-label="The other participant is typing…" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
                                                 <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:300ms]" /></span>
                                                 The other participant is typing…
                                             </div>
@@ -2089,6 +2138,12 @@ function ReportsPageContent() {
                                             })}
                                         </div>
                                         <div className="border-t border-sky-100 bg-white px-6 py-4">
+                                            {staffConversationTyping.isOtherParticipantTyping && (
+                                                <div aria-live="polite" aria-label="The other participant is typing…" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                                    <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:300ms]" /></span>
+                                                    The other participant is typing…
+                                                </div>
+                                            )}
                                             <div className="guidance-reports-detail-actions mb-3 flex flex-wrap items-center gap-2">
                                                 <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                                     <Paperclip className="w-4 h-4" />
@@ -2119,13 +2174,6 @@ function ReportsPageContent() {
                                                     </div>
                                                 ))}
                                             </div>
-
-                                            {staffConversationTyping.isOtherParticipantTyping && (
-                                                <div aria-live="polite" className="mb-3 flex items-center gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
-                                                    <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:300ms]" /></span>
-                                                    The other participant is typing…
-                                                </div>
-                                            )}
 
                                             <div className="guidance-reports-composer flex items-end gap-3">
                                                 {/* Textarea with embedded attach button */}

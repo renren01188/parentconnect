@@ -8,6 +8,7 @@ import {
   getPrincipalSession,
   getReportForAdviser,
   getReportForParent,
+  isStudentConcernReport,
 } from "../../_lib";
 
 const ACTOR_KEY = /^[a-zA-Z0-9-]{16,128}$/;
@@ -20,6 +21,8 @@ type RealtimeReport = {
   status?: string | null;
   escalated_to_guidance?: boolean | null;
   escalated_to_principal?: boolean | null;
+  subject: string;
+  allow_history_access?: boolean | null;
 };
 
 /**
@@ -46,6 +49,7 @@ export async function POST(
     }
 
     let report: RealtimeReport | null = null;
+    let currentGuidanceId: number | null = null;
 
     if (role === "parent") {
       const parent = await getParentSession();
@@ -58,9 +62,10 @@ export async function POST(
     } else if (role === "guidance") {
       const guidance = await getGuidanceSession();
       if (!guidance) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+      currentGuidanceId = guidance.id;
       const { data, error } = await supabase
         .from("parent_adviser_reports")
-        .select("id, parent_id, adviser_id, status, escalated_to_guidance, escalated_to_principal")
+        .select("id, parent_id, adviser_id, status, escalated_to_guidance, escalated_to_principal, subject, allow_history_access")
         .eq("id", reportId)
         .eq("escalated_to_guidance", true)
         .maybeSingle();
@@ -71,7 +76,7 @@ export async function POST(
       if (!principal) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
       const { data, error } = await supabase
         .from("parent_adviser_reports")
-        .select("id, parent_id, adviser_id, status, escalated_to_guidance, escalated_to_principal")
+        .select("id, parent_id, adviser_id, status, escalated_to_guidance, escalated_to_principal, subject, allow_history_access")
         .eq("id", reportId)
         .eq("escalated_to_principal", true)
         .maybeSingle();
@@ -80,6 +85,9 @@ export async function POST(
     }
 
     if (!report) return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
+    if (role === "parent" && isStudentConcernReport(report) && report.allow_history_access !== true) {
+      return NextResponse.json({ success: false, message: "Accept the Terms and Agreement before starting this Student Concern conversation." }, { status: 403 });
+    }
     if (String(report.status ?? "").toLowerCase() === "cancelled") {
       return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });
     }
@@ -91,8 +99,14 @@ export async function POST(
     if (role === "adviser" && report.escalated_to_guidance) {
       return NextResponse.json({ success: false, message: "This report is no longer assigned to the Adviser." }, { status: 403 });
     }
-    if (role === "guidance" && report.escalated_to_principal) {
-      return NextResponse.json({ success: false, message: "This report is now assigned to the Principal." }, { status: 403 });
+    if (role === "guidance") {
+      if (report.escalated_to_principal) {
+        return NextResponse.json({ success: false, message: "This report is now assigned to the Principal." }, { status: 403 });
+      }
+      const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
+      if (assignedGuidanceId !== null && assignedGuidanceId !== currentGuidanceId) {
+        return NextResponse.json({ success: false, message: "This report is assigned to another Guidance Counselor." }, { status: 403 });
+      }
     }
 
     const principalConversation = Boolean(report.escalated_to_principal);

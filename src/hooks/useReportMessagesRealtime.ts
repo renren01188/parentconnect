@@ -10,6 +10,8 @@ type RefreshReport = (invalidation: RealtimeInvalidation) => void | Promise<void
 type ReportRealtimeOptions = {
   /** Receives report-scoped events without replacing the selected conversation. */
   onReportUpdate?: RefreshReport;
+  /** Receives a durable report-status event without waiting for message batching. */
+  onReportStatusUpdate?: RefreshReport;
   /** Refreshes a role's authorized ticket list and ticket-derived badges in place. */
   onTicketUpdate?: RefreshReports;
   /** Delivers an ephemeral standalone staff-conversation event without a list refresh. */
@@ -32,6 +34,7 @@ export function useReportMessagesRealtime(
   const [liveUpdateNotice, setLiveUpdateNotice] = useState<string | null>(null);
   const refreshRef = useRef(refreshReports);
   const reportUpdateRef = useRef<RefreshReport | undefined>(options.onReportUpdate);
+  const reportStatusUpdateRef = useRef<RefreshReport | undefined>(options.onReportStatusUpdate);
   const ticketUpdateRef = useRef<RefreshReports | undefined>(options.onTicketUpdate);
   const staffMessageUpdateRef = useRef<RefreshReport | undefined>(options.onStaffMessageUpdate);
   const studentReportUpdateRef = useRef<RefreshReports | undefined>(options.onStudentReportUpdate);
@@ -50,6 +53,10 @@ export function useReportMessagesRealtime(
   useEffect(() => {
     reportUpdateRef.current = options.onReportUpdate;
   }, [options.onReportUpdate]);
+
+  useEffect(() => {
+    reportStatusUpdateRef.current = options.onReportStatusUpdate;
+  }, [options.onReportStatusUpdate]);
 
   useEffect(() => {
     ticketUpdateRef.current = options.onTicketUpdate;
@@ -106,6 +113,21 @@ export function useReportMessagesRealtime(
     }, 75);
   }, [refresh]);
 
+  // A workflow handoff changes badges, ownership, the status timeline, and
+  // the reply controls at once. Do not make it wait behind message batching:
+  // the parent must see an Adviser → Guidance escalation as soon as the
+  // durable status event reaches its authenticated Supabase channel.
+  const refreshReportStatus = useCallback(async (invalidation: RealtimeInvalidation) => {
+    try {
+      if (reportStatusUpdateRef.current) await reportStatusUpdateRef.current(invalidation);
+      else await refresh();
+      if (mountedRef.current) setLiveUpdateNotice(null);
+    } catch {
+      if (mountedRef.current) setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
+      scheduleRefresh();
+    }
+  }, [refresh, scheduleRefresh]);
+
   const refreshReport = useCallback(async (invalidation: RealtimeInvalidation) => {
     try {
       if (reportUpdateRef.current) await reportUpdateRef.current(invalidation);
@@ -135,6 +157,10 @@ export function useReportMessagesRealtime(
 
   useSessionInvalidation((invalidation) => {
     if (invalidation.scope === "reports") {
+      if (invalidation.kind === "status" && reportStatusUpdateRef.current) {
+        void refreshReportStatus(invalidation);
+        return;
+      }
       if (invalidation.reportId) scheduleReportRefresh(invalidation);
       else scheduleRefresh();
       return;

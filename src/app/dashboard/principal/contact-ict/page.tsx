@@ -298,6 +298,9 @@ export default function ContactICTPage() {
     const [sendingReply, setSendingReply] = useState(false);
     const [showCompose, setShowCompose] = useState(false);
     const threadEndRef = useRef<HTMLDivElement>(null);
+    // Ignore a stale response when a newer Realtime refresh has already
+    // loaded the same ICT conversation.
+    const messagesRequestVersionRef = useRef(0);
     const newMessageAttemptRef = useRef<IdempotencyAttempt | null>(null);
     const replyAttemptRef = useRef<IdempotencyAttempt | null>(null);
 
@@ -315,11 +318,14 @@ export default function ContactICTPage() {
     }, [conversations, search]);
 
     const loadMessages = useCallback(async (background = false): Promise<boolean> => {
+        const requestVersion = ++messagesRequestVersionRef.current;
         if (!background) setLoading(true);
         if (!background) setError(null);
         try {
             const { response: res, data } = await fetchJsonWithRetry<PrincipalIctMessagesResponse>("/api/principal-ict/messages", { cache: "no-store" });
             if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load ICT messages.");
+
+            if (requestVersion !== messagesRequestVersionRef.current) return true;
 
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
@@ -328,6 +334,7 @@ export default function ContactICTPage() {
             setError(null);
             return true;
         } catch (err) {
+            if (requestVersion !== messagesRequestVersionRef.current) return true;
             if (!background) {
                 setError(err instanceof Error ? err.message : "Unable to load ICT messages.");
                 setConversations([]);
@@ -335,7 +342,7 @@ export default function ContactICTPage() {
             }
             return false;
         } finally {
-            if (!background) setLoading(false);
+            if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
         }
     }, [setIctUnreadCount]);
 

@@ -10,6 +10,14 @@ const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
 
+const ictSessionCookie = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: 60 * 60 * 8,
+  path: "/",
+};
+
 function getFullName(row: {
   first_name: string;
   middle_name?: string | null;
@@ -36,7 +44,6 @@ async function getIctSession() {
     if (verified.payload.role !== "ict") return null;
 
     return {
-      cookieStore,
       payload: verified.payload,
       ictId: Number(verified.payload.id),
     };
@@ -228,16 +235,8 @@ export async function PATCH(req: NextRequest) {
       .setExpirationTime("8h")
       .sign(SECRET);
 
-    session.cookieStore.set("ict_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
-
     await publishAccountRealtimeInvalidation([{ role: "ict", id: session.ictId }]);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       ict: {
         employeeId: data.employee_id,
@@ -252,6 +251,10 @@ export async function PATCH(req: NextRequest) {
       },
       message: "Profile updated successfully.",
     });
+    // The refreshed identity token must travel with this response so profile
+    // edits do not interrupt an active ICT dashboard session.
+    response.cookies.set("ict_token", newToken, ictSessionCookie);
+    return response;
   } catch (error: unknown) {
     console.error("PATCH /api/ict/me error:", error);
     return NextResponse.json(

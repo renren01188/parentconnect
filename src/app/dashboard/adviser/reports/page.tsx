@@ -97,6 +97,23 @@ function getAdminMsgStatusStyle(status: AdminMsgStatus) {
         case "Replied": return "bg-emerald-100 text-emerald-700";
     }
 }
+function getLatestAdminPreview(message: AdminMessage) {
+    const latestReply = message.replies?.[message.replies.length - 1];
+    const latestIsCurrent = message.latest_sender_is_current ?? latestReply?.is_current_user ?? message.message_sender_is_current ?? false;
+    const latestSenderName = latestIsCurrent
+        ? "You"
+        : message.latest_sender_name || latestReply?.sender_name || message.message_sender_name || message.sender_name || message.sender;
+    const latestSenderRole = latestIsCurrent
+        ? "Adviser"
+        : message.latest_sender || latestReply?.sender || message.message_sender || message.sender;
+    const latestBody = message.latest_message ?? latestReply?.message ?? message.message;
+    return {
+        body: latestBody || (message.attachments?.length || latestReply?.attachments?.length ? "Attachment" : "No message content"),
+        senderName: latestSenderName,
+        senderRole: latestSenderRole,
+        sentAt: message.latest_sent_at ?? latestReply?.sent_at ?? message.sent_at,
+    };
+}
 function getCategoryStyle(cat: ReportCategory) {
     switch (cat) {
         case "Academic Concern": return "bg-blue-50 text-blue-600 border border-blue-200";
@@ -854,6 +871,10 @@ function ReportsPageContent() {
     const [studentReps, setStudentReps] = useState<StudentReport[]>([]);
     const [adminMsgs, setAdminMsgs] = useState<AdminMessage[]>([]);
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+    // A Realtime refresh may begin while the first page snapshot is still
+    // loading. Keep the newest response authoritative so that the older
+    // snapshot cannot erase a just-submitted Student Report.
+    const studentReportsRequestVersionRef = useRef(0);
     const parentMessagesRef = useRef<HTMLDivElement>(null);
     const adminMessagesRef = useRef<HTMLDivElement>(null);
     const reportWasAtBottomRef = useRef(true);
@@ -918,9 +939,11 @@ function ReportsPageContent() {
     }, []);
 
     const loadStudentReports = useCallback(async () => {
+        const requestVersion = ++studentReportsRequestVersionRef.current;
         const res = await fetch("/api/student-reports", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load student reports.");
+        if (requestVersion !== studentReportsRequestVersionRef.current) return;
         const nextReports = (data.reports ?? []) as (StudentReport & { notified_parent?: boolean })[];
         setStudentReps(nextReports);
         setNotifiedStudentReports(new Set(nextReports.filter(r => r.notified_parent).map(r => r.id)));
@@ -940,13 +963,22 @@ function ReportsPageContent() {
             res.json().catch(() => null),
             staffRes.json().catch(() => null),
         ]);
-        if (!res.ok) throw new Error(data?.message || "Unable to load principal messages.");
+        // Standalone Principal-to-Adviser threads live in staff_messages. Do
+        // not hide that live inbox when the older principal-message feed is
+        // temporarily unavailable.
+        if (!res.ok && !staffRes.ok) {
+            throw new Error(data?.message || staffData?.message || "Unable to load principal messages.");
+        }
         const nextMessages = [
-            ...((data?.principalMessages ?? []) as AdminMessage[]),
+            ...(res.ok ? ((data?.principalMessages ?? []) as AdminMessage[]) : []),
             ...(staffRes.ok ? ((staffData?.messages ?? []) as AdminMessage[]) : []),
         ]
             .filter((message) => message.sender !== "ICT" && message.message_sender !== "ICT")
-            .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime());
+            .sort((a, b) => {
+                const aTime = Date.parse(a.latest_created_at ?? a.sent_at);
+                const bTime = Date.parse(b.latest_created_at ?? b.sent_at);
+                return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+            });
         setAdminMsgs(nextMessages);
         setSelectedAdminMsg(current => current
             ? nextMessages.find(message => adminMessageKey(message) === adminMessageKey(current)) ?? current
@@ -1392,7 +1424,7 @@ function ReportsPageContent() {
 
     // ── Render ────────────────────────────────────────────────────────────
     return (
-        <div className="flex h-[calc(100dvh-4rem)] min-h-0 flex-col bg-slate-50 md:h-full">
+        <div className="flex h-[calc(100dvh-4rem)] min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50 md:h-full">
             {liveUpdateNotice && <div role="status" className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800 sm:px-6">{liveUpdateNotice}</div>}
             {/* ── Top bar ── */}
             <div className="flex flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -1449,6 +1481,15 @@ function ReportsPageContent() {
                         </div>
 
                         <div className="h-px bg-slate-100 mx-3" />
+
+                        {leftTab === "Principal" && (
+                            <div className="px-3 pt-3">
+                                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                                    <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-emerald-700">School Messages</p>
+                                    <p className="mt-1 text-xs leading-relaxed text-slate-500">Direct conversations with parents and school staff.</p>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Filter tabs (Parent only) */}
                         {leftTab === "Parent" && (
@@ -1555,32 +1596,33 @@ function ReportsPageContent() {
 
                         {/* ── Principal messages list ── */}
                         {leftTab === "Principal" && (
-                            <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
-                                {principalMsgs.map(m => (
-                                    <button key={adminMessageKey(m)} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
-                                        className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${selectedAdminMsg && adminMessageKey(selectedAdminMsg) === adminMessageKey(m) ? "bg-violet-50 border-violet-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${m.sender === "Parent" ? "bg-blue-500" : "bg-violet-600"}`}>
-                                                {m.sender === "Parent" ? <User className="w-3.5 h-3.5 text-white" /> : <Shield className="w-3.5 h-3.5 text-white" />}
+                            <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-2">
+                                {principalMsgs.map(m => {
+                                    const preview = getLatestAdminPreview(m);
+                                    return (
+                                        <button key={adminMessageKey(m)} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
+                                            className={`w-full text-left rounded-xl border px-3 py-2.5 transition ${selectedAdminMsg && adminMessageKey(selectedAdminMsg) === adminMessageKey(m) ? "border-violet-200 bg-violet-50" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                                            <div className="flex items-start gap-2">
+                                                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${m.sender === "Parent" ? "bg-blue-500" : "bg-violet-600"}`}>
+                                                    {m.sender === "Parent" ? <User className="h-4 w-4 text-white" /> : <Shield className="h-4 w-4 text-white" />}
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-xs font-extrabold text-slate-800">{m.sender_name || m.sender}</p>
+                                                            <p className="truncate text-[10px] font-semibold text-slate-400">{m.sender} · {m.subject}</p>
+                                                        </div>
+                                                        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
+                                                    </div>
+                                                    <p className="mt-1.5 truncate text-[11px] leading-relaxed text-slate-500"><span className="font-bold text-slate-600">{preview.senderName} · {preview.senderRole}:</span> {preview.body}</p>
+                                                    <div className="mt-2 flex justify-end">
+                                                        <span className="truncate text-[10px] text-slate-400">{preview.sentAt.split("·")[0].trim()}</span>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <p className="text-[11px] font-bold text-slate-700 truncate flex-1">{m.subject}</p>
-                                            {m.status === "New" && <span className="w-2 h-2 rounded-full bg-violet-500 shrink-0" />}
-                                        </div>
-                                        <div className="flex items-center justify-between pl-9">
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
-                                            <span className="text-[10px] text-slate-400">{m.sent_at.split("·")[0].trim()}</span>
-                                        </div>
-                                        {!!m.categories?.length && (
-                                            <div className="mt-2 flex flex-wrap gap-1 pl-9">
-                                                {m.categories.map((cat) => (
-                                                    <span key={cat} className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${getAdminCategoryStyle(cat)}`}>
-                                                        {cat}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </button>
-                                ))}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         )}
 
@@ -1906,7 +1948,7 @@ function ReportsPageContent() {
                                     {/* Actions + Reply */}
                                     <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
                                         {reportTyping.isOtherParticipantTyping && leftTab === "Parent" && (
-                                            <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                            <div aria-live="polite" aria-label="The other participant is typing…" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
                                                 <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:300ms]" /></span>
                                                 The other participant is typing…
                                             </div>
@@ -2132,8 +2174,8 @@ function ReportsPageContent() {
 
                         {/* ── Admin message detail (Principal) ── */}
                         {leftTab === "Principal" && selectedAdminMsg && (
-                            <div className="flex-1 flex flex-col overflow-hidden">
-                                <div className="px-6 py-5 bg-white border-b border-slate-100 border-l-4 border-l-violet-500">
+                            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                                <div className="border-b border-l-4 border-l-violet-500 border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex items-center gap-3">
                                             <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${selectedAdminMsg.sender === "Parent" ? "bg-blue-500" : "bg-violet-600"}`}>
@@ -2167,7 +2209,7 @@ function ReportsPageContent() {
                                         )}
                                     </div>
                                 </div>
-                                <div ref={adminMessagesRef} className="flex-1 overflow-y-auto px-6 py-5">
+                                <div ref={adminMessagesRef} className="min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
 
                                     {/* Original message */}
                                     {(() => {
@@ -2223,7 +2265,13 @@ function ReportsPageContent() {
                                     })
                                     }
                                 </div>
-                                <div className="px-6 py-4 bg-white border-t border-slate-100">
+                                <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
+                                    {staffConversationTyping.isOtherParticipantTyping && (
+                                        <div aria-live="polite" aria-label="The other participant is typing…" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                            <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:300ms]" /></span>
+                                            The other participant is typing…
+                                        </div>
+                                    )}
                                     <div className="mb-3 flex flex-wrap items-center gap-2">
                                         <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                             <Paperclip className="w-4 h-4" />
@@ -2254,21 +2302,15 @@ function ReportsPageContent() {
                                             </div>
                                         ))}
                                     </div>
-                                    {staffConversationTyping.isOtherParticipantTyping && (
-                                        <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
-                                            <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:300ms]" /></span>
-                                            The other participant is typing…
-                                        </div>
-                                    )}
-                                    <div className="flex items-end gap-3">
-                                        <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 transition overflow-hidden bg-slate-50">
+                                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
+                                        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
                                             <textarea
                                                 value={replyText}
                                                 onChange={e => { setReplyText(e.target.value); staffConversationTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                                                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
                                                 placeholder={`Reply to ${selectedAdminMsg.sender_name}... (Enter to send)`}
                                                 rows={2}
-                                                className="w-full px-3.5 pt-2.5 pb-2 text-sm text-slate-700 resize-none outline-none bg-transparent"
+                                                className="min-h-[52px] min-w-0 w-full resize-none bg-transparent px-3.5 pb-2 pt-2.5 text-sm text-slate-700 outline-none"
                                             />
                                         </div>
 
@@ -2276,7 +2318,8 @@ function ReportsPageContent() {
                                         <button
                                             onClick={sendReply}
                                             disabled={sendingReply || (!replyText.trim() && replyAttachments.length === 0)}
-                                            className={`p-2.5 rounded-xl transition ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}
+                                            aria-label="Send message"
+                                            className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl transition ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 text-white hover:bg-emerald-600" : "cursor-not-allowed bg-slate-100 text-slate-300"}`}
                                         >
                                             {sendingReply ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                         </button>

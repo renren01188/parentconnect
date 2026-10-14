@@ -24,6 +24,11 @@ import {
   validateUserManagementPasswordChange,
 } from "@/lib/ictUserManagementAccountUpdate";
 import { publishAccountRealtimeInvalidation, publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+  passwordSessionAuditRole,
+  type PasswordSessionRole,
+} from "@/lib/passwordSessionRevocation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -324,6 +329,44 @@ async function requireIct() {
     };
   }
   return { session };
+}
+
+type PasswordSessionTarget = {
+  role: PasswordSessionRole;
+  id: number;
+  name: string;
+  email?: string;
+};
+
+/**
+ * The hash has already been written and bcrypt-verified when this runs.  The
+ * audit marker is the durable cross-instance source of truth for revocation;
+ * it intentionally contains neither the old nor new password.
+ */
+async function recordIctPasswordSessionRevocations(ictId: number, targets: PasswordSessionTarget[]) {
+  const uniqueTargets = Array.from(
+    new Map(
+      targets
+        .filter((target) => Number.isSafeInteger(target.id) && target.id > 0)
+        .map((target) => [`${target.role}:${target.id}`, target]),
+    ).values(),
+  );
+
+  await Promise.all(uniqueTargets.map((target) => logAudit({
+    action: ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+    performedById: ictId,
+    performedBy: `ICT ${ictId}`,
+    performedByRole: "ICT",
+    targetUser: target.name || passwordSessionAuditRole(target.role),
+    targetRole: passwordSessionAuditRole(target.role),
+    targetEmail: target.email?.trim().toLowerCase() || "N/A",
+    targetType: "user",
+    targetId: target.id,
+    module: "User Management",
+    details: "ICT changed this account's password. All prior sessions were invalidated.",
+  })));
+
+  return uniqueTargets;
 }
 
 export async function GET(request: NextRequest) {
@@ -647,6 +690,8 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const completedUpdateSteps: string[] = [];
+  let passwordSessionTargets: Array<{ role: "parent" | "adviser" | "guidance"; id: number }> = [];
+  let passwordSessionInvalidationPublished = false;
   try {
     const auth = await requireIct();
     if ("error" in auth) return auth.error;
@@ -802,6 +847,17 @@ export async function PATCH(req: NextRequest) {
     let passwordPatch: { password_hash: string; password_set: true } | Record<string, never> = {};
     let parentPasswordPatch: { password: string; password_set: number; temp_password: null; temporary_password_expires_at: null } | Record<string, never> = {};
 
+    const recordPasswordSessionRevocation = async (targets: PasswordSessionTarget[]) => {
+      if (!hasPasswordChange) return;
+      const recorded = await recordIctPasswordSessionRevocations(auth.session.ictId, targets);
+      passwordSessionTargets = recorded.map(({ role, id }) => ({ role, id }));
+      completedUpdateSteps.push("prior account sessions revoked");
+    };
+    const publishAccountChange = async (targets: Array<{ role: "parent" | "adviser" | "guidance" | "ict"; id: number }>) => {
+      await publishAccountRealtimeInvalidation(targets, { sessionRevoked: hasPasswordChange && passwordSessionTargets.length > 0 });
+      if (hasPasswordChange && passwordSessionTargets.length > 0) passwordSessionInvalidationPublished = true;
+    };
+
     if (hasPasswordChange) {
       if (user.status === "Pending Activation") {
         return NextResponse.json(
@@ -898,7 +954,8 @@ export async function PATCH(req: NextRequest) {
       if (hasPasswordChange && !await bcrypt.compare(requestedPassword!, data.password_hash)) {
         throw new Error("The Guidance password update could not be verified.");
       }
-      await publishAccountRealtimeInvalidation([{ role: "guidance", id: Number(data.id) }]);
+      await recordPasswordSessionRevocation([{ role: "guidance", id: Number(data.id), name: user.name, email: user.email }]);
+      await publishAccountChange([{ role: "guidance", id: Number(data.id) }]);
       return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
@@ -989,6 +1046,7 @@ export async function PATCH(req: NextRequest) {
         if (verified.some((isMatch) => !isMatch)) {
           throw new Error("The Parent password update could not be verified.");
         }
+        await recordPasswordSessionRevocation(parentAccountIds.map((id) => ({ role: "parent", id: Number(id), name: user.name, email: user.email })));
       }
 
       const reconciledStudentIds = new Set<number>();
@@ -1106,7 +1164,7 @@ export async function PATCH(req: NextRequest) {
         })));
       }
 
-      await publishAccountRealtimeInvalidation(parentAccountIds.map((id) => ({ role: "parent" as const, id: Number(id) })));
+      await publishAccountChange(parentAccountIds.map((id) => ({ role: "parent" as const, id: Number(id) })));
       await Promise.all([...reconciledStudentIds].map((studentDbId) => publishStudentRealtimeInvalidation({ studentDbId })));
       return NextResponse.json({ success: true, ids: parentAccountIds, passwordUpdated: hasPasswordChange });
     }
@@ -1177,7 +1235,8 @@ export async function PATCH(req: NextRequest) {
       if (hasPasswordChange && !(await bcrypt.compare(requestedPassword!, data.password_hash))) {
         throw new Error("The adviser password update could not be verified.");
       }
-      await publishAccountRealtimeInvalidation([{ role: "adviser", id: Number(data.id) }]);
+      await recordPasswordSessionRevocation([{ role: "adviser", id: Number(data.id), name: user.name, email: user.email }]);
+      await publishAccountChange([{ role: "adviser", id: Number(data.id) }]);
       return NextResponse.json({ success: true, id: data.id, passwordUpdated: hasPasswordChange });
     }
 
@@ -1186,6 +1245,11 @@ export async function PATCH(req: NextRequest) {
       { status: 400 }
     );
   } catch (error: unknown) {
+    if (passwordSessionTargets.length > 0 && !passwordSessionInvalidationPublished) {
+      // A later profile/student write can fail after the password itself was
+      // verified.  Do not leave that successfully changed credential active.
+      await publishAccountRealtimeInvalidation(passwordSessionTargets, { sessionRevoked: true });
+    }
     const completed = [...new Set(completedUpdateSteps)];
     if (completed.length > 0) {
       // Do not log request data: it can include password fields. The client

@@ -64,5 +64,8 @@ assert.match(staffRoute, /status: "read"[\s\S]*?publishRealtimeInvalidation\(rec
 // receives the corresponding Realtime invalidation.
 assert.match(guidanceReports, /const loadGuidanceStaffMessages = useCallback\(async \(preferredConversationId\?: string\)/);
 assert.match(guidanceReports, /await loadGuidanceStaffMessages\(conversationId\);/);
+assert.match(guidanceReports, /function getLatestAdminPreview\(message: AdminMessage\)/);
+assert.match(guidanceReports, /\{preview\.senderName\} · \{preview\.senderRole\}:/);
+assert.match(guidanceReports, /\{getAdminMsgStatusStyle\(m\.status\)\}/);
 
 console.log("staff direct-message checks passed");

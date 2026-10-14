@@ -30,6 +30,8 @@
     "test:parent-report-cancellation": "node scripts/test-parent-report-cancellation.cjs",
     "test:guidance-ticket-read-state": "node scripts/test-guidance-ticket-read-state.cjs",
     "test:student-report-submission": "node scripts/test-student-report-submission.cjs",
+    "test:student-concern-parent-reports": "node scripts/test-student-concern-parent-reports.cjs",
+    "test:student-concern-agreement": "node scripts/test-student-concern-agreement.cjs",
     "test:notification-realtime": "node scripts/test-notification-realtime.cjs",
     "test:adviser-notification-badge": "node scripts/test-adviser-notification-badge.cjs",
     "test:announcement-schedule": "node scripts/test-announcement-schedule.cjs",
@@ -39,6 +41,7 @@
     "test:staff-direct-messages": "node scripts/test-staff-direct-messages.cjs",
     "test:parent-report-list-filters": "node scripts/test-parent-report-list-filters.cjs",
     "test:dashboard-realtime": "node scripts/test-dashboard-realtime.cjs",
+    "test:dashboard-live-updates": "node scripts/test-dashboard-live-updates.cjs",
     "test:staff-typing-realtime": "node scripts/test-staff-typing-realtime.cjs",
     "test:audit-trail": "node scripts/test-audit-trail.cjs",
     "test:student-religion": "node scripts/test-student-religion.cjs",
@@ -48,7 +51,15 @@
     "test:principal-report-monitoring": "node scripts/test-principal-report-monitoring.cjs",
     "test:principal-message-panel": "node scripts/test-principal-message-panel.cjs",
     "test:contact-ict-realtime": "node scripts/test-contact-ict-realtime.cjs",
-    "test:principal-profile": "node scripts/test-principal-profile.cjs"
+    "test:principal-profile": "node scripts/test-principal-profile.cjs",
+    "test:profile-save-flows": "node scripts/test-profile-save-flows.cjs",
+    "test:parent-staff-message-badges": "node scripts/test-parent-staff-message-badges.cjs",
+    "test:guidance-parent-live-messaging": "node scripts/test-guidance-parent-live-messaging.cjs",
+    "test:student-concern-stage-realtime": "node scripts/test-student-concern-stage-realtime.cjs",
+    "test:parent-escalation-status-realtime": "node scripts/test-parent-escalation-status-realtime.cjs",
+    "test:guidance-sidebar-concern-count": "node scripts/test-guidance-sidebar-concern-count.cjs",
+    "test:principal-panel3-display": "node scripts/test-principal-panel3-display.cjs",
+    "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

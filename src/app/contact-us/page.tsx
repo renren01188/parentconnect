@@ -2,9 +2,10 @@
 
 import { SchoolBackground } from "@/components/SchoolBackground";
 import { useRef, useState } from "react";
-import { GraduationCap, ArrowLeft, Send, CheckCircle, Phone, Mail, MapPin } from "lucide-react";
+import { ArrowLeft, Send, CheckCircle, Phone, Mail, MapPin } from "lucide-react";
 import Link from "next/link";
 import { ContactRecaptcha } from "@/components/ContactRecaptcha";
+import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 
 const emptyForm = {
   name: "",
@@ -87,10 +88,7 @@ export default function ContactUsPage() {
 
         {/* Top bar */}
         <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center border border-white/30">
-              <GraduationCap className="w-4 h-4 text-white" />
-            </div>
+          <div>
             <span className="text-white/90 text-sm font-semibold tracking-widest uppercase">
               Santiago Elementary School
             </span>
@@ -121,27 +119,7 @@ export default function ContactUsPage() {
               </span>
             </h1>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
-            <div className="flex flex-col items-center">
-              <div className="w-16 h-16 rounded-full bg-white/10 border-2 border-white/30 flex items-center justify-center backdrop-blur-sm">
-                <div className="text-center">
-                  <div className="text-white font-black text-xs leading-none">Dep</div>
-                  <div className="text-yellow-300 font-black text-sm leading-none">ED</div>
-                </div>
-              </div>
-              <span className="text-white/70 text-[9px] mt-1 text-center leading-tight">
-                DEPARTMENT OF<br />EDUCATION
-              </span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="w-16 h-16 rounded-full bg-emerald-700/40 border-2 border-emerald-400/50 flex items-center justify-center backdrop-blur-sm">
-                <GraduationCap className="w-7 h-7 text-emerald-300" />
-              </div>
-              <span className="text-white/70 text-[9px] mt-1 text-center leading-tight">
-                SANTIAGO<br />ELEM. SCHOOL
-              </span>
-            </div>
-          </div>
+          <LoginInstitutionLogos className="ml-4" />
         </div>
       </header>
 

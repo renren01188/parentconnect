@@ -19,6 +19,11 @@ import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import {
+  publishRealtimeInvalidation,
+  publishStudentRealtimeInvalidation,
+  recipientsForRoles,
+} from "@/lib/realtimeInvalidation";
+import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
@@ -417,6 +422,14 @@ export async function POST(req: NextRequest) {
         throw familyError;
       }
     }
+
+    // Student lists and dashboard totals can change for the assigned adviser,
+    // principal, and ICT staff. There is no linked parent until Guardian Sign
+    // Up, so the per-student event remains correctly scoped at this point.
+    await Promise.all([
+      publishStudentRealtimeInvalidation({ studentDbId: createdStudent.id }),
+      recipientsForRoles(["ict"]).then((recipients) => publishRealtimeInvalidation(recipients, "students")),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -841,6 +854,14 @@ export async function DELETE(req: NextRequest) {
         console.error("Deletion email failed:", mailErr);
       }
     }
+
+    // Archiving is still a data change for linked parent/adviser/principal
+    // views; ICT also needs its roster view refreshed. The event has no
+    // student details, and recipients re-read their normal authorized API.
+    await Promise.all([
+      publishStudentRealtimeInvalidation({ studentDbId: student.id }),
+      recipientsForRoles(["ict"]).then((recipients) => publishRealtimeInvalidation(recipients, "students")),
+    ]);
 
     return NextResponse.json({
       success: true,
