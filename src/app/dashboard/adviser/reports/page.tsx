@@ -378,7 +378,7 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                 setSubmitError("");
                 const [res, staffRes] = await Promise.all([
                     fetch("/api/reports/adviser-messages", { cache: "no-store" }),
-                    fetch("/api/reports/staff-messages?role=adviser", { cache: "no-store" }),
+                    fetch("/api/reports/staff-messages?role=adviser&excludeIct=1", { cache: "no-store" }),
                 ]);
                 const [data, staffData] = await Promise.all([
                     res.json().catch(() => null),
@@ -957,7 +957,7 @@ function ReportsPageContent() {
     const loadAdminMessages = useCallback(async () => {
         const [res, staffRes] = await Promise.all([
             fetch("/api/reports/adviser-messages", { cache: "no-store" }),
-            fetch("/api/reports/staff-messages?role=adviser", { cache: "no-store" }),
+            fetch("/api/reports/staff-messages?role=adviser&excludeIct=1", { cache: "no-store" }),
         ]);
         const [data, staffData] = await Promise.all([
             res.json().catch(() => null),

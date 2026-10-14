@@ -7,6 +7,22 @@ type BrevoEmailMessage = {
 };
 
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
+const BREVO_REQUEST_TIMEOUT_MS = 5_000;
+const BREVO_MAX_DELIVERY_ATTEMPTS = 3;
+
+function retryDelayMs(attempt: number) {
+  // A small capped backoff handles temporary provider/network failures while
+  // keeping the signup request responsive.
+  return Math.min(1_000, 250 * 2 ** attempt);
+}
+
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function getBrevoConfig() {
   const apiKey = process.env.BREVO_API_KEY?.trim();
@@ -37,33 +53,57 @@ export async function sendWithBrevo(message: BrevoEmailMessage) {
     throw new Error("An email recipient is required.");
   }
 
-  const response = await fetch(BREVO_SEND_URL, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "api-key": apiKey,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      // Brevo always uses its verified sender address.
-      sender: { email: fromEmail, name: fromName },
-      to: recipients,
-      subject: message.subject,
-      ...(message.html ? { htmlContent: message.html } : { textContent: message.text ?? "" }),
-      ...(message.replyTo ? { replyTo: { email: message.replyTo.trim() } } : {}),
-    }),
-    cache: "no-store",
+  const body = JSON.stringify({
+    // Brevo always uses its verified sender address.
+    sender: { email: fromEmail, name: fromName },
+    to: recipients,
+    subject: message.subject,
+    ...(message.html ? { htmlContent: message.html } : { textContent: message.text ?? "" }),
+    ...(message.replyTo ? { replyTo: { email: message.replyTo.trim() } } : {}),
   });
+  let lastError: Error | null = null;
 
-  const data = await response.json().catch(() => null) as {
-    messageId?: string;
-    code?: string;
-    message?: string;
-  } | null;
+  for (let attempt = 0; attempt < BREVO_MAX_DELIVERY_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BREVO_REQUEST_TIMEOUT_MS);
 
-  if (!response.ok) {
-    throw new Error(data?.message || data?.code || "Brevo could not send the email.");
+    try {
+      const response = await fetch(BREVO_SEND_URL, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "api-key": apiKey,
+          "content-type": "application/json",
+        },
+        body,
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => null) as {
+        messageId?: string;
+        code?: string;
+        message?: string;
+      } | null;
+
+      if (response.ok) return data;
+
+      const error = new Error(data?.message || data?.code || "Brevo could not send the email.");
+      if (!isRetryableStatus(response.status)) {
+        lastError = error;
+        break;
+      }
+      lastError = error;
+    } catch (error) {
+      if (error instanceof Error) lastError = error;
+      else lastError = new Error("Brevo could not send the email.");
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (attempt < BREVO_MAX_DELIVERY_ATTEMPTS - 1) {
+      await wait(retryDelayMs(attempt));
+    }
   }
 
-  return data;
+  throw lastError ?? new Error("Brevo could not send the email.");
 }

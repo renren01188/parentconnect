@@ -7,7 +7,7 @@ import {
   X, CheckCircle, AlertTriangle, CreditCard,
   Users, GraduationCap,
   ChevronLeft, ChevronRight, Info, ArrowLeft, Save,
-  WifiOff, Phone, Mail, Trash2, Eye as EyeIcon, EyeOff,
+  WifiOff, Phone, Trash2, Eye as EyeIcon, EyeOff,
   ShieldAlert, MessageSquare, TriangleAlert, Wifi,
   ClipboardList, Filter, CheckCircle2, XCircle,
   ArrowLeftRight, Tag, Clock, PlusCircle, RefreshCw,
@@ -47,6 +47,14 @@ interface Student {
   birthDate?: string; motherTongue?: string; ipEthnicGroup?: string; religion?: string; learningModality?: string;
   houseStreetSitioPurok?: string; barangay?: string; municipalityCity?: string; province?: string;
 }
+
+type StudentProfileUpdate = Pick<
+  Student,
+  "firstName" | "middleName" | "lastName" | "suffix" | "studentId" | "gender" |
+  "grade" | "section" | "birthDate" | "motherTongue" | "ipEthnicGroup" |
+  "religion" | "learningModality" | "houseStreetSitioPurok" | "barangay" |
+  "municipalityCity" | "province"
+>;
 
 type AuditAction = "registered" | "revoked" | "replaced" | "assigned";
 
@@ -841,7 +849,7 @@ function AuditTrailModal({ entries, onClose }: { entries: AuditEntry[]; onClose:
 
 // ─── Delete Student Modal ─────────────────────────────────────────
 function DeleteStudentModal({ student, onClose, onDeleted }: {
-  student: Student; onClose: () => void; onDeleted: (id: number) => void;
+  student: Student; onClose: () => void; onDeleted: (student: Student, password: string, reason: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -850,6 +858,7 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
   const [touched, setTouched] = useState({ password: false, reason: false, agreed: false });
   const [deleting, setDeleting] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState("");
 
   const fullName = [student.firstName, student.middleName, student.lastName].filter(Boolean).join(" ") +
     (student.suffix && student.suffix !== "None" ? ` ${student.suffix}` : "");
@@ -859,11 +868,19 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
   const agreedError = touched.agreed && !agreed ? "You must confirm to proceed." : "";
   const canSubmit = password.trim().length > 0 && reason.trim().length >= 10 && agreed;
 
-  function handleDelete() {
+  async function handleDelete() {
     setTouched({ password: true, reason: true, agreed: true });
     if (!canSubmit) return;
     setDeleting(true);
-    setTimeout(() => { setDeleting(false); setDone(true); }, 1200);
+    setError("");
+    try {
+      await onDeleted(student, password, reason);
+      setDone(true);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not schedule this student record for archive.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (done) return (
@@ -871,15 +888,9 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="p-8 text-center">
           <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4"><Trash2 className="w-7 h-7 text-red-500" /></div>
-          <h3 className="text-lg font-bold text-gray-800 mb-1">Student Deleted</h3>
-          <p className="text-sm text-gray-500 mb-5"><strong>{fullName}</strong> has been archived. Their history remains available to authorized staff.</p>
-          {student.parentEmail && (
-            <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 mb-5">
-              <Mail className="w-4 h-4 text-emerald-500 shrink-0" />
-              <p className="text-xs text-emerald-700">Notification sent to <strong>{student.parentEmail}</strong>.</p>
-            </div>
-          )}
-          <button onClick={() => { onDeleted(student.id); onClose(); }} className="w-full py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
+          <h3 className="text-lg font-bold text-gray-800 mb-1">Archive Scheduled</h3>
+          <p className="text-sm text-gray-500 mb-5"><strong>{fullName}</strong> will remain available during the 30-day retention period. Their history will be preserved when the archive is completed.</p>
+          <button onClick={onClose} className="w-full py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition">Done</button>
         </div>
       </div>
     </div>
@@ -892,8 +903,8 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0"><Trash2 className="w-5 h-5 text-red-500" /></div>
             <div>
-              <h2 className="font-extrabold text-gray-800 text-base">Delete Student Record</h2>
-              <p className="text-xs text-gray-400 mt-0.5">This action is permanent and cannot be undone.</p>
+              <h2 className="font-extrabold text-gray-800 text-base">Schedule Student Archive</h2>
+              <p className="text-xs text-gray-400 mt-0.5">The record is retained for 30 days before archiving.</p>
             </div>
           </div>
           <button onClick={onClose} disabled={deleting} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-gray-100 text-gray-400 transition"><X className="w-4 h-4" /></button>
@@ -901,7 +912,7 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
         <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
             <TriangleAlert className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-xs text-red-600 leading-relaxed">Archives the selected student only. Attendance, RFID, linked-parent, report, and audit history are preserved. <strong>This can be restored by authorized ICT staff.</strong></p>
+            <p className="text-xs text-red-600 leading-relaxed">This starts the existing 30-day archive workflow. Attendance, RFID, linked-parent, report, and audit history are preserved. <strong>Authorized ICT staff can restore a scheduled archive.</strong></p>
           </div>
           <div className="rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3.5 bg-white border-b border-gray-100">
@@ -918,8 +929,8 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
             </div>
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><MessageSquare className="w-3.5 h-3.5 text-gray-400" />Message to Parent<span className="text-red-500 text-xs">*</span></label>
-            <textarea rows={3} placeholder="Explain the reason for deletion…" value={reason} onChange={e => { setReason(e.target.value); setTouched(p => ({ ...p, reason: true })); }}
+            <label className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><MessageSquare className="w-3.5 h-3.5 text-gray-400" />Reason for archive<span className="text-red-500 text-xs">*</span></label>
+            <textarea rows={3} placeholder="Explain the reason for archiving this record…" value={reason} onChange={e => { setReason(e.target.value); setTouched(p => ({ ...p, reason: true })); }}
               className={`w-full px-4 py-3 rounded-xl border text-gray-800 text-sm focus:outline-none focus:ring-2 transition resize-none ${reasonError ? "border-red-400 bg-red-50 focus:ring-red-300" : "border-gray-200 focus:ring-[#274e13]/25"}`} />
             {reasonError && <p className="text-xs text-red-500 font-medium flex items-center gap-1"><TriangleAlert className="w-3 h-3" />{reasonError}</p>}
           </div>
@@ -940,15 +951,16 @@ function DeleteStudentModal({ student, onClose, onDeleted }: {
                 className={`w-5 h-5 rounded-md border-2 flex items-center justify-center mt-0.5 shrink-0 cursor-pointer transition ${agreed ? "bg-[#274e13] border-[#274e13]" : "bg-white border-gray-300"}`}>
                 {agreed && <CheckCircle className="w-3.5 h-3.5 text-white" />}
               </div>
-              <p className="text-xs text-gray-700 leading-relaxed">I confirm that deleting <strong>{fullName}</strong> (ID: {student.studentId}) is irreversible and all associated data will be permanently erased.</p>
+              <p className="text-xs text-gray-700 leading-relaxed">I confirm that I want to schedule <strong>{fullName}</strong> (ID: {student.studentId}) for archive. The record remains recoverable during the 30-day retention period.</p>
             </label>
             {agreedError && <p className="mt-2 text-xs text-red-500 font-medium flex items-center gap-1 pl-8"><TriangleAlert className="w-3 h-3 shrink-0" />{agreedError}</p>}
           </div>
+          {error && <p className="text-xs text-red-600 font-medium flex items-center gap-1"><TriangleAlert className="w-3 h-3 shrink-0" />{error}</p>}
         </div>
         <div className="flex shrink-0 flex-col gap-3 rounded-b-2xl border-t border-gray-100 bg-gray-50 px-4 py-4 sm:flex-row sm:px-6">
           <button onClick={onClose} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 bg-white text-gray-600 font-bold text-sm rounded-xl transition disabled:opacity-50"><X className="w-4 h-4" />Cancel</button>
           <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold text-sm rounded-xl transition">
-            {deleting ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Deleting…</> : <><Trash2 className="w-4 h-4" />Confirm Delete</>}
+            {deleting ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Scheduling…</> : <><Trash2 className="w-4 h-4" />Schedule Archive</>}
           </button>
         </div>
       </div>
@@ -1002,9 +1014,10 @@ function ViewStudentModal({ student, onClose, onEdit }: { student: Student; onCl
 }
 
 // ─── Edit Student Modal ──────────────────────────────────────────
-function EditStudentModal({ student, onClose, onSave, grades }: { student: Student; onClose: () => void; onSave: (updated: Student) => void; grades: string[] }) {
+function EditStudentModal({ student, onClose, onSave, grades }: { student: Student; onClose: () => void; onSave: (update: StudentProfileUpdate) => Promise<void>; grades: string[] }) {
   const [step, setStep] = useState<"edit" | "confirm" | "saved">("edit");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [form, setForm] = useState({
     firstName: student.firstName, middleName: student.middleName, lastName: student.lastName, suffix: student.suffix,
     studentId: student.studentId, gender: student.gender as "Male" | "Female", grade: student.grade, section: student.section,
@@ -1026,12 +1039,17 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
   const displayName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") + (form.suffix && form.suffix !== "None" ? ` ${form.suffix}` : "");
   const inBase = "w-full px-3.5 py-2.5 rounded-xl border text-gray-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-gray-400 bg-gray-50 focus:ring-[#274e13]/25 border-gray-200";
 
-  function handleSave() {
+  async function handleSave() {
     setSaving(true);
-    setTimeout(() => {
-      const updated: Student = { ...student, ...form, initials: `${form.firstName[0] ?? ''}${form.lastName[0] ?? ''}`.toUpperCase() };
-      onSave(updated); setSaving(false); setStep("saved");
-    }, 900);
+    setSaveError("");
+    try {
+      await onSave(form);
+      setStep("saved");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save the student profile.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (step === "saved") return (
@@ -1143,6 +1161,7 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
                 ))}
               </div>
             </div>
+            {saveError && <p className="text-xs font-medium text-red-600 flex items-center gap-1"><TriangleAlert className="w-3 h-3 shrink-0" />{saveError}</p>}
             <div className="flex gap-3">
               <button onClick={() => setStep("edit")} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Go Back</button>
               <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition disabled:opacity-60">
@@ -2020,6 +2039,41 @@ export default function StudentManagementPage() {
     addAuditEntry({ action: "revoked", studentName: `${student.firstName} ${student.lastName}`, studentId: student.studentId, grade: student.grade, section: student.section, rfidTagId: student.rfid ?? "", previousRfid: student.rfid, performedBy: "ICT Admin", performedByRole: "ICT" });
   }
 
+  async function handleSaveStudentProfile(student: Student, update: StudentProfileUpdate) {
+    const response = await fetch(`/api/ict/students/${student.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Could not save the student profile.");
+    }
+
+    // Refresh this session immediately. Other ICT windows receive the same
+    // protected students invalidation from the server-side write.
+    setStudentRefreshKey((key) => key + 1);
+  }
+
+  async function handleScheduleStudentArchive(student: Student, password: string, reason: string) {
+    const response = await fetch("/api/scheduled-deletions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        password,
+        reason,
+        targetType: "student",
+        targetId: student.id,
+        targetName: [student.firstName, student.middleName, student.lastName, student.suffix !== "None" ? student.suffix : ""].filter(Boolean).join(" "),
+        targetEmail: student.parentEmail ?? null,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Could not schedule this student record for archive.");
+    }
+  }
+
   const rfidRegisteredPct = stats.total > 0 ? Math.round((stats.rfidRegistered / stats.total) * 100) : 0;
 
   return (
@@ -2337,8 +2391,8 @@ export default function StudentManagementPage() {
       {showAttendanceNotificationSettings && <AttendanceNotificationSettingsModal onClose={() => setShowAttendanceNotificationSettings(false)} />}
       {showAdd && <AddStudentModal grades={grades} onClose={() => setShowAdd(false)} onAdd={s => { setStudents(prev => prev.map(existing => existing.id === s.id ? s : existing)); setStudentRefreshKey(key => key + 1); setShowAdd(false); }} />}
       {viewStudent && <ViewStudentModal student={viewStudent} onClose={() => setViewStudent(null)} onEdit={s => { setViewStudent(null); setEditStudent(s); }} />}
-      {editStudent && <EditStudentModal grades={grades} student={editStudent} onClose={() => setEditStudent(null)} onSave={updated => { setStudents(prev => prev.map(s => s.id === updated.id ? updated : s)); setEditStudent(null); }} />}
-      {deleteStudent && <DeleteStudentModal student={deleteStudent} onClose={() => setDeleteStudent(null)} onDeleted={id => { setStudents(prev => prev.filter(s => s.id !== id)); setDeleteStudent(null); }} />}
+      {editStudent && <EditStudentModal grades={grades} student={editStudent} onClose={() => setEditStudent(null)} onSave={update => handleSaveStudentProfile(editStudent, update)} />}
+      {deleteStudent && <DeleteStudentModal student={deleteStudent} onClose={() => setDeleteStudent(null)} onDeleted={handleScheduleStudentArchive} />}
       {editRFID && <EditRFIDModal student={editRFID} onClose={() => setEditRFID(null)} onSave={(tag, action) => handleSaveRFID(editRFID, tag, action)} />}
       {revokeRFID && <RevokeRFIDModal student={revokeRFID} onClose={() => setRevokeRFID(null)} onConfirm={async () => { await handleRevokeRFID(revokeRFID); setRevokeRFID(null); }} />}
     </div>

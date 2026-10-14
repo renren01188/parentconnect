@@ -30,7 +30,6 @@ let reconnectTimer: number | undefined;
 let connectAttempt = 0;
 let connecting = false;
 let connectionGeneration = 0;
-let refreshAfterReconnect = false;
 let clientForChannel: typeof supabaseBrowser | null = null;
 
 function dispatch(invalidation: RealtimeInvalidation) {
@@ -63,15 +62,14 @@ function handleStatus(status: ChannelStatus, generation: number) {
   if (generation !== connectionGeneration || listeners.size === 0) return;
   if (status === "SUBSCRIBED") {
     connectAttempt = 0;
-    if (refreshAfterReconnect) {
-      refreshAfterReconnect = false;
-      dispatch(reconnectRefresh);
-    }
+    // Reconcile after every successful join, including the first one. A row
+    // can be committed after the page's initial fetch but before its browser
+    // Realtime channel is ready to receive Broadcast events.
+    dispatch(reconnectRefresh);
     return;
   }
 
   if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-    refreshAfterReconnect = true;
     removeSharedChannel();
     scheduleReconnect();
   }
@@ -100,7 +98,6 @@ async function connectSharedChannel() {
     removeSharedChannel();
     channel = connectedChannel;
     if (!connectedChannel) {
-      refreshAfterReconnect = true;
       scheduleReconnect();
     }
   } finally {
@@ -122,7 +119,6 @@ function stopSharedChannelWhenUnused() {
   }
   connectionGeneration += 1;
   connectAttempt = 0;
-  refreshAfterReconnect = false;
   removeSharedChannel();
   clientForChannel = null;
 }

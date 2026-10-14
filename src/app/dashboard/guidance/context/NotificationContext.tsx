@@ -57,7 +57,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     try {
       const [reportsRes, staffRes, ticketsRes] = await Promise.all([
         fetch("/api/reports/parent-adviser?role=guidance", { cache: "no-store" }),
-        fetch("/api/reports/staff-messages?role=guidance", { cache: "no-store" }),
+        fetch("/api/reports/staff-messages?role=guidance&excludeIct=1", { cache: "no-store" }),
         fetch("/api/reports/guidance/tickets", { cache: "no-store" }),
       ]);
       const [reportsData, staffData, ticketsData] = await Promise.all([
@@ -89,12 +89,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         || (report.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(Number(report.id)))
       );
       const reportCount = reportsRes.ok ? allReports.filter(isUnreadReport).length : 0;
-      const staffCount = staffRes.ok
-        ? ((staffData?.messages ?? []) as Array<{ status?: string }>).filter(m => m.status === "New").length
+      // ICT conversations use the dedicated Contact ICT badge. Do not route
+      // their unread state into the separate Reports badge.
+      const reportStaffCount = staffRes.ok
+        ? ((staffData?.messages ?? []) as Array<{ status?: string; sender?: string }>).filter(
+            (message) => message.status === "New" && message.sender !== "ICT",
+          ).length
         : 0;
-      const nextCount = reportCount + staffCount + pendingTicketCount;
+      const nextCount = reportCount + reportStaffCount + pendingTicketCount;
       setUnreadCount(nextCount);
-      setReportsUnreadCount(reportCount + staffCount + pendingTicketCount);
+      setReportsUnreadCount(reportCount + reportStaffCount + pendingTicketCount);
       // notifUnreadCount is intentionally NOT set here — the Notifications
       // nav item tracks its own separate source, not parent-adviser replies.
       // This sidebar total is an active Guidance workload count, not an

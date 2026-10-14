@@ -1,32 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { cookies } from "next/headers";
-import { jwtVerify } from "jose";
-import { getJwtSecret } from "@/lib/authSecret";
-
-const SECRET = getJwtSecret();
+import { getActiveIct } from "@/lib/apiAuthorization";
 
 // Student/RFID values are shared with the adviser dashboard. Never serve a
 // previously fetched list after an assignment, replacement, or removal.
 export const dynamic = "force-dynamic";
 const noStoreHeaders = { "Cache-Control": "no-store, max-age=0" };
 
-async function getIctFromToken() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("ict_token")?.value;
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, SECRET);
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
 // GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All
 export async function GET(req: NextRequest) {
   try {
-    const ict = await getIctFromToken();
+    const ict = await getActiveIct();
     if (!ict) return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
 
     const { searchParams } = new URL(req.url);

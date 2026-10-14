@@ -441,12 +441,20 @@ export async function GET() {
               ? "ICT"
               : "Adviser";
         const senderName = notification.sender_name?.trim() || announcement.adviser_name || senderRole;
+        // The announcement tables are the source of truth. Notification rows
+        // only identify an authorized recipient and their read state, so do
+        // not replace a saved title with a role-based placeholder here.
+        const announcementTitle = String(announcement.title ?? "").trim()
+          || `Announcement from ${senderRole}`;
+        const announcementMessage = String(announcement.message ?? "").trim()
+          || "No announcement message was provided.";
+        const announcementCreatedAt = announcement.created_at || notification.created_at;
         return {
           id: notification.id,
           type: "message",
-          title: "Announcement From " + senderRole,
-          msg: announcement.message,
-          time: timeLabel(notification.created_at),
+          title: announcementTitle,
+          msg: announcementMessage,
+          time: timeLabel(announcementCreatedAt),
           // Keep the existing category/filter contract (adviser announcements
           // are grouped under Teacher) while exposing the normalized sender
           // role separately for the title and modal.
@@ -459,11 +467,11 @@ export async function GET() {
           ],
           teacherName: senderName,
           announcementId: announcement.id,
-          announcementTitle: announcement.title,
+          announcementTitle,
           notificationIds: notification.notification_ids,
           senderName,
           senderRole,
-          createdAt: notification.created_at,
+          createdAt: announcementCreatedAt,
           grade: notification.grade,
           section: notification.section,
         };

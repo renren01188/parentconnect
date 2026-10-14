@@ -10,7 +10,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
-import { countParentReportTabs, filterParentReportConversations } from "@/lib/parentReportList";
+import { countParentReportTabs, filterParentReportConversations, sortParentReportConversations } from "@/lib/parentReportList";
 import {
   canSubmitConfirmedReport,
   createReportSubmissionConfirmation,
@@ -43,6 +43,8 @@ type StandaloneStaffMessage = {
   message: string;
   attachments?: MessageAttachment[];
   sentAt: string;
+  /** Server-provided raw latest reply time; never use a formatted display date for sorting. */
+  sortAt?: number;
   unread: boolean;
   replies?: Array<{
     id: number;
@@ -97,6 +99,7 @@ function standaloneMessageToReport(message: StandaloneStaffMessage): Report {
     reportStatus: null,
     hasReportStatus: false,
     time: last.sentAt,
+    lastActivityAt: message.sortAt ?? last.sentAt,
     unread: message.unread,
     messages: [toChatMessage(message), ...(message.replies ?? []).map(toChatMessage)],
     categories: [],
@@ -933,11 +936,11 @@ function ParentReportsPageContent() {
     ]);
     // Deduplicate by id in case of race conditions
     const seen = new Set<number>();
-    const nextReports = rawReports.filter(r => {
+    const nextReports = sortParentReportConversations(rawReports.filter(r => {
       if (seen.has(r.id)) return false;
       seen.add(r.id);
       return true;
-    });
+    }));
     setReports((current) => nextReports.map((report) => {
       const loaded = current.find((item) => item.id === report.id);
       // A list refresh carries current badges and status, but it deliberately
@@ -1017,9 +1020,9 @@ function ParentReportsPageContent() {
         const standaloneMessages = staffMessagesRes.ok
           ? ((staffMessagesData?.messages ?? []) as StandaloneStaffMessage[]).map(standaloneMessageToReport)
           : [];
-        const nextReports = reportsRes.ok
+        const nextReports = sortParentReportConversations(reportsRes.ok
           ? mergePendingMessages([...(reportsData?.reports ?? []) as Report[], ...standaloneMessages])
-          : standaloneMessages;
+          : standaloneMessages);
         setReports(nextReports);
         setReportSubmissionCooldownUntil(
           reportsRes.ok && typeof reportsData?.reportSubmissionCooldownUntil === "string"
@@ -1202,10 +1205,10 @@ function ParentReportsPageContent() {
   // Role tabs are assigned from the latest actual staff sender, not the
   // report's current owner or escalation flags. This keeps each conversation
   // in one staff tab and makes every badge mean exactly what its list shows.
-  const filteredReports = filterParentReportConversations(reports, {
+  const filteredReports = sortParentReportConversations(filterParentReportConversations(reports, {
     tab: activeFilter,
     category: categoryFilter,
-  });
+  }));
   const counts: Record<FilterTab, number> = countParentReportTabs(reports, {
     category: categoryFilter,
   });
@@ -1455,15 +1458,17 @@ function ParentReportsPageContent() {
                   className={`w-full text-left px-4 py-3.5 flex flex-col gap-2 transition-colors hover:bg-blue-50/50 ${r.id === selectedId ? "bg-blue-50 border-l-[3px] border-l-blue-500" : "border-l-[3px] border-l-transparent"}`}>
                   <div className="flex items-center gap-2.5">
                     <span style={{ width: 36, height: 36, minWidth: 36, borderRadius: "50%", background: r.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{r.recipientInitials}</span>
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center gap-2 mb-0.5">
                         {r.unread && <span style={{ width: 7, height: 7, minWidth: 7, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />}
                         <p className={`min-w-0 flex-1 text-sm truncate ${r.unread ? "font-bold text-slate-800" : "font-semibold text-slate-700"}`}>{r.subject}</p>
+                      </div>
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         {r.isStudentSubmittedConcern && (
                           <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">Student concern</span>
                         )}
+                        <p className="min-w-0 flex-1 text-[11px] text-slate-400 truncate">{r.preview}</p>
                       </div>
-                      <p className="text-[11px] text-slate-400 truncate">{r.preview}</p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
                       <span className="text-[10px] text-slate-400 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" />{r.time}</span>

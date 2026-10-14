@@ -310,36 +310,36 @@ function ComposeModal({
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
             <div>
-              <label className="mb-1.5 block text-xs font-bold text-gray-600">Recipient</label>
-              <div className="mb-2 flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2">
-                <Search className="h-4 w-4 text-gray-400" />
+              <label className="mb-1.5 block text-xs font-bold text-gray-700">Recipient</label>
+              <div className="mb-2 flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 transition focus-within:border-[#274e13] focus-within:ring-2 focus-within:ring-[#274e13]/10">
+                <Search className="h-4 w-4 text-gray-500" />
                 <input
                   value={recipientSearch}
                   onChange={(event) => setRecipientSearch(event.target.value)}
                   placeholder="Search school staff or principal..."
-                  className="flex-1 text-sm outline-none"
+                  className="flex-1 bg-transparent text-sm text-gray-900 caret-[#274e13] outline-none placeholder:text-gray-500"
                 />
               </div>
-              <div className="max-h-44 overflow-y-auto rounded-xl border border-gray-200">
+              <div className="max-h-44 overflow-y-auto rounded-xl border border-gray-300 bg-white">
                 {filteredRecipients.length === 0 ? (
-                  <p className="px-3 py-4 text-center text-xs font-semibold text-gray-400">No recipients found.</p>
+                  <p className="px-3 py-4 text-center text-xs font-semibold text-gray-500">No recipients found.</p>
                 ) : filteredRecipients.map((recipient) => (
                   <button
                     key={recipient.id}
                     type="button"
                     onClick={() => setRecipientId(recipient.id)}
-                    className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition hover:bg-gray-50 ${recipientId === recipient.id ? "bg-[#274e13]/5" : ""}`}
+                    className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition hover:bg-[#274e13]/5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#274e13] ${recipientId === recipient.id ? "bg-[#274e13]/10" : "bg-white"}`}
                   >
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#274e13] text-xs font-bold text-white">
                       {initials(recipient.name)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-gray-800">{recipient.name}</p>
+                      <p className="truncate text-sm font-semibold text-gray-900">{recipient.name}</p>
                       <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${roleClass(recipient.role)}`}>
                           {recipient.role === "Guidance" ? "School Staff" : recipient.role}
                         </span>
-                        <p className="truncate text-xs text-gray-400">{recipientMeta(recipient)}</p>
+                        <p className="truncate text-xs text-gray-600">{recipientMeta(recipient)}</p>
                       </div>
                     </div>
                     {recipientId === recipient.id && <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" />}

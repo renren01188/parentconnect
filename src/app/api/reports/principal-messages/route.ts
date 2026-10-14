@@ -377,6 +377,13 @@ function roleLabel(type: string) {
   return "Adviser";
 }
 
+function isPrincipalIctPair(row: StaffMessageRow) {
+  return (
+    (row.sender_type === "principal" && row.recipient_type === "ict") ||
+    (row.sender_type === "ict" && row.recipient_type === "principal")
+  );
+}
+
 function buildUnifiedStaffConversations(principal: PrincipalSession, rows: StaffMessageRow[]) {
   const roots = rows.filter((row) => !Number(row.source_message_id));
 
@@ -584,6 +591,9 @@ export async function GET() {
     const adviserMessageRows = (adviserInboxResult.data ?? []) as Array<Record<string, unknown>>;
     const staffMessageRows = sentStaffResult.error ? [] : ((sentStaffResult.data ?? []) as Array<Record<string, unknown>>);
     const unifiedStaffRows = unifiedStaffResult.error ? [] : ((unifiedStaffResult.data ?? []) as unknown as StaffMessageRow[]);
+    // Contact ICT owns Principal–ICT conversations and their read state. Keep
+    // those rows out of this Reports-only staff inbox and its badge source.
+    const reportStaffRows = unifiedStaffRows.filter((row) => !isPrincipalIctPair(row));
 
     const receivedInbox = adviserMessageRows.filter((row) => !Number(row.source_staff_message_id)).map((row) => {
       const thread = buildAdviserStartedThread(row, adviserMessageRows, staffMessageRows);
@@ -656,7 +666,7 @@ export async function GET() {
       buildParentReportConversation(report, parentMessagesByReport.get(report.id) ?? [])
     );
 
-    const unifiedStaffInbox = buildUnifiedStaffConversations(principal, unifiedStaffRows);
+    const unifiedStaffInbox = buildUnifiedStaffConversations(principal, reportStaffRows);
 
     const inbox = [...receivedInbox, ...sentInbox, ...unifiedStaffInbox]
       .sort((a, b) => b.sortAt - a.sortAt);

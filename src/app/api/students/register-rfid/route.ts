@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
 import { normalizeRfidCard } from "@/lib/rfid";
+import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type Body = {
   student_id: string;
@@ -113,6 +114,7 @@ export async function POST(req: NextRequest) {
       throw new Error("RFID assignment could not be verified.");
     }
     await logAudit({ action: "RFID Assigned", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: `${targetStudent.first_name} ${targetStudent.last_name}`, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, newStatus: "Assigned", module: "RFID", details: `Assigned RFID to ${targetStudent.first_name} ${targetStudent.last_name} (${updatedStudent.student_id}).` });
+    await publishStudentRealtimeInvalidation({ studentDbId: updatedStudent.id });
 
     return NextResponse.json({
       success: true,
@@ -171,6 +173,7 @@ export async function DELETE(req: NextRequest) {
       throw new Error("RFID removal could not be verified.");
     }
     await logAudit({ action: "RFID Revoked", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: targetStudent.student_id, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, previousStatus: "Assigned", newStatus: "Unassigned", module: "RFID", details: `Removed RFID from student ${updatedStudent.student_id}.` });
+    await publishStudentRealtimeInvalidation({ studentDbId: updatedStudent.id });
 
     return NextResponse.json({ success: true, student: updatedStudent }, { headers: noStoreHeaders });
   } catch (error) {

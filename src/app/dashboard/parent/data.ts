@@ -60,6 +60,8 @@ export interface Report {
   reportStatus?: ReportStatus | null;
   hasReportStatus?: boolean;
   time: string;
+  /** Raw latest-activity timestamp used to keep the mixed inbox in newest-first order. */
+  lastActivityAt?: string | number;
   unread?: boolean;
   grade?: string;
   section?: string;

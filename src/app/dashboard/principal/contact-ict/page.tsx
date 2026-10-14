@@ -105,6 +105,22 @@ function formatAttachmentSize(size: number) {
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Preserve an ICT reply received through Realtime while a slower previous
+// snapshot resolves. Each saved staff-message ID can appear only once.
+function mergeConversations(current: Conversation[], incoming: Conversation[]) {
+    const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
+    return incoming.map((conversation) => {
+        const existing = currentById.get(conversation.conversationId);
+        if (!existing) return conversation;
+
+        const messages = new Map<string, ThreadMessage>();
+        [...existing.thread, ...conversation.thread].forEach((message) => {
+            messages.set(String(message.id), message);
+        });
+        return { ...conversation, thread: Array.from(messages.values()) };
+    });
+}
+
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
     if (!attachments?.length) return null;
     return (
@@ -329,7 +345,7 @@ export default function ContactICTPage() {
 
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
-            setConversations(nextConversations);
+            setConversations((current) => mergeConversations(current, nextConversations));
             setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
             setError(null);
             return true;

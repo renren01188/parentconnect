@@ -94,6 +94,33 @@ type ParentNotificationPreview = {
     parentDeletionNotificationId?: number;
 };
 
+type ParentAnnouncementPreview = {
+    id: number;
+    title: string;
+    message: string;
+    senderName: string;
+    senderRole: string;
+    time: string;
+    unread: boolean;
+};
+
+type ParentDashboardNotification = {
+    id: number;
+    title: string;
+    msg: string;
+    time: string;
+    unread: boolean;
+    announcementId?: number;
+    announcementTitle?: string;
+    notificationIds?: number[];
+    reportId?: number;
+    staffMessageConversationId?: number;
+    parentDeletionNotificationId?: number;
+    senderName?: string;
+    senderRole?: string;
+    teacherName?: string;
+};
+
 type ParentScheduledDeletionNotice = {
     scheduledDeletionId: number;
     deleteAfter: string | null;
@@ -197,6 +224,7 @@ export default function ParentDashboard() {
     const router = useRouter();
     const { session, refreshSession } = useParentSession();
     const [notifs, setNotifs] = useState<ParentNotificationPreview[]>([]);
+    const [announcements, setAnnouncements] = useState<ParentAnnouncementPreview[]>([]);
     const [scheduledDeletionNotice, setScheduledDeletionNotice] = useState<ParentScheduledDeletionNotice | null>(null);
     const [students, setStudents] = useState<StudentInfo[]>([]);
     const [selectedId, setSelectedId] = useState("");
@@ -316,20 +344,11 @@ export default function ParentDashboard() {
                 });
 
                 const notifData = notificationResult.data;
-                const realNotifications = Array.isArray(notifData?.notifications) ? notifData.notifications : [];
+                const realNotifications: ParentDashboardNotification[] = Array.isArray(notifData?.notifications)
+                    ? notifData.notifications
+                    : [];
                 setScheduledDeletionNotice(notifData?.scheduledDeletionNotice ?? null);
-                setNotifs(realNotifications.slice(0, 3).map((notif: {
-                    id: number;
-                    title: string;
-                    msg: string;
-                    time: string;
-                    unread: boolean;
-                    announcementId?: number;
-                    notificationIds?: number[];
-                    reportId?: number;
-                    staffMessageConversationId?: number;
-                    parentDeletionNotificationId?: number;
-                }) => ({
+                setNotifs(realNotifications.slice(0, 3).map((notif) => ({
                     id: notif.id,
                     type: "message",
                     icon: MessageSquare,
@@ -345,6 +364,22 @@ export default function ParentDashboard() {
                     staffMessageConversationId: notif.staffMessageConversationId,
                     parentDeletionNotificationId: notif.parentDeletionNotificationId,
                 })));
+                setAnnouncements(realNotifications
+                    .filter((notif) => typeof notif.announcementId === "number")
+                    .slice(0, 3)
+                    .map((notif) => {
+                        const senderRole = String(notif.senderRole ?? "School staff").trim() || "School staff";
+                        const senderName = String(notif.senderName ?? notif.teacherName ?? senderRole).trim() || senderRole;
+                        return {
+                            id: notif.id,
+                            title: String(notif.announcementTitle ?? notif.title ?? "School announcement").trim() || "School announcement",
+                            message: String(notif.msg ?? "").trim() || "No announcement message was provided.",
+                            senderName,
+                            senderRole,
+                            time: notif.time,
+                            unread: notif.unread,
+                        };
+                    }));
                 const reportsJson = reportsResult.data;
                 if (reportsResult.ok && reportsJson?.success) {
                     const reports = (reportsJson.reports ?? []).slice(0, 3);
@@ -634,16 +669,19 @@ export default function ParentDashboard() {
                         <div className="rounded-2xl border border-slate-100 shadow-sm p-4" style={{ background: "#3a1a1a" }}>
                             <p className="text-[10px] font-bold text-red-300 uppercase tracking-widest mb-2">Announcements</p>
                             <div className="flex flex-col gap-2">
-                                {notifs.slice(0, 3).map((a) => (
-                                    <div key={a.id} className="flex items-start gap-2">
+                                {announcements.map((announcement) => (
+                                    <div key={announcement.id} className="flex items-start gap-2">
                                         <span className="w-2 h-2 mt-1 rounded-full bg-red-400 shrink-0" />
                                         <div className="min-w-0 break-words">
-                                            <p className="break-words text-xs font-semibold leading-tight text-white">{a.title}</p>
-                                            <p className="break-words text-[10px] text-red-300">{a.time}</p>
+                                            <p className="break-words text-xs font-semibold leading-tight text-white">{announcement.title}</p>
+                                            <p className="mt-0.5 line-clamp-2 break-words text-[10px] leading-tight text-red-100">{announcement.message}</p>
+                                            <p className="mt-1 break-words text-[10px] text-red-300">
+                                                {announcement.senderName}{announcement.senderName !== announcement.senderRole ? ` · ${announcement.senderRole}` : ""} · {announcement.time}
+                                            </p>
                                         </div>
                                     </div>
                                 ))}
-                                {notifs.length === 0 && (
+                                {announcements.length === 0 && (
                                     <p className="text-red-200/70 text-xs leading-tight">No announcements yet</p>
                                 )}
                             </div>

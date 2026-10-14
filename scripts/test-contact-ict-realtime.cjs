@@ -9,6 +9,8 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const sharedRoute = read("src/app/api/reports/staff-messages/route.ts");
 const ictInbox = read("src/app/dashboard/ict/inbox/page.tsx");
 const realtimeHook = read("src/hooks/useStaffMessagesRealtime.ts");
+const sessionInvalidation = read("src/hooks/useSessionInvalidation.ts");
+const ictNotifications = read("src/app/dashboard/ict/context/NotificationContext.tsx");
 
 const contactPairs = [
   {
@@ -41,7 +43,7 @@ for (const pair of contactPairs) {
 
   // All three role-specific endpoints wake the saved participants for a
   // new/replied thread and again when a read acknowledgement changes a count.
-  assert.match(route, /await publishRealtimeInvalidation\(\[[\s\S]*?role: session\.type[\s\S]*?role: recipientType[\s\S]*?\], "staff-messages"\)/);
+  assert.match(route, /await publishRealtimeInvalidation\(\[[\s\S]*?role: session\.type[\s\S]*?role: recipientType[\s\S]*?\],\s*(?:"staff-messages"|\{\s*scope: "staff-messages",\s*kind: "message")/);
   assert.match(route, /repliesReadError[\s\S]*?await publishRealtimeInvalidation\(\[[\s\S]*?typedRoot\.sender_type[\s\S]*?typedRoot\.recipient_type[\s\S]*?\], "staff-messages"\)/);
   assert.match(route, /if \(rootId\) \{[\s\S]*?source_message_id", rootId[\s\S]*?status", "unread"[\s\S]*?\}/);
   assert.match(route, /select\("id, source_message_id"\)/);
@@ -63,11 +65,28 @@ for (const pair of contactPairs) {
   // page must discard that old response rather than hiding the live thread.
   assert.match(page, /messagesRequestVersionRef/);
   assert.match(page, /requestVersion !== messagesRequestVersionRef\.current/);
+  assert.match(page, /function mergeConversations\(current: Conversation\[\], incoming: Conversation\[\]\)/);
+  assert.match(page, /setConversations\(\(current\) => mergeConversations\(current, nextConversations\)\)/);
   assert.doesNotMatch(page, /setIctUnreadCount\(Number\(data\.unreadCount/);
   assert.match(context, new RegExp(`${pair.clear}: \\(\\) => void`));
   assert.match(context, /ictBadgeVersionRef\.current \+= 1/);
   assert.match(context, /contact-ict-seen-at/);
   assert.match(context, /seenAfter/);
+}
+
+// These providers live in their respective dashboard layouts, not on Contact
+// ICT. An ICT reply must therefore refresh the badge while the recipient is
+// browsing any other page, and the matching sidebar must consume that state.
+for (const [contextPath, sidebarPath, countName, refreshName] of [
+  ["src/app/dashboard/adviser/context/NotificationContext.tsx", "src/app/dashboard/adviser/components/Sidebar.tsx", "ictUnreadCount", "loadIctCount"],
+  ["src/app/dashboard/guidance/context/NotificationContext.tsx", "src/app/dashboard/guidance/components/Sidebar.tsx", "ictUnreadCount", "loadIctCount"],
+  ["src/app/dashboard/principal/context/NotificationContext.tsx", "src/app/dashboard/principal/components/Sidebar.tsx", "ictMessageCount", "refreshIctMessages"],
+]) {
+  const context = read(contextPath);
+  const sidebar = read(sidebarPath);
+  assert.match(context, /useSessionInvalidation/);
+  assert.match(context, new RegExp(`scope === "staff-messages"[\\s\\S]*?${refreshName}`));
+  assert.match(sidebar, new RegExp(countName));
 }
 
 // Principal and Guidance email notifications are deferred until after the
@@ -78,7 +97,7 @@ for (const routePath of [
 ]) {
   const route = read(routePath);
   assert.match(route, /import \{ after, NextRequest, NextResponse \} from "next\/server"/);
-  assert.ok(route.indexOf('], "staff-messages");') < route.indexOf("if (!rootId) after(async () =>"));
+  assert.ok(route.indexOf("await publishRealtimeInvalidation(") < route.indexOf("if (!rootId) after(async () =>"));
 }
 
 // ICT Inbox is a real subscriber over the shared staff-message source, with
@@ -93,5 +112,201 @@ assert.match(sharedRoute, /\["read", "replied", "typing"\]/);
 assert.match(sharedRoute, /A reply acknowledges every inbound message/);
 assert.match(sharedRoute, /source_message_id", rootId/);
 assert.match(realtimeHook, /invalidation\.scope === "staff-messages"/);
+assert.match(
+  sharedRoute,
+  /const excludeIctContact = req\.nextUrl\.searchParams\.get\("excludeIct"\) === "1"/,
+  "The shared staff-message API must support a Reports-only ICT exclusion",
+);
+assert.match(
+  sharedRoute,
+  /allRows\.filter\(\(row\) => !isIctContactRow\(row, current\.type\)\)/,
+  "Reports-scoped staff results must remove only the current role's ICT threads",
+);
+// The ICT layout owns its badge subscription, so a Principal message updates
+// it before ICT opens the Inbox. The count endpoint remains the authority.
+assert.match(ictNotifications, /new URLSearchParams\(\{ role: "ict", summary: "1" \}\)/);
+assert.match(ictNotifications, /useSessionInvalidation\(\(\{ scope \}\) => \{[\s\S]*?scope === "staff-messages"[\s\S]*?refreshInboxCount\(\)/);
+assert.match(ictNotifications, /inboxBadgeVersionRef/);
+assert.match(ictNotifications, /badgeVersion === inboxBadgeVersionRef\.current/);
+assert.match(ictNotifications, /inboxCountRequestVersionRef/);
+assert.match(ictNotifications, /requestVersion === inboxCountRequestVersionRef\.current/);
+assert.match(sharedRoute, /searchParams\.get\("summary"\) === "1"[\s\S]*?recipient_type", current\.type[\s\S]*?unreadConversationIds/);
+assert.match(read("src/app/api/principal-ict/messages/route.ts"), /kind: "message",[\s\S]*?conversationId: conversationId\(rootId \?\? Number\(createdMessage\.id\)\)/);
+// A first subscription has the same short race window as a reconnect. Its
+// completion must therefore reconcile the page's protected snapshot too.
+assert.match(sessionInvalidation, /if \(status === "SUBSCRIBED"\) \{[\s\S]*?dispatch\(reconnectRefresh\)/);
+// Adviser sends, ICT replies, and ICT-created threads all identify the saved
+// conversation in the same data-free Realtime event.
+assert.match(read("src/app/api/adviser-ict/messages/route.ts"), /kind: "message",[\s\S]*?conversationId: conversationId\(rootId \?\? Number\(createdMessage\.id\)\)/);
+assert.match(sharedRoute, /kind: "message",[\s\S]*?conversationId: `staff-message:\$\{sourceMessageId \|\| Number\(createdMessage\.id\)\}`/);
+assert.match(sharedRoute, /kind: "message",[\s\S]*?conversationId: `staff-message:\$\{rootId\}`/);
+
+// The sender must not wait for a separate Realtime event (or for the other
+// participant to write) before seeing their successful Adviser message. The
+// saved message returned by the API is rendered optimistically and then the
+// protected background refresh reconciles it with the server snapshot.
+const adviserContact = read("src/app/dashboard/adviser/contact-ict/page.tsx");
+assert.match(adviserContact, /type CreatedStaffMessage/);
+assert.match(adviserContact, /function responseErrorMessage/);
+assert.match(adviserContact, /The write route returns the saved row\. Render it now/);
+assert.match(adviserContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
+assert.match(adviserContact, /setConversations\(\(current\) => \[\s*conversation,/);
+assert.match(adviserContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
+assert.match(adviserContact, /messagesRequestVersionRef\.current \+= 1/);
+// Both panes publish local typing state and consume the other participant's
+// data-free Realtime typing event for the active canonical conversation.
+assert.match(adviserContact, /conversationTyping\.onRealtimeEvent/);
+assert.match(adviserContact, /conversationTyping\.onDraftChange/);
+assert.match(adviserContact, /conversationTyping\.isOtherParticipantTyping/);
+assert.match(ictInbox, /conversationTyping\.onRealtimeEvent/);
+assert.match(ictInbox, /conversationTyping\.onDraftChange/);
+assert.match(ictInbox, /conversationTyping\.isOtherParticipantTyping/);
+
+// Guidance-to-ICT uses the same durable-write contract: a new Guidance row
+// is selected and returned to its sender, while ICT gets an opaque message
+// invalidation that wakes both the open Inbox and the layout-level badge.
+const guidanceRoute = read("src/app/api/guidance-ict/messages/route.ts");
+const guidanceContact = read("src/app/dashboard/guidance/contact-ict/page.tsx");
+const guidanceNotifications = read(
+  "src/app/dashboard/guidance/context/NotificationContext.tsx",
+);
+const guidanceSidebar = read("src/app/dashboard/guidance/components/Sidebar.tsx");
+assert.match(guidanceRoute, /const \{ data: createdMessage, error \} = await supabase\.from\("staff_messages"\)\.insert\(/);
+assert.match(guidanceRoute, /idempotency_key: idempotencyKey,[\s\S]*?\}\)\.select\("\*"\)\.single\(\)/);
+assert.match(guidanceRoute, /scope: "staff-messages",[\s\S]*?kind: "message",[\s\S]*?conversationId: conversationId\(rootId \?\? Number\(createdMessage\.id\)\),[\s\S]*?messageId: Number\(createdMessage\.id\)/);
+assert.match(guidanceRoute, /return NextResponse\.json\(\{ success: true, message: createdMessage \}, \{ status: 201 \}\)/);
+assert.match(guidanceContact, /senderRole: "Guidance"/);
+assert.match(guidanceContact, /Render the durable result before the asynchronous Realtime refresh/);
+assert.match(guidanceContact, /function mergeConversations\(current: Conversation\[\], incoming: Conversation\[\]\)/);
+assert.match(guidanceContact, /setConversations\(\(current\) => mergeConversations\(current, nextConversations\)\)/);
+assert.match(guidanceContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
+assert.match(guidanceContact, /setConversations\(\(current\) => \[\s*conversation,/);
+assert.match(guidanceContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
+assert.match(
+  guidanceNotifications,
+  /message\.status === "New" && message\.sender !== "ICT"/,
+  "Guidance Reports count must exclude unread ICT conversations",
+);
+assert.match(
+  guidanceNotifications,
+  /setReportsUnreadCount\(reportCount \+ reportStaffCount \+ pendingTicketCount\)/,
+  "Guidance Reports count must retain only report, non-ICT staff, and ticket counts",
+);
+assert.match(
+  guidanceNotifications,
+  /scope === "staff-messages"[\s\S]*?Promise\.all\(\[refreshGuidanceCounts\(\), loadIctCount\(\)\]\)/,
+  "Guidance must refresh the dedicated ICT count on staff-message updates",
+);
+assert.match(
+  guidanceSidebar,
+  /badgeKey === "ict" \? ictUnreadCount/,
+  "Guidance Contact ICT sidebar badge must use the dedicated ICT unread count",
+);
+
+// Adviser Reports has a separate direct-staff source. ICT threads must be
+// omitted from that count so the layout-level Contact ICT summary owns them.
+const adviserNotifications = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
+const adviserSidebar = read("src/app/dashboard/adviser/components/Sidebar.tsx");
+const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
+assert.match(
+  adviserNotifications,
+  /message\.status === "New" && message\.sender !== "ICT"/,
+  "Adviser Reports count must exclude unread ICT conversations",
+);
+assert.match(
+  adviserNotifications,
+  /setUnreadCount\(actionableParentReports \+ actionableStudentReports \+ actionablePrincipalMessages \+ unreadReportStaffMessages\)/,
+  "Adviser Reports count must retain only report-scoped and non-ICT staff work",
+);
+assert.match(
+  adviserNotifications,
+  /scope === "staff-messages"[\s\S]*?loadReportCount\(\)[\s\S]*?loadIctCount\(\)/,
+  "Adviser must refresh the dedicated Contact ICT count after a live staff message",
+);
+assert.match(
+  adviserSidebar,
+  /label === "Reports" \? unreadCount[\s\S]*?label === "Contact ICT" \? ictUnreadCount/,
+  "Adviser sidebar must map report and Contact ICT badges to separate counts",
+);
+assert.match(
+  adviserNotifications,
+  /staff-messages\?role=adviser&excludeIct=1/,
+  "Adviser Reports badge must request the ICT-free staff feed",
+);
+assert.match(
+  adviserReports,
+  /staff-messages\?role=adviser&excludeIct=1/,
+  "Adviser Reports must request the ICT-free staff feed",
+);
+assert.match(
+  adviserReports,
+  /message\.sender !== "ICT" && message\.message_sender !== "ICT"/,
+  "Adviser Reports must retain its defensive ICT conversation filter",
+);
+assert.match(
+  adviserContact,
+  /function mergeConversations/,
+  "Adviser Contact ICT remains responsible for live ICT conversations",
+);
+
+assert.match(
+  guidanceNotifications,
+  /staff-messages\?role=guidance&excludeIct=1/,
+  "Guidance Reports badge must request the ICT-free staff feed",
+);
+const guidanceReports = read("src/app/dashboard/guidance/reports/page.tsx");
+assert.match(
+  guidanceReports,
+  /staff-messages\?role=guidance&excludeIct=1/,
+  "Guidance Reports must request the ICT-free staff feed",
+);
+assert.match(
+  guidanceReports,
+  /message\.sender !== "ICT" && message\.message_sender !== "ICT"/,
+  "Guidance Reports must retain its defensive ICT conversation filter",
+);
+assert.match(
+  guidanceContact,
+  /function mergeConversations/,
+  "Guidance Contact ICT remains responsible for live ICT conversations",
+);
+
+// Principal Reports must never use Contact ICT conversations as a report
+// message. The Reports API excludes the pair at its source, and the page
+// keeps a defensive client filter for stale responses during a deployment.
+const principalReportsRoute = read("src/app/api/reports/principal-messages/route.ts");
+const principalReportsPage = read("src/app/dashboard/principal/reports/page.tsx");
+const principalNotifications = read("src/app/dashboard/principal/context/NotificationContext.tsx");
+const principalSidebar = read("src/app/dashboard/principal/components/Sidebar.tsx");
+assert.match(
+  principalReportsRoute,
+  /function isPrincipalIctPair\(row: StaffMessageRow\)/,
+  "Principal Reports must identify Principal–ICT conversations",
+);
+assert.match(
+  principalReportsRoute,
+  /const reportStaffRows = unifiedStaffRows\.filter\(\(row\) => !isPrincipalIctPair\(row\)\)/,
+  "Principal Reports must exclude Contact ICT rows before building its inbox",
+);
+assert.match(
+  principalReportsRoute,
+  /buildUnifiedStaffConversations\(principal, reportStaffRows\)/,
+  "Principal Reports must only render report-scoped staff conversations",
+);
+assert.match(
+  principalReportsPage,
+  /conversation\.sender\.role !== "ICT"/,
+  "Principal Reports must defensively exclude ICT conversations from its panel",
+);
+assert.match(
+  principalNotifications,
+  /scope === "staff-messages"[\s\S]*?refreshAdviserMessages\(\)[\s\S]*?refreshIctMessages\(\)/,
+  "Principal must refresh the separate Contact ICT count after a live staff message",
+);
+assert.match(
+  principalSidebar,
+  /badgeKey === "reports" \? reportCount \+ adviserMessageCount[\s\S]*?badgeKey === "ict" \? ictMessageCount/,
+  "Principal sidebar must map report and Contact ICT badges to separate counts",
+);
 
 console.log("Contact ICT Realtime and unread-state checks passed");

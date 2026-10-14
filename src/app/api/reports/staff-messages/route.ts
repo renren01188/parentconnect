@@ -90,6 +90,15 @@ function parseParticipantRole(value: unknown): ParticipantRole | null {
   return value === "parent" ? "parent" : parseRole(value);
 }
 
+function isIctContactRow(row: Record<string, unknown>, participantType: ParticipantRole) {
+  const senderType = String(row.sender_type ?? "");
+  const recipientType = String(row.recipient_type ?? "");
+  return participantType !== "ict" && (
+    (senderType === participantType && recipientType === "ict") ||
+    (senderType === "ict" && recipientType === participantType)
+  );
+}
+
 function rootIdFromConversationId(value: unknown) {
   const match = String(value ?? "").match(/^(?:staff-message|adviser-ict|guidance-ict|principal-ict):([1-9][0-9]*)$/);
   if (!match) return 0;
@@ -301,6 +310,32 @@ export async function GET(req: NextRequest) {
   try {
     const current = await currentParticipant(parseParticipantRole(req.nextUrl.searchParams.get("role")));
     if (!current) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+    // Reports pages opt into this scoped feed. Contact ICT continues to use
+    // its dedicated role-pair endpoints, so ICT threads never enter a Reports
+    // panel or its count calculation.
+    const excludeIctContact = req.nextUrl.searchParams.get("excludeIct") === "1";
+
+    // Sidebar layouts need a fast, server-authorized unread count while the
+    // user is elsewhere in the dashboard. Do not send thread bodies or
+    // attachment data just to update a badge after a Realtime invalidation.
+    if (req.nextUrl.searchParams.get("summary") === "1") {
+      const seenAfter = Date.parse(req.nextUrl.searchParams.get("seenAfter") ?? "");
+      let unreadQuery = supabase
+        .from("staff_messages")
+        .select("id, source_message_id")
+        .eq("recipient_type", current.type)
+        .eq("recipient_id", current.id)
+        .eq("status", "unread");
+      if (Number.isFinite(seenAfter)) {
+        unreadQuery = unreadQuery.gt("created_at", new Date(seenAfter).toISOString());
+      }
+      const { data, error } = await unreadQuery;
+      if (error && !isMissingTableError(error)) throw error;
+      const unreadConversationIds = new Set((data ?? [])
+        .map((row) => Number(row.source_message_id) || Number(row.id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0));
+      return NextResponse.json({ success: true, unreadCount: unreadConversationIds.size });
+    }
 
     // Parents can fetch only messages addressed to their own account.  This
     // endpoint is intentionally server-session authenticated; no browser RLS
@@ -375,7 +410,10 @@ export async function GET(req: NextRequest) {
     ]);
 
     if (messagesResult.error && !isMissingTableError(messagesResult.error)) throw messagesResult.error;
-    const rows = messagesResult.error ? [] : ((messagesResult.data ?? []) as Array<Record<string, unknown>>);
+    const allRows = messagesResult.error ? [] : ((messagesResult.data ?? []) as Array<Record<string, unknown>>);
+    const rows = excludeIctContact
+      ? allRows.filter((row) => !isIctContactRow(row, current.type))
+      : allRows;
     const roots = rows.filter((row) => !Number(row.source_message_id));
     const repliesByRootId = new Map<number, Array<Record<string, unknown>>>();
     for (const row of rows) {
@@ -563,7 +601,12 @@ export async function POST(req: NextRequest) {
     await publishRealtimeInvalidation([
       { role: current.type, id: current.id },
       { role: recipientType, id: Number(rawRecipientId) },
-    ], "staff-messages");
+    ], {
+      scope: "staff-messages",
+      kind: "message",
+      conversationId: `staff-message:${sourceMessageId || Number(createdMessage.id)}`,
+      messageId: Number(createdMessage.id),
+    });
 
     if (recipient.email) after(async () => {
       try {
@@ -705,7 +748,12 @@ export async function PATCH(req: NextRequest) {
       await publishRealtimeInvalidation([
         { role: current.type, id: current.id },
         { role: recipientType as ParticipantRole, id: recipientId },
-      ], "staff-messages");
+      ], {
+        scope: "staff-messages",
+        kind: "message",
+        conversationId: `staff-message:${rootId}`,
+        messageId: Number(createdMessage.id),
+      });
       return NextResponse.json({ success: true, message: createdMessage });
     } else {
       const now = new Date().toISOString();

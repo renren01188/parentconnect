@@ -990,7 +990,7 @@ function ReportsPageContent() {
     const loadGuidanceStaffMessages = useCallback(async (preferredConversationId?: string) => {
         if (preferredConversationId) preferredStaffConversationRef.current = preferredConversationId;
         const requestVersion = ++staffMessageRequestVersionRef.current;
-        const res = await fetch("/api/reports/staff-messages?role=guidance", { cache: "no-store" });
+        const res = await fetch("/api/reports/staff-messages?role=guidance&excludeIct=1", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (requestVersion !== staffMessageRequestVersionRef.current) return [];
         if (!res.ok) {

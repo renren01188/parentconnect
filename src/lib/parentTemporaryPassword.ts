@@ -2,11 +2,19 @@ import crypto from "crypto";
 
 export const PARENT_TEMPORARY_PASSWORD_TTL_SECONDS = 10 * 60;
 export const PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS = 2 * 60;
+// Keep the newest code and one prior code. This allows for delayed delivery
+// after a resend without leaving an unbounded number of codes valid.
+export const PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES = 2;
 export const TEMPORARY_PASSWORD_EXPIRED_MESSAGE = "Your temporary password has expired. Please start Parent signup again.";
 
 type TemporaryPassword = {
   password: string;
   expiresAt: Date;
+};
+
+export type TemporaryPasswordProofEntry = {
+  proof: string;
+  expiresAt: string;
 };
 
 const LEGACY_TEMPORARY_PASSWORD_PATTERN = /^PC-([0-9a-z]+)-([a-f0-9]{24})$/i;
@@ -51,6 +59,50 @@ export function matchesTemporaryPasswordProof(password: string, proof: unknown) 
   const expected = Buffer.from(createTemporaryPasswordProof(password), "hex");
   const received = Buffer.from(proof, "hex");
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
+}
+
+function isTemporaryPasswordProofEntry(value: unknown): value is TemporaryPasswordProofEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as { proof?: unknown; expiresAt?: unknown };
+  return typeof entry.proof === "string"
+    && /^[a-f0-9]{64}$/i.test(entry.proof)
+    && typeof entry.expiresAt === "string"
+    && temporaryPasswordExpiryEpochSeconds(entry.expiresAt) !== null;
+}
+
+/**
+ * Reads the valid proof entries from a signed pending-signup payload. Legacy
+ * payloads used one proof directly on the token, so keep that path while new
+ * payloads can safely tolerate a delayed resend email.
+ */
+export function temporaryPasswordProofEntries(payload: Record<string, unknown>) {
+  const entries = Array.isArray(payload.temporaryPasswordProofEntries)
+    ? payload.temporaryPasswordProofEntries.filter(isTemporaryPasswordProofEntry)
+    : [];
+  const legacyEntry = {
+    proof: payload.temporaryPasswordProof,
+    expiresAt: payload.temporaryPasswordExpiresAt,
+  };
+
+  if (isTemporaryPasswordProofEntry(legacyEntry) && !entries.some((entry) => entry.proof === legacyEntry.proof)) {
+    entries.push(legacyEntry);
+  }
+
+  return entries.slice(0, PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES);
+}
+
+/** Returns the matching unexpired proof entry without exposing any password data. */
+export function matchingTemporaryPasswordProof(
+  password: string,
+  entries: TemporaryPasswordProofEntry[],
+  now = Date.now(),
+) {
+  return entries.find((entry) => {
+    const expiresAtSeconds = temporaryPasswordExpiryEpochSeconds(entry.expiresAt);
+    return !!expiresAtSeconds
+      && expiresAtSeconds * 1_000 > now
+      && matchesTemporaryPasswordProof(password, entry.proof);
+  }) ?? null;
 }
 
 /** Validates the printable format without logging or otherwise exposing it. */

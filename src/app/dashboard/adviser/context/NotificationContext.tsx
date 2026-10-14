@@ -15,7 +15,7 @@ interface NotifContextType {
   // Notifications nav badge — unread notification items
   notifUnreadCount: number;
   setNotifUnreadCount: (n: number) => void;
-  clearNotifUnreadCount: () => void;
+  markNotifRead: () => void;
 
   // Contact ICT nav badge — unread ICT messages
   ictUnreadCount: number;
@@ -28,7 +28,7 @@ const NotifContext = createContext<NotifContextType>({
   setUnreadCount: () => { },
   notifUnreadCount: 0,
   setNotifUnreadCount: () => { },
-  clearNotifUnreadCount: () => { },
+  markNotifRead: () => { },
   ictUnreadCount: 0,
   setIctUnreadCount: () => { },
   clearIctUnreadCount: () => { },
@@ -46,7 +46,7 @@ function ictSeenTimestamp() {
 export function NotificationProvider({ children }: { children: ReactNode }) {
   // Seeded from real data — never hardcoded
   const [unreadCount, setUnreadCount] = useState(0);
-  const [notifUnreadCount, setNotifUnreadCount] = useState(0);
+  const [notifUnreadCount, setNotifUnreadCountState] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
   const hasLoadedInitialCounts = useRef(false);
   const refreshByScopeRef = useRef<(scope: string | null) => void>(() => {});
@@ -54,9 +54,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const ictBadgeVersionRef = useRef(0);
   const ictSeenAtRef = useRef(ictSeenTimestamp());
 
-  const clearNotifUnreadCount = useCallback(() => {
+  // Keep page-level optimistic reads ahead of a stale count request. A later
+  // Realtime/API refresh reconciles this with saved read rows.
+  const setNotifUnreadCount = useCallback((count: number) => {
     notificationBadgeVersionRef.current += 1;
-    setNotifUnreadCount(0);
+    setNotifUnreadCountState(Math.max(0, count));
+  }, []);
+
+  const markNotifRead = useCallback(() => {
+    notificationBadgeVersionRef.current += 1;
+    setNotifUnreadCountState((count) => Math.max(0, count - 1));
   }, []);
 
   const clearIctUnreadCount = useCallback(() => {
@@ -85,7 +92,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           fetch("/api/reports/parent-adviser?role=adviser", { cache: "no-store" }),
           fetch("/api/student-reports", { cache: "no-store" }),
           fetch("/api/reports/adviser-messages", { cache: "no-store" }),
-          fetch("/api/reports/staff-messages?role=adviser", { cache: "no-store" }),
+          fetch("/api/reports/staff-messages?role=adviser&excludeIct=1", { cache: "no-store" }),
         ]);
         const [parentReportsData, studentReportsData, principalMessagesData, staffMessagesData] = await Promise.all([
           parentReportsRes.json().catch(() => null),
@@ -120,13 +127,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         const actionablePrincipalMessages = principalMessages.filter((message: { sender?: string; status?: string }) =>
           message.sender === "Principal" && message.status === "New"
         ).length;
-        // Direct staff conversations have their own inbox state. They belong
-        // in the Reports nav badge but must not be treated as report statuses.
-        const unreadDirectStaffMessages = directStaffMessages.filter((message: { status?: string }) =>
-          message.status === "New"
+        // Adviser–ICT conversations have their own Contact ICT badge. Keep
+        // unread ICT threads out of the Reports total while retaining other
+        // direct staff conversations in their existing Reports workflow.
+        const unreadReportStaffMessages = directStaffMessages.filter((message: { status?: string; sender?: string }) =>
+          message.status === "New" && message.sender !== "ICT"
         ).length;
 
-        setUnreadCount(actionableParentReports + actionableStudentReports + actionablePrincipalMessages + unreadDirectStaffMessages);
+        setUnreadCount(actionableParentReports + actionableStudentReports + actionablePrincipalMessages + unreadReportStaffMessages);
       } catch {
         setUnreadCount(0);
       } finally {
@@ -162,7 +170,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       try {
         const { response: res, data } = await fetchJsonWithRetry<AdviserNotificationsResponse>("/api/adviser/notifications", { cache: "no-store" });
         if (res.ok && badgeVersion === notificationBadgeVersionRef.current) {
-          setNotifUnreadCount(Number(data?.sidebarUnreadCount ?? data?.unreadCount ?? 0));
+          setNotifUnreadCountState(Number(data?.sidebarUnreadCount ?? data?.unreadCount ?? 0));
         }
       } catch {
         // Retain the last confirmed count while a temporary request is retried.
@@ -249,7 +257,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setUnreadCount,
       notifUnreadCount,
       setNotifUnreadCount,
-      clearNotifUnreadCount,
+      markNotifRead,
       ictUnreadCount,
       setIctUnreadCount,
       clearIctUnreadCount,

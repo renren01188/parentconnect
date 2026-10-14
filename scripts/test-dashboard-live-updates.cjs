@@ -99,7 +99,7 @@ for (const file of [
 assert.match(read("src/app/api/ict/user-management/route.ts"), /publishAccountRealtimeInvalidation/);
 assert.match(read("src/app/api/ict/user-management/route.ts"), /publishStudentRealtimeInvalidation/);
 assert.match(read("src/app/api/students/route.ts"), /publishStudentRealtimeInvalidation/);
-assert.match(read("src/app/api/students/route.ts"), /publishRealtimeInvalidation/);
+assert.match(realtime, /publishStudentRealtimeInvalidation[\s\S]*?recipientsForRoles\(\["ict"\]\)/);
 assert.match(read("src/app/api/excuse-letters/route.ts"), /publishAttendanceRealtimeInvalidation/);
 
 console.log("Dashboard live-update coverage checks passed.");

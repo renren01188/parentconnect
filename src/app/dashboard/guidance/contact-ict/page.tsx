@@ -24,7 +24,7 @@ type MessageAttachment = {
 
 type ThreadMessage = {
     id: number;
-    senderRole: "Adviser" | "ICT";
+    senderRole: "Guidance" | "ICT";
     senderName: string;
     isCurrentUser: boolean;
     body: string;
@@ -37,7 +37,7 @@ type Conversation = {
     id: number;
     conversationId: string;
     recipientId: string;
-    otherRole: "Adviser" | "ICT";
+    otherRole: "Guidance" | "ICT";
     otherName: string;
     otherProfilePicture?: string | null;
     subject: string;
@@ -49,9 +49,15 @@ type Conversation = {
     thread: ThreadMessage[];
 };
 
+type CreatedStaffMessage = {
+    id: number;
+    created_at: string;
+    sender_name?: string | null;
+};
+
 type GuidanceIctMessagesResponse = {
     success: boolean;
-    message?: string;
+    message?: string | CreatedStaffMessage;
     conversations?: Conversation[];
     recipients?: Recipient[];
     unreadCount?: number;
@@ -103,6 +109,29 @@ function initials(name: string) {
 function formatAttachmentSize(size: number) {
     if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function responseErrorMessage(data: GuidanceIctMessagesResponse | null, fallback: string) {
+    return typeof data?.message === "string" ? data.message : fallback;
+}
+
+/**
+ * A Broadcast can start a second authorized fetch while the initial request
+ * is still returning. Keep any message identified by the saved row ID until
+ * the newer snapshot catches up, so an ICT reply never flashes then vanishes.
+ */
+function mergeConversations(current: Conversation[], incoming: Conversation[]) {
+    const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
+    return incoming.map((conversation) => {
+        const existing = currentById.get(conversation.conversationId);
+        if (!existing) return conversation;
+
+        const messages = new Map<string, ThreadMessage>();
+        [...existing.thread, ...conversation.thread].forEach((message) => {
+            messages.set(String(message.id), message);
+        });
+        return { ...conversation, thread: Array.from(messages.values()) };
+    });
 }
 
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
@@ -322,13 +351,13 @@ export default function ContactICTPage() {
         if (!background) setError(null);
         try {
             const { response: res, data } = await fetchJsonWithRetry<GuidanceIctMessagesResponse>("/api/guidance-ict/messages", { cache: "no-store" });
-            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load ICT messages.");
+            if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to load ICT messages."));
 
             if (requestVersion !== messagesRequestVersionRef.current) return true;
 
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
-            setConversations(nextConversations);
+            setConversations((current) => mergeConversations(current, nextConversations));
             setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
             setError(null);
             return true;
@@ -383,9 +412,53 @@ export default function ContactICTPage() {
             headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
             body: JSON.stringify(payload),
         });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
+        const data = await res.json().catch(() => null) as GuidanceIctMessagesResponse | null;
+        if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to send message."));
         newMessageAttemptRef.current = null;
+
+        // Render the durable result before the asynchronous Realtime refresh.
+        // ICT receives the same data-free invalidation and loads its own
+        // authorized snapshot; neither participant has to refresh or send a
+        // second message to make this new conversation visible.
+        if (data.message && typeof data.message !== "string") {
+            const recipient = recipients.find((item) => item.id === payload.recipientId);
+            if (recipient) {
+                const created = data.message;
+                const conversationId = `staff-message:${created.id}`;
+                const sentMessage: ThreadMessage = {
+                    id: created.id,
+                    senderRole: "Guidance",
+                    senderName: created.sender_name || "Guidance",
+                    isCurrentUser: true,
+                    body: payload.message,
+                    attachments: payload.attachments,
+                    sentAt: created.created_at,
+                    status: "Read",
+                };
+                const conversation: Conversation = {
+                    id: created.id,
+                    conversationId,
+                    recipientId: recipient.id,
+                    otherRole: "ICT",
+                    otherName: recipient.name,
+                    subject: payload.subject,
+                    body: payload.message,
+                    sentAt: created.created_at,
+                    updatedAt: created.created_at,
+                    status: "Read",
+                    isUnread: false,
+                    thread: [sentMessage],
+                };
+
+                // Keep an older list request from removing this live result.
+                messagesRequestVersionRef.current += 1;
+                setConversations((current) => [
+                    conversation,
+                    ...current.filter((item) => item.conversationId !== conversationId),
+                ]);
+                setSelectedId(conversationId);
+            }
+        }
         void loadMessages(true);
     }
 
@@ -393,11 +466,13 @@ export default function ContactICTPage() {
         if (!selected || (!reply.trim() && replyAttachments.length === 0) || sendingReply) return;
         setSendingReply(true);
         try {
+            const replyBody = reply.trim();
+            const attachments = replyAttachments;
             const payload = {
                 conversationId: selected.conversationId,
                 recipientId: selected.recipientId,
-                message: reply.trim(),
-                attachments: replyAttachments,
+                message: replyBody,
+                attachments,
             };
             const idempotencyKey = keyForSubmission(replyAttemptRef, payload);
             const res = await fetch("/api/guidance-ict/messages", {
@@ -405,12 +480,40 @@ export default function ContactICTPage() {
                 headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
                 body: JSON.stringify(payload),
             });
-            const data = await res.json().catch(() => null);
-            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
+            const data = await res.json().catch(() => null) as GuidanceIctMessagesResponse | null;
+            if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to send reply."));
             replyAttemptRef.current = null;
             setReply("");
             setReplyAttachments([]);
             conversationTyping.stopTyping();
+
+            if (data.message && typeof data.message !== "string") {
+                const created = data.message;
+                const sentMessage: ThreadMessage = {
+                    id: created.id,
+                    senderRole: "Guidance",
+                    senderName: created.sender_name || "Guidance",
+                    isCurrentUser: true,
+                    body: replyBody,
+                    attachments,
+                    sentAt: created.created_at,
+                    status: "Replied",
+                };
+
+                messagesRequestVersionRef.current += 1;
+                setConversations((current) => current.map((conversation) => {
+                    if (conversation.conversationId !== selected.conversationId) return conversation;
+                    if (conversation.thread.some((message) => message.id === sentMessage.id)) return conversation;
+                    return {
+                        ...conversation,
+                        body: replyBody || conversation.body,
+                        updatedAt: created.created_at,
+                        status: "Replied",
+                        isUnread: false,
+                        thread: [...conversation.thread, sentMessage],
+                    };
+                }));
+            }
             void loadMessages(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to send reply.");

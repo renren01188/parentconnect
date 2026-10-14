@@ -113,12 +113,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ]);
   });
 
-  useSessionInvalidation(async ({ scope }) => {
-    if (scope === "reports") {
+  useSessionInvalidation(async ({ scope, kind }) => {
+    // Typing is ephemeral conversation UI. It must not flood the layout-level
+    // badge reader and race a durable incoming message that changes the count.
+    if (kind === "typing") return;
+
+    // This listener is mounted by the Parent layout, so an Adviser message
+    // updates the Reports sidebar badge on Dashboard, Attendance, and every
+    // other Parent route — not only after Reports mounts its own message UI.
+    if (scope === "reports" || scope === "staff-messages") {
       await Promise.all([refreshUnreadReportsCount(), refreshNotificationFeed()]);
       return;
     }
-    if (scope === "notifications" || scope === "announcements" || scope === "staff-messages" || scope === "attendance") {
+    if (scope === "notifications" || scope === "announcements" || scope === "attendance") {
       await Promise.all([refreshUnreadReportsCount(), refreshNotificationFeed()]);
       return;
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 export async function PATCH(req: NextRequest) {
   try {
@@ -10,19 +11,6 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-
-    // Opening the Notifications page clears the sidebar badge, but does not
-    // mark any rows as read. Keep this state distinct from notification reads
-    // so unread rows remain highlighted after a refresh.
-    if (body.mark_seen === true) {
-      const { error } = await supabase
-        .from("advisers")
-        .update({ notifications_last_seen_at: new Date().toISOString() })
-        .eq("id", adviser.id);
-
-      if (error) throw error;
-      return NextResponse.json({ success: true });
-    }
 
     // ── Mark all as read ──────────────────────────────────────────────────────
     if (body.mark_all && Array.isArray(body.notif_keys)) {
@@ -40,6 +28,7 @@ export async function PATCH(req: NextRequest) {
           .upsert(rows, { onConflict: "adviser_id,notif_key" });
 
         if (error) throw error;
+        await publishRealtimeInvalidation([{ role: "adviser", id: adviser.id }], "notifications");
       }
 
       return NextResponse.json({ success: true, marked: rows.length });
@@ -55,6 +44,7 @@ export async function PATCH(req: NextRequest) {
         );
 
       if (error) throw error;
+      await publishRealtimeInvalidation([{ role: "adviser", id: adviser.id }], "notifications");
       return NextResponse.json({ success: true });
     }
 

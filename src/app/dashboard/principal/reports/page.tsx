@@ -1504,9 +1504,12 @@ function PrincipalReportsPageContent() {
     }
     setStaffRecipients((data?.staff ?? []) as StaffRecipient[]);
     setParentRecipients((data?.parents ?? []) as ParentRecipient[]);
-    // Filter out parent-report conversations — those belong in Escalated Reports only
+    // Parent-report conversations belong in Escalated Reports, while the
+    // dedicated Contact ICT page owns all Principal–ICT conversations.
     const nextConversations = ((data?.inbox ?? []) as Conversation[]).filter(
-      (conversation) => !conversation.id.startsWith("parent-report:")
+      (conversation) =>
+        !conversation.id.startsWith("parent-report:") &&
+        conversation.sender.role !== "ICT",
     );
     setConversations(nextConversations);
     setSelectedConversationId((current) => {

@@ -310,6 +310,10 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     // it in their own locale; they must not parse a presentation label such as
     // `submittedAt` back into a date.
     createdAt: row.created_at,
+    // Parent Reports combines report conversations with direct staff
+    // conversations. Keep the raw activity time so the client can sort both
+    // sources together without attempting to parse the display-only `time`.
+    lastActivityAt: row.last_message_at || row.created_at,
     preview: lastMessage?.body?.trim().slice(0, 80) || (lastMessage ? "An attachment was sent." : ""),
     status: isResolved ? "Resolved" : unread ? "Unread" : "Pending Response",
     reportStatus: hasOriginalReportStatus ? parentReportStatus(row.status) : null,

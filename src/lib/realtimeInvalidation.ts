@@ -185,10 +185,18 @@ export async function publishAttendanceRealtimeInvalidation(input: { studentDbId
   await publishRealtimeInvalidation(recipients, "attendance");
 }
 
-/** Reuses the same protected recipient set for a student-profile change. */
+/**
+ * Refreshes every authorized student view after a profile or RFID change.
+ * ICT is intentionally included here rather than at individual write routes:
+ * it keeps adviser, ICT, and future student writers on one audited delivery
+ * path and lets every open ICT Student Profiles tab receive the same event.
+ */
 export async function publishStudentRealtimeInvalidation(input: { studentDbId?: number | null; studentId?: string | null }) {
-  const recipients = await attendanceRecipientsForStudent(input);
-  await publishRealtimeInvalidation(recipients, "students");
+  const [studentRecipients, ictRecipients] = await Promise.all([
+    attendanceRecipientsForStudent(input),
+    recipientsForRoles(["ict"]),
+  ]);
+  await publishRealtimeInvalidation([...studentRecipients, ...ictRecipients], "students");
 }
 
 /**

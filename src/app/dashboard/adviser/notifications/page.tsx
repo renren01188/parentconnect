@@ -274,7 +274,7 @@ function NotifRow({ n, onClick, busy }: { n: Notification; onClick: (n: Notifica
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function NotificationsPage() {
     const router = useRouter();
-    const { clearNotifUnreadCount, setNotifUnreadCount } = useNotifContext();
+    const { markNotifRead, setNotifUnreadCount } = useNotifContext();
 
 
     const [notifications, setNotifs] = useState<Notification[]>([]);
@@ -289,21 +289,6 @@ export default function NotificationsPage() {
     const [markingId, setMarkingId] = useState<string | null>(null);
     const [openingAnnouncementId, setOpeningAnnouncementId] = useState<string | null>(null);
     const fetchSequence = useRef(0);
-
-    const markNotificationsSeen = useCallback(async () => {
-        // Acknowledging the page clears only the sidebar badge. Individual
-        // rows remain unread until the adviser opens them or marks all read.
-        clearNotifUnreadCount();
-        const res = await fetch("/api/adviser/notifications/read", {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mark_seen: true }),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data?.success) {
-            throw new Error(data?.message || "Unable to save notification view state.");
-        }
-    }, [clearNotifUnreadCount]);
 
     const fetchNotifications = useCallback(async ({ refresh = false }: { refresh?: boolean } = {}) => {
         const requestId = ++fetchSequence.current;
@@ -338,16 +323,7 @@ export default function NotificationsPage() {
     }, [setNotifUnreadCount]);
 
     useEffect(() => {
-        let active = true;
-        async function openNotifications() {
-            // This is a persisted page-view marker, not a read action. The
-            // individual notification rows stay unread until the adviser
-            // opens one or uses Mark All Read.
-            await markNotificationsSeen().catch(() => null);
-            if (!active) return;
-            await fetchNotifications();
-        }
-        void openNotifications();
+        void fetchNotifications();
 
         // The layout owns the single real-time subscription. Batch the
         // resulting page refreshes so a publication can never render a
@@ -359,11 +335,10 @@ export default function NotificationsPage() {
         };
         window.addEventListener("adviser-notifications-changed", reloadFromRealtime);
         return () => {
-            active = false;
             if (reloadTimer) window.clearTimeout(reloadTimer);
             window.removeEventListener("adviser-notifications-changed", reloadFromRealtime);
         };
-    }, [fetchNotifications, markNotificationsSeen]);
+    }, [fetchNotifications]);
     const filterRef = React.useRef<HTMLDivElement>(null);
     useEffect(() => {
         const handler = (e: MouseEvent) => {
@@ -410,6 +385,9 @@ export default function NotificationsPage() {
 
         setMarkingId(id);
         setNotifs(p => p.map(n => n.id === id ? { ...n, read: true } : n)); // optimistic update
+        // Opening one item affects only its own saved read state and badge
+        // contribution; every other unread announcement remains counted.
+        markNotifRead();
         try {
             const res = await fetch("/api/adviser/notifications/read", {
                 method: "PATCH",
@@ -425,7 +403,7 @@ export default function NotificationsPage() {
         } finally {
             setMarkingId(current => current === id ? null : current);
         }
-    }, [fetchNotifications, notifications]);
+    }, [fetchNotifications, markNotifRead, notifications]);
 
     const filteredNotifications = notifications.filter(n => {
         if (filterType !== "all" && n.type !== filterType) return false;

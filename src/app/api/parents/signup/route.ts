@@ -310,21 +310,9 @@ export async function POST(req: NextRequest) {
     const { password: temporaryPassword, expiresAt: temporaryPasswordExpiresAt } = createTemporaryPassword(
       temporaryPasswordIssuedAt.getTime(),
     );
+    const temporaryPasswordProof = createTemporaryPasswordProof(temporaryPassword);
     const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt);
     if (!temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
-
-    try {
-      await sendTempPasswordEmail({
-        parentEmail: email,
-        parentName,
-        studentName: `${student.first_name} ${student.last_name}`.trim(),
-        tempPassword: temporaryPassword,
-      });
-    } catch {
-      // No account or contact details have been written at this point, so a
-      // delivery failure leaves nothing for the parent to clean up or retry.
-      return genericEnrollmentError(503);
-    }
 
     // Keep the approved enrollment only in this short-lived, HttpOnly cookie
     // until the recipient proves they received the emailed password. This
@@ -345,7 +333,11 @@ export async function POST(req: NextRequest) {
       contactNumber,
       relationship,
       guardianRelationship,
-      temporaryPasswordProof: createTemporaryPasswordProof(temporaryPassword),
+      temporaryPasswordProof,
+      temporaryPasswordProofEntries: [{
+        proof: temporaryPasswordProof,
+        expiresAt: temporaryPasswordExpiresAt.toISOString(),
+      }],
       temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString(),
       temporaryPasswordIssuedAt: temporaryPasswordIssuedAt.toISOString(),
       temporaryPasswordResendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
@@ -367,6 +359,27 @@ export async function POST(req: NextRequest) {
     // A verified enrollment that reached this point is successful. Clear any
     // prior guard state so an earlier typo cannot affect the new account.
     await clearEnrollmentFailures(req);
+
+    try {
+      await sendTempPasswordEmail({
+        parentEmail: email,
+        parentName,
+        studentName: `${student.first_name} ${student.last_name}`.trim(),
+        tempPassword: temporaryPassword,
+      });
+    } catch {
+      // The signed cookie has no account record or raw password. Preserve it
+      // when a provider cannot confirm delivery so the guardian can retry from
+      // the verification page instead of having to repeat the whole signup.
+      return NextResponse.json({
+        success: true,
+        deliveryPending: true,
+        redirectTo: "/login/guardian/verify-temp-password",
+        expiresAt: temporaryPasswordExpiresAt.toISOString(),
+        resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
+        message: "We could not confirm email delivery. Please check your inbox and spam folder, then request a new temporary password when it becomes available.",
+      }, { status: 202 });
+    }
 
     return NextResponse.json({
       success: true,

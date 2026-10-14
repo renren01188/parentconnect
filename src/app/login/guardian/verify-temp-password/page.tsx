@@ -33,6 +33,12 @@ export default function VerifyTemporaryPasswordPage() {
   const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("deliveryPending") === "1") {
+      setResendMessage("We could not confirm email delivery. Check your inbox and spam folder, then request a new temporary password when it becomes available.");
+    }
+  }, []);
+
+  useEffect(() => {
     const expiresAt = new URLSearchParams(window.location.search).get("expiresAt");
     if (!expiresAt) return;
 
@@ -153,7 +159,7 @@ export default function VerifyTemporaryPasswordPage() {
       setCurrentTime(Date.now());
       setPassword("");
       setShowPassword(false);
-      setResendMessage(data.message || "A new temporary password was sent. Your previous temporary password is now invalid.");
+      setResendMessage(data.message || "A new temporary password was sent. Earlier valid codes remain usable until they expire.");
     } catch {
       setError("Cannot connect to server. Please try again.");
     } finally {
@@ -186,7 +192,7 @@ export default function VerifyTemporaryPasswordPage() {
             {PARENT_SIGNUP_CONFIRMATION_MESSAGE}
           </p>
           <p className="mt-3 max-w-sm text-center text-xs leading-5 text-slate-400">
-            Didn&apos;t receive it? You can request one new temporary password every two minutes. No account is created until you confirm it.
+            Didn&apos;t receive it? Delivery can take a few minutes, including in the spam folder. You can request a new temporary password every two minutes.
           </p>
         </div>
 
@@ -255,7 +261,7 @@ export default function VerifyTemporaryPasswordPage() {
             {resendLoading ? "Sending..." : "Resend Temporary Password"}
           </button>
           <p className="mt-2 text-[11px] leading-4 text-slate-400">
-            After a successful resend, only the newest temporary password will work.
+            If a resend is delayed, an earlier temporary password remains usable until its own expiry.
           </p>
         </div>
       </div>

@@ -7,6 +7,7 @@ import { archiveTarget, restoreArchivedTarget } from "@/lib/permanentDeletion";
 import { restoreDeletionTarget, suspendDeletionTarget } from "@/lib/deletionAccess";
 import { sendAccountDeletionRevertedEmail, sendAccountDeletionScheduledEmail, sendIctDeletionRequestEmail, sendStudentDeletionRevertedEmail, sendStudentDeletionScheduledEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -394,6 +395,9 @@ export async function PATCH(req: NextRequest) {
       if (item.status === "Archived") await restoreArchivedTarget(item);
       // Clears a waiting-period suspension only for an explicitly selected parent.
       await restoreDeletionTarget(item);
+      if (item.status === "Archived" && item.target_type === "student") {
+        await publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) });
+      }
       await logAudit({
         action: item.status === "Archived" ? "Record Restored" : "Revert Deletion",
         performedBy: getIctName(ict),
@@ -420,6 +424,9 @@ export async function PATCH(req: NextRequest) {
       if (!ict || item.status !== "Scheduled") return NextResponse.json({ success: false, message: "Only ICT can archive a scheduled record immediately." }, { status: 403 });
       await archiveTarget(item, { id: ict.id, name: getIctName(ict), role: "ICT Admin" });
       await supabase.from("scheduled_deletions").update({ status: "Archived", archived_at: new Date().toISOString(), archived_by: String(ict.id), archive_reason: item.reason }).eq("id", deletionId).eq("status", "Scheduled");
+      if (item.target_type === "student") {
+        await publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) });
+      }
       await logAudit({
         action: "Record Archived",
         performedBy: getIctName(ict),

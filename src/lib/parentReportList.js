@@ -46,6 +46,26 @@ function matchesParentReportFilter(conversation, tab) {
   return ROLE_TABS.has(tab) && latestStaffRoleTab(conversation) === tab;
 }
 
+function latestActivityTimestamp(conversation) {
+  const value = conversation?.lastActivityAt ?? conversation?.createdAt;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const timestamp = Date.parse(String(value ?? ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * Parent Reports merges report threads and direct staff messages from two
+ * authorized endpoints. Sort the merged inbox here using raw activity times
+ * so a new direct message is never stranded beneath an older report.
+ */
+function sortParentReportConversations(conversations) {
+  return [...(conversations ?? [])].sort((left, right) => {
+    const activityDifference = latestActivityTimestamp(right) - latestActivityTimestamp(left);
+    if (activityDifference !== 0) return activityDifference;
+    return Number(right?.id ?? 0) - Number(left?.id ?? 0);
+  });
+}
+
 function filterParentReportConversations(conversations, { tab, category = "All" }) {
   return (conversations ?? []).filter((conversation) =>
     matchesCategory(conversation, category) && matchesParentReportFilter(conversation, tab)
@@ -67,4 +87,5 @@ module.exports = {
   countParentReportTabs,
   filterParentReportConversations,
   latestStaffRoleTab,
+  sortParentReportConversations,
 };

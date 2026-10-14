@@ -11,6 +11,7 @@
     "test:attendance-sms": "node scripts/test-attendance-sms.cjs",
     "test:attendance-notifications": "node scripts/test-attendance-notification-settings.cjs",
     "test:rfid-attendance": "node scripts/test-rfid-attendance.cjs",
+    "test:rfid-student-profiles-realtime": "node scripts/test-rfid-student-profiles-realtime.cjs",
     "test:parent-enrollment": "node scripts/test-parent-enrollment.cjs",
     "test:parent-data-isolation": "node scripts/test-parent-data-isolation.cjs",
     "test:ict-shared-family": "node scripts/test-ict-shared-family.cjs",
@@ -59,7 +60,9 @@
     "test:parent-escalation-status-realtime": "node scripts/test-parent-escalation-status-realtime.cjs",
     "test:guidance-sidebar-concern-count": "node scripts/test-guidance-sidebar-concern-count.cjs",
     "test:principal-panel3-display": "node scripts/test-principal-panel3-display.cjs",
-    "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs"
+    "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs",
+    "test:guardian-temp-password-delivery": "node scripts/test-guardian-temp-password-delivery.cjs",
+    "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

@@ -286,8 +286,11 @@ function GuardianLoginPageContent() {
       }
       const redirectTo = data.redirectTo || "/login/guardian/verify-temp-password";
       const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt : "";
-      router.push(expiresAt
-        ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}expiresAt=${encodeURIComponent(expiresAt)}`
+      const query = new URLSearchParams();
+      if (expiresAt) query.set("expiresAt", expiresAt);
+      if (data.deliveryPending === true) query.set("deliveryPending", "1");
+      router.push(query.size > 0
+        ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}${query.toString()}`
         : redirectTo);
     } catch (error) {
       setError(

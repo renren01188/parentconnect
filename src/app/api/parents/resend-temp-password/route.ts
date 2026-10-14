@@ -6,10 +6,12 @@ import { sendTempPasswordEmail } from "@/lib/mailer";
 import {
   createTemporaryPassword,
   createTemporaryPasswordProof,
+  PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES,
   PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS,
   PARENT_TEMPORARY_PASSWORD_TTL_SECONDS,
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
+  temporaryPasswordProofEntries,
 } from "@/lib/parentTemporaryPassword";
 import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
 
@@ -187,6 +189,10 @@ export async function POST() {
     }, { status: 503 });
   }
 
+  const temporaryPasswordProof = createTemporaryPasswordProof(password);
+  const activeProofEntries = temporaryPasswordProofEntries(pending.payload)
+    .filter((entry) => (temporaryPasswordExpiryEpochSeconds(entry.expiresAt) ?? 0) * 1_000 > issuedAt.getTime());
+
   const token = await new SignJWT({
     role: "pending-parent-signup",
     pendingParentId: pending.signup.pendingParentId,
@@ -203,7 +209,11 @@ export async function POST() {
     contactNumber: pending.signup.contactNumber,
     relationship: pending.signup.relationship,
     guardianRelationship: pending.signup.guardianRelationship,
-    temporaryPasswordProof: createTemporaryPasswordProof(password),
+    temporaryPasswordProof,
+    temporaryPasswordProofEntries: [
+      { proof: temporaryPasswordProof, expiresAt: expiresAt.toISOString() },
+      ...activeProofEntries,
+    ].slice(0, PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES),
     temporaryPasswordExpiresAt: expiresAt.toISOString(),
     temporaryPasswordIssuedAt: issuedAt.toISOString(),
     temporaryPasswordResendAvailableAt: nextResendAvailableAt.toISOString(),
@@ -225,6 +235,6 @@ export async function POST() {
     success: true,
     expiresAt: expiresAt.toISOString(),
     resendAvailableAt: nextResendAvailableAt.toISOString(),
-    message: `${PARENT_SIGNUP_CONFIRMATION_MESSAGE} Your previous temporary password is now invalid.`,
+    message: `${PARENT_SIGNUP_CONFIRMATION_MESSAGE} Earlier valid temporary passwords remain usable until they expire.`,
   });
 }

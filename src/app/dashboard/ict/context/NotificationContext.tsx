@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
@@ -37,8 +37,7 @@ function inboxSeenTimestamp() {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-type InboxMessageSummary = { status?: string; sortAt?: number };
-type InboxCountResponse = { messages?: InboxMessageSummary[] };
+type InboxCountResponse = { unreadCount?: number };
 type AnnouncementCountResponse = { unreadCount?: number };
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -70,7 +69,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   ]);
 
   const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
-  const [inboxSeenAt, setInboxSeenAt] = useState(inboxSeenTimestamp);
+  // Keep the badge's local acknowledgement ahead of any count request that
+  // began before ICT opened the Inbox or read a conversation.
+  const inboxBadgeVersionRef = useRef(0);
+  const inboxCountRequestVersionRef = useRef(0);
+  const inboxSeenAtRef = useRef(inboxSeenTimestamp());
   const [annUnreadCount, setAnnUnreadCount] = useState(0);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -95,23 +98,34 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const markInboxSeen = useCallback(() => {
     const now = Date.now();
     window.sessionStorage.setItem("ict-inbox-seen-at", String(now));
-    setInboxSeenAt(now);
+    inboxSeenAtRef.current = now;
+    inboxBadgeVersionRef.current += 1;
     setInboxUnreadCount(0);
   }, []);
 
   const refreshInboxCount = useCallback(async () => {
+    const badgeVersion = inboxBadgeVersionRef.current;
+    const requestVersion = ++inboxCountRequestVersionRef.current;
     try {
-      const { response: msgRes, data: msgData } = await fetchJsonWithRetry<InboxCountResponse>("/api/reports/staff-messages?role=ict", { cache: "no-store" });
-      const messages = Array.isArray(msgData?.messages) ? msgData.messages : [];
-      if (msgRes.ok) {
-        setInboxUnreadCount(messages.filter((message) =>
-          message.status === "New" && Number(message.sortAt ?? 0) > inboxSeenAt
-        ).length);
+      // The layout stays mounted on every ICT page, so this small protected
+      // summary is the Realtime target for the sidebar rather than a full
+      // inbox payload (which can include attachments and whole threads).
+      const query = new URLSearchParams({ role: "ict", summary: "1" });
+      if (inboxSeenAtRef.current) {
+        query.set("seenAfter", new Date(inboxSeenAtRef.current).toISOString());
+      }
+      const { response: msgRes, data: msgData } = await fetchJsonWithRetry<InboxCountResponse>(`/api/reports/staff-messages?${query}`, { cache: "no-store" });
+      if (
+        msgRes.ok
+        && badgeVersion === inboxBadgeVersionRef.current
+        && requestVersion === inboxCountRequestVersionRef.current
+      ) {
+        setInboxUnreadCount(Math.max(0, Number(msgData?.unreadCount ?? 0)));
       }
     } catch {
       // Retain the last confirmed counts while a temporary request is retried.
     }
-  }, [inboxSeenAt]);
+  }, []);
 
   const refreshAnnouncementCount = useCallback(async () => {
     try {

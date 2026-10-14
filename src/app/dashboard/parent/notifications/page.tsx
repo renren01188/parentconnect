@@ -289,7 +289,7 @@ function NotificationsPageContent() {
           className="mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
           style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
         >
-          {(["All", "Unread", "Principal", "Teacher", "Guidance", "ICT", "Attendance", "Account"] as FilterTab[]).map(
+          {(["All", "Unread", "Principal", "Teacher", "Guidance", "ICT", "Attendance"] as FilterTab[]).map(
             (tab) => {
               const isActive = activeTab === tab;
               const count = tabCounts[tab];

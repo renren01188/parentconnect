@@ -389,7 +389,7 @@ export async function POST(req: NextRequest) {
     if (existingError) throw existingError;
     if (existing) return NextResponse.json({ success: true, idempotent: true }, { status: 200 });
 
-    const { error } = await supabase.from("staff_messages").insert({
+    const { data: createdMessage, error } = await supabase.from("staff_messages").insert({
       sender_type: session.type,
       sender_id: session.id,
       sender_name: session.name,
@@ -405,7 +405,7 @@ export async function POST(req: NextRequest) {
       source_message_id: rootId,
       status: "unread",
       idempotency_key: idempotencyKey,
-    });
+    }).select("*").single();
 
     if (error) {
       if (isUniqueViolation(error)) return NextResponse.json({ success: true, idempotent: true }, { status: 200 });
@@ -438,9 +438,14 @@ export async function POST(req: NextRequest) {
     await publishRealtimeInvalidation([
       { role: session.type, id: session.id },
       { role: recipientType, id: Number(rawRecipientId) },
-    ], "staff-messages");
+    ], {
+      scope: "staff-messages",
+      kind: "message",
+      conversationId: conversationId(rootId ?? Number(createdMessage.id)),
+      messageId: Number(createdMessage.id),
+    });
 
-    return NextResponse.json({ success: true }, { status: 201 });
+    return NextResponse.json({ success: true, message: createdMessage }, { status: 201 });
   } catch (error) {
     const unavailable = isTransientConnectionError(error);
     (unavailable ? console.warn : console.error)("POST /api/adviser-ict/messages error:", error);

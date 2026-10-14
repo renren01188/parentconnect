@@ -10,9 +10,10 @@ import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { sameGuardianRelationship } from "@/lib/guardianRelationship";
 import {
   legacyTemporaryPasswordExpiryEpochSeconds,
-  matchesTemporaryPasswordProof,
+  matchingTemporaryPasswordProof,
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
+  temporaryPasswordProofEntries,
 } from "@/lib/parentTemporaryPassword";
 
 const SECRET = getJwtSecret();
@@ -253,15 +254,29 @@ export async function POST(req: NextRequest) {
       }
 
       const signup = pendingSignupFromPayload(pendingPayload);
-      const expirySeconds = temporaryPasswordExpiryEpochSeconds(signup?.temporaryPasswordExpiresAt);
-      if (!signup || !expirySeconds || expirySeconds * 1_000 <= Date.now()) return temporaryPasswordExpired();
-      if (!matchesTemporaryPasswordProof(password, signup.temporaryPasswordProof)) {
+      const proofEntries = temporaryPasswordProofEntries(pendingPayload);
+      const hasActiveProof = proofEntries.some((entry) => {
+        const proofExpiresAt = temporaryPasswordExpiryEpochSeconds(entry.expiresAt);
+        return !!proofExpiresAt && proofExpiresAt * 1_000 > Date.now();
+      });
+      const matchingProof = signup
+        ? matchingTemporaryPasswordProof(password, proofEntries)
+        : null;
+      const expirySeconds = temporaryPasswordExpiryEpochSeconds(matchingProof?.expiresAt);
+      if (!signup || !hasActiveProof) {
+        return temporaryPasswordExpired();
+      }
+      if (!matchingProof) {
         return NextResponse.json({ success: false, message: INCORRECT_PASSWORD_MESSAGE }, { status: 401 });
       }
+      if (!expirySeconds || expirySeconds * 1_000 <= Date.now()) return temporaryPasswordExpired();
 
       let completed: Awaited<ReturnType<typeof finalizePendingSignup>>;
       try {
-        completed = await finalizePendingSignup(signup, password);
+        completed = await finalizePendingSignup({
+          ...signup,
+          temporaryPasswordExpiresAt: matchingProof.expiresAt,
+        }, password);
       } catch (error) {
         console.error("Pending parent signup finalization failed:", error instanceof Error ? error.name : "Unknown error");
         return NextResponse.json({ success: false, message: SIGNUP_RETRY_MESSAGE }, { status: 409 });
