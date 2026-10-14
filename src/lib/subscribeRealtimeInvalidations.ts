@@ -6,6 +6,7 @@ import type { ReportRealtimeEventKind } from "@/lib/realtimeInvalidation";
 export type ChannelStatus = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
 export type RealtimeInvalidationScope =
   | "reports"
+  | "tickets"
   | "staff-messages"
   | "notifications"
   | "announcements"
@@ -18,6 +19,7 @@ export type RealtimeInvalidationScope =
 export type RealtimeInvalidation = {
   scope: RealtimeInvalidationScope | null;
   reportId: number | null;
+  conversationId: string | null;
   kind: ReportRealtimeEventKind | null;
   messageId: number | null;
   actorKey: string | null;
@@ -38,11 +40,14 @@ export async function subscribeRealtimeInvalidations(
     return client
       .channel(data.topic)
       .on("broadcast", { event: "invalidate" }, ({ payload }) => {
-        const scope = typeof payload?.scope === "string" && ["reports", "staff-messages", "notifications", "announcements", "attendance", "accounts", "students", "dashboard", "audit"].includes(payload.scope)
+        const scope = typeof payload?.scope === "string" && ["reports", "tickets", "staff-messages", "notifications", "announcements", "attendance", "accounts", "students", "dashboard", "audit"].includes(payload.scope)
           ? payload.scope as RealtimeInvalidationScope
           : null;
         const reportId = Number(payload?.reportId);
         const messageId = Number(payload?.messageId);
+        const conversationId = typeof payload?.conversationId === "string" && /^(?:staff-message|adviser-ict|guidance-ict|principal-ict):[1-9][0-9]*$/.test(payload.conversationId)
+          ? payload.conversationId
+          : null;
         const kind = typeof payload?.kind === "string" && ["message", "status", "typing"].includes(payload.kind)
           ? payload.kind as ReportRealtimeEventKind
           : null;
@@ -52,6 +57,7 @@ export async function subscribeRealtimeInvalidations(
         onInvalidate({
           scope,
           reportId: Number.isSafeInteger(reportId) && reportId > 0 ? reportId : null,
+          conversationId,
           kind,
           messageId: Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null,
           actorKey,

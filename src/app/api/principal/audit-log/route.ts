@@ -4,6 +4,7 @@ import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { auditActionDatabaseValues, auditRoleDatabaseValues, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { parseAuditArchiveFilter } from "@/lib/auditArchive";
+import { auditManilaDateRange, formatAuditTimestamp } from "@/lib/auditPresentation";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -87,19 +88,31 @@ export async function GET(req: NextRequest) {
     if (search) query = query.or(
       `performed_by.ilike.%${search}%,performed_by_role.ilike.%${search}%,details.ilike.%${search}%,action.ilike.%${search}%`
     );
-    if (date) {
-      const start = new Date(`${date}T00:00:00.000Z`).toISOString();
-      const end   = new Date(`${date}T23:59:59.999Z`).toISOString();
-      query = query.gte("created_at", start).lte("created_at", end);
-    }
+    const dateRange = date ? auditManilaDateRange(date) : null;
+    if (dateRange) query = query.gte("created_at", dateRange.start).lt("created_at", dateRange.end);
+
+    // The Security Alerts card must represent all recent security events, not
+    // merely whichever rows happen to be on the current pagination page.
+    let securityQuery = supabase
+      .from("audit_log")
+      .select("id", { count: "exact", head: true })
+      .in("action", ["Failed Login", "Security Alert"]);
+    securityQuery = archive === "archived"
+      ? securityQuery.lt("created_at", archiveCutoff)
+      : securityQuery.gte("created_at", archiveCutoff);
+    if (dateRange) securityQuery = securityQuery.gte("created_at", dateRange.start).lt("created_at", dateRange.end);
 
     // Pagination
     const from = (page - 1) * perPage;
     const to   = from + perPage - 1;
     query = query.range(from, to);
 
-    const { data, error, count } = await query;
+    const [{ data, error, count }, { error: securityError, count: securityTotal }] = await Promise.all([
+      query,
+      securityQuery,
+    ]);
     if (error) throw error;
+    if (securityError) throw securityError;
 
     const entries = ((data ?? []) as AuditLogRow[]).map((row) => ({
       id:             String(row.id),
@@ -123,11 +136,7 @@ export async function GET(req: NextRequest) {
       relatedUserId: row.related_user_id ?? "",
       archiveStatus:  archive,
       archivedAt:     null,
-      timestamp: new Date(row.created_at).toLocaleDateString("en-US", {
-        month: "short", day: "numeric",
-      }) + " · " + new Date(row.created_at).toLocaleTimeString("en-US", {
-        hour: "numeric", minute: "2-digit",
-      }),
+      timestamp: formatAuditTimestamp(row.created_at),
       timestampMs: new Date(row.created_at).getTime(),
       changes: Array.isArray(row.changes) ? row.changes : [],
     }));
@@ -136,6 +145,7 @@ export async function GET(req: NextRequest) {
       success:  true,
       auditLog: entries,
       total:    count ?? 0,
+      securityTotal: securityTotal ?? 0,
       page,
       perPage,
     });

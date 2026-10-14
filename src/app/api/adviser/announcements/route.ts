@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
+import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 type ParentRecipientRow = {
   parent_id: number;
@@ -163,6 +164,23 @@ export async function POST(req: NextRequest) {
       { role: "adviser" as const, id: Number(adviser.id) },
     ];
     await publishRealtimeInvalidation(realtimeRecipients, "announcements");
+
+    await logAnnouncementAudit({
+      action: "Published",
+      actor: {
+        id: adviser.id,
+        name: adviserFullName(adviser),
+        role: "Adviser",
+        email: adviser.email,
+      },
+      announcement: {
+        id: announcementRows.id,
+        title: announcementRows.title,
+        audience: `Grade ${adviser.grade} - ${adviserSections.join(", ")}`,
+        status: "Published",
+      },
+      headers: req.headers,
+    });
 
     return NextResponse.json({
       success: true,

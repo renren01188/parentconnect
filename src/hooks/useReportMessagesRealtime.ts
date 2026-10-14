@@ -10,6 +10,12 @@ type RefreshReport = (invalidation: RealtimeInvalidation) => void | Promise<void
 type ReportRealtimeOptions = {
   /** Receives report-scoped events without replacing the selected conversation. */
   onReportUpdate?: RefreshReport;
+  /** Refreshes a role's authorized ticket list and ticket-derived badges in place. */
+  onTicketUpdate?: RefreshReports;
+  /** Delivers an ephemeral standalone staff-conversation event without a list refresh. */
+  onStaffMessageUpdate?: RefreshReport;
+  /** Refreshes a role's authorized student-report list in place. */
+  onStudentReportUpdate?: RefreshReports;
   /** Reconnect recovery keeps ephemeral typing UI from becoming stale. */
   onConnectionStatus?: (status: ChannelStatus) => void;
 };
@@ -26,6 +32,9 @@ export function useReportMessagesRealtime(
   const [liveUpdateNotice, setLiveUpdateNotice] = useState<string | null>(null);
   const refreshRef = useRef(refreshReports);
   const reportUpdateRef = useRef<RefreshReport | undefined>(options.onReportUpdate);
+  const ticketUpdateRef = useRef<RefreshReports | undefined>(options.onTicketUpdate);
+  const staffMessageUpdateRef = useRef<RefreshReport | undefined>(options.onStaffMessageUpdate);
+  const studentReportUpdateRef = useRef<RefreshReports | undefined>(options.onStudentReportUpdate);
   const connectionStatusRef = useRef<ReportRealtimeOptions["onConnectionStatus"]>(options.onConnectionStatus);
   const mountedRef = useRef(true);
   const refreshTimerRef = useRef<number | undefined>(undefined);
@@ -41,6 +50,18 @@ export function useReportMessagesRealtime(
   useEffect(() => {
     reportUpdateRef.current = options.onReportUpdate;
   }, [options.onReportUpdate]);
+
+  useEffect(() => {
+    ticketUpdateRef.current = options.onTicketUpdate;
+  }, [options.onTicketUpdate]);
+
+  useEffect(() => {
+    staffMessageUpdateRef.current = options.onStaffMessageUpdate;
+  }, [options.onStaffMessageUpdate]);
+
+  useEffect(() => {
+    studentReportUpdateRef.current = options.onStudentReportUpdate;
+  }, [options.onStudentReportUpdate]);
 
   useEffect(() => {
     connectionStatusRef.current = options.onConnectionStatus;
@@ -118,8 +139,30 @@ export function useReportMessagesRealtime(
       else scheduleRefresh();
       return;
     }
+    if (invalidation.scope === "tickets") {
+      // Tickets are server-authorized and need only their own lightweight
+      // snapshot; reloading every report would disrupt an open conversation.
+      if (ticketUpdateRef.current) {
+        void Promise.resolve(ticketUpdateRef.current()).catch(scheduleRefresh);
+      } else {
+        scheduleRefresh();
+      }
+      return;
+    }
     if (invalidation.scope === "staff-messages") {
+      if (invalidation.kind === "typing") {
+        staffMessageUpdateRef.current?.(invalidation);
+        return;
+      }
       scheduleRefresh();
+      return;
+    }
+    if (invalidation.scope === "students") {
+      // Student Reports have their own authorized feed on the Adviser page.
+      // Updating that state directly keeps its active list/detail mounted.
+      if (studentReportUpdateRef.current) {
+        void Promise.resolve(studentReportUpdateRef.current()).catch(scheduleRefresh);
+      }
       return;
     }
     if (!invalidation.scope) {

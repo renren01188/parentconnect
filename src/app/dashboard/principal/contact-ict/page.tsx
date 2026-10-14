@@ -6,6 +6,7 @@ import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { keyForSubmission, type IdempotencyAttempt } from "@/lib/clientIdempotency";
 
 type Recipient = {
@@ -284,7 +285,7 @@ function ComposeModal({
 }
 
 export default function ContactICTPage() {
-    const { setIctMessageCount: setIctUnreadCount } = useNotifContext();
+    const { setIctMessageCount: setIctUnreadCount, clearIctMessageCount } = useNotifContext();
     const [recipients, setRecipients] = useState<Recipient[]>([]);
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -301,6 +302,7 @@ export default function ContactICTPage() {
     const replyAttemptRef = useRef<IdempotencyAttempt | null>(null);
 
     const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
+    const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "principal");
     const filteredConversations = useMemo(() => {
         const query = search.trim().toLowerCase();
         if (!query) return conversations;
@@ -322,7 +324,6 @@ export default function ContactICTPage() {
             const nextConversations = (data.conversations ?? []) as Conversation[];
             setRecipients((data.recipients ?? []) as Recipient[]);
             setConversations(nextConversations);
-            setIctUnreadCount(Number(data.unreadCount ?? 0));
             setSelectedId((current) => current ?? nextConversations[0]?.conversationId ?? null);
             setError(null);
             return true;
@@ -339,10 +340,16 @@ export default function ContactICTPage() {
     }, [setIctUnreadCount]);
 
     useEffect(() => {
+        clearIctMessageCount();
+    }, [clearIctMessageCount]);
+
+    useEffect(() => {
         void loadMessages();
     }, [loadMessages]);
 
-    const liveUpdateNotice = useStaffMessagesRealtime(loadMessages);
+    const liveUpdateNotice = useStaffMessagesRealtime(loadMessages, {
+        onConversationUpdate: conversationTyping.onRealtimeEvent,
+    });
 
     useEffect(() => {
         threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -356,8 +363,6 @@ export default function ContactICTPage() {
         setConversations((prev) =>
             prev.map((item) => item.conversationId === conversation.conversationId ? { ...item, status: "Read", isUnread: false } : item)
         );
-        setIctUnreadCount(Math.max(0, conversations.filter((item) => item.isUnread).length - 1));
-
         await fetch("/api/principal-ict/messages", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -403,6 +408,7 @@ export default function ContactICTPage() {
             replyAttemptRef.current = null;
             setReply("");
             setReplyAttachments([]);
+            conversationTyping.stopTyping();
             void loadMessages(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to send reply.");
@@ -543,6 +549,12 @@ export default function ContactICTPage() {
                             </div>
 
                             <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 sm:px-6">
+                                {conversationTyping.isOtherParticipantTyping && (
+                                    <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                        <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:300ms]" /></span>
+                                        The other participant is typing…
+                                    </div>
+                                )}
                                 {replyAttachments.length > 0 && (
                                     <div className="mb-2 flex flex-wrap gap-2">
                                         {replyAttachments.map((attachment, index) => (
@@ -560,7 +572,7 @@ export default function ContactICTPage() {
                                 <div className="flex items-end gap-2 sm:gap-3">
                                     <textarea
                                         value={reply}
-                                        onChange={(event) => setReply(event.target.value)}
+                                        onChange={(event) => { setReply(event.target.value); conversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
                                         onKeyDown={(event) => {
                                             if (event.key === "Enter" && !event.shiftKey) {
                                                 event.preventDefault();

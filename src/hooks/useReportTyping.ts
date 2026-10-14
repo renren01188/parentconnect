@@ -18,26 +18,25 @@ function createActorKey() {
  * stale typing indicator behind.
  */
 export function useReportTyping(reportId: number | null, role: ReportRole) {
-  const actorKeyRef = useRef("");
+  const [actorKey] = useState(createActorKey);
   const activeRef = useRef(false);
   const activeReportIdRef = useRef<number | null>(null);
   const stopTimerRef = useRef<number | undefined>(undefined);
   const otherStopTimerRef = useRef<number | undefined>(undefined);
-  const [isOtherParticipantTyping, setIsOtherParticipantTyping] = useState(false);
-
-  if (!actorKeyRef.current) actorKeyRef.current = createActorKey();
+  const [typingReportId, setTypingReportId] = useState<number | null>(null);
+  const isOtherParticipantTyping = typingReportId === reportId;
 
   const publish = useCallback((targetReportId: number, active: boolean) => {
     void fetch(`/api/reports/parent-adviser/${targetReportId}/realtime`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role, active, actorKey: actorKeyRef.current }),
+      body: JSON.stringify({ role, active, actorKey }),
       keepalive: !active,
     }).catch(() => {
       // Typing is intentionally best-effort. The UI expiry below cleans up a
       // missed stop event, while messages remain durable through the normal API.
     });
-  }, [role]);
+  }, [actorKey, role]);
 
   const stopTyping = useCallback(() => {
     if (stopTimerRef.current !== undefined) {
@@ -68,24 +67,23 @@ export function useReportTyping(reportId: number | null, role: ReportRole) {
   }, [publish, reportId, stopTyping]);
 
   const onRealtimeEvent = useCallback((event: RealtimeInvalidation) => {
-    if (event.kind !== "typing" || event.reportId !== reportId || event.actorKey === actorKeyRef.current) return;
+    if (event.kind !== "typing" || event.reportId !== reportId || event.actorKey === actorKey) return;
     if (otherStopTimerRef.current !== undefined) window.clearTimeout(otherStopTimerRef.current);
     if (event.active) {
-      setIsOtherParticipantTyping(true);
-      otherStopTimerRef.current = window.setTimeout(() => setIsOtherParticipantTyping(false), 3000);
+      setTypingReportId(reportId);
+      otherStopTimerRef.current = window.setTimeout(() => setTypingReportId(null), 3000);
     } else {
-      setIsOtherParticipantTyping(false);
+      setTypingReportId(null);
     }
-  }, [reportId]);
+  }, [actorKey, reportId]);
 
   const clearOtherTyping = useCallback(() => {
     if (otherStopTimerRef.current !== undefined) window.clearTimeout(otherStopTimerRef.current);
     otherStopTimerRef.current = undefined;
-    setIsOtherParticipantTyping(false);
+    setTypingReportId(null);
   }, []);
 
   useEffect(() => {
-    setIsOtherParticipantTyping(false);
     return () => {
       stopTyping();
       clearOtherTyping();

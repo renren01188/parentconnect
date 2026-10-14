@@ -23,6 +23,8 @@ import {
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
 
+const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
 }
@@ -245,12 +247,31 @@ export async function POST(req: NextRequest) {
     const {
       firstName, middleName, lastName, suffix,
       studentId, gender, grade, section, classSession, rfidCard,
-      birthDate, motherTongue, ipEthnicGroup, religion, learningModality,
+      birthDate, motherTongue, ipEthnicGroup, religion, religionSelection, religionOther, learningModality,
       address, barangay, municipalityCity, province,
       fatherFirstName, fatherMiddleName, fatherLastName, fatherSuffix,
       motherFirstName, motherMiddleName, motherLastName, motherSuffix,
       guardianFirstName, guardianMiddleName, guardianLastName, guardianSuffix, guardianRelationship, guardianRelationshipOther,
     } = body;
+
+    const selectedReligion = typeof religionSelection === "string" ? religionSelection.trim() : "";
+    const customReligion = typeof religionOther === "string" ? religionOther.trim() : "";
+    let resolvedReligion = typeof religion === "string" ? religion.trim() : "";
+    if (selectedReligion) {
+      if (!(STUDENT_RELIGION_OPTIONS as readonly string[]).includes(selectedReligion)) {
+        return NextResponse.json({ success: false, message: "Select a valid religion." }, { status: 400 });
+      }
+      if (selectedReligion === "Others") {
+        if (!customReligion) {
+          return NextResponse.json({ success: false, message: "Specify the religion when Others is selected." }, { status: 400 });
+        }
+        resolvedReligion = customReligion;
+      } else {
+        resolvedReligion = selectedReligion;
+      }
+    } else if (resolvedReligion) {
+      return NextResponse.json({ success: false, message: "Select a religion before submitting." }, { status: 400 });
+    }
 
     const adviserSections = adviser?.sections?.length
       ? adviser.sections
@@ -373,7 +394,7 @@ export async function POST(req: NextRequest) {
       birth_date: birthDate || null,
       mother_tongue: motherTongue || null,
       ip_ethnic_group: ipEthnicGroup || null,
-      religion: religion || null,
+      religion: resolvedReligion || null,
       learning_modality: learningModality || null,
       house_street_sitio_purok: address || null,
       barangay: barangay || null,

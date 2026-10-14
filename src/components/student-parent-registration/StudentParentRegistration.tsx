@@ -32,10 +32,11 @@ type ApprovalPhase = null | "review" | "sent";
 const STEPS = ["Student Info", "RFID & Section", "Verification Records", "Review & Submit"];
 const SUFFIX_OPTIONS = ["Jr.", "Sr.", "II", "III", "IV"] as const;
 const LEARNING_MODALITY_OPTIONS = ["Face-to-Face", "Modular"] as const;
+const RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
 const emptyForm = {
   firstName: "", middleName: "", lastName: "", suffix: "", studentId: "", gender: "",
-  birthDate: "", motherTongue: "", ipEthnicGroup: "", religion: "", learningModality: "",
+  birthDate: "", motherTongue: "", ipEthnicGroup: "", religion: "", religionOther: "", learningModality: "",
   grade: "", classSession: "", section: "", rfidCard: "",
   address: "", barangay: "", municipalityCity: "", province: "",
   fatherFirstName: "", fatherMiddleName: "", fatherLastName: "", fatherSuffix: "",
@@ -465,7 +466,9 @@ export function StudentParentRegistration({
     const value = suffixFields.includes(field)
       ? canonicalSuffix(raw)
       : uppercaseFields.includes(field) ? capitalize(raw) : raw;
-    setForm(prev => ({ ...prev, [field]: value }));
+    setForm(prev => field === "religion"
+      ? { ...prev, religion: value, religionOther: value === "Others" ? prev.religionOther : "" }
+      : { ...prev, [field]: value });
     setTouched(prev => ({ ...prev, [field]: true }));
     if (apiError) setApiError("");
   };
@@ -489,6 +492,9 @@ export function StudentParentRegistration({
     else if (duplicateStudentId)                   E.studentId = "This LRN is already used by another student in this registration.";
   }
   if (show("gender")   && !form.gender)            E.gender   = "Please select a gender.";
+  if ((show("religion") || show("religionOther")) && form.religion === "Others" && !form.religionOther.trim()) {
+    E.religionOther = "Specify the religion when Others is selected.";
+  }
   if (show("grade")    && !form.grade)             E.grade    = "Grade level is required.";
   if (show("classSession") && !form.classSession)  E.classSession = "Class session is required.";
   if (show("section")  && !form.section.trim())    E.section  = "Section is required.";
@@ -544,7 +550,7 @@ export function StudentParentRegistration({
   }
 
   const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender
-    && form.firstName && form.middleName && form.lastName && form.studentId && form.gender
+    && form.firstName && form.middleName && form.lastName && form.studentId && form.gender && !E.religionOther
     && !studentIdTaken && !studentIdChecking && !duplicateStudentId;
   const step1OK = !E.grade && !E.classSession && !E.section && !!(form.grade && form.classSession && form.section) && !rfidConflict
     && !pendingManualRfid.trim() && !duplicateRfid;
@@ -572,6 +578,7 @@ export function StudentParentRegistration({
       const incompleteIndex = students.findIndex(student =>
         !student.firstName.trim() || !student.middleName.trim() || !student.lastName.trim() ||
         !student.studentId.trim() || !/^\d{12}$/.test(student.studentId.trim()) || !student.gender
+        || (student.religion === "Others" && !student.religionOther.trim())
       );
       const duplicateIndex = students.findIndex((student, index) =>
         !!student.studentId.trim() && students.some((other, otherIndex) =>
@@ -639,6 +646,7 @@ export function StudentParentRegistration({
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
       !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      || (s.religion === "Others" && !s.religionOther.trim())
     );
     const invalidVerificationRecord = students.some(student => {
       const hasGuardian = recordHasAnyName(student, "Guardian");
@@ -680,6 +688,7 @@ export function StudentParentRegistration({
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
       !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      || (s.religion === "Others" && !s.religionOther.trim())
     );
     const invalidVerificationRecord = students.some(student => {
       const hasGuardian = recordHasAnyName(student, "Guardian");
@@ -713,6 +722,8 @@ export function StudentParentRegistration({
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             ...student,
+            religion: student.religion === "Others" ? student.religionOther.trim() : student.religion,
+            religionSelection: student.religion,
             registrationMode,
             fullName: studentFullName,
           }),
@@ -1003,7 +1014,31 @@ export function StudentParentRegistration({
                     <Field label="Mother Tongue"><input className={inputOk} value={form.motherTongue} onChange={e => set("motherTongue", e.target.value)} /></Field>
                     <Field label="IP (Ethnic Group)" hint="Optional"><input className={inputOk} value={form.ipEthnicGroup} onChange={e => set("ipEthnicGroup", e.target.value)} /></Field>
                   </div>
-                  <Field label="Religion"><input className={inputOk} value={form.religion} onChange={e => set("religion", e.target.value)} /></Field>
+                  <Field label="Religion">
+                    <div className="relative">
+                      <select
+                        className={`${inputOk} appearance-none pr-10`}
+                        value={form.religion}
+                        onChange={e => set("religion", e.target.value)}
+                        onBlur={() => touch("religion")}
+                      >
+                        <option value="">Select religion</option>
+                        {RELIGION_OPTIONS.map(religion => <option key={religion} value={religion}>{religion}</option>)}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    </div>
+                  </Field>
+                  {form.religion === "Others" && (
+                    <Field label="Specify Religion" required error={E.religionOther}>
+                      <input
+                        className={E.religionOther ? inputErr : inputOk}
+                        placeholder="Enter religion"
+                        value={form.religionOther}
+                        onChange={e => set("religionOther", e.target.value)}
+                        onBlur={() => touch("religionOther")}
+                      />
+                    </Field>
+                  )}
                 </div>
               )}
 

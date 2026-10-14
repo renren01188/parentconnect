@@ -18,6 +18,14 @@ export type NotificationFeedItem = {
   unread?: boolean;
 };
 
+type NotificationFeedMergeOptions = {
+  /**
+   * The caller received a complete authorized snapshot and should remove an
+   * item that is no longer present (for example, a deleted announcement).
+   */
+  removeMissing?: boolean;
+};
+
 export function notificationFeedKey(item: NotificationFeedItem) {
   if (item.staffMessageId !== undefined && item.staffMessageId !== null) {
     return `staff-message:${item.staffMessageId}`;
@@ -43,13 +51,20 @@ function timestamp(item: NotificationFeedItem) {
 export function mergeNotificationFeed<T extends NotificationFeedItem>(
   current: T[],
   snapshot: T[],
+  { removeMissing = false }: NotificationFeedMergeOptions = {},
 ) {
   const items = new Map<string, T>();
-  for (const item of current) items.set(notificationFeedKey(item), item);
+  if (!removeMissing) {
+    for (const item of current) items.set(notificationFeedKey(item), item);
+  }
+
+  const currentByKey = new Map(
+    current.map((item) => [notificationFeedKey(item), item]),
+  );
 
   for (const incoming of snapshot) {
     const key = notificationFeedKey(incoming);
-    const existing = items.get(key);
+    const existing = currentByKey.get(key);
     if (!existing) {
       items.set(key, incoming);
       continue;

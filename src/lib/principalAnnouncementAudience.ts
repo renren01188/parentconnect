@@ -52,3 +52,20 @@ export function principalAudienceIncludesParents(value: unknown) {
   const audience = normalizePrincipalAnnouncementAudience(value);
   return audience === "Everyone" || audience === "Parents";
 }
+
+/**
+ * Principal announcements use source-table notification feeds for staff and
+ * durable notification rows for Parents. Realtime still needs to reach every
+ * dashboard whose authorized feed can change.
+ */
+export function principalAnnouncementRecipientRoles(
+  audience: PrincipalAnnouncementAudience,
+) {
+  if (audience === "Everyone") {
+    return ["parent", "adviser", "guidance", "ict"] as const;
+  }
+  if (audience === "Advisers") {
+    return ["adviser", "ict"] as const;
+  }
+  return ["parent"] as const;
+}

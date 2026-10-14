@@ -23,6 +23,10 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: "Reject", label: "Reject", databaseValues: ["Reject", "rejected"] },
   { value: "Delete", label: "Delete", databaseValues: ["deleted", "Permanently Delete"] },
   { value: "Message", label: "Message", databaseValues: ["Message", "Message Sent"] },
+  { value: "Announcement Published", label: "Announcement Published", databaseValues: ["Announcement Published"] },
+  { value: "Announcement Scheduled", label: "Announcement Scheduled", databaseValues: ["Announcement Scheduled"] },
+  { value: "Announcement Updated", label: "Announcement Updated", databaseValues: ["Announcement Updated"] },
+  { value: "Announcement Deleted", label: "Announcement Deleted", databaseValues: ["Announcement Deleted"] },
   { value: "Submit Report", label: "Submit Report", databaseValues: ["Submit Report", "Report Submitted"] },
   { value: "Report Viewed", label: "Report Viewed", databaseValues: ["Report Viewed"] },
   { value: "Report Status Updated", label: "Report Status Updated", databaseValues: ["Report Status Updated"] },
@@ -71,6 +75,13 @@ export function normalizeAuditRole(value: string | null | undefined): string {
 export function normalizeAuditAction(value: string | null | undefined): string {
   const normalized = String(value ?? "").trim();
   return AUDIT_ACTION_OPTIONS.find((option) => option.databaseValues.some((databaseValue) => databaseValue.toLowerCase() === normalized.toLowerCase()))?.label ?? normalized;
+}
+
+/** Failed sign-ins are security alerts even though their stored action is
+ * intentionally more specific than the generic "Security Alert" label. */
+export function isSecurityAuditAction(action: string | null | undefined): boolean {
+  const normalized = normalizeAuditAction(action).toLowerCase();
+  return normalized === "security alert" || normalized === "failed login";
 }
 
 export function matchesAuditRoleFilter(role: string, filter: string): boolean {

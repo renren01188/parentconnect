@@ -1,7 +1,13 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+
+function ictSeenTimestamp() {
+  if (typeof window === "undefined") return 0;
+  const value = Number(window.sessionStorage.getItem("guidance-contact-ict-seen-at") ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
 
 type GuidanceNotifContextType = {
   unreadCount: number;
@@ -17,6 +23,7 @@ type GuidanceNotifContextType = {
   markAnnouncementRead: (notifKey: string) => void;
   ictUnreadCount: number;
   setIctUnreadCount: (count: number) => void;
+  clearIctUnreadCount: () => void;
 };
 
 const GuidanceNotifContext = createContext<GuidanceNotifContextType>({
@@ -33,6 +40,7 @@ const GuidanceNotifContext = createContext<GuidanceNotifContextType>({
   markAnnouncementRead: () => {},
   ictUnreadCount: 0,
   setIctUnreadCount: () => {},
+  clearIctUnreadCount: () => {},
 });
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -41,6 +49,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [escalatedCount, setEscalatedCount] = useState(0);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
+  const ictBadgeVersionRef = useRef(0);
+  const ictSeenAtRef = useRef(ictSeenTimestamp());
   const [principalAnnouncementUnreadCount, setPrincipalAnnouncementUnreadCount] = useState(0);
 
   const refreshGuidanceCounts = useCallback(async () => {
@@ -91,11 +101,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const clearIctUnreadCount = useCallback(() => {
+    const now = Date.now();
+    window.sessionStorage.setItem("guidance-contact-ict-seen-at", String(now));
+    ictSeenAtRef.current = now;
+    ictBadgeVersionRef.current += 1;
+    setIctUnreadCount(0);
+  }, []);
+
   const loadIctCount = useCallback(async () => {
+    const badgeVersion = ictBadgeVersionRef.current;
+    const seenAfter = ictSeenAtRef.current;
     try {
-      const res = await fetch("/api/guidance-ict/messages?summary=1", { cache: "no-store" });
+      const query = new URLSearchParams({ summary: "1" });
+      if (seenAfter) query.set("seenAfter", new Date(seenAfter).toISOString());
+      const res = await fetch(`/api/guidance-ict/messages?${query}`, { cache: "no-store" });
       const data = await res.json().catch(() => null);
-      setIctUnreadCount(res.ok ? Number(data?.unreadCount ?? 0) : 0);
+      if (badgeVersion === ictBadgeVersionRef.current) {
+        setIctUnreadCount(res.ok ? Number(data?.unreadCount ?? 0) : 0);
+      }
     } catch {
       setIctUnreadCount(0);
     }
@@ -132,6 +156,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useSessionInvalidation(async ({ scope }) => {
     if (scope === "reports") {
       await Promise.all([refreshGuidanceCounts(), refreshNotificationCounts()]);
+      return;
+    }
+    if (scope === "tickets") {
+      await refreshGuidanceCounts();
       return;
     }
     if (scope === "staff-messages") {
@@ -197,6 +225,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       markAnnouncementRead,
       ictUnreadCount,
       setIctUnreadCount,
+      clearIctUnreadCount,
     }}>
       {children}
     </GuidanceNotifContext.Provider>

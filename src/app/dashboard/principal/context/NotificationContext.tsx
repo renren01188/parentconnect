@@ -1,8 +1,14 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+
+function ictSeenTimestamp() {
+  if (typeof window === "undefined") return 0;
+  const value = Number(window.sessionStorage.getItem("principal-contact-ict-seen-at") ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
 
 type PrincipalConversationSummary = {
   status?: string;
@@ -20,6 +26,7 @@ interface NotifContextType {
   setAdviserMessageCount: (n: number) => void;
   ictMessageCount: number;
   setIctMessageCount: (n: number) => void;
+  clearIctMessageCount: () => void;
   refreshCounts: () => Promise<void>;
   principalNotifCount: number;
 }
@@ -33,6 +40,7 @@ const NotifContext = createContext<NotifContextType>({
   setAdviserMessageCount: () => { },
   ictMessageCount: 0,
   setIctMessageCount: () => { },
+  clearIctMessageCount: () => { },
   refreshCounts: async () => { },
   principalNotifCount: 0,
 });
@@ -41,6 +49,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [reportCount, setReportCount] = useState(0);
   const [adviserMessageCount, setAdviserMessageCount] = useState(0);
   const [ictMessageCount, setIctMessageCount] = useState(0);
+  const ictBadgeVersionRef = useRef(0);
+  const ictSeenAtRef = useRef(ictSeenTimestamp());
   const [principalNotifCount, setPrincipalNotifCount] = useState(0);
   const unreadCount = reportCount + adviserMessageCount + ictMessageCount;
 
@@ -48,13 +58,29 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const { response, data } = await fetchJsonWithRetry<PrincipalMessagesResponse>("/api/reports/principal-messages", { cache: "no-store" });
     if (response.ok) {
       const conversations = (data?.inbox ?? []) as PrincipalConversationSummary[];
-      setAdviserMessageCount(conversations.filter((conversation) => conversation.status === "Unread").length);
+      // The unified standalone-message inbox uses "New Message", while
+      // older Adviser threads use "Unread". Both represent a reply that the
+      // Principal has not opened, so the Reports sidebar must count both.
+      setAdviserMessageCount(conversations.filter((conversation) =>
+        conversation.status === "New Message" || conversation.status === "Unread"
+      ).length);
     }
   }, []);
 
+  const clearIctMessageCount = useCallback(() => {
+    const now = Date.now();
+    window.sessionStorage.setItem("principal-contact-ict-seen-at", String(now));
+    ictSeenAtRef.current = now;
+    ictBadgeVersionRef.current += 1;
+    setIctMessageCount(0);
+  }, []);
+
   const refreshIctMessages = useCallback(async () => {
-    const { response, data } = await fetchJsonWithRetry<IctMessagesResponse>("/api/principal-ict/messages?summary=1", { cache: "no-store" });
-    if (response.ok) {
+    const badgeVersion = ictBadgeVersionRef.current;
+    const query = new URLSearchParams({ summary: "1" });
+    if (ictSeenAtRef.current) query.set("seenAfter", new Date(ictSeenAtRef.current).toISOString());
+    const { response, data } = await fetchJsonWithRetry<IctMessagesResponse>(`/api/principal-ict/messages?${query}`, { cache: "no-store" });
+    if (response.ok && badgeVersion === ictBadgeVersionRef.current) {
       setIctMessageCount(Number(data?.unreadCount ?? 0));
     }
   }, []);
@@ -115,6 +141,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setAdviserMessageCount,
       ictMessageCount,
       setIctMessageCount,
+      clearIctMessageCount,
       refreshCounts,
       principalNotifCount,
     }}>

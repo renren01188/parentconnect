@@ -656,7 +656,7 @@ export default function AccountProfilePage() {
     return () => {
       isMounted = false;
     };
-  }, [profileRefreshKey]);
+  }, [profileRefreshKey, router]);
 
   useSessionInvalidation((event) => {
     if (event.scope === "accounts" && !showSettingsModal) setProfileRefreshKey((key) => key + 1);

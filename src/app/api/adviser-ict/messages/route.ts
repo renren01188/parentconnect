@@ -236,15 +236,25 @@ export async function GET(req: NextRequest) {
     }
 
     if (req.nextUrl.searchParams.get("summary") === "1") {
-      const { count, error } = await supabase
+      const seenAfter = Date.parse(req.nextUrl.searchParams.get("seenAfter") ?? "");
+      let unreadQuery = supabase
         .from("staff_messages")
-        .select("id", { count: "exact", head: true })
+        .select("id, source_message_id")
         .eq("sender_type", otherRole(session.type))
         .eq("recipient_type", session.type)
         .eq("recipient_id", session.id)
         .eq("status", "unread");
+      if (Number.isFinite(seenAfter)) {
+        unreadQuery = unreadQuery.gt("created_at", new Date(seenAfter).toISOString());
+      }
+      const { data, error } = await unreadQuery;
       if (error) throw error;
-      return NextResponse.json({ success: true, unreadCount: count ?? 0 });
+      // The sidebar represents actionable conversations, not the number of
+      // individual reply rows inside a single highlighted thread.
+      const unreadConversationIds = new Set((data ?? []).map((row) =>
+        Number(row.source_message_id) || Number(row.id)
+      ));
+      return NextResponse.json({ success: true, unreadCount: unreadConversationIds.size });
     }
 
     const [recipients, messagesResult] = await Promise.all([
@@ -398,6 +408,29 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
+    if (rootId) {
+      // A reply acknowledges every incoming message already visible in this
+      // thread. Keep that inbox state separate from the conversation's
+      // durable reply row so list highlighting and badges agree.
+      const now = new Date().toISOString();
+      const [{ error: rootReadError }, { error: repliesReadError }] = await Promise.all([
+        supabase.from("staff_messages")
+          .update({ status: "read", updated_at: now })
+          .eq("id", rootId)
+          .eq("recipient_type", session.type)
+          .eq("recipient_id", session.id)
+          .eq("status", "unread"),
+        supabase.from("staff_messages")
+          .update({ status: "read", updated_at: now })
+          .eq("source_message_id", rootId)
+          .eq("recipient_type", session.type)
+          .eq("recipient_id", session.id)
+          .eq("status", "unread"),
+      ]);
+      if (rootReadError) throw rootReadError;
+      if (repliesReadError) throw repliesReadError;
+    }
+
     await publishRealtimeInvalidation([
       { role: session.type, id: session.id },
       { role: recipientType, id: Number(rawRecipientId) },
@@ -462,6 +495,13 @@ export async function PATCH(req: NextRequest) {
       .eq("status", "unread");
 
     if (repliesReadError) throw repliesReadError;
+
+    // Keep the other participant's open list and the recipient badge in
+    // sync with this persisted read acknowledgement.
+    await publishRealtimeInvalidation([
+      { role: typedRoot.sender_type, id: Number(typedRoot.sender_id) },
+      { role: typedRoot.recipient_type, id: Number(typedRoot.recipient_id) },
+    ], "staff-messages");
 
     return NextResponse.json({ success: true });
   } catch (error) {

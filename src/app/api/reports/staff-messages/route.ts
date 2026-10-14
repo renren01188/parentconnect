@@ -90,6 +90,13 @@ function parseParticipantRole(value: unknown): ParticipantRole | null {
   return value === "parent" ? "parent" : parseRole(value);
 }
 
+function rootIdFromConversationId(value: unknown) {
+  const match = String(value ?? "").match(/^(?:staff-message|adviser-ict|guidance-ict|principal-ict):([1-9][0-9]*)$/);
+  if (!match) return 0;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : 0;
+}
+
 async function resolveStaffByRole(role: StaffRole) {
   if (role === "guidance") {
     const guidance = await getGuidanceSession();
@@ -384,6 +391,7 @@ export async function GET(req: NextRequest) {
       const thread = [root, ...replies];
       const last = thread.at(-1) ?? root;
       const latestIncoming = last.recipient_type === current.type && Number(last.recipient_id) === current.id;
+      const latestOutgoing = last.sender_type === current.type && Number(last.sender_id) === current.id;
       const unread = latestIncoming && String(last.status ?? "") === "unread";
       const otherIsSender = root.sender_type !== current.type || Number(root.sender_id) !== current.id;
       const rootIsCurrentUser = root.sender_type === current.type && Number(root.sender_id) === current.id;
@@ -402,7 +410,9 @@ export async function GET(req: NextRequest) {
         categories: Array.isArray(root.categories) ? root.categories.map(String) : [],
         attachments: cleanAttachments(root.attachments),
         sent_at: formatDate(String(root.created_at)),
-        status: unread ? "New" as const : thread.length > 1 && !latestIncoming ? "Replied" as const : "Read" as const,
+        // Direct staff conversations are independent from report workflow
+        // state. An outgoing final message is "Sent", never "Replied".
+        status: unread ? "New" as const : latestOutgoing ? "Sent" as const : "Read" as const,
         priority: "Normal" as const,
         replies: replies.map((reply) => ({
           id: Number(reply.id),
@@ -574,13 +584,11 @@ export async function PATCH(req: NextRequest) {
     if (!current) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
 
     const { conversationId, status, reply, attachments } = payload;
-    const rootId = String(conversationId ?? "").startsWith("staff-message:")
-      ? Number(String(conversationId).replace("staff-message:", ""))
-      : 0;
+    const rootId = rootIdFromConversationId(conversationId);
     const nextStatus = String(status ?? "").toLowerCase();
     const replyBody = String(reply ?? "").trim();
     const cleanedAttachments = cleanAttachments(attachments);
-    if (!rootId || !["read", "replied"].includes(nextStatus)) {
+    if (!rootId || !["read", "replied", "typing"].includes(nextStatus)) {
       return NextResponse.json({ success: false, message: "Valid conversation and status are required." }, { status: 400 });
     }
 
@@ -597,6 +605,37 @@ export async function PATCH(req: NextRequest) {
       (root.sender_type === current.type && Number(root.sender_id) === current.id) ||
       (root.recipient_type === current.type && Number(root.recipient_id) === current.id);
     if (!isParticipant) return NextResponse.json({ success: false, message: "Conversation not found." }, { status: 404 });
+
+    if (nextStatus === "typing") {
+      const active = payload?.active;
+      const actorKey = typeof payload?.actorKey === "string" ? payload.actorKey : "";
+      if (typeof active !== "boolean" || !/^[a-zA-Z0-9-]{16,128}$/.test(actorKey)) {
+        return NextResponse.json({ success: false, message: "Invalid typing event." }, { status: 400 });
+      }
+
+      // This never writes a row. The root lookup above proves that the caller
+      // is one of the two saved participants before its opaque conversation
+      // key is broadcast to those same participants only.
+      const recipients: Array<{ role: ParticipantRole; id: number }> = [];
+      const senderRole = parseParticipantRole(root.sender_type);
+      const recipientRole = parseParticipantRole(root.recipient_type);
+      const senderId = Number(root.sender_id);
+      const recipientId = Number(root.recipient_id);
+      if (senderRole && Number.isSafeInteger(senderId) && senderId > 0) {
+        recipients.push({ role: senderRole, id: senderId });
+      }
+      if (recipientRole && Number.isSafeInteger(recipientId) && recipientId > 0) {
+        recipients.push({ role: recipientRole, id: recipientId });
+      }
+      await publishRealtimeInvalidation(recipients, {
+        scope: "staff-messages",
+        kind: "typing",
+        conversationId: String(conversationId),
+        actorKey,
+        active,
+      });
+      return NextResponse.json({ success: true });
+    }
 
     if (replyBody || cleanedAttachments.length > 0) {
       const recipientType = root.sender_type === current.type && Number(root.sender_id) === current.id
@@ -629,6 +668,28 @@ export async function PATCH(req: NextRequest) {
         status: "unread",
       }).select("*").single();
       if (error) throw error;
+
+      // A reply acknowledges every inbound message in its own conversation.
+      // This is inbox/read state only; direct conversations never inherit a
+      // report workflow status merely because someone responded.
+      const now = new Date().toISOString();
+      const [{ error: rootReadError }, { error: repliesReadError }] = await Promise.all([
+        supabase.from("staff_messages")
+          .update({ status: "read", updated_at: now })
+          .eq("id", rootId)
+          .eq("recipient_type", current.type)
+          .eq("recipient_id", current.id)
+          .eq("status", "unread"),
+        supabase.from("staff_messages")
+          .update({ status: "read", updated_at: now })
+          .eq("source_message_id", rootId)
+          .eq("recipient_type", current.type)
+          .eq("recipient_id", current.id)
+          .eq("status", "unread"),
+      ]);
+      if (rootReadError) throw rootReadError;
+      if (repliesReadError) throw repliesReadError;
+
       // Email notifications are intentionally disabled for replies.
       // Only new conversations (POST) trigger an email notification.
       await publishRealtimeInvalidation([

@@ -82,11 +82,11 @@ type ParentReportMessageRow = {
 
 type StaffMessageRow = {
   id: number;
-  sender_type: "adviser" | "guidance" | "principal" | "ict";
+  sender_type: "parent" | "adviser" | "guidance" | "principal" | "ict";
   sender_id: number;
   sender_name: string;
   sender_email?: string | null;
-  recipient_type: "adviser" | "guidance" | "principal" | "ict";
+  recipient_type: "parent" | "adviser" | "guidance" | "principal" | "ict";
   recipient_id: number;
   recipient_name: string;
   recipient_email?: string | null;
@@ -322,7 +322,10 @@ function principalStartedStatus(thread: ReturnType<typeof buildStaffStartedThrea
   if (!hasAdviserReply) return null;
   if (latestFromAdviser && hasUnreadAdviserReply) return "New Message" as const;
   if (latestFromAdviser) return "Read" as const;
-  if (latestFromPrincipal) return "Replied" as const;
+  // These are standalone staff conversations, not report workflow actions.
+  // A Principal's outgoing message is therefore simply sent, never a report
+  // "reply" that could imply an unrelated report status transition.
+  if (latestFromPrincipal) return "Sent" as const;
   return "Read" as const;
 }
 
@@ -367,6 +370,7 @@ function buildParentReportConversation(report: ParentReportRow, messages: Parent
 }
 
 function roleLabel(type: string) {
+  if (type === "parent") return "Parent";
   if (type === "guidance") return "Guidance";
   if (type === "principal") return "Principal";
   if (type === "ict") return "ICT";
@@ -402,8 +406,12 @@ function buildUnifiedStaffConversations(principal: PrincipalSession, rows: Staff
       },
       subject: String(root.subject ?? ""),
       category: Array.isArray(root.categories) ? root.categories.join(", ") : "",
-      status: unread ? "New Message" as const : latestFromPrincipal ? "Replied" as const : "Read" as const,
-      lastMessageAt: formatDate(String(last.updated_at ?? last.created_at ?? root.created_at)),
+      // A direct message has its own inbox state. Do not reuse the report
+      // workflow's "Replied" status just because the Principal sent it.
+      status: unread ? "New Message" as const : latestFromPrincipal ? "Sent" as const : "Read" as const,
+      // `updated_at` changes when a recipient marks the message read. The
+      // inbox timestamp must remain the durable send time.
+      lastMessageAt: formatDate(String(last.created_at ?? root.created_at)),
       messages: thread.map((message) => ({
         id: `staff-message-row:${message.id}`,
         sender: message.sender_type === "principal" && Number(message.sender_id) === principal.id ? "principal" as const : "them" as const,
@@ -594,8 +602,8 @@ export async function GET() {
         },
         subject: String(row.subject ?? ""),
         category: Array.isArray(row.categories) ? row.categories.join(", ") : "",
-        status: hasUnreadStaffMessage ? "New Message" as const : hasPrincipalReply ? "Replied" as const : row.status === "replied" ? "Replied" as const : "Read" as const,
-        lastMessageAt: formatDate(String(thread.lastRow.updated_at ?? thread.lastRow.created_at ?? row.created_at)),
+        status: hasUnreadStaffMessage ? "New Message" as const : hasPrincipalReply ? "Sent" as const : "Read" as const,
+        lastMessageAt: formatDate(String(thread.lastRow.created_at ?? row.created_at)),
         messages: thread.messages,
         sortAt: createdAtMs(thread.lastRow),
       };
@@ -620,7 +628,7 @@ export async function GET() {
           subject: String(row.subject ?? ""),
           category: Array.isArray(row.categories) ? row.categories.join(", ") : "",
           status: principalStartedStatus(thread, hasUnreadReply),
-          lastMessageAt: formatDate(String(thread.lastRow.updated_at ?? thread.lastRow.created_at ?? row.created_at)),
+          lastMessageAt: formatDate(String(thread.lastRow.created_at ?? row.created_at)),
           messages: thread.messages,
           sortAt: createdAtMs(thread.lastRow),
         };
@@ -1362,9 +1370,16 @@ async function sendToParent({
     .single();
   if (messageError) throw messageError;
 
+  // This durable row is immediately visible to the Parent Reports inbox.
+  // Keep the Broadcast on the request path; only email delivery is deferred.
+  await publishRealtimeInvalidation([
+    { role: "principal", id: principal.id },
+    { role: "parent", id: parent.id },
+  ], "staff-messages");
+
   after(async () => {
-    const outcomes = await Promise.allSettled([
-      sendPrincipalParentMessageEmail({
+    try {
+      await sendPrincipalParentMessageEmail({
         parentEmail: parent.email,
         parentName,
         studentName,
@@ -1372,14 +1387,9 @@ async function sendToParent({
         subject,
         message,
         hasAttachments: attachments.length > 0,
-      }),
-      publishRealtimeInvalidation([
-        { role: "principal", id: principal.id },
-        { role: "parent", id: parent.id },
-      ], "staff-messages"),
-    ]);
-    for (const outcome of outcomes) {
-      if (outcome.status === "rejected") console.error("Principal message post-send delivery failed:", outcome.reason);
+      });
+    } catch (error) {
+      console.error("Principal message email delivery failed:", error);
     }
   });
 
@@ -1392,6 +1402,7 @@ function initials(name: string) {
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("en-US", {
+    timeZone: "Asia/Manila",
     month: "long",
     day: "numeric",
     year: "numeric",

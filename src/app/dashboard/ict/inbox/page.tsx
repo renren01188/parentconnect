@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle, Inbox, Loader2, MessageSquare, Paperclip, Plus,
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 
 type Recipient = {
   id: string;
@@ -442,6 +443,7 @@ export default function ICTInboxPage() {
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
+  const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "ict");
   const unreadCount = conversations.filter((conversation) => conversation.isUnread).length;
 
   // Dismiss the sidebar attention badge without changing a thread's read state.
@@ -500,7 +502,9 @@ export default function ICTInboxPage() {
     loadMessages();
   }, [loadMessages]);
 
-  const liveUpdateNotice = useStaffMessagesRealtime(loadMessages);
+  const liveUpdateNotice = useStaffMessagesRealtime(loadMessages, {
+    onConversationUpdate: conversationTyping.onRealtimeEvent,
+  });
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -614,6 +618,7 @@ export default function ICTInboxPage() {
       }));
       setReply("");
       setReplyAttachments([]);
+      conversationTyping.stopTyping();
       void loadMessages(true);
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : "Unable to send reply.");
@@ -788,6 +793,12 @@ export default function ICTInboxPage() {
                 <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
                   <Reply className="h-3.5 w-3.5" /> Reply to {selected.otherName}
                 </div>
+                {conversationTyping.isOtherParticipantTyping && (
+                  <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500">
+                    <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13] [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#274e13] [animation-delay:300ms]" /></span>
+                    The other participant is typing…
+                  </div>
+                )}
                 {replyError && <p role="alert" className="mb-2 text-xs font-semibold text-red-600">{replyError}</p>}
                 {replyAttachments.length > 0 && (
                   <div className="mb-2 flex flex-wrap gap-2">
@@ -806,7 +817,7 @@ export default function ICTInboxPage() {
                 <div className="flex min-w-0 items-end gap-2 sm:gap-3">
                   <textarea
                     value={reply}
-                    onChange={(event) => setReply(event.target.value)}
+                    onChange={(event) => { setReply(event.target.value); conversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();

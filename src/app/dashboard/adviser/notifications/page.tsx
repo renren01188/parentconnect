@@ -274,7 +274,7 @@ function NotifRow({ n, onClick, busy }: { n: Notification; onClick: (n: Notifica
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function NotificationsPage() {
     const router = useRouter();
-    const { setNotifUnreadCount } = useNotifContext();
+    const { clearNotifUnreadCount, setNotifUnreadCount } = useNotifContext();
 
 
     const [notifications, setNotifs] = useState<Notification[]>([]);
@@ -291,6 +291,9 @@ export default function NotificationsPage() {
     const fetchSequence = useRef(0);
 
     const markNotificationsSeen = useCallback(async () => {
+        // Acknowledging the page clears only the sidebar badge. Individual
+        // rows remain unread until the adviser opens them or marks all read.
+        clearNotifUnreadCount();
         const res = await fetch("/api/adviser/notifications/read", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -300,8 +303,7 @@ export default function NotificationsPage() {
         if (!res.ok || !data?.success) {
             throw new Error(data?.message || "Unable to save notification view state.");
         }
-        setNotifUnreadCount(0);
-    }, [setNotifUnreadCount]);
+    }, [clearNotifUnreadCount]);
 
     const fetchNotifications = useCallback(async ({ refresh = false }: { refresh?: boolean } = {}) => {
         const requestId = ++fetchSequence.current;
@@ -338,12 +340,12 @@ export default function NotificationsPage() {
     useEffect(() => {
         let active = true;
         async function openNotifications() {
-            const loaded = await fetchNotifications();
-            if (!active || !loaded) return;
             // This is a persisted page-view marker, not a read action. The
             // individual notification rows stay unread until the adviser
             // opens one or uses Mark All Read.
             await markNotificationsSeen().catch(() => null);
+            if (!active) return;
+            await fetchNotifications();
         }
         void openNotifications();
 

@@ -21,6 +21,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { isPrincipalReportUnread, markPrincipalReportRead } from "@/lib/principalReportReadState.cjs";
 import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
 import {
@@ -35,10 +36,14 @@ type MainTab = "Escalated" | "Monitoring" | "Messages";
 type FilterTab = "All" | "Pending" | "Ongoing" | "Escalated" | "Resolved";
 type MonitoringPriority = "low" | "medium" | "high";
 type MonitoringStatus = "Pending" | "Under Review" | "Accepted Ticket" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved";
+type MonitoringSourceFilter = "All" | "Parent" | "Student";
+type MonitoringStatusFilter = "All" | MonitoringStatus;
 type ExportFormat = "excel" | "pdf";
 
 type MonitoringEntry = {
   id: string;
+  /** Immutable database timestamp used for sorting, filtering, and export. */
+  occurredAt: string;
   date: string;
   from: { name: string; role: string; initials: string };
   to: { name: string; role: string; initials: string };
@@ -48,6 +53,15 @@ type MonitoringEntry = {
   priority: MonitoringPriority;
   status: MonitoringStatus;
 };
+
+const MONITORING_STATUS_OPTIONS: MonitoringStatus[] = [
+  "Pending",
+  "Under Review",
+  "Accepted Ticket",
+  "Escalated to Guidance",
+  "Escalated to Principal",
+  "Resolved",
+];
 
 type PrincipalStudentReport = {
   id: number;
@@ -114,7 +128,7 @@ type Conversation = {
   sender: ConversationSender;
   subject: string;
   category: string;
-  status: "New Message" | "Unread" | "Read" | "Replied" | null;
+  status: "New Message" | "Unread" | "Read" | "Sent" | "Replied" | null;
   lastMessageAt: string;
   messages: ConversationMessage[];
 };
@@ -312,14 +326,18 @@ function monitoringPriorityFromLevel(level: number): MonitoringPriority {
 function reportsToMonitoringEntries(reports: Report[]): MonitoringEntry[] {
   return reports.map((report) => {
     const fromName = parentDisplayName(report);
-    const acceptedByGuidanceTicket = report.ticketStatus === "accepted";
+    const occurredAt = report.createdAt || report.submitted_at;
+    const destination = report.escalatedToPrincipal
+      ? { name: "School Principal", role: "Principal", initials: "SP" }
+      : report.ticketStatus === "accepted" || report.escalatedToGuidance
+        ? { name: "Guidance Office", role: "Guidance", initials: "GO" }
+        : { name: "Class Adviser", role: "Adviser", initials: "CA" };
     return {
       id: `parent:${report.id}`,
-      date: report.submitted_at,
+      occurredAt,
+      date: formatManilaTimestamp(occurredAt) || report.submitted_at,
       from: { name: fromName, role: "Parent", initials: getInitials(fromName) },
-      to: acceptedByGuidanceTicket
-        ? { name: "Guidance Counselor", role: "Guidance", initials: "GC" }
-        : { name: "School Staff", role: "Adviser", initials: "SS" },
+      to: destination,
       category: report.categories[0] ?? report.category,
       concern: report.subject,
       student: report.student_name,
@@ -338,29 +356,83 @@ function studentReportStatus(status: string): MonitoringStatus {
 }
 
 function studentReportsToMonitoringEntries(reports: PrincipalStudentReport[]): MonitoringEntry[] {
-  return reports.map((report) => ({
-    id: `student:${report.id}`,
-    date: new Date(report.created_at).toLocaleString("en-US", {
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }),
-    from: { name: report.student_name, role: "Student", initials: getInitials(report.student_name) },
-    to: { name: report.adviser_name || "Class Adviser", role: "Adviser", initials: getInitials(report.adviser_name || "Class Adviser") },
-    category: report.category || "Other",
-    concern: report.description ? `${report.title}: ${report.description}` : report.title,
-    student: `${report.student_name} (${report.grade} - ${report.section})`,
-    priority: "medium",
-    status: studentReportStatus(report.status),
-  }));
+  return reports.map((report) => {
+    const status = studentReportStatus(report.status);
+    const destination = status === "Escalated to Principal"
+      ? { name: "School Principal", role: "Principal", initials: "SP" }
+      : { name: report.adviser_name || "Class Adviser", role: "Adviser", initials: getInitials(report.adviser_name || "Class Adviser") };
+    return {
+      id: `student:${report.id}`,
+      occurredAt: report.created_at,
+      date: formatManilaTimestamp(report.created_at),
+      from: { name: report.student_name, role: "Student", initials: getInitials(report.student_name) },
+      to: destination,
+      category: report.category || "Other",
+      concern: report.description ? `${report.title}: ${report.description}` : report.title,
+      student: `${report.student_name} (${report.grade} - ${report.section})`,
+      priority: "medium",
+      status,
+    };
+  });
 }
 
 function conversationStatusClass(status: Conversation["status"]) {
   if (status === "New Message" || status === "Unread") return "bg-violet-600 text-white";
+  if (status === "Sent") return "bg-violet-50 text-violet-700";
   if (status === "Replied") return "bg-emerald-100 text-emerald-700";
   return "bg-slate-200 text-slate-600";
+}
+
+function formatManilaTimestamp(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleString("en-US", {
+    timeZone: "Asia/Manila",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function manilaDateKey(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+  const year = getPart("year");
+  const month = getPart("month");
+  const day = getPart("day");
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
+function monitoringEntryTimestamp(entry: MonitoringEntry) {
+  const timestamp = Date.parse(entry.occurredAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/** The parent and student feeds are independent, so dedupe only an exact,
+ * source-qualified record ID. Distinct reports with similar titles remain. */
+function dedupeMonitoringEntries(entries: MonitoringEntry[]) {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (!entry.id || seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+}
+
+function monitoringDateRangeLabel(startDate: string, endDate: string) {
+  if (startDate && endDate) return `${startDate} to ${endDate}`;
+  if (startDate) return `From ${startDate}`;
+  if (endDate) return `Through ${endDate}`;
+  return "All dates";
 }
 
 function MonitoringPerson({ person }: { person: MonitoringEntry["from"] }) {
@@ -406,6 +478,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 function monitoringExportRows(items: MonitoringEntry[]) {
   return items.map((entry) => ({
+    recordId: entry.id,
     date: entry.date,
     fromName: entry.from.name,
     fromRole: entry.from.role,
@@ -419,7 +492,7 @@ function monitoringExportRows(items: MonitoringEntry[]) {
   }));
 }
 
-async function exportMonitoringToExcel(items: MonitoringEntry[]) {
+async function exportMonitoringToExcel(items: MonitoringEntry[], filterSummary: string) {
   const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ParentConnect";
@@ -427,36 +500,46 @@ async function exportMonitoringToExcel(items: MonitoringEntry[]) {
 
   const sheet = workbook.addWorksheet("Report Monitoring");
   sheet.columns = [
-    { header: "Date", key: "date", width: 20 },
+    { header: "Report ID", key: "recordId", width: 16 },
+    { header: "Submitted (PHT)", key: "date", width: 24 },
     { header: "From", key: "fromName", width: 24 },
-    { header: "From Role", key: "fromRole", width: 16 },
-    { header: "To", key: "toName", width: 24 },
-    { header: "To Role", key: "toRole", width: 16 },
-    { header: "Category", key: "category", width: 24 },
-    { header: "Concern", key: "concern", width: 42 },
-    { header: "Student", key: "student", width: 22 },
-    { header: "Priority", key: "priority", width: 14 },
+    { header: "From Role", key: "fromRole", width: 15 },
+    { header: "To", key: "toName", width: 23 },
+    { header: "To Role", key: "toRole", width: 15 },
+    { header: "Student", key: "student", width: 28 },
+    { header: "Category", key: "category", width: 22 },
+    { header: "Concern", key: "concern", width: 48 },
+    { header: "Priority", key: "priority", width: 12 },
     { header: "Status", key: "status", width: 28 },
   ];
-  sheet.spliceRows(1, 0, [], []);
+  // Keep a compact context block above the data. The header is deliberately
+  // frozen and filtered so a long export remains easy to scan.
+  sheet.spliceRows(1, 0, [], [], [], []);
   sheet.addRows(monitoringExportRows(items));
 
-  sheet.mergeCells("A1:J1");
+  sheet.mergeCells("A1:K1");
   sheet.getCell("A1").value = "ParentConnect - Report Monitoring";
   sheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
-  sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6D28D9" } };
+  sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF522081" } };
   sheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
   sheet.getRow(1).height = 28;
-  sheet.getCell("A2").value = `Generated: ${new Date().toLocaleString()}`;
-  sheet.getCell("J2").value = `Total: ${items.length}`;
+  sheet.mergeCells("A2:K2");
+  sheet.getCell("A2").value = `Filters: ${filterSummary}`;
+  sheet.getCell("A3").value = `Generated (PHT): ${formatManilaTimestamp(new Date())}`;
+  sheet.getCell("K3").value = `Total records: ${items.length}`;
   sheet.getRow(2).font = { italic: true, color: { argb: "FF64748B" } };
-  sheet.getRow(3).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  sheet.getRow(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
-  sheet.getRow(3).alignment = { vertical: "middle", horizontal: "center" };
-  sheet.views = [{ state: "frozen", ySplit: 3 }];
+  sheet.getRow(3).font = { color: { argb: "FF64748B" } };
+  sheet.getCell("K3").alignment = { horizontal: "right" };
+  sheet.getRow(5).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+  sheet.getRow(5).alignment = { vertical: "middle", horizontal: "center" };
+  sheet.getRow(5).height = 24;
+  sheet.autoFilter = { from: "A5", to: `K${Math.max(5, items.length + 5)}` };
+  sheet.views = [{ state: "frozen", ySplit: 5 }];
+  sheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
   sheet.eachRow((row, rowNumber) => {
-    if (rowNumber < 3) return;
+    if (rowNumber < 5) return;
     row.eachCell((cell) => {
       cell.border = {
         top: { style: "thin", color: { argb: "FFE2E8F0" } },
@@ -466,10 +549,11 @@ async function exportMonitoringToExcel(items: MonitoringEntry[]) {
       };
       cell.alignment = { vertical: "top", wrapText: true };
     });
+    if (rowNumber > 5) row.height = 34;
   });
 
   sheet.eachRow((row, rowNumber) => {
-    if (rowNumber > 3 && rowNumber % 2 === 0) {
+    if (rowNumber > 5 && rowNumber % 2 === 0) {
       row.eachCell((cell) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
       });
@@ -479,7 +563,7 @@ async function exportMonitoringToExcel(items: MonitoringEntry[]) {
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(
     new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-    `principal_report_monitoring_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.xlsx`,
   );
 }
 
@@ -499,68 +583,116 @@ function makePdfLine(x1: number, y1: number, x2: number, y2: number, gray = 0.82
   return `q ${gray} G ${x1} ${y1} m ${x2} ${y2} l S Q`;
 }
 
-function createMonitoringPdf(items: MonitoringEntry[]) {
+function compactPdfText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 3))}...` : value;
+}
+
+function wrapPdfText(value: string, maxLength: number, maxLines: number) {
+  const words = value.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  if (!words.length) return ["-"];
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const segments = word.length > maxLength
+      ? word.match(new RegExp(`.{1,${maxLength}}`, "g")) ?? [word]
+      : [word];
+    for (const segment of segments) {
+      const next = line ? `${line} ${segment}` : segment;
+      if (next.length <= maxLength || !line) {
+        line = next;
+        continue;
+      }
+      lines.push(line);
+      line = segment;
+    }
+  }
+  if (line) lines.push(line);
+  if (lines.length <= maxLines) return lines;
+  const visible = lines.slice(0, maxLines);
+  visible[maxLines - 1] = compactPdfText(visible[maxLines - 1], Math.max(4, maxLength - 3)) + "...";
+  return visible;
+}
+
+function createMonitoringPdf(items: MonitoringEntry[], filterSummary: string) {
   const pageWidth = 792;
   const pageHeight = 612;
   const left = 36;
   const right = 756;
-  const commands: string[] = [];
-
-  commands.push(makePdfRect(0, pageHeight - 72, pageWidth, 72, 0.93));
-  commands.push(makePdfText("ParentConnect", left, 570, 9, true));
-  commands.push(makePdfText("Principal Report Monitoring", left, 548, 18, true));
-  commands.push(makePdfText("Santiago Elementary School", left, 530, 10));
-  commands.push(makePdfText(`Generated: ${new Date().toLocaleString()}`, 560, 558, 9));
-
-  commands.push(makePdfRect(left, 492, right - left, 34, 0.97));
-  commands.push(makePdfText("Total Reports", left + 14, 510, 9, true));
-  commands.push(makePdfText(String(items.length), left + 100, 510, 12, true));
-  commands.push(makePdfText("From Parents", left + 180, 510, 9, true));
-  commands.push(makePdfText(String(items.filter((entry) => entry.from.role === "Parent").length), left + 272, 510, 12, true));
-  commands.push(makePdfText("From Students", left + 350, 510, 9, true));
-  commands.push(makePdfText(String(items.filter((entry) => entry.from.role === "Student").length), left + 446, 510, 12, true));
-  commands.push(makePdfText("To Principal", left + 530, 510, 9, true));
-  commands.push(makePdfText(String(items.filter((entry) => entry.status === "Escalated to Principal").length), left + 610, 510, 12, true));
-
+  const rowHeight = 54;
+  const rowsPerPage = 7;
+  const pages = items.length
+    ? Array.from({ length: Math.ceil(items.length / rowsPerPage) }, (_, index) => items.slice(index * rowsPerPage, (index + 1) * rowsPerPage))
+    : [[]];
   const columns = [
-    { label: "Date", x: left + 8 },
-    { label: "From", x: left + 104 },
-    { label: "To", x: left + 226 },
-    { label: "Category", x: left + 340 },
-    { label: "Concern", x: left + 446 },
-    { label: "Student", x: left + 558 },
-    { label: "Status", x: left + 650 },
+    { label: "Submitted", x: left + 6, width: 82, maxLength: 18, maxLines: 3 },
+    { label: "Source -> Recipient", x: left + 88, width: 138, maxLength: 29, maxLines: 3 },
+    { label: "Student", x: left + 226, width: 104, maxLength: 21, maxLines: 3 },
+    { label: "Category", x: left + 330, width: 82, maxLength: 16, maxLines: 3 },
+    { label: "Concern", x: left + 412, width: 188, maxLength: 38, maxLines: 3 },
+    { label: "Priority / Status", x: left + 600, width: 120, maxLength: 24, maxLines: 3 },
   ];
+  const pageBodies = pages.map((pageRows, pageIndex) => {
+    const commands: string[] = [];
+    commands.push(makePdfRect(0, pageHeight - 70, pageWidth, 70, 0.95));
+    commands.push(makePdfText("ParentConnect", left, 572, 9, true));
+    commands.push(makePdfText("Report Monitoring", left, 550, 17, true));
+    wrapPdfText(`Filters: ${filterSummary}`, 116, 2).forEach((line, lineIndex) => {
+      commands.push(makePdfText(line, left, 532 - lineIndex * 10, 8));
+    });
+    commands.push(makePdfText(`Generated (PHT): ${formatManilaTimestamp(new Date())}`, 510, 558, 8));
 
-  let y = 454;
-  commands.push(makePdfRect(left, y - 10, right - left, 28, 0.88));
-  columns.forEach((column) => commands.push(makePdfText(column.label, column.x, y, 8, true)));
-  y -= 30;
+    if (pageIndex === 0) {
+      commands.push(makePdfText(`${items.length} matching report${items.length === 1 ? "" : "s"}`, left, 498, 9, true));
+      commands.push(makePdfText(`${items.filter((entry) => entry.from.role === "Parent").length} parent`, left + 150, 498, 9));
+      commands.push(makePdfText(`${items.filter((entry) => entry.from.role === "Student").length} student`, left + 250, 498, 9));
+      commands.push(makePdfText(`${items.filter((entry) => entry.status === "Escalated to Principal").length} escalated to principal`, left + 350, 498, 9));
+    }
 
-  items.forEach((entry, index) => {
-    if (index % 2 === 0) commands.push(makePdfRect(left, y - 12, right - left, 26, 0.985));
-    commands.push(makePdfText(entry.date, columns[0].x, y, 8, true));
-    commands.push(makePdfText(`${entry.from.name} (${entry.from.role})`, columns[1].x, y, 8));
-    commands.push(makePdfText(`${entry.to.name} (${entry.to.role})`, columns[2].x, y, 8));
-    commands.push(makePdfText(entry.category, columns[3].x, y, 8));
-    commands.push(makePdfText(entry.concern.slice(0, 40), columns[4].x, y, 8));
-    commands.push(makePdfText(entry.student, columns[5].x, y, 8));
-    commands.push(makePdfText(entry.status.replace("Escalated to ", "To "), columns[6].x, y, 8, true));
-    commands.push(makePdfLine(left, y - 14, right, y - 14, 0.9));
-    y -= 28;
+    const tableHeaderY = pageIndex === 0 ? 462 : 510;
+    commands.push(makePdfRect(left, tableHeaderY - 15, right - left, 23, 0.88));
+    columns.forEach((column) => commands.push(makePdfText(column.label, column.x + 4, tableHeaderY - 1, 7, true)));
+    columns.slice(1).forEach((column) => commands.push(makePdfLine(column.x, tableHeaderY - 15, column.x, tableHeaderY + 8, 0.78)));
+    let rowTop = tableHeaderY - 15;
+
+    pageRows.forEach((entry, index) => {
+      const rowBottom = rowTop - rowHeight;
+      if (index % 2 === 0) commands.push(makePdfRect(left, rowBottom, right - left, rowHeight, 0.985));
+      const cells = [
+        entry.date,
+        `${entry.from.role}: ${entry.from.name} -> ${entry.to.role}: ${entry.to.name}`,
+        entry.student,
+        entry.category,
+        entry.concern,
+        `${entry.priority.toUpperCase()} | ${entry.status}`,
+      ];
+      cells.forEach((value, cellIndex) => {
+        const column = columns[cellIndex];
+        wrapPdfText(value, column.maxLength, column.maxLines).forEach((line, lineIndex) => {
+          commands.push(makePdfText(line, column.x + 4, rowTop - 12 - lineIndex * 10, 7, cellIndex === columns.length - 1));
+        });
+      });
+      columns.slice(1).forEach((column) => commands.push(makePdfLine(column.x, rowBottom, column.x, rowTop, 0.9)));
+      commands.push(makePdfLine(left, rowBottom, right, rowBottom, 0.9));
+      rowTop = rowBottom;
+    });
+
+    commands.push(makePdfLine(left, 46, right, 46, 0.82));
+    commands.push(makePdfText("Confidential report monitoring export", left, 28, 8));
+    commands.push(makePdfText(`Page ${pageIndex + 1} of ${pages.length}`, 690, 28, 8));
+    return commands.join("\n");
   });
 
-  commands.push(makePdfLine(left, 46, right, 46, 0.82));
-  commands.push(makePdfText("Confidential report monitoring export", left, 28, 8));
-  commands.push(makePdfText("Page 1 of 1", 700, 28, 8));
-
+  const pageObjectNumbers = pageBodies.map((_, index) => 3 + index * 2);
   const objects: string[] = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Contents 4 0 R >>`,
+    `<< /Type /Pages /Kids [${pageObjectNumbers.map((number) => `${number} 0 R`).join(" ")}] /Count ${pageBodies.length} >>`,
   ];
-  const body = commands.join("\n");
-  objects.push(`<< /Length ${body.length} >>\nstream\n${body}\nendstream`);
+  pageBodies.forEach((body, index) => {
+    const pageObjectNumber = pageObjectNumbers[index];
+    const contentObjectNumber = pageObjectNumber + 1;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Contents ${contentObjectNumber} 0 R >>`);
+    objects.push(`<< /Length ${body.length} >>\nstream\n${body}\nendstream`);
+  });
 
   let pdf = "%PDF-1.4\n";
   const offsets: number[] = [0];
@@ -577,19 +709,20 @@ function createMonitoringPdf(items: MonitoringEntry[]) {
   return new Blob([pdf], { type: "application/pdf" });
 }
 
-function exportMonitoringToPdf(items: MonitoringEntry[]) {
-  downloadBlob(createMonitoringPdf(items), `principal_report_monitoring_${new Date().toISOString().slice(0, 10)}.pdf`);
+function exportMonitoringToPdf(items: MonitoringEntry[], filterSummary: string) {
+  downloadBlob(createMonitoringPdf(items, filterSummary), `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
-function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; onClose: () => void }) {
+function ExportMonitoringModal({ items, filterSummary, onClose }: { items: MonitoringEntry[]; filterSummary: string; onClose: () => void }) {
   const [format, setFormat] = useState<ExportFormat>("excel");
   const [exporting, setExporting] = useState(false);
 
   async function handleExport() {
+    if (!items.length) return;
     setExporting(true);
     try {
-      if (format === "excel") await exportMonitoringToExcel(items);
-      else exportMonitoringToPdf(items);
+      if (format === "excel") await exportMonitoringToExcel(items, filterSummary);
+      else exportMonitoringToPdf(items, filterSummary);
       onClose();
     } finally {
       setExporting(false);
@@ -610,10 +743,10 @@ function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; o
         </div>
 
         <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
-          <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
+          <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
             <p className="text-sm font-extrabold text-violet-800">Included Data</p>
             <p className="mt-1 text-xs leading-relaxed text-violet-700">
-              {items.length} monitoring records with date, sender, receiver, category, student, priority, and status.
+              {items.length} matching record{items.length === 1 ? "" : "s"}. {filterSummary}
             </p>
           </div>
 
@@ -650,11 +783,11 @@ function ExportMonitoringModal({ items, onClose }: { items: MonitoringEntry[]; o
           </button>
           <button
             onClick={handleExport}
-            disabled={exporting}
+            disabled={exporting || items.length === 0}
             className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
           >
             <FileDown className="h-4 w-4" />
-            {exporting ? "Exporting..." : `Export ${format.toUpperCase()}`}
+            {exporting ? "Exporting..." : items.length === 0 ? "No matching reports" : `Export ${format.toUpperCase()}`}
           </button>
         </div>
       </div>
@@ -1161,11 +1294,18 @@ function PrincipalReportsPageContent() {
   const [replyError, setReplyError] = useState<string | null>(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [showExportMonitoring, setShowExportMonitoring] = useState(false);
+  const [monitoringSearch, setMonitoringSearch] = useState("");
+  const [monitoringSourceFilter, setMonitoringSourceFilter] = useState<MonitoringSourceFilter>("All");
+  const [monitoringStatusFilter, setMonitoringStatusFilter] = useState<MonitoringStatusFilter>("All");
+  const [monitoringCategoryFilter, setMonitoringCategoryFilter] = useState("All");
+  const [monitoringStartDate, setMonitoringStartDate] = useState("");
+  const [monitoringEndDate, setMonitoringEndDate] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [conversationReply, setConversationReply] = useState("");
   const [conversationReplyAttachments, setConversationReplyAttachments] = useState<File[]>([]);
+  const [sendingConversationReply, setSendingConversationReply] = useState(false);
   const conversationMessagesRef = useRef<HTMLDivElement>(null);
   const reportMessagesRef = useRef<HTMLDivElement>(null);
   const reportWasAtBottomRef = useRef(true);
@@ -1190,6 +1330,10 @@ function PrincipalReportsPageContent() {
   const selectedReportId = selectedReport?.id ?? null;
   const selectedReportReplies = selectedReport ? (principalReplies[selectedReport.id] ?? []) : [];
   const reportTyping = useReportTyping(selectedReportId, "principal");
+  const staffConversationTyping = useStaffConversationTyping(
+    selectedConversationId?.startsWith("staff-message:") ? selectedConversationId : null,
+    "principal",
+  );
   const guideHighlight = (target: string) => guideTarget === target
     ? "relative z-[85] rounded-2xl ring-4 ring-violet-400 ring-offset-4 ring-offset-slate-50"
     : "";
@@ -1213,21 +1357,57 @@ function PrincipalReportsPageContent() {
     });
   }, [selectedReportId, selectedReportReplies.length]);
   const monitoringEntries = useMemo(
-    () => [...reportsToMonitoringEntries(reports), ...studentReportsToMonitoringEntries(studentReports)]
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    () => dedupeMonitoringEntries([
+      ...reportsToMonitoringEntries(reports),
+      ...studentReportsToMonitoringEntries(studentReports),
+    ]).sort((a, b) => monitoringEntryTimestamp(b) - monitoringEntryTimestamp(a)),
     [reports, studentReports]
   );
+  const monitoringCategories = useMemo(
+    () => Array.from(new Set(monitoringEntries.map((entry) => entry.category).filter(Boolean))).sort(),
+    [monitoringEntries],
+  );
+  const filteredMonitoringEntries = useMemo(() => {
+    const searchTerm = monitoringSearch.trim().toLowerCase();
+    return monitoringEntries.filter((entry) => {
+      const entryDate = manilaDateKey(entry.occurredAt);
+      if (monitoringSourceFilter !== "All" && entry.from.role !== monitoringSourceFilter) return false;
+      if (monitoringStatusFilter !== "All" && entry.status !== monitoringStatusFilter) return false;
+      if (monitoringCategoryFilter !== "All" && entry.category !== monitoringCategoryFilter) return false;
+      if (monitoringStartDate && (!entryDate || entryDate < monitoringStartDate)) return false;
+      if (monitoringEndDate && (!entryDate || entryDate > monitoringEndDate)) return false;
+      if (!searchTerm) return true;
+      return [
+        entry.date,
+        entry.from.name,
+        entry.from.role,
+        entry.to.name,
+        entry.to.role,
+        entry.student,
+        entry.category,
+        entry.concern,
+        entry.status,
+      ].some((value) => value.toLowerCase().includes(searchTerm));
+    });
+  }, [monitoringEntries, monitoringSearch, monitoringSourceFilter, monitoringStatusFilter, monitoringCategoryFilter, monitoringStartDate, monitoringEndDate]);
   const monitoringTotals = {
-    parentReports: monitoringEntries.filter((entry) => entry.from.role === "Parent").length,
-    studentReports: monitoringEntries.filter((entry) => entry.from.role === "Student").length,
-    escalatedToPrincipal: monitoringEntries.filter((entry) => entry.status === "Escalated to Principal").length,
-    escalatedToGuidance: monitoringEntries.filter((entry) => entry.status === "Escalated to Guidance").length,
-    acceptedGuidanceTickets: monitoringEntries.filter((entry) => entry.status === "Accepted Ticket").length,
+    parentReports: filteredMonitoringEntries.filter((entry) => entry.from.role === "Parent").length,
+    studentReports: filteredMonitoringEntries.filter((entry) => entry.from.role === "Student").length,
+    escalatedToPrincipal: filteredMonitoringEntries.filter((entry) => entry.status === "Escalated to Principal").length,
+    escalatedToGuidance: filteredMonitoringEntries.filter((entry) => entry.status === "Escalated to Guidance").length,
+    acceptedGuidanceTickets: filteredMonitoringEntries.filter((entry) => entry.status === "Accepted Ticket").length,
   };
-  const monitoringCategoryTotals = MESSAGE_CATEGORIES.map((category) => ({
-    name: category.name,
-    count: monitoringEntries.filter((entry) => entry.category === category.name).length,
+  const monitoringCategoryTotals = monitoringCategories.map((name) => ({
+    name,
+    count: filteredMonitoringEntries.filter((entry) => entry.category === name).length,
   })).filter((category) => category.count > 0);
+  const monitoringFilterSummary = [
+    monitoringSourceFilter === "All" ? "All sources" : `${monitoringSourceFilter} reports`,
+    monitoringStatusFilter === "All" ? "All statuses" : monitoringStatusFilter,
+    monitoringCategoryFilter === "All" ? "All categories" : monitoringCategoryFilter,
+    monitoringDateRangeLabel(monitoringStartDate, monitoringEndDate),
+    monitoringSearch.trim() ? `Search: ${monitoringSearch.trim()}` : null,
+  ].filter((value): value is string => Boolean(value)).join(" · ");
 
   const loadPrincipalReports = useCallback(async () => {
     const [parentRes, studentRes] = await Promise.all([
@@ -1312,7 +1492,7 @@ function PrincipalReportsPageContent() {
     }
   }, []);
 
-  const loadPrincipalMessages = useCallback(async () => {
+  const loadPrincipalMessages = useCallback(async (preferredConversationId?: string) => {
     const res = await fetch("/api/reports/principal-messages", { cache: "no-store" });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -1329,11 +1509,12 @@ function PrincipalReportsPageContent() {
       (conversation) => !conversation.id.startsWith("parent-report:")
     );
     setConversations(nextConversations);
-    setSelectedConversationId((current) =>
-      current && nextConversations.some((conversation) => conversation.id === current)
-        ? current
+    setSelectedConversationId((current) => {
+      const requested = preferredConversationId ?? current;
+      return requested && nextConversations.some((conversation) => conversation.id === requested)
+        ? requested
         : nextConversations[0]?.id ?? null
-    );
+    });
   }, []);
 
   useEffect(() => {
@@ -1366,12 +1547,19 @@ function PrincipalReportsPageContent() {
     ]);
   }, [loadPrincipalReports, loadReportDetail, reportTyping, selectedReportId]);
 
-  const liveUpdateNotice = useReportMessagesRealtime(loadPrincipalReports, {
+  const refreshPrincipalInbox = useCallback(async () => {
+    await Promise.all([loadPrincipalReports(), loadPrincipalMessages()]);
+  }, [loadPrincipalMessages, loadPrincipalReports]);
+
+  const liveUpdateNotice = useReportMessagesRealtime(refreshPrincipalInbox, {
     onReportUpdate: handleLiveReportUpdate,
+    onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
     onConnectionStatus: (status) => {
       if (status === "CLOSED") {
         reportTyping.clearOtherTyping();
         reportTyping.stopTyping();
+        staffConversationTyping.clearOtherTyping();
+        staffConversationTyping.stopTyping();
       }
     },
   });
@@ -1423,11 +1611,15 @@ function PrincipalReportsPageContent() {
   const { position: detailPosition, width: detailWidth } = detailPanelLayout(Boolean(selectedParent));
 
   function panelClass(visible: boolean, bg: string, width: string, position = "left-0", mobileVisible = visible) {
-    const desktopPosition = position === "left-[420px]" ? "md:left-[420px]" : "md:left-0";
+    const desktopPosition = position === "left-[420px]"
+      ? "md:left-[420px]"
+      : position === "left-[300px]" ? "md:left-[300px]" : "md:left-0";
     const desktopWidth = width === "right-0 w-auto"
       ? "md:right-0 md:w-auto"
       : width.includes("max-w-[860px]")
         ? "md:w-full md:max-w-[860px]"
+        : width.includes("max-w-[300px]")
+          ? "md:w-full md:max-w-[300px]"
         : "md:w-full md:max-w-[420px]";
 
     return `relative h-full w-full max-w-none flex-col overflow-hidden ${bg} ${mobileVisible ? "flex" : "hidden"} md:absolute md:inset-y-0 ${desktopPosition} ${desktopWidth} md:flex md:border-r md:border-slate-100 md:shadow-sm md:transition-all md:duration-200 md:ease-out ${visible ? "md:opacity-100 md:translate-y-0 md:scale-100 md:pointer-events-auto" : "md:opacity-0 md:translate-y-2 md:scale-[0.99] md:pointer-events-none"
@@ -1579,10 +1771,13 @@ function PrincipalReportsPageContent() {
   }
 
   async function markConversationRead(conversationId: string) {
-    const res = await fetch("/api/reports/principal-messages", {
+    const isStandaloneStaffConversation = conversationId.startsWith("staff-message:");
+    const res = await fetch(isStandaloneStaffConversation ? "/api/reports/staff-messages" : "/api/reports/principal-messages", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId, status: "read" }),
+      body: JSON.stringify(isStandaloneStaffConversation
+        ? { role: "principal", conversationId, status: "read" }
+        : { conversationId, status: "read" }),
     });
     if (!res.ok) throw new Error("Unable to mark message as read.");
   }
@@ -1603,37 +1798,48 @@ function PrincipalReportsPageContent() {
 
   async function sendConversationReply() {
     const body = conversationReply.trim();
-    if (!selectedConversation || (!body && conversationReplyAttachments.length === 0)) return;
+    if (sendingConversationReply || !selectedConversation || (!body && conversationReplyAttachments.length === 0)) return;
 
-    const validFiles = conversationReplyAttachments.filter(f => f.size <= MAX_ATTACHMENT_BYTES);
+    const pendingFiles = conversationReplyAttachments;
+    const validFiles = pendingFiles.filter(f => f.size <= MAX_ATTACHMENT_BYTES);
     const cleanedAttachments = await filesToAttachments(validFiles);
     const categories = selectedConversation.category.split(",").map((c) => c.trim()).filter(Boolean);
+    const optimisticTimestamp = formatManilaTimestamp(new Date());
 
-    // Optimistic update first
+    // Render immediately, then replace the temporary timestamp with the
+    // stored server timestamp below. This keeps the panel responsive without
+    // treating a standalone message as a report reply.
     const optimisticMsg = {
       id: `principal-${Date.now()}`,
       sender: "principal" as const,
       body,
-      sentAt: new Date().toLocaleString(),
+      sentAt: optimisticTimestamp,
       attachments: cleanedAttachments,
     };
     setConversations((prev) => prev.map((conv) =>
       conv.id !== selectedConversation.id ? conv : {
         ...conv,
-        status: "Replied" as const,
-        lastMessageAt: new Date().toLocaleString(),
+        status: "Sent" as const,
+        lastMessageAt: optimisticTimestamp,
         messages: [...conv.messages, optimisticMsg],
       }
     ));
     setConversationReply("");
     setConversationReplyAttachments([]);
+    setSendingConversationReply(true);
 
-    // Then persist to backend
     try {
-      const res = await fetch("/api/reports/principal-messages", {
-        method: "POST",
+      const isStandaloneStaffConversation = selectedConversation.id.startsWith("staff-message:");
+      const res = await fetch(isStandaloneStaffConversation ? "/api/reports/staff-messages" : "/api/reports/principal-messages", {
+        method: isStandaloneStaffConversation ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(isStandaloneStaffConversation ? {
+          role: "principal",
+          conversationId: selectedConversation.id,
+          status: "replied",
+          reply: body,
+          attachments: cleanedAttachments,
+        } : {
           recipientId: selectedConversation.sender.id,
           conversationId: selectedConversation.id,
           subject: selectedConversation.subject,
@@ -1645,12 +1851,23 @@ function PrincipalReportsPageContent() {
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         console.error("Send failed:", data?.message);
-        // Roll back on failure
+        setConversationReply(body);
+        setConversationReplyAttachments(pendingFiles);
         await loadPrincipalMessages();
+        return;
       }
+      if (isStandaloneStaffConversation) staffConversationTyping.stopTyping();
+      // This is an in-place inbox refresh, not a page refresh. It replaces
+      // the optimistic timestamp with the saved timestamp and also covers a
+      // browser that missed its own Broadcast while reconnecting.
+      await loadPrincipalMessages();
     } catch (error) {
       console.error("Send error:", error);
+      setConversationReply(body);
+      setConversationReplyAttachments(pendingFiles);
       await loadPrincipalMessages();
+    } finally {
+      setSendingConversationReply(false);
     }
   }
 
@@ -1670,12 +1887,12 @@ function PrincipalReportsPageContent() {
     if (!res.ok) throw new Error(data?.message || "Unable to send message.");
 
     setMainTab("Messages");
-    if (data?.message?.id) setSelectedConversationId(`staff-message:${data.message.id}`);
-    // The conversation is stored at this point; update the list without
-    // delaying the modal success state on a second request.
-    void loadPrincipalMessages().catch((refreshError) => {
-      console.warn("Unable to refresh principal messages after sending:", refreshError);
-    });
+    const conversationId = data?.message?.id ? `staff-message:${data.message.id}` : undefined;
+    if (conversationId) setSelectedConversationId(conversationId);
+    // Update only the Message Panel, then render the stored record and its
+    // server-generated Asia/Manila timestamp. Parent Reports receives the
+    // matching Realtime invalidation from the same committed write.
+    await loadPrincipalMessages(conversationId);
   }
 
   function renderTopTabs(mobile = false) {
@@ -1909,11 +2126,17 @@ function PrincipalReportsPageContent() {
                           </div>
                         ))}
                       </div>
-                      <div className="flex items-end gap-3">
+                      {staffConversationTyping.isOtherParticipantTyping && (
+                        <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                          <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:300ms]" /></span>
+                          The other participant is typing…
+                        </div>
+                      )}
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
                         <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
                           <textarea
                             value={conversationReply}
-                            onChange={(event) => setConversationReply(event.target.value)}
+                            onChange={(event) => { setConversationReply(event.target.value); staffConversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
                             onKeyDown={(event) => {
                               if (event.key === "Enter" && !event.shiftKey) {
                                 event.preventDefault();
@@ -1927,8 +2150,9 @@ function PrincipalReportsPageContent() {
                         </div>
                         <button
                           onClick={sendConversationReply}
-                          disabled={!conversationReply.trim() && conversationReplyAttachments.length === 0}
-                          className={`rounded-xl p-3 transition ${conversationReply.trim() || conversationReplyAttachments.length > 0 ? "bg-violet-600 text-white hover:bg-violet-700" : "cursor-not-allowed bg-slate-100 text-slate-300"}`}
+                            disabled={sendingConversationReply || (!conversationReply.trim() && conversationReplyAttachments.length === 0)}
+                            aria-label="Send message"
+                            className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl transition ${!sendingConversationReply && (conversationReply.trim() || conversationReplyAttachments.length > 0) ? "bg-violet-600 text-white hover:bg-violet-700" : "cursor-not-allowed bg-slate-100 text-slate-300"}`}
                         >
                           <Send className="h-4 w-4" />
                         </button>
@@ -1945,77 +2169,191 @@ function PrincipalReportsPageContent() {
             </>
           ) : mainTab === "Monitoring" ? (
             <>
-              <div className={panelClass(true, "bg-white", "w-full max-w-[420px]", "left-0", false)}>
+              <div className={panelClass(true, "bg-white", "w-full max-w-[300px]", "left-0", false)}>
                 {renderTopTabs()}
                 <div className="mx-3 h-px bg-slate-100" />
-                <div className="px-4 py-5">
-                  <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-4">
-                    <p className="text-sm font-extrabold text-violet-800">Report Monitoring</p>
-                    <p className="mt-1 text-xs leading-relaxed text-violet-600">
-                      Review the system-wide report path, status, and escalation totals from this monitoring table.
-                    </p>
-                  </div>
+                <div className="px-4 py-4">
+                  <p className="text-sm font-extrabold text-slate-800">Report Monitoring</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    Review report flow, current status, and escalation activity across the school.
+                  </p>
                 </div>
               </div>
 
-              <div className="relative h-full w-full overflow-y-auto bg-slate-50 p-4 md:absolute md:inset-y-0 md:left-[420px] md:right-0 md:p-6">
-                <section className="min-h-full rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/70 sm:p-6 md:min-h-[690px]">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="relative h-full w-full overflow-y-auto bg-slate-50 p-3 sm:p-4 md:absolute md:inset-y-0 md:left-[300px] md:right-0 md:p-6">
+                <section className="min-h-full rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/70 sm:p-5 md:min-h-[690px] md:p-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <h2 className="text-base font-extrabold text-slate-900">Report Monitoring</h2>
-                      <p className="mt-1 text-sm font-medium leading-6 text-slate-500">All reports in the system with privacy controls applied</p>
+                      <h2 className="text-lg font-extrabold text-slate-900">Report Monitoring</h2>
+                      <p className="mt-1 text-sm leading-6 text-slate-500">
+                        Showing {filteredMonitoringEntries.length} of {monitoringEntries.length} report{monitoringEntries.length === 1 ? "" : "s"}.
+                      </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-col gap-2 sm:items-end">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-violet-700"><Eye className="h-3.5 w-3.5" /> Privacy controls active</span>
                       <button
                         onClick={() => setShowExportMonitoring(true)}
-                        className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700"
+                        disabled={filteredMonitoringEntries.length === 0}
+                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300 sm:w-auto"
                       >
                         <FileDown className="h-4 w-4" /> Export
                       </button>
-                      <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-violet-700">
-                        <p className="flex items-center gap-2 text-sm font-extrabold"><Eye className="h-4 w-4" /> Privacy Mode Active</p>
-                        <p className="mt-1 text-xs font-semibold text-violet-600">Content hidden for non-escalated reports</p>
-                      </div>
                     </div>
                   </div>
 
-                  <div className="mt-6 grid gap-3 md:grid-cols-4 xl:grid-cols-5">
+                  <div className="mt-5 grid gap-3 border-y border-slate-100 py-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
+                    <label className="relative sm:col-span-2 xl:col-span-2">
+                      <span className="sr-only">Search monitoring reports</span>
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={monitoringSearch}
+                        onChange={(event) => setMonitoringSearch(event.target.value)}
+                        placeholder="Search reports"
+                        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Source</span>
+                      <select value={monitoringSourceFilter} onChange={(event) => setMonitoringSourceFilter(event.target.value as MonitoringSourceFilter)} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100">
+                        <option value="All">All sources</option>
+                        <option value="Parent">Parents</option>
+                        <option value="Student">Students</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Status</span>
+                      <select value={monitoringStatusFilter} onChange={(event) => setMonitoringStatusFilter(event.target.value as MonitoringStatusFilter)} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100">
+                        <option value="All">All statuses</option>
+                        {MONITORING_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Category</span>
+                      <select value={monitoringCategoryFilter} onChange={(event) => setMonitoringCategoryFilter(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100">
+                        <option value="All">All categories</option>
+                        {monitoringCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">From date</span>
+                      <input
+                        type="date"
+                        value={monitoringStartDate}
+                        max={monitoringEndDate || undefined}
+                        onChange={(event) => {
+                          const nextStart = event.target.value;
+                          setMonitoringStartDate(nextStart);
+                          if (monitoringEndDate && nextStart && nextStart > monitoringEndDate) setMonitoringEndDate(nextStart);
+                        }}
+                        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Through date</span>
+                      <input
+                        type="date"
+                        value={monitoringEndDate}
+                        min={monitoringStartDate || undefined}
+                        onChange={(event) => setMonitoringEndDate(event.target.value)}
+                        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                    {(monitoringSearch || monitoringSourceFilter !== "All" || monitoringStatusFilter !== "All" || monitoringCategoryFilter !== "All" || monitoringStartDate || monitoringEndDate) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMonitoringSearch("");
+                          setMonitoringSourceFilter("All");
+                          setMonitoringStatusFilter("All");
+                          setMonitoringCategoryFilter("All");
+                          setMonitoringStartDate("");
+                          setMonitoringEndDate("");
+                        }}
+                        className="flex min-h-11 items-center justify-center gap-1.5 self-end rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 xl:col-span-7"
+                      >
+                        <X className="h-3.5 w-3.5" /> Clear filters
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
                     {[
-                      { label: "Reports from Parents", value: monitoringTotals.parentReports, tone: "border-sky-100 bg-sky-50 text-sky-700" },
-                      { label: "Reports from Students", value: monitoringTotals.studentReports, tone: "border-emerald-100 bg-emerald-50 text-emerald-700" },
-                      { label: "Escalated to Principal", value: monitoringTotals.escalatedToPrincipal, tone: "border-red-100 bg-red-50 text-red-700" },
-                      { label: "Escalated to Guidance", value: monitoringTotals.escalatedToGuidance, tone: "border-violet-100 bg-violet-50 text-violet-700" },
-                      { label: "Accepted Guidance Tickets", value: monitoringTotals.acceptedGuidanceTickets, tone: "border-sky-100 bg-sky-50 text-sky-700" },
+                      { label: "Parent reports", value: monitoringTotals.parentReports },
+                      { label: "Student reports", value: monitoringTotals.studentReports },
+                      { label: "To principal", value: monitoringTotals.escalatedToPrincipal },
+                      { label: "To guidance", value: monitoringTotals.escalatedToGuidance },
+                      { label: "Accepted tickets", value: monitoringTotals.acceptedGuidanceTickets },
                     ].map((item) => (
-                      <div key={item.label} className={`rounded-2xl border px-4 py-3 ${item.tone}`}>
-                        <p className="text-[11px] font-extrabold uppercase tracking-wide opacity-75">{item.label}</p>
-                        <p className="mt-1 text-2xl font-extrabold">{item.value}</p>
+                      <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        <p className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">{item.label}</p>
+                        <p className="mt-1 text-2xl font-extrabold text-slate-800">{item.value}</p>
                       </div>
                     ))}
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-[11px] font-extrabold uppercase tracking-wide text-slate-400">Categories</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                  {monitoringCategoryTotals.length > 0 && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Categories</span>
                       {monitoringCategoryTotals.map((category) => (
-                        <span key={category.name} className="rounded-lg border border-violet-100 bg-white px-2.5 py-1 text-xs font-bold text-violet-700">
+                        <span key={category.name} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
                           {category.name} ({category.count})
                         </span>
                       ))}
                     </div>
-                  </div>
+                  )}
 
-                  <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-100 [-webkit-overflow-scrolling:touch]">
-                    {monitoringEntries.length === 0 ? (
+                  {filteredMonitoringEntries.length > 0 && (
+                    <div className="mt-5 space-y-3 md:hidden">
+                      {filteredMonitoringEntries.map((entry) => (
+                        <article key={entry.id} className="rounded-xl border border-slate-200 bg-white p-3.5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-extrabold text-slate-800">{entry.concern}</p>
+                              <p className="mt-1 text-xs font-medium text-slate-400">{entry.date}</p>
+                            </div>
+                            <span className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold capitalize ${monitoringPriorityClass(entry.priority)}`}>{entry.priority}</span>
+                          </div>
+                          <p className="mt-3 text-xs font-semibold text-slate-600">{entry.student}</p>
+                          <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 text-xs">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">From</p>
+                              <p className="mt-0.5 truncate font-semibold text-slate-700">{entry.from.name}</p>
+                              <p className="text-slate-400">{entry.from.role}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">To</p>
+                              <p className="mt-0.5 truncate font-semibold text-slate-700">{entry.to.name}</p>
+                              <p className="text-slate-400">{entry.to.role}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-600">{entry.category}</span>
+                            <span className={`rounded-lg px-2 py-1 text-[10px] font-extrabold ${monitoringStatusClass(entry.status)}`}>{entry.status}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                  {filteredMonitoringEntries.length === 0 && (
+                    <div className="mt-5 flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-6 py-12 text-center md:hidden">
+                      <Eye className="h-9 w-9 text-slate-300" />
+                      <p className="text-sm font-semibold text-slate-500">No reports match these filters.</p>
+                      <p className="text-xs text-slate-400">Try clearing a filter or changing your search.</p>
+                    </div>
+                  )}
+
+                  <div className="mt-5 hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
+                    {filteredMonitoringEntries.length === 0 ? (
                       <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-12 text-center">
                         <Eye className="h-9 w-9 text-slate-300" />
-                        <p className="text-sm font-semibold text-slate-400">No monitoring records yet.</p>
+                        <p className="text-sm font-semibold text-slate-500">No reports match these filters.</p>
+                        <p className="text-xs text-slate-400">Try clearing a filter or changing your search.</p>
                       </div>
                     ) : (
-                      <table className="w-full min-w-[760px] border-collapse text-left">
+                      <table className="w-full min-w-[960px] border-collapse text-left">
                         <thead>
                           <tr className="border-b border-slate-200 bg-slate-50">
-                            {["Date", "From → To", "Student", "Category", "Priority", "Status"].map((h) => (
+                            {["Date", "From → To", "Student", "Concern", "Category", "Priority", "Status"].map((h) => (
                               <th key={h} className="px-4 py-3 text-[10px] font-extrabold uppercase tracking-widest text-slate-400 whitespace-nowrap">
                                 {h}
                               </th>
@@ -2023,7 +2361,7 @@ function PrincipalReportsPageContent() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {monitoringEntries.map((entry) => (
+                          {filteredMonitoringEntries.map((entry) => (
                             <tr key={entry.id} className="transition-colors hover:bg-violet-50/40">
                               {/* Date */}
                               <td className="px-4 py-4 align-middle">
@@ -2061,6 +2399,10 @@ function PrincipalReportsPageContent() {
                               {/* Student */}
                               <td className="px-4 py-4 align-middle">
                                 <p className="whitespace-nowrap text-xs font-semibold text-slate-700">{entry.student}</p>
+                              </td>
+
+                              <td className="px-4 py-4 align-middle">
+                                <p className="max-w-[230px] text-xs leading-5 text-slate-600">{entry.concern}</p>
                               </td>
 
                               {/* Category */}
@@ -2598,7 +2940,13 @@ function PrincipalReportsPageContent() {
           parentRecipients={parentRecipients}
         />
       )}
-      {showExportMonitoring && <ExportMonitoringModal items={monitoringEntries} onClose={() => setShowExportMonitoring(false)} />}
+      {showExportMonitoring && (
+        <ExportMonitoringModal
+          items={filteredMonitoringEntries}
+          filterSummary={monitoringFilterSummary}
+          onClose={() => setShowExportMonitoring(false)}
+        />
+      )}
       <ResolveConfirmationModal
         open={resolveTargetId !== null}
         saving={resolving}

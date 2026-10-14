@@ -102,9 +102,10 @@ function NotificationsPageContent() {
 
     const snapshot = (data.notifications as PageNotification[])
       .map((notification) => ({ ...notification, source: "database" as const }));
-    // A late initial response must not erase an announcement that arrived via
-    // the account's Realtime invalidation a moment later.
-    setNotifications((current) => mergeNotificationFeed(current, snapshot));
+    // This endpoint returns the complete authorized feed. Preserve a read
+    // acknowledgement that is still being persisted, but prune entries that
+    // no longer belong in the snapshot (such as a deleted announcement).
+    setNotifications((current) => mergeNotificationFeed(current, snapshot, { removeMissing: true }));
   }, []);
 
   useEffect(() => {

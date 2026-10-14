@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
-import { normalizePrincipalAnnouncementAudience } from "@/lib/principalAnnouncementAudience";
+import {
+  normalizePrincipalAnnouncementAudience,
+  principalAnnouncementRecipientRoles,
+} from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 export async function GET() {
   try {
@@ -41,12 +45,12 @@ export async function GET() {
       .order("created_at", { ascending: false });
     if (guidanceError) throw guidanceError;
 
-    const myAnns = (mine ?? []).map((announcement: any) => ({
+    const myAnns = (mine ?? []).map((announcement) => ({
       ...announcement,
       id: String(announcement.id),
       source: "principal" as const,
     }));
-    const adviserShaped = (adviserAnns ?? []).map((announcement: any) => ({
+    const adviserShaped = (adviserAnns ?? []).map((announcement) => ({
       id: "adviser-" + String(announcement.id),
       title: announcement.title ?? "Class Announcement",
       message: announcement.message,
@@ -55,7 +59,7 @@ export async function GET() {
       senderName: announcement.adviser_name,
       source: "adviser" as const,
     }));
-    const guidanceShaped = (guidanceAnns ?? []).map((announcement: any) => ({
+    const guidanceShaped = (guidanceAnns ?? []).map((announcement) => ({
       id: "guidance-" + String(announcement.id),
       title: announcement.title ?? "Guidance Announcement",
       message: announcement.message,
@@ -64,7 +68,7 @@ export async function GET() {
       senderName: announcement.guidance_name,
       source: "guidance" as const,
     }));
-    const ictShaped = (ictAnns ?? []).map((announcement: any) => ({
+    const ictShaped = (ictAnns ?? []).map((announcement) => ({
       id: "ict-" + String(announcement.id),
       title: announcement.title,
       message: announcement.message,
@@ -130,15 +134,18 @@ export async function POST(req: Request) {
     if (status === "Published") {
       await deliverPrincipalAnnouncement(announcement, principal);
 
-      const recipientRoles: RealtimeRecipientRole[] = audience === "Everyone"
-        ? ["parent", "adviser", "guidance", "ict"]
-        : audience === "Advisers"
-          ? ["adviser", "ict"]
-          : ["parent"];
+      const recipientRoles: RealtimeRecipientRole[] = [...principalAnnouncementRecipientRoles(audience)];
       const recipients = await recipientsForRoles(recipientRoles);
       recipients.push({ role: "principal", id: Number(principal.id) });
       await publishRealtimeInvalidation(recipients, "announcements");
     }
+
+    await logAnnouncementAudit({
+      action: status === "Published" ? "Published" : "Scheduled",
+      actor: { id: principal.id, name: principal.name, role: "Principal" },
+      announcement: { id: announcement.id, title: announcement.title, audience, status },
+      headers: req.headers,
+    });
 
     return NextResponse.json({
       success: true,

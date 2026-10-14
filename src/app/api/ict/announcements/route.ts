@@ -4,6 +4,16 @@ import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendIctAnnouncementEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { logAnnouncementAudit } from "@/lib/announcementAudit";
+import { ictAnnouncementRecipientRoles, normalizeIctAnnouncementAudience } from "@/lib/ictAnnouncementAudience";
+import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
+
+type IctAnnouncementRow = {
+    id: number;
+    title: string;
+    message: string;
+    audience: string[];
+};
 
 export async function GET() {
     try {
@@ -18,7 +28,7 @@ export async function GET() {
 
         if (error) throw error;
 
-        const announcements = (data ?? []).map((a: any) => ({
+        const announcements = (data ?? []).map((a) => ({
             ...a,
             id: String(a.id),
             audience: Array.isArray(a.audience) ? a.audience : [],
@@ -36,12 +46,13 @@ export async function POST(req: Request) {
         const ict = await getIctFromToken();
         if (!ict) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
 
-        const { title, message, audience, scheduled_at } = await req.json();
+        const { title, message, audience: rawAudience, scheduled_at } = await req.json();
+        const audience = normalizeIctAnnouncementAudience(rawAudience);
 
         if (!title?.trim() || !message?.trim()) {
             return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
         }
-        if (!Array.isArray(audience) || audience.length === 0) {
+        if (!audience) {
             return NextResponse.json({ success: false, message: "Select at least one audience." }, { status: 400 });
         }
         if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
@@ -73,15 +84,18 @@ export async function POST(req: Request) {
         if (status === "Published") {
             await fanOutIctAnnouncement(ann, senderName);
 
-            const recipientRoles: RealtimeRecipientRole[] = [];
-            if (audience.includes("Parents")) recipientRoles.push("parent");
-            if (audience.includes("Class Advisers")) recipientRoles.push("adviser");
-            if (audience.includes("Guidance")) recipientRoles.push("guidance");
-            if (audience.includes("Principal")) recipientRoles.push("principal");
+            const recipientRoles: RealtimeRecipientRole[] = [...ictAnnouncementRecipientRoles(audience)];
             const recipients = await recipientsForRoles(recipientRoles);
             recipients.push({ role: "ict", id: Number(ict.id) });
             await publishRealtimeInvalidation(recipients, "announcements");
         }
+
+        await logAnnouncementAudit({
+            action: status === "Published" ? "Published" : "Scheduled",
+            actor: { id: ict.id, name: senderName, role: "ICT", email: ict.email },
+            announcement: { id: ann.id, title: ann.title, audience, status },
+            headers: req.headers,
+        });
 
         return NextResponse.json({ success: true, announcement: { ...ann, id: String(ann.id) } });
     } catch (error) {
@@ -90,49 +104,12 @@ export async function POST(req: Request) {
     }
 }
 
-async function fanOutIctAnnouncement(ann: any, senderName: string) {
-    const audience: string[] = ann.audience ?? [];
+async function fanOutIctAnnouncement(ann: IctAnnouncementRow, senderName: string) {
+    const audience = ann.audience;
 
     // ── Parents ────────────────────────────────────────────────────────────────
     if (audience.includes("Parents")) {
-        const [linksResult, directParentsResult] = await Promise.all([
-            supabase
-                .from("parent_student_links")
-                .select("parent_id, student_id"),
-            // Legacy parent accounts may have only their primary student_id.
-            // Include them before broadcasting so every intended Parent has a
-            // durable delivery row, not just a transient socket event.
-            supabase
-                .from("parents")
-                .select("id, student_id"),
-        ]);
-        const seen = new Set<number>();
-        const recipients = [
-            ...((linksResult.data ?? []) as { parent_id: number; student_id: string }[])
-                .map((link) => ({ parentId: link.parent_id, studentId: link.student_id })),
-            ...((directParentsResult.data ?? []) as { id: number; student_id: string | null }[])
-                .filter((parent) => parent.student_id !== null)
-                .map((parent) => ({ parentId: parent.id, studentId: parent.student_id as string })),
-        ].filter((recipient) => !seen.has(recipient.parentId) && seen.add(recipient.parentId));
-        const rows = recipients.map((recipient) => ({
-            source: "ict",
-            announcement_id: ann.id,
-            parent_id: recipient.parentId,
-            student_id: String(recipient.studentId),
-            title: ann.title,
-            message: ann.message,
-            sender_name: senderName,
-            tab: "ICT",
-            unread: true,
-        }));
-
-        if (rows.length) {
-            const { error } = await supabase
-                .from("parent_announcement_notifications")
-                .upsert(rows, { onConflict: "source,announcement_id,parent_id" });
-
-            if (error) console.error("ICT fan-out to parents error:", error.message);
-        }
+        await syncIctParentAnnouncementRecipients(ann, senderName);
         const { data: parentRows } = await supabase
             .from("parents")
             .select("id, email, parent_first_name, parent_last_name")
@@ -200,12 +177,6 @@ async function fanOutIctAnnouncement(ann: any, senderName: string) {
             .select("id");
 
         if (guidanceStaff?.length) {
-            const rows = guidanceStaff.map((g: { id: number }) => ({
-                guidance_id: g.id,
-                notif_key: `ict-announcement-${ann.id}`,
-                created_at: new Date().toISOString(),
-            }));
-
             // We insert into guidance_notification_reads with read=false pattern
             // by inserting a row into adviser_notifications for guidance
             const notifRows = guidanceStaff.map((g: { id: number }) => ({

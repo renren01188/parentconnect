@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidanceMessageEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { acceptedGuidanceRecipientForReport, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import {
   getAdviserSession,
@@ -132,9 +132,10 @@ export async function POST(
 
       const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
       const result = await insertMessage(reportId, "adviser", adviserName, trimmedBody, report.status, cleanedAttachments, "adviser", idempotencyKey);
-      // The message and report status are already committed. Broadcast after
-      // the response so a slow Realtime request never delays the sender UI.
-      if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+      // Broadcast while this request is still alive. Deferring this with
+      // `after()` lets a serverless response finish before the Broadcast REST
+      // call starts, which can leave the Parent waiting for a manual refresh.
+      if (!result.duplicate) await deliverReportInvalidation(report, reportId, result.id);
       return NextResponse.json({ success: true, messageId: result.id });
     }
 
@@ -175,24 +176,26 @@ export async function POST(
       const isFirstGuidanceReply = !report.guidance_seen_at;
       const result = await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
       if (!result.duplicate) {
-        after(async () => {
-          const deliveries = [publishReportInvalidation(report, reportId, result.id)];
-          if (isFirstGuidanceReply && report.parent_email) {
-            deliveries.push(sendGuidanceMessageEmail({
-              recipientEmail: String(report.parent_email),
-              recipientName: String(report.parent_name ?? "Parent"),
-              recipientRole: "Parent",
-              guidanceName: guidance.name,
-              subject: String(report.subject ?? "Guidance Message"),
-              message: trimmedBody,
-              hasAttachments: cleanedAttachments.length > 0,
-            }));
-          }
-          const outcomes = await Promise.allSettled(deliveries);
-          for (const outcome of outcomes) {
-            if (outcome.status === "rejected") console.error("Guidance message post-send delivery failed:", outcome.reason);
-          }
-        });
+        await deliverReportInvalidation(report, reportId, result.id);
+        // Email is supplemental. It remains deferred so SMTP availability can
+        // never delay a saved reply or its live in-app delivery.
+        if (isFirstGuidanceReply && report.parent_email) {
+          after(async () => {
+            try {
+              await sendGuidanceMessageEmail({
+                recipientEmail: String(report.parent_email),
+                recipientName: String(report.parent_name ?? "Parent"),
+                recipientRole: "Parent",
+                guidanceName: guidance.name,
+                subject: String(report.subject ?? "Guidance Message"),
+                message: trimmedBody,
+                hasAttachments: cleanedAttachments.length > 0,
+              });
+            } catch (error) {
+              console.error("Guidance message email delivery failed:", error);
+            }
+          });
+        }
       }
       return NextResponse.json({ success: true, messageId: result.id });
     }
@@ -225,7 +228,7 @@ export async function POST(
 
       const result = await insertMessage(reportId, "principal", principal.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "principal", idempotencyKey);
       // Email notifications are intentionally disabled for Principal <-> Parent conversations.
-      if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+      if (!result.duplicate) await deliverReportInvalidation(report, reportId, result.id);
       return NextResponse.json({ success: true, messageId: result.id });
     }
 
@@ -257,7 +260,7 @@ export async function POST(
     void threadType;
     const result = await insertMessage(reportId, "parent", parent.name, trimmedBody, report.status, cleanedAttachments, parentThreadType, idempotencyKey);
     // Email notifications are intentionally disabled for Parent <-> Principal conversations.
-    if (!result.duplicate) after(() => publishReportInvalidation(report, reportId, result.id));
+    if (!result.duplicate) await deliverReportInvalidation(report, reportId, result.id);
     return NextResponse.json({ success: true, messageId: result.id });
   } catch (error: unknown) {
     console.error("POST /api/reports/parent-adviser/[id]/messages error:", error);
@@ -271,14 +274,38 @@ async function publishReportInvalidation(report: {
   escalated_to_guidance?: boolean | null;
   escalated_to_principal?: boolean | null;
 }, reportId: number, messageId: number) {
+  const guidanceId = report.escalated_to_guidance
+    ? await acceptedGuidanceRecipientForReport(reportId)
+    : null;
   await publishReportRealtimeInvalidation({
     parentId: report.parent_id,
     adviserId: report.adviser_id,
     includeGuidance: Boolean(report.escalated_to_guidance),
+    guidanceId,
     reportId,
     kind: "message",
     messageId,
   });
+}
+
+/**
+ * Realtime is an enhancement to a committed message, never a reason to turn
+ * that successful message into a server error. Calling it before the response
+ * makes an active recipient receive the update immediately; this boundary
+ * still preserves the normal reconnect/visibility refresh if Realtime itself
+ * is temporarily unavailable.
+ */
+async function deliverReportInvalidation(report: {
+  parent_id?: number | null;
+  adviser_id?: number | null;
+  escalated_to_guidance?: boolean | null;
+  escalated_to_principal?: boolean | null;
+}, reportId: number, messageId: number) {
+  try {
+    await publishReportInvalidation(report, reportId, messageId);
+  } catch (error) {
+    console.error("Unable to publish parent report Realtime invalidation:", error);
+  }
 }
 
 function scheduleMessageAudit({

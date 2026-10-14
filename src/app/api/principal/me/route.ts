@@ -6,10 +6,17 @@ import { supabase } from "@/lib/supabase";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
+import { getJwtSecret } from "@/lib/authSecret";
 
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
+const SECRET = getJwtSecret();
+
+const principalSessionCookie = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: 60 * 60 * 8,
+  path: "/",
+};
 
 function getFullName(row: {
   first_name: string;
@@ -37,7 +44,6 @@ async function getPrincipalSession() {
     if (verified.payload.role !== "principal") return null;
 
     return {
-      cookieStore,
       payload: verified.payload,
       principalId: Number(verified.payload.id),
     };
@@ -167,11 +173,24 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    if (
+      session.payload.authVersion &&
+      current.auth_version &&
+      session.payload.authVersion !== current.auth_version
+    ) {
+      return NextResponse.json(
+        { success: false, message: "Session expired. Please log in again." },
+        { status: 401 }
+      );
+    }
+
     const passwordMatch = await bcrypt.compare(currentPassword, current.password_hash);
     if (!passwordMatch) {
       return NextResponse.json(
         { success: false, message: "Current password is incorrect." },
-        { status: 401 }
+        // A failed re-authentication is not an expired dashboard session.
+        // The client reserves 401 for a session that actually needs login.
+        { status: 400 }
       );
     }
 
@@ -207,7 +226,6 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const authVersion = crypto.randomUUID();
     const updatePayload = {
       employee_id: normalizedEmployeeId,
       first_name: String(firstName).trim(),
@@ -216,7 +234,6 @@ export async function PATCH(req: NextRequest) {
       suffix: suffix ? String(suffix).trim() : null,
       email: normalizedEmail,
       phone: String(phone).trim(),
-      auth_version: authVersion,
       updated_at: new Date().toISOString(),
     };
 
@@ -269,22 +286,17 @@ export async function PATCH(req: NextRequest) {
       email: data.email,
       phone: data.phone,
       passwordSet,
-      authVersion,
+      // Profile changes do not revoke sessions. Keeping the current version
+      // prevents the saved database record from invalidating this request's
+      // cookie before the browser receives the refreshed identity claims.
+      authVersion: session.payload.authVersion,
     })
       .setProtectedHeader({ alg: "HS256" })
       .setExpirationTime("8h")
       .sign(SECRET);
 
-    session.cookieStore.set("principal_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
-
     await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       principal: {
         employeeId: data.employee_id,
@@ -299,6 +311,10 @@ export async function PATCH(req: NextRequest) {
       },
       message: "Profile updated successfully.",
     });
+    // Attach the refreshed token to this response explicitly. This is more
+    // reliable than mutating the request cookie store after a database write.
+    response.cookies.set("principal_token", newToken, principalSessionCookie);
+    return response;
   } catch (error: unknown) {
     console.error("PATCH /api/principal/me error:", error);
     return NextResponse.json(
@@ -392,19 +408,13 @@ export async function PUT(req: NextRequest) {
       .setExpirationTime("8h")
       .sign(SECRET);
 
-    session.cookieStore.set("principal_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
-
     await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Password updated successfully.",
     });
+    response.cookies.set("principal_token", newToken, principalSessionCookie);
+    return response;
   } catch (error: unknown) {
     console.error("PUT /api/principal/me error:", error);
     return NextResponse.json(

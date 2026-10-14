@@ -18,6 +18,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import {
     createGuidanceReportsExcel as buildGuidanceReportsExcel,
     createGuidanceReportsPdf as buildGuidanceReportsPdf,
@@ -73,6 +74,7 @@ function getAdminMsgStatusStyle(status: AdminMsgStatus) {
     switch (status) {
         case "New": return "bg-sky-500 text-white";
         case "Read": return "bg-slate-200 text-slate-600";
+        case "Sent": return "bg-sky-50 text-sky-700";
         case "Replied": return "bg-sky-100 text-sky-700";
     }
 }
@@ -825,7 +827,7 @@ function ReportsPageContent() {
         return responses.filter((report): report is Report => report !== null);
     }, []);
 
-    async function refreshTickets(operation: TicketLoadOperation) {
+    const refreshTickets = useCallback(async (operation: TicketLoadOperation) => {
         if (ticketLoadInFlightRef.current) return ticketLoadInFlightRef.current;
 
         setTicketLoadingOperation(operation);
@@ -849,7 +851,7 @@ function ReportsPageContent() {
         })();
         ticketLoadInFlightRef.current = request;
         return request;
-    }
+    }, []);
 
     const pendingTicketCount = tickets.filter((ticket) => ticket.status === "pending").length;
     const unreadAcceptedTicketReportIds = new Set(tickets
@@ -946,7 +948,7 @@ function ReportsPageContent() {
         await refreshTickets("refresh").catch(() => null);
     }
 
-    async function loadGuidanceStaffMessages() {
+    const loadGuidanceStaffMessages = useCallback(async (preferredConversationId?: string) => {
         const res = await fetch("/api/reports/staff-messages?role=guidance", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) {
@@ -956,9 +958,10 @@ function ReportsPageContent() {
             console.warn("Guidance staff messages are temporarily unavailable:", data?.message || res.statusText);
             return;
         }
-        setAdminMsgs(((data?.messages ?? []) as AdminMessage[]).filter(
+        const nextMessages = ((data?.messages ?? []) as AdminMessage[]).filter(
             (message) => message.sender !== "ICT" && message.message_sender !== "ICT"
-        ));
+        );
+        setAdminMsgs(nextMessages);
         setStaffRecipients(((data?.recipients ?? []) as StaffRecipient[])
             .filter((recipient) => recipient.type === "staff" && recipient.role !== "ICT" && ["Adviser", "Guidance", "Principal"].includes(recipient.role))
             .filter((recipient, index, list) => list.findIndex((item) => item.id === recipient.id) === index));
@@ -969,11 +972,14 @@ function ReportsPageContent() {
                 section: parent.section || "No section",
             }))
             .filter((parent, index, list) => list.findIndex((item) => item.id === parent.id) === index));
-        setSelectedAdminMsg(current => current
-            ? ((data?.messages ?? []) as AdminMessage[]).find(message => (message.conversationId ?? String(message.id)) === (current.conversationId ?? String(current.id))) ?? current
-            : current
-        );
-    }
+        setSelectedAdminMsg((current) => {
+            const requestedConversationId = preferredConversationId ?? (current?.conversationId ?? (current ? String(current.id) : ""));
+            return requestedConversationId
+                ? nextMessages.find((message) => (message.conversationId ?? String(message.id)) === requestedConversationId) ?? current
+                : current;
+        });
+        return nextMessages;
+    }, []);
 
     async function openNewMessageModal() {
         setShowNewMessage(true);
@@ -1014,10 +1020,10 @@ function ReportsPageContent() {
             || (report.status === "Escalated" && !report.guidanceSeen)
             || (report.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(report.id))
         )).length;
-        const newPrincipal = adminMsgs.filter(m => m.status === "New").length;
-        setUnreadCount(unreadReportCount + newPrincipal + pendingTicketCount);
+        const unreadDirectStaffMessages = adminMsgs.filter((message) => message.status === "New").length;
+        setUnreadCount(unreadReportCount + unreadDirectStaffMessages + pendingTicketCount);
         setEscalatedCount(reports.filter(r => r.status === "Escalated" || (r.ticketStatus === "accepted" && unreadAcceptedTicketReportIds.has(r.id))).length + pendingTicketCount);
-        setReportsUnreadCount(unreadReportCount + newPrincipal + pendingTicketCount);
+        setReportsUnreadCount(unreadReportCount + unreadDirectStaffMessages + pendingTicketCount);
     }, [reports, adminMsgs, tickets, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
@@ -1033,6 +1039,10 @@ function ReportsPageContent() {
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminLastReply = selectedAdminMsg?.replies?.at(-1);
     const reportTyping = useReportTyping(selectedReportId, "guidance");
+    const staffConversationTyping = useStaffConversationTyping(
+        selectedAdminConversationId.startsWith("staff-message:") ? selectedAdminConversationId : null,
+        "guidance",
+    );
 
     const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
         reportTyping.onRealtimeEvent(event);
@@ -1044,12 +1054,20 @@ function ReportsPageContent() {
         ]);
     }, [loadGuidanceReports, loadReportDetail, reportTyping, selectedReportId]);
 
-    const liveUpdateNotice = useReportMessagesRealtime(loadGuidanceReports, {
+    const refreshGuidanceInbox = useCallback(async () => {
+        await Promise.all([loadGuidanceReports(), loadGuidanceStaffMessages()]);
+    }, [loadGuidanceReports, loadGuidanceStaffMessages]);
+
+    const liveUpdateNotice = useReportMessagesRealtime(refreshGuidanceInbox, {
         onReportUpdate: handleLiveReportUpdate,
+        onTicketUpdate: async () => { await refreshTickets("background"); },
+        onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
         onConnectionStatus: (status) => {
             if (status === "CLOSED") {
                 reportTyping.clearOtherTyping();
                 reportTyping.stopTyping();
+                staffConversationTyping.clearOtherTyping();
+                staffConversationTyping.stopTyping();
             }
         },
     });
@@ -1240,7 +1258,41 @@ function ReportsPageContent() {
         try {
             const cleanedAttachments = await filesToAttachments(attachmentsToSend);
             if (selectedAdminMsg) {
-                // ... keep existing selectedAdminMsg block unchanged ...
+                const conversationId = selectedAdminMsg.conversationId;
+                if (!conversationId?.startsWith("staff-message:")) {
+                    throw new Error("This message conversation is unavailable. Please refresh and try again.");
+                }
+                const res = await fetch("/api/reports/staff-messages", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        role: "guidance",
+                        conversationId,
+                        status: "replied",
+                        reply: textToSend,
+                        attachments: cleanedAttachments,
+                    }),
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.message || "Unable to send guidance reply.");
+
+                const newReply = {
+                    sender: "Guidance",
+                    message: textToSend,
+                    sent_at: new Date().toLocaleString(),
+                    attachments: cleanedAttachments,
+                };
+                setAdminMsgs((current) => current.map((message) => message.id === selectedAdminMsg.id
+                    ? { ...message, status: "Sent", replies: [...(message.replies ?? []), newReply] }
+                    : message));
+                setSelectedAdminMsg((current) => current
+                    ? { ...current, status: "Sent", replies: [...(current.replies ?? []), newReply] }
+                    : current);
+                staffConversationTyping.stopTyping();
+                void loadGuidanceStaffMessages().catch((refreshError) => {
+                    console.warn("Unable to refresh the guidance message inbox after replying:", refreshError);
+                });
+                return;
             }
 
             if (selectedReport && !selectedAdminMsg) {
@@ -1292,15 +1344,14 @@ function ReportsPageContent() {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to send message.");
 
+        const conversationId = data?.message?.id ? `staff-message:${data.message.id}` : undefined;
         setLeftTab("Principal");
-        setSelectedAdminMsg(null);
         setSelectedReport(null);
-        setViewStep("list");
-        // The write already succeeded. Fetch the authoritative lists in the
-        // background so the send confirmation is shown immediately.
-        void Promise.all([loadGuidanceReports(), loadGuidanceStaffMessages()]).catch((refreshError) => {
-            console.warn("Unable to refresh guidance messages after sending:", refreshError);
-        });
+        setViewStep("detail");
+        // Fetch just the in-place Message Panel snapshot and select the saved
+        // conversation. The recipient gets the matching Realtime event from
+        // the same committed staff_messages write.
+        await loadGuidanceStaffMessages(conversationId);
     }
 
     // When a report is selected, auto-mark as Read
@@ -1510,26 +1561,57 @@ function ReportsPageContent() {
 
                         {/* ── Principal messages list ── */}
                         {leftTab === "Principal" && (
-                            <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
-                                {principalMsgs.map(m => (
-                                    <button key={m.id} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
-                                        className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${selectedAdminMsg?.id === m.id ? "bg-sky-50 border-sky-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <div className="w-7 h-7 rounded-full bg-sky-600 flex items-center justify-center shrink-0"><Shield className="w-3.5 h-3.5 text-white" /></div>
-                                            <div className="min-w-0 flex-1">
-                                                <p className="text-[11px] font-bold text-slate-700 truncate">{m.subject}</p>
-                                                <p className="text-[10px] font-semibold text-slate-400 truncate">
-                                                    {m.message_sender_is_current ? `To ${m.sender}` : `From ${m.sender}`} · {m.sender_name}
-                                                </p>
+                            <div className="flex-1 overflow-y-auto px-3 py-3">
+                                <div className="mb-3 rounded-xl border border-sky-100 bg-sky-50/70 px-3 py-2.5">
+                                    <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-sky-700">School Messages</p>
+                                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">Direct conversations with parents and school staff.</p>
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    {principalMsgs.length === 0 && (
+                                        <div className="mt-5 flex flex-col items-center rounded-2xl border border-dashed border-sky-200 bg-sky-50/50 px-5 py-8 text-center">
+                                            <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-sky-500 shadow-sm ring-1 ring-sky-100">
+                                                <MessageSquare className="h-5 w-5" />
                                             </div>
-                                            {m.status === "New" && <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0" />}
+                                            <p className="text-sm font-bold text-slate-700">No messages yet</p>
+                                            <p className="mt-1 text-xs leading-relaxed text-slate-400">New conversations will appear here.</p>
                                         </div>
-                                        <div className="flex items-center justify-between pl-9">
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
-                                            <span className="text-[10px] text-slate-400">{m.sent_at.split("·")[0].trim()}</span>
-                                        </div>
-                                    </button>
-                                ))}
+                                    )}
+
+                                    {principalMsgs.map(m => {
+                                        const isSelected = selectedAdminMsg?.id === m.id;
+                                        const participantRole = m.message_sender_is_current ? m.sender : m.message_sender ?? m.sender;
+                                        const isParentConversation = participantRole === "Parent";
+                                        const ParticipantIcon = isParentConversation ? User : Shield;
+
+                                        return (
+                                            <button key={m.id} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
+                                                className={`group w-full text-left rounded-2xl border px-3 py-3 transition-all ${isSelected
+                                                    ? "border-sky-200 bg-sky-50 ring-2 ring-sky-100 shadow-sm"
+                                                    : "border-slate-100 bg-white shadow-sm hover:border-sky-100 hover:bg-sky-50/50 hover:shadow"}`}>
+                                                <div className="flex items-start gap-2.5">
+                                                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm ${isParentConversation ? "bg-sky-500" : "bg-blue-600"}`}>
+                                                        <ParticipantIcon className="h-4 w-4" />
+                                                    </div>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <p className="truncate text-xs font-extrabold text-slate-800">{m.subject}</p>
+                                                            {m.status === "New" && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]" aria-label="New message" />}
+                                                        </div>
+                                                        <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">
+                                                            {m.message_sender_is_current ? `To ${m.sender}` : `From ${m.sender}`} <span className="text-slate-300">·</span> {m.sender_name}
+                                                        </p>
+                                                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{m.message}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2">
+                                                    <span className={`rounded-lg px-2 py-0.5 text-[10px] font-extrabold ${getAdminMsgStatusStyle(m.status)}`}>{m.status}</span>
+                                                    <span className="text-[10px] font-medium text-slate-400">{m.sent_at.split("·")[0].trim()}</span>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
                         )}
 
@@ -1909,21 +1991,27 @@ function ReportsPageContent() {
                                 const rootMine = Boolean(selectedAdminMsg.message_sender_is_current);
                                 const rootSenderName = rootMine ? "You" : selectedAdminMsg.message_sender_name || selectedAdminMsg.sender_name;
                                 const rootSenderEmail = rootMine ? "" : selectedAdminMsg.message_sender_email || selectedAdminMsg.sender_email;
+                                const counterpartName = rootMine ? selectedAdminMsg.sender_name : selectedAdminMsg.message_sender_name || selectedAdminMsg.sender_name;
+                                const counterpartEmail = rootMine ? selectedAdminMsg.sender_email : selectedAdminMsg.message_sender_email || selectedAdminMsg.sender_email;
+                                const counterpartRole = rootMine ? selectedAdminMsg.sender : selectedAdminMsg.message_sender ?? selectedAdminMsg.sender;
+                                const counterpartIsParent = counterpartRole === "Parent";
+                                const CounterpartIcon = counterpartIsParent ? User : Shield;
 
                                 return (
                                     <div className="flex-1 flex flex-col overflow-hidden">
-                                        <div className="px-6 py-5 bg-white border-b border-slate-100 border-l-4 border-l-sky-500">
+                                        <div className="border-b border-slate-100 border-l-4 border-l-sky-500 bg-white px-6 py-5 shadow-[0_1px_0_rgba(14,165,233,0.04)]">
                                             <div className="flex items-start justify-between gap-4">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-sky-600">
-                                                        <Shield className="w-5 h-5 text-white" />
+                                                    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white shadow-sm ${counterpartIsParent ? "bg-sky-500" : "bg-blue-600"}`}>
+                                                        <CounterpartIcon className="h-5 w-5" />
                                                     </div>
-                                                    <div>
-                                                        <p className="text-sm font-extrabold text-slate-900">{selectedAdminMsg.sender_name}</p>
+                                                    <div className="min-w-0">
+                                                        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-sky-600">Direct message</p>
+                                                        <p className="truncate text-sm font-extrabold text-slate-900">{counterpartName}</p>
                                                         <p className="text-xs font-semibold text-slate-500">
                                                             {selectedAdminMsg.message_sender_is_current ? `Sent to ${selectedAdminMsg.sender}` : `From ${selectedAdminMsg.sender}`}
                                                         </p>
-                                                        <p className="text-xs text-slate-400">{selectedAdminMsg.sender_email}</p>
+                                                        {counterpartEmail && <p className="truncate text-xs text-slate-400">{counterpartEmail}</p>}
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2">
@@ -1933,16 +2021,17 @@ function ReportsPageContent() {
                                                     <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getAdminMsgStatusStyle(selectedAdminMsg.status)}`}>{selectedAdminMsg.status}</span>
                                                 </div>
                                             </div>
-                                            <div className="mt-3">
-                                                <h2 className="text-base font-extrabold text-slate-900">{selectedAdminMsg.subject}</h2>
-                                                <p className="text-xs text-slate-400 mt-0.5">{selectedAdminMsg.sent_at}</p>
+                                            <div className="mt-4 rounded-xl border border-sky-100 bg-sky-50/70 px-3.5 py-2.5">
+                                                <p className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-sky-600">Subject</p>
+                                                <h2 className="mt-0.5 text-base font-extrabold text-slate-900">{selectedAdminMsg.subject}</h2>
+                                                <p className="mt-1 text-xs text-slate-400">{selectedAdminMsg.sent_at}</p>
                                             </div>
                                         </div>
-                                        <div ref={adminMessagesRef} onScroll={handleAdminMessagesScroll} className="flex-1 overflow-y-auto px-6 py-5">
+                                        <div ref={adminMessagesRef} onScroll={handleAdminMessagesScroll} className="flex-1 overflow-y-auto bg-slate-50/70 px-6 py-6">
                                             {/* Original staff message */}
                                             <div className={`flex items-start gap-3 mb-5 ${rootMine ? "flex-row-reverse" : ""}`}>
-                                                <div className={`w-9 h-9 rounded-full ${rootMine ? "bg-sky-500 text-white text-xs font-extrabold" : "bg-sky-600"} flex items-center justify-center shrink-0 mt-0.5`}>
-                                                    {rootMine ? "Me" : <Shield className="w-4 h-4 text-white" />}
+                                                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full shadow-sm ${rootMine ? "bg-sky-500 text-xs font-extrabold text-white" : counterpartIsParent ? "bg-sky-500" : "bg-blue-600"} mt-0.5`}>
+                                                    {rootMine ? "Me" : <CounterpartIcon className="h-4 w-4 text-white" />}
                                                 </div>
                                                 <div className={`flex-1 flex flex-col ${rootMine ? "items-end" : "items-start"}`}>
                                                     <div className="flex items-center gap-2 mb-1">
@@ -1950,7 +2039,7 @@ function ReportsPageContent() {
                                                         {rootSenderEmail && <span className="text-[10px] text-slate-400">{rootSenderEmail}</span>}
                                                         <span className="text-[10px] text-slate-400">{selectedAdminMsg.sent_at}</span>
                                                     </div>
-                                                    <div className={`${rootMine ? "bg-sky-500 text-white rounded-tr-none" : "bg-white text-slate-700 rounded-tl-none border border-slate-100"} max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap`}>
+                                                    <div className={`${rootMine ? "rounded-tr-none bg-sky-500 text-white shadow-sky-100" : "rounded-tl-none border border-slate-100 bg-white text-slate-700"} max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap`}>
                                                         {selectedAdminMsg.message}
                                                     </div>
                                                     {selectedAdminMsg.attachments && selectedAdminMsg.attachments.length > 0 && (
@@ -1969,17 +2058,19 @@ function ReportsPageContent() {
                                             {/* Staff reply bubbles */}
                                             {selectedAdminMsg.replies?.map((reply, i) => {
                                                 const mine = Boolean(reply.is_current_user || reply.sender === "Guidance");
+                                                const replyIsParent = reply.sender === "Parent";
+                                                const ReplyIcon = replyIsParent ? User : Shield;
                                                 return (
                                                     <div key={i} className={`flex items-start gap-3 mb-4 ${mine ? "flex-row-reverse" : ""}`}>
-                                                        <div className={`w-9 h-9 rounded-full ${mine ? "bg-sky-500 text-white text-xs font-extrabold" : "bg-sky-600"} flex items-center justify-center shrink-0 mt-0.5`}>
-                                                            {mine ? "Me" : <Shield className="w-4 h-4 text-white" />}
+                                                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full shadow-sm ${mine ? "bg-sky-500 text-xs font-extrabold text-white" : replyIsParent ? "bg-sky-500" : "bg-blue-600"} mt-0.5`}>
+                                                            {mine ? "Me" : <ReplyIcon className="h-4 w-4 text-white" />}
                                                         </div>
                                                         <div className={`flex-1 flex flex-col ${mine ? "items-end" : "items-start"}`}>
                                                             <div className="flex items-center gap-2 mb-1">
                                                                 <span className="text-[10px] text-slate-400">{reply.sent_at}</span>
                                                                 <p className="text-xs font-bold text-slate-800">{mine ? "You" : reply.sender_name || reply.sender}</p>
                                                             </div>
-                                                            <div className={`${mine ? "bg-sky-500 text-white rounded-tr-none" : "bg-white text-slate-700 rounded-tl-none border border-slate-100"} rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed max-w-[85%] whitespace-pre-wrap`}>
+                                                            <div className={`${mine ? "rounded-tr-none bg-sky-500 text-white shadow-sky-100" : "rounded-tl-none border border-slate-100 bg-white text-slate-700"} max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap`}>
                                                                 {reply.message}
                                                             </div>
                                                             {reply.attachments && reply.attachments.length > 0 && (
@@ -1997,7 +2088,7 @@ function ReportsPageContent() {
                                                 );
                                             })}
                                         </div>
-                                        <div className="px-6 py-4 bg-white border-t border-slate-100">
+                                        <div className="border-t border-sky-100 bg-white px-6 py-4">
                                             <div className="guidance-reports-detail-actions mb-3 flex flex-wrap items-center gap-2">
                                                 <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                                     <Paperclip className="w-4 h-4" />
@@ -2029,12 +2120,19 @@ function ReportsPageContent() {
                                                 ))}
                                             </div>
 
+                                            {staffConversationTyping.isOtherParticipantTyping && (
+                                                <div aria-live="polite" className="mb-3 flex items-center gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
+                                                    <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:300ms]" /></span>
+                                                    The other participant is typing…
+                                                </div>
+                                            )}
+
                                             <div className="guidance-reports-composer flex items-end gap-3">
                                                 {/* Textarea with embedded attach button */}
                                                 <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 transition overflow-hidden bg-white">
                                                     <textarea
                                                         value={replyText}
-                                                        onChange={e => setReplyText(e.target.value)}
+                                                        onChange={e => { setReplyText(e.target.value); staffConversationTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                                                         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
                                                         placeholder={`Reply to ${selectedAdminMsg.sender_name}... (Enter to send)`}
                                                         rows={2}
@@ -2067,9 +2165,14 @@ function ReportsPageContent() {
                             </div>
                         )}
                         {leftTab === "Principal" && !selectedAdminMsg && (
-                            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-400">
-                                <MessageSquare className="w-10 h-10 opacity-30" />
-                                <p className="text-sm font-semibold">Select a message to read</p>
+                            <div className="flex flex-1 items-center justify-center bg-slate-50/70 px-6">
+                                <div className="max-w-sm rounded-2xl border border-sky-100 bg-white px-8 py-9 text-center shadow-sm">
+                                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-500 ring-1 ring-sky-100">
+                                        <MessageSquare className="h-6 w-6" />
+                                    </div>
+                                    <p className="text-sm font-extrabold text-slate-800">Select a message</p>
+                                    <p className="mt-1.5 text-xs leading-relaxed text-slate-400">Choose a conversation to read and reply without leaving Escalated Reports.</p>
+                                </div>
                             </div>
                         )}
                     </div>

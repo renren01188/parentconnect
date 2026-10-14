@@ -2,7 +2,7 @@
 
 // src/app/dashboard/adviser/context/NotificationContext.tsx
 
-import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
@@ -15,10 +15,12 @@ interface NotifContextType {
   // Notifications nav badge — unread notification items
   notifUnreadCount: number;
   setNotifUnreadCount: (n: number) => void;
+  clearNotifUnreadCount: () => void;
 
   // Contact ICT nav badge — unread ICT messages
   ictUnreadCount: number;
   setIctUnreadCount: (n: number) => void;
+  clearIctUnreadCount: () => void;
 }
 
 const NotifContext = createContext<NotifContextType>({
@@ -26,12 +28,20 @@ const NotifContext = createContext<NotifContextType>({
   setUnreadCount: () => { },
   notifUnreadCount: 0,
   setNotifUnreadCount: () => { },
+  clearNotifUnreadCount: () => { },
   ictUnreadCount: 0,
   setIctUnreadCount: () => { },
+  clearIctUnreadCount: () => { },
 });
 
 type IctMessagesResponse = { unreadCount?: number };
 type AdviserNotificationsResponse = { sidebarUnreadCount?: number; unreadCount?: number };
+
+function ictSeenTimestamp() {
+  if (typeof window === "undefined") return 0;
+  const value = Number(window.sessionStorage.getItem("adviser-contact-ict-seen-at") ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   // Seeded from real data — never hardcoded
@@ -40,6 +50,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
   const hasLoadedInitialCounts = useRef(false);
   const refreshByScopeRef = useRef<(scope: string | null) => void>(() => {});
+  const notificationBadgeVersionRef = useRef(0);
+  const ictBadgeVersionRef = useRef(0);
+  const ictSeenAtRef = useRef(ictSeenTimestamp());
+
+  const clearNotifUnreadCount = useCallback(() => {
+    notificationBadgeVersionRef.current += 1;
+    setNotifUnreadCount(0);
+  }, []);
+
+  const clearIctUnreadCount = useCallback(() => {
+    // Opening Contact ICT acknowledges the sidebar badge, but never changes
+    // the unread state displayed on the conversation itself.
+    const now = Date.now();
+    window.sessionStorage.setItem("adviser-contact-ict-seen-at", String(now));
+    ictSeenAtRef.current = now;
+    ictBadgeVersionRef.current += 1;
+    setIctUnreadCount(0);
+  }, []);
 
   useEffect(() => {
     // Each count has its own single-flight guard. A report save can update the
@@ -53,20 +81,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (reportCountRequest) return reportCountRequest;
       reportCountRequest = (async () => {
       try {
-        const [parentReportsRes, studentReportsRes, principalMessagesRes] = await Promise.all([
+        const [parentReportsRes, studentReportsRes, principalMessagesRes, staffMessagesRes] = await Promise.all([
           fetch("/api/reports/parent-adviser?role=adviser", { cache: "no-store" }),
           fetch("/api/student-reports", { cache: "no-store" }),
           fetch("/api/reports/adviser-messages", { cache: "no-store" }),
+          fetch("/api/reports/staff-messages?role=adviser", { cache: "no-store" }),
         ]);
-        const [parentReportsData, studentReportsData, principalMessagesData] = await Promise.all([
+        const [parentReportsData, studentReportsData, principalMessagesData, staffMessagesData] = await Promise.all([
           parentReportsRes.json().catch(() => null),
           studentReportsRes.json().catch(() => null),
           principalMessagesRes.json().catch(() => null),
+          staffMessagesRes.json().catch(() => null),
         ]);
 
         const parentReports = parentReportsRes.ok ? parentReportsData?.reports ?? [] : [];
         const studentReports = studentReportsRes.ok ? studentReportsData?.reports ?? [] : [];
         const principalMessages = principalMessagesRes.ok ? principalMessagesData?.principalMessages ?? [] : [];
+        const directStaffMessages = staffMessagesRes.ok ? staffMessagesData?.messages ?? [] : [];
 
         const actionableParentReports = parentReports.filter((report: {
           hasUnreadForAdviser?: boolean;
@@ -89,8 +120,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         const actionablePrincipalMessages = principalMessages.filter((message: { sender?: string; status?: string }) =>
           message.sender === "Principal" && message.status === "New"
         ).length;
+        // Direct staff conversations have their own inbox state. They belong
+        // in the Reports nav badge but must not be treated as report statuses.
+        const unreadDirectStaffMessages = directStaffMessages.filter((message: { status?: string }) =>
+          message.status === "New"
+        ).length;
 
-        setUnreadCount(actionableParentReports + actionableStudentReports + actionablePrincipalMessages);
+        setUnreadCount(actionableParentReports + actionableStudentReports + actionablePrincipalMessages + unreadDirectStaffMessages);
       } catch {
         setUnreadCount(0);
       } finally {
@@ -102,10 +138,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     async function loadIctCount() {
       if (ictCountRequest) return ictCountRequest;
+      const badgeVersion = ictBadgeVersionRef.current;
+      const seenAfter = ictSeenAtRef.current;
       ictCountRequest = (async () => {
       try {
-        const { response: res, data } = await fetchJsonWithRetry<IctMessagesResponse>("/api/adviser-ict/messages?summary=1", { cache: "no-store" });
-        if (res.ok) setIctUnreadCount(Number(data?.unreadCount ?? 0));
+        const query = new URLSearchParams({ summary: "1" });
+        if (seenAfter) query.set("seenAfter", new Date(seenAfter).toISOString());
+        const { response: res, data } = await fetchJsonWithRetry<IctMessagesResponse>(`/api/adviser-ict/messages?${query}`, { cache: "no-store" });
+        if (res.ok && badgeVersion === ictBadgeVersionRef.current) setIctUnreadCount(Number(data?.unreadCount ?? 0));
       } catch {
         // Retain the last confirmed count while a temporary request is retried.
       } finally {
@@ -117,10 +157,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     async function loadNotifCount() {
       if (notificationCountRequest) return notificationCountRequest;
+      const badgeVersion = notificationBadgeVersionRef.current;
       notificationCountRequest = (async () => {
       try {
         const { response: res, data } = await fetchJsonWithRetry<AdviserNotificationsResponse>("/api/adviser/notifications", { cache: "no-store" });
-        if (res.ok) setNotifUnreadCount(Number(data?.sidebarUnreadCount ?? data?.unreadCount ?? 0));
+        if (res.ok && badgeVersion === notificationBadgeVersionRef.current) {
+          setNotifUnreadCount(Number(data?.sidebarUnreadCount ?? data?.unreadCount ?? 0));
+        }
       } catch {
         // Retain the last confirmed count while a temporary request is retried.
       } finally {
@@ -159,6 +202,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     };
     const handleInvalidation = ({ scope }: { scope: string | null }) => {
       if (scope === "staff-messages") {
+        // A direct staff message can change the Reports badge even while the
+        // Adviser is on another page. Reconcile its authorized inbox here;
+        // Contact ICT remains an independent count source.
+        void loadReportCount();
         void loadIctCount();
         return;
       }
@@ -198,8 +245,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setUnreadCount,
       notifUnreadCount,
       setNotifUnreadCount,
+      clearNotifUnreadCount,
       ictUnreadCount,
       setIctUnreadCount,
+      clearIctUnreadCount,
     }}>
       {children}
     </NotifContext.Provider>

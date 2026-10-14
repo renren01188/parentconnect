@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
+import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 // ── PATCH — edit an announcement ─────────────────────────────────────────────
 export async function PATCH(
@@ -52,6 +54,18 @@ export async function PATCH(
       .single();
 
     if (error) throw error;
+
+    await logAnnouncementAudit({
+      action: "Updated",
+      actor: { id: guidance.id, name: guidance.name, role: "Guidance", email: guidance.email },
+      announcement: {
+        id: data.id,
+        title: data.title,
+        audience: String(data.audience ?? ""),
+        status: String(data.status ?? ""),
+      },
+      headers: req.headers,
+    });
     return NextResponse.json({ success: true, announcement: data });
   } catch (error) {
     console.error("PATCH /api/guidance/announcements/[id] error:", error);
@@ -61,7 +75,7 @@ export async function PATCH(
 
 // ── DELETE — delete an announcement ──────────────────────────────────────────
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -71,6 +85,28 @@ export async function DELETE(
     const { id: paramId } = await params;
     const id = Number(paramId);
 
+    const { data: announcement, error: announcementLookupError } = await supabase
+      .from("guidance_announcements")
+      .select("id, title, audience, status")
+      .eq("id", id)
+      .eq("guidance_id", guidance.id)
+      .maybeSingle();
+
+    if (announcementLookupError) throw announcementLookupError;
+    if (!announcement) {
+      return NextResponse.json({ success: false, message: "Announcement not found." }, { status: 404 });
+    }
+
+    // Parent announcement notifications are durable rows, unlike the Adviser
+    // notification projection. Remove them before the source announcement so
+    // an open Parent notification list cannot retain an orphaned item.
+    const { error: notificationError } = await supabase
+      .from("parent_announcement_notifications")
+      .delete()
+      .eq("source", "guidance")
+      .eq("announcement_id", id);
+    if (notificationError) throw notificationError;
+
     const { error } = await supabase
       .from("guidance_announcements")
       .delete()
@@ -78,6 +114,31 @@ export async function DELETE(
       .eq("guidance_id", guidance.id);
 
     if (error) throw error;
+
+    // The recipient dashboards re-read their own protected notification feed.
+    // Parent and Adviser are included only when the deleted announcement was
+    // actually addressed to them; Principal retains its existing oversight
+    // feed for all Guidance announcements.
+    const audience = String(announcement.audience ?? "");
+    const recipientRoles: RealtimeRecipientRole[] = announcement.status === "Published" ? ["principal"] : [];
+    if (announcement.status === "Published" && (audience === "Parents" || audience === "Both")) recipientRoles.push("parent");
+    if (announcement.status === "Published" && (audience === "Class Advisers" || audience === "Both")) recipientRoles.push("adviser");
+    const recipients = await recipientsForRoles(recipientRoles);
+    recipients.push({ role: "guidance", id: Number(guidance.id) });
+    await publishRealtimeInvalidation(recipients, "announcements");
+
+    await logAnnouncementAudit({
+      action: "Deleted",
+      actor: { id: guidance.id, name: guidance.name, role: "Guidance", email: guidance.email },
+      announcement: {
+        id: announcement.id,
+        title: String(announcement.title ?? "Announcement"),
+        audience,
+        status: String(announcement.status ?? ""),
+      },
+      headers: req.headers,
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/guidance/announcements/[id] error:", error);

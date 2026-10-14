@@ -15,6 +15,7 @@ export type RealtimeRecipient = {
  */
 export type RealtimeInvalidationScope =
   | "reports"
+  | "tickets"
   | "staff-messages"
   | "notifications"
   | "announcements"
@@ -33,6 +34,11 @@ export type ReportRealtimeEventKind = "message" | "status" | "typing";
 export type RealtimeInvalidationPayload = {
   scope: RealtimeInvalidationScope;
   reportId?: number;
+  /**
+   * An opaque staff-conversation key. It is used only to match an already
+   * authorized open conversation for ephemeral events such as typing.
+   */
+  conversationId?: string;
   kind?: ReportRealtimeEventKind;
   messageId?: number;
   actorKey?: string;
@@ -67,6 +73,36 @@ export async function recipientsForRoles(roles: RealtimeRecipientRole[]) {
     }
   }));
   return results.flat();
+}
+
+/**
+ * A Guidance ticket becomes a one-counselor conversation only after it is
+ * accepted. Resolve that assignment on the server so a report's message and
+ * typing events reach the counselor responsible for the accepted ticket.
+ *
+ * Older escalations may not have a ticket assignment. Returning null keeps
+ * their established active-Guidance fallback without exposing any ticket data
+ * to the browser.
+ */
+export async function acceptedGuidanceRecipientForReport(reportId: number) {
+  if (!Number.isSafeInteger(reportId) || reportId <= 0) return null;
+  try {
+    const { data, error } = await supabase
+      .from("parent_report_guidance_tickets")
+      .select("assigned_guidance_id")
+      .eq("report_id", reportId)
+      .eq("status", "accepted")
+      .maybeSingle();
+    if (error) {
+      console.warn("Unable to resolve accepted Guidance Realtime recipient:", error.message);
+      return null;
+    }
+    const id = Number(data?.assigned_guidance_id);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  } catch (error) {
+    console.warn("Unable to resolve accepted Guidance Realtime recipient:", error);
+    return null;
+  }
 }
 
 type AttendanceStudent = {
@@ -276,7 +312,10 @@ export async function publishPublicSectionsInvalidation() {
 export async function publishReportRealtimeInvalidation({
   parentId,
   adviserId,
+  includeAdviser = true,
   includeGuidance = false,
+  guidanceId,
+  includePrincipals = true,
   reportId,
   kind,
   messageId,
@@ -285,7 +324,13 @@ export async function publishReportRealtimeInvalidation({
 }: {
   parentId?: number | null;
   adviserId?: number | null;
+  /** Keep a report-presence event within the currently assigned conversation. */
+  includeAdviser?: boolean;
   includeGuidance?: boolean;
+  /** The counselor assigned to an accepted ticket, when there is one. */
+  guidanceId?: number | null;
+  /** Principal monitoring remains enabled for durable report changes by default. */
+  includePrincipals?: boolean;
   reportId?: number;
   kind?: ReportRealtimeEventKind;
   messageId?: number;
@@ -293,9 +338,13 @@ export async function publishReportRealtimeInvalidation({
   active?: boolean;
 }) {
   const [principalsResult, guidanceResult] = await Promise.all([
-    supabase.from("principals").select("id").eq("status", "active").eq("is_active", true).neq("archive_status", "archived"),
+    includePrincipals
+      ? supabase.from("principals").select("id").eq("status", "active").eq("is_active", true).neq("archive_status", "archived")
+      : Promise.resolve({ data: [], error: null }),
     includeGuidance
-      ? supabase.from("guidance_counselors").select("id").eq("status", "active").neq("archive_status", "archived")
+      ? Number.isSafeInteger(Number(guidanceId)) && Number(guidanceId) > 0
+        ? Promise.resolve({ data: [{ id: Number(guidanceId) }], error: null })
+        : supabase.from("guidance_counselors").select("id").eq("status", "active").neq("archive_status", "archived")
       : Promise.resolve({ data: [], error: null }),
   ]);
 
@@ -303,7 +352,7 @@ export async function publishReportRealtimeInvalidation({
   if (Number.isSafeInteger(Number(parentId)) && Number(parentId) > 0) {
     recipients.push({ role: "parent", id: Number(parentId) });
   }
-  if (Number.isSafeInteger(Number(adviserId)) && Number(adviserId) > 0) {
+  if (includeAdviser && Number.isSafeInteger(Number(adviserId)) && Number(adviserId) > 0) {
     recipients.push({ role: "adviser", id: Number(adviserId) });
   }
   if (!principalsResult.error) {

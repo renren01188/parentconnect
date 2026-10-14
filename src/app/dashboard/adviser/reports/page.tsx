@@ -13,6 +13,7 @@ import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import AdviserReportsGuide from "../components/AdviserReportsGuide";
 import {
@@ -92,6 +93,7 @@ function getAdminMsgStatusStyle(status: AdminMsgStatus) {
     switch (status) {
         case "New": return "bg-violet-500 text-white";
         case "Read": return "bg-slate-200 text-slate-600";
+        case "Sent": return "bg-violet-50 text-violet-700";
         case "Replied": return "bg-emerald-100 text-emerald-700";
     }
 }
@@ -1009,6 +1011,10 @@ function ReportsPageContent() {
     const selectedAdminReplyCount = selectedAdminMsg?.replies?.length ?? 0;
     const selectedAdminMessage = selectedAdminMsg?.message ?? "";
     const reportTyping = useReportTyping(selectedReportId, "adviser");
+    const staffConversationTyping = useStaffConversationTyping(
+        selectedAdminConversationId?.startsWith("staff-message:") ? selectedAdminConversationId : null,
+        "adviser",
+    );
 
     const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
         reportTyping.onRealtimeEvent(event);
@@ -1025,10 +1031,14 @@ function ReportsPageContent() {
 
     const liveUpdateNotice = useReportMessagesRealtime(refreshAdviserInbox, {
         onReportUpdate: handleLiveReportUpdate,
+        onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
+        onStudentReportUpdate: loadStudentReports,
         onConnectionStatus: (status) => {
             if (status === "CLOSED") {
                 reportTyping.clearOtherTyping();
                 reportTyping.stopTyping();
+                staffConversationTyping.clearOtherTyping();
+                staffConversationTyping.stopTyping();
             }
         },
     });
@@ -1216,7 +1226,8 @@ function ReportsPageContent() {
 
             if (selectedAdminMsg) {
                 const selectedKey = adminMessageKey(selectedAdminMsg);
-                const endpoint = selectedAdminMsg.conversationId?.startsWith("staff-message:")
+                const isDirectStaffConversation = selectedAdminMsg.conversationId?.startsWith("staff-message:") ?? false;
+                const endpoint = isDirectStaffConversation
                     ? "/api/reports/staff-messages"
                     : "/api/reports/adviser-messages";
                 const res = await fetch(endpoint, {
@@ -1224,7 +1235,7 @@ function ReportsPageContent() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         messageId: selectedAdminMsg.id,
-                        role: selectedAdminMsg.conversationId?.startsWith("staff-message:") ? "adviser" : undefined,
+                        role: isDirectStaffConversation ? "adviser" : undefined,
                         conversationId: selectedAdminMsg.conversationId,
                         status: "replied",
                         reply: replyText.trim(),
@@ -1237,13 +1248,15 @@ function ReportsPageContent() {
                     setActionError(message);
                     return;
                 }
+                const nextStatus: AdminMsgStatus = isDirectStaffConversation ? "Sent" : "Replied";
                 setAdminMsgs(prev => prev.map(m => adminMessageKey(m) === selectedKey
-                    ? { ...m, status: "Replied", replies: [...(m.replies ?? []), newReply] }
+                    ? { ...m, status: nextStatus, replies: [...(m.replies ?? []), newReply] }
                     : m
                 ));
-                setSelectedAdminMsg(prev => prev ? { ...prev, status: "Replied", replies: [...(prev.replies ?? []), newReply] } : prev);
+                setSelectedAdminMsg(prev => prev ? { ...prev, status: nextStatus, replies: [...(prev.replies ?? []), newReply] } : prev);
                 setReplyText("");
                 setReplyAttachments([]);
+                staffConversationTyping.stopTyping();
                 void loadAdminMessages().catch((refreshError) => {
                     console.warn("Unable to refresh the adviser message inbox after replying:", refreshError);
                 });
@@ -1547,7 +1560,9 @@ function ReportsPageContent() {
                                     <button key={adminMessageKey(m)} onClick={() => { selectAdminMsg(m); setViewStep("detail"); }}
                                         className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${selectedAdminMsg && adminMessageKey(selectedAdminMsg) === adminMessageKey(m) ? "bg-violet-50 border-violet-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                         <div className="flex items-center gap-2 mb-1">
-                                            <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center shrink-0"><Shield className="w-3.5 h-3.5 text-white" /></div>
+                                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${m.sender === "Parent" ? "bg-blue-500" : "bg-violet-600"}`}>
+                                                {m.sender === "Parent" ? <User className="w-3.5 h-3.5 text-white" /> : <Shield className="w-3.5 h-3.5 text-white" />}
+                                            </div>
                                             <p className="text-[11px] font-bold text-slate-700 truncate flex-1">{m.subject}</p>
                                             {m.status === "New" && <span className="w-2 h-2 rounded-full bg-violet-500 shrink-0" />}
                                         </div>
@@ -2121,12 +2136,14 @@ function ReportsPageContent() {
                                 <div className="px-6 py-5 bg-white border-b border-slate-100 border-l-4 border-l-violet-500">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-violet-600">
-                                                <Shield className="w-5 h-5 text-white" />
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${selectedAdminMsg.sender === "Parent" ? "bg-blue-500" : "bg-violet-600"}`}>
+                                                {selectedAdminMsg.sender === "Parent" ? <User className="w-5 h-5 text-white" /> : <Shield className="w-5 h-5 text-white" />}
                                             </div>
                                             <div>
                                                 <p className="text-sm font-extrabold text-slate-900">{selectedAdminMsg.sender_name}</p>
-                                                <p className="text-xs text-slate-400">{selectedAdminMsg.sender_email}</p>
+                                                {selectedAdminMsg.sender !== "Parent" && selectedAdminMsg.sender_email && (
+                                                    <p className="text-xs text-slate-400">{selectedAdminMsg.sender_email}</p>
+                                                )}
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
@@ -2158,13 +2175,14 @@ function ReportsPageContent() {
                                         const adviserSent = standaloneConversation
                                             ? Boolean(selectedAdminMsg.message_sender_is_current)
                                             : selectedAdminMsg.conversationId?.startsWith("adviser-sent-principal:");
+                                        const originalSenderIsParent = selectedAdminMsg.message_sender === "Parent";
                                         const originalSenderName = adviserSent
                                             ? "You"
                                             : selectedAdminMsg.message_sender_name || selectedAdminMsg.sender_name;
                                         return (
                                             <div className={`flex items-start gap-3 mb-5 ${adviserSent ? "flex-row-reverse" : ""}`}>
-                                                <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${adviserSent ? "bg-emerald-500" : "bg-violet-600"}`}>
-                                                    {adviserSent ? "Me" : <Shield className="w-4 h-4 text-white" />}
+                                                <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${adviserSent ? "bg-emerald-500" : originalSenderIsParent ? "bg-blue-500" : "bg-violet-600"}`}>
+                                                    {adviserSent ? "Me" : originalSenderIsParent ? <User className="w-4 h-4 text-white" /> : <Shield className="w-4 h-4 text-white" />}
                                                 </div>
                                                 <div className={`flex-1 flex flex-col ${adviserSent ? "items-end" : "items-start"}`}>
                                                     <div className="flex items-center gap-2 mb-1">
@@ -2183,10 +2201,11 @@ function ReportsPageContent() {
                                     {/* Conversation replies */}
                                     {selectedAdminMsg.replies?.map((reply, i) => {
                                         const mine = reply.is_current_user ?? reply.sender === "Adviser";
+                                        const replyIsParent = reply.sender === "Parent";
                                         return (
                                             <div key={i} className={`flex items-start gap-3 mb-4 ${mine ? "flex-row-reverse" : ""}`}>
-                                                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-extrabold shrink-0 mt-0.5 ${mine ? "bg-emerald-500" : "bg-violet-600"}`}>
-                                                    {mine ? "Me" : <Shield className="w-4 h-4 text-white" />}
+                                                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-extrabold shrink-0 mt-0.5 ${mine ? "bg-emerald-500" : replyIsParent ? "bg-blue-500" : "bg-violet-600"}`}>
+                                                    {mine ? "Me" : replyIsParent ? <User className="w-4 h-4 text-white" /> : <Shield className="w-4 h-4 text-white" />}
                                                 </div>
                                                 <div className={`flex-1 flex flex-col ${mine ? "items-end" : "items-start"}`}>
                                                     <div className="flex items-center gap-2 mb-1">
@@ -2235,11 +2254,17 @@ function ReportsPageContent() {
                                             </div>
                                         ))}
                                     </div>
+                                    {staffConversationTyping.isOtherParticipantTyping && (
+                                        <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                            <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:300ms]" /></span>
+                                            The other participant is typing…
+                                        </div>
+                                    )}
                                     <div className="flex items-end gap-3">
                                         <div className="flex-1 rounded-xl border border-slate-200 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 transition overflow-hidden bg-slate-50">
                                             <textarea
                                                 value={replyText}
-                                                onChange={e => setReplyText(e.target.value)}
+                                                onChange={e => { setReplyText(e.target.value); staffConversationTyping.onDraftChange(Boolean(e.target.value.trim())); }}
                                                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
                                                 placeholder={`Reply to ${selectedAdminMsg.sender_name}... (Enter to send)`}
                                                 rows={2}

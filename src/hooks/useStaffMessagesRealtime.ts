@@ -2,20 +2,33 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import type { RealtimeInvalidation } from "@/lib/subscribeRealtimeInvalidations";
 
 type RefreshMessages = (background?: boolean) => Promise<boolean>;
+type StaffMessagesRealtimeOptions = {
+  /** Typing is ephemeral: deliver it to the open conversation, never refetch the inbox. */
+  onConversationUpdate?: (invalidation: RealtimeInvalidation) => void;
+};
 
 /** Keeps Contact ICT inboxes current through the shared account subscription. */
-export function useStaffMessagesRealtime(refreshMessages: RefreshMessages) {
+export function useStaffMessagesRealtime(
+  refreshMessages: RefreshMessages,
+  options: StaffMessagesRealtimeOptions = {},
+) {
   const [liveUpdateNotice, setLiveUpdateNotice] = useState<string | null>(null);
   const refreshRef = useRef(refreshMessages);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
   const mountedRef = useRef(true);
+  const conversationUpdateRef = useRef<StaffMessagesRealtimeOptions["onConversationUpdate"]>(options.onConversationUpdate);
 
   useEffect(() => {
     refreshRef.current = refreshMessages;
   }, [refreshMessages]);
+
+  useEffect(() => {
+    conversationUpdateRef.current = options.onConversationUpdate;
+  }, [options.onConversationUpdate]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -47,6 +60,10 @@ export function useStaffMessagesRealtime(refreshMessages: RefreshMessages) {
   }, []);
 
   useSessionInvalidation((invalidation) => {
+    if (invalidation.scope === "staff-messages" && invalidation.kind === "typing") {
+      conversationUpdateRef.current?.(invalidation);
+      return;
+    }
     if (invalidation.scope === "staff-messages" || !invalidation.scope) {
       void refreshAndClearNotice();
     }

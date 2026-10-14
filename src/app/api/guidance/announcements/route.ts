@@ -4,6 +4,7 @@ import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
 import { sendGuidanceAnnouncementEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
 import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 // ── GET — fetch all announcements by this guidance counselor ──────────────────
 export async function GET() {
@@ -81,6 +82,13 @@ export async function POST(req: NextRequest) {
       recipients.push({ role: "guidance", id: Number(guidance.id) });
       await publishRealtimeInvalidation(recipients, "announcements");
     }
+
+    await logAnnouncementAudit({
+      action: status === "Published" ? "Published" : "Scheduled",
+      actor: { id: guidance.id, name: guidance.name, role: "Guidance", email: guidance.email },
+      announcement: { id: ann.id, title: ann.title, audience, status },
+      headers: req.headers,
+    });
 
     return NextResponse.json({ success: true, announcement: ann });
   } catch (error) {

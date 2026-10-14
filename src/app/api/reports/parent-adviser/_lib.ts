@@ -548,6 +548,9 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     subject: row.subject,
     message: firstParentMessage?.body ?? "",
     attachments: attachmentsFromRow(firstParentMessage?.attachments),
+    // Keep the stored timestamp alongside the display label so Principal
+    // monitoring can apply an exact Manila date range without parsing text.
+    createdAt: row.created_at,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : hasUnreadForPrincipal ? "New" as const : adviserReportStatus(row.status),
     resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance,

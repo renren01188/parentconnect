@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { sendNewGuidanceTicketEmail } from "@/lib/mailer";
 import { getParentSession, getReportForParent } from "../../_lib";
 import { logAudit } from "@/lib/audit";
-import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishRealtimeInvalidation, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type Attachment = { name: string; type: string; size: number; dataUrl: string };
 
@@ -66,10 +66,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       throw error;
     }
 
-    // Tickets are intentionally server-only (RLS denies browser access), but
-    // Guidance already receives report-table realtime events. Touching the
-    // parent-owned report prompts that existing subscription to refresh its
-    // server-derived ticket notification and sidebar counts immediately.
+    // Preserve the report's recency for its Parent and Adviser views. Guidance
+    // receives the ticket-specific invalidation below instead of inferring a
+    // ticket change from a generic report update.
     const { error: reportRefreshError } = await supabase
       .from("parent_adviser_reports")
       .update({ updated_at: now })
@@ -84,7 +83,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await publishReportRealtimeInvalidation({
       parentId: report.parent_id ?? parent.id,
       adviserId: report.adviser_id,
-      includeGuidance: true,
+      // Guidance receives the dedicated ticket invalidation below. This keeps
+      // the open Guidance ticket list and its count current without causing a
+      // full report-list reload for a still-pending ticket.
+      includeGuidance: false,
       reportId,
       kind: "status",
     });
@@ -94,15 +96,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // non-blocking: SMTP failure never rolls back a created ticket.
     const { data: counselors, error: counselorsError } = await supabase
       .from("guidance_counselors")
-      .select("email, first_name, middle_name, last_name, suffix")
-      .eq("status", "active")
-      .not("email", "is", null);
+      .select("id, email, first_name, middle_name, last_name, suffix")
+      .eq("status", "active");
     if (counselorsError) {
       console.error("Unable to load Guidance ticket email recipients:", counselorsError);
-    } else if (counselors?.length) {
-      const emailResults = await Promise.allSettled(counselors.map((counselor) =>
+    } else {
+      // Broadcast only a data-free invalidation after the ticket has
+      // committed. Each Guidance browser re-reads its normal, protected
+      // tickets endpoint, which updates both the list and every ticket count.
+      await publishRealtimeInvalidation(
+        (counselors ?? []).map((counselor) => ({ role: "guidance" as const, id: Number(counselor.id) })),
+        { scope: "tickets", reportId, kind: "status" },
+      );
+
+      const emailRecipients = (counselors ?? []).filter((counselor) => typeof counselor.email === "string" && counselor.email.trim());
+      const emailResults = await Promise.allSettled(emailRecipients.map((counselor) =>
         sendNewGuidanceTicketEmail({
-          guidanceEmail: counselor.email,
+          guidanceEmail: counselor.email!,
           guidanceName: [counselor.first_name, counselor.middle_name, counselor.last_name, counselor.suffix].filter(Boolean).join(" "),
           parentName: report.parent_name || parent.name || "Parent",
           studentName: report.student_name || report.student_id || "Student",

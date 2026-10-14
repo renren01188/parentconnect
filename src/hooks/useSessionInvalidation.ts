@@ -13,6 +13,7 @@ type InvalidationListener = (invalidation: RealtimeInvalidation) => void | Promi
 const reconnectRefresh: RealtimeInvalidation = {
   scope: null,
   reportId: null,
+  conversationId: null,
   kind: null,
   messageId: null,
   actorKey: null,

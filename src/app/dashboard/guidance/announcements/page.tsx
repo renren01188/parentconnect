@@ -103,8 +103,10 @@ export default function AnnouncementsPage() {
   }, []);
 
   useVisibleRefresh(loadIncomingAnnouncements);
-  useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "announcements") return loadIncomingAnnouncements();
+  useSessionInvalidation(async ({ scope }) => {
+    if (!scope || scope === "announcements") {
+      await Promise.all([loadMyAnnouncements(), loadIncomingAnnouncements()]);
+    }
   });
 
   useEffect(() => {
@@ -193,7 +195,10 @@ export default function AnnouncementsPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+    <div
+      className="guidance-announcements-page mx-auto flex w-full max-w-5xl flex-col gap-5"
+      style={{ fontFamily: '"DM Sans", "Segoe UI", system-ui, sans-serif' }}
+    >
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-extrabold uppercase tracking-[0.08em] text-sky-600">Guidance Office</p>

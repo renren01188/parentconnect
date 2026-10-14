@@ -9,7 +9,8 @@ import {
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_TIME_ZONE, auditManilaDate } from "@/lib/auditPresentation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Theme ───────────────────────────────────────────────────
@@ -51,6 +52,7 @@ const ACTION_META: Record<string, { label: string; bg: string; text: string; bor
   Delete:           { label: "Delete",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2         },
   Message:          { label: "Message",        bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare  },
   System:           { label: "System",         bg: "#f0f9ff", text: "#0284c7", border: "#bae6fd", Icon: Settings       },
+  "Failed Login":   { label: "Failed Login",   bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert    },
   "Security Alert": { label: "Security Alert", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert    },
   "Password Reset": { label: "Password Reset", bg: "#fdf4ff", text: "#7c3aed", border: "#ddd6fe", Icon: RefreshCw      },
   Export:           { label: "Export",         bg: "#f0fdf4", text: "#0f766e", border: "#99f6e4", Icon: FileText       },
@@ -108,7 +110,7 @@ function toAuditEvent(row: AuditRealtimeRow): AuditEvent {
     targetUser: row.target_user ?? "", targetRole: row.target_role ?? "", targetEmail: row.target_email ?? "",
     performedBy: row.performed_by ?? "", performedByRole: normalizeAuditRole(row.performed_by_role), module: row.module ?? "",
     ipAddress: row.ip_address ?? "", browser: row.browser ?? "",
-    timestamp: timestamp.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " · " + timestamp.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+    timestamp: timestamp.toLocaleDateString("en-US", { timeZone: AUDIT_TIME_ZONE, month: "short", day: "numeric" }) + " · " + timestamp.toLocaleTimeString("en-US", { timeZone: AUDIT_TIME_ZONE, hour: "numeric", minute: "2-digit" }),
     timestampMs: timestamp.getTime(), changes: Array.isArray(row.changes) ? row.changes : [],
   };
 }
@@ -290,6 +292,7 @@ export default function AuditTrailPage() {
   // ── Data state ──
   const [events,     setEvents]     = useState<AuditEvent[]>([]);
   const [total,      setTotal]      = useState(0);
+  const [securityTotal, setSecurityTotal] = useState(0);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -324,6 +327,7 @@ export default function AuditTrailPage() {
 
       setEvents(json.auditLog ?? []);
       setTotal(json.total     ?? 0);
+      setSecurityTotal(json.securityTotal ?? 0);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -350,7 +354,12 @@ export default function AuditTrailPage() {
         (!current.query || searchText.includes(current.query.toLowerCase())) &&
         matchesAuditActionFilter(event.action, current.actionFilter) &&
         matchesAuditRoleFilter(event.performedByRole, current.roleFilter) &&
-        (!current.dateFilter || new Date(event.timestampMs).toISOString().slice(0, 10) === current.dateFilter);
+        (!current.dateFilter || auditManilaDate(event.timestampMs) === current.dateFilter);
+      if (current.archiveFilter === "active" &&
+          (!current.dateFilter || auditManilaDate(event.timestampMs) === current.dateFilter) &&
+          isSecurityAuditAction(event.action)) {
+        setSecurityTotal((value) => value + 1);
+      }
       if (!matches) return;
       setTotal((value) => value + 1);
       if (current.page === 1) setEvents((items) => [event, ...items.filter((item) => item.id !== event.id)].slice(0, current.perPage));
@@ -373,8 +382,8 @@ export default function AuditTrailPage() {
     total,
     logins:   events.filter(e => resolveAction(e.action) === "Login").length,
     edits:    events.filter(e => ["Submit Report", "Message", "Escalate", "Resolve", "Update", "Approve", "Reject"].includes(resolveAction(e.action))).length,
-    security: events.filter(e => resolveAction(e.action) === "Security Alert").length,
-  }), [events, total]);
+    security: securityTotal,
+  }), [events, securityTotal, total]);
 
   function resetFilters() {
     setQuery(""); setActionFilter("");
@@ -637,7 +646,7 @@ export default function AuditTrailPage() {
                 events.map((event, idx) => {
                   const initials = getInitials(event.performedBy);
                   const color    = avatarColor(event.performedBy);
-                  const isAlert  = resolveAction(event.action) === "Security Alert";
+                  const isAlert  = isSecurityAuditAction(event.action);
                   const rowNum   = (page - 1) * perPage + idx + 1;
 
                   return (
@@ -732,7 +741,7 @@ export default function AuditTrailPage() {
             events.map((event, index) => {
               const initials = getInitials(event.performedBy);
               const color = avatarColor(event.performedBy);
-              const isAlert = resolveAction(event.action) === "Security Alert";
+              const isAlert = isSecurityAuditAction(event.action);
               const rowNum = (page - 1) * perPage + index + 1;
               return (
                 <article key={event.id} className={`rounded-xl border p-4 shadow-sm ${isAlert ? "border-red-200 bg-red-50/30" : "border-gray-200 bg-white"}`}>

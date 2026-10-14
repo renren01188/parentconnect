@@ -9,6 +9,7 @@ import { DEFAULT_CATEGORIES, CONCERN_PERCENTAGES, computeConcernLevel, type Chat
 import { UserAvatar } from "@/components/UserAvatar";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
+import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { countParentReportTabs, filterParentReportConversations } from "@/lib/parentReportList";
 import {
   canSubmitConfirmedReport,
@@ -875,7 +876,7 @@ function ParentReportsPageContent() {
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const messagesRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
-  const lastScrolledReportIdRef = useRef<number | null>(null);
+  const lastScrolledConversationRef = useRef<string | null>(null);
   const cooldownMessage = reportCooldownMessage(reportSubmissionCooldownUntil, currentTime);
   const cancelTarget = reports.find((report) => report.id === cancelTargetId) ?? null;
 
@@ -954,7 +955,14 @@ function ParentReportsPageContent() {
       // A list refresh carries current badges and status, but it deliberately
       // omits conversation contents. Keep an already open thread intact until
       // its one-report request supplies the canonical persisted messages.
-      return loaded?.detailsLoaded ? { ...report, messages: loaded.messages, detailsLoaded: true } : report;
+      // Standalone staff conversations are already returned as complete
+      // threads by the authorized staff-messages endpoint. Preserve an open
+      // report thread until its focused detail request finishes, but always
+      // replace a staff conversation so an Adviser or Guidance reply received
+      // through Realtime is visible immediately without a page refresh.
+      return loaded?.detailsLoaded && !report.isStandaloneStaffMessage
+        ? { ...report, messages: loaded.messages, detailsLoaded: true }
+        : report;
     }));
     setLoadError("");
     setSelectedId((current) => current ?? nextReports[0]?.id ?? null);
@@ -1134,8 +1142,13 @@ function ParentReportsPageContent() {
     selectedReport.allowHistoryAccess === null
   );
   const selectedReportId = selectedReport?.isStandaloneStaffMessage ? null : selectedReport?.id ?? null;
+  const selectedStandaloneConversationId = selectedReport?.isStandaloneStaffMessage && selectedReport.standaloneMessageId
+    ? `staff-message:${selectedReport.standaloneMessageId}`
+    : null;
+  const selectedConversationKey = selectedStandaloneConversationId ?? (selectedReportId ? `report:${selectedReportId}` : null);
   const selectedMessageCount = selectedReport?.messages.length ?? 0;
   const reportTyping = useReportTyping(selectedReportId, "parent");
+  const staffConversationTyping = useStaffConversationTyping(selectedStandaloneConversationId, "parent");
 
   const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
     reportTyping.onRealtimeEvent(event);
@@ -1152,25 +1165,28 @@ function ParentReportsPageContent() {
   // place instead of replacing the conversation with an inbox summary.
   const liveUpdateNotice = useReportMessagesRealtime(loadReports, {
     onReportUpdate: handleLiveReportUpdate,
+    onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
     onConnectionStatus: (status) => {
       if (status === "CLOSED") {
         reportTyping.clearOtherTyping();
         reportTyping.stopTyping();
+        staffConversationTyping.clearOtherTyping();
+        staffConversationTyping.stopTyping();
       }
     },
   });
 
   useEffect(() => {
-    if (!selectedReportId) return;
-    const shouldFollowLatest = lastScrolledReportIdRef.current !== selectedReportId || wasAtBottomRef.current;
-    lastScrolledReportIdRef.current = selectedReportId;
+    if (!selectedConversationKey) return;
+    const shouldFollowLatest = lastScrolledConversationRef.current !== selectedConversationKey || wasAtBottomRef.current;
+    lastScrolledConversationRef.current = selectedConversationKey;
     if (!shouldFollowLatest) return;
     const timer = window.setTimeout(() => {
       const el = messagesRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }, 50);
     return () => window.clearTimeout(timer);
-  }, [selectedReportId, selectedMessageCount]);
+  }, [selectedConversationKey, selectedMessageCount]);
 
   // Role tabs are assigned from the latest actual staff sender, not the
   // report's current owner or escalation flags. This keeps each conversation
@@ -1198,6 +1214,7 @@ function ParentReportsPageContent() {
       setReplyText("");
       setReplyAttachments([]);
       reportTyping.stopTyping();
+      staffConversationTyping.stopTyping();
 
       if (selectedReport.isStandaloneStaffMessage) {
         const messageId = selectedReport.standaloneMessageId;
@@ -1217,6 +1234,7 @@ function ParentReportsPageContent() {
         if (!res.ok) {
           setReplyText(sentText);
           setReplyAttachments(sentAttachments);
+          staffConversationTyping.onDraftChange(true);
           throw new Error(data?.message || "Unable to send your reply.");
         }
         await loadReports();
@@ -1580,7 +1598,7 @@ function ParentReportsPageContent() {
                 </div>
 
                 <div className="shrink-0 border-t border-slate-100 px-4 pb-4 pt-3 sm:px-5">
-                  {!selectedReport.isStandaloneStaffMessage && reportTyping.isOtherParticipantTyping && (
+                  {(selectedReport.isStandaloneStaffMessage ? staffConversationTyping.isOtherParticipantTyping : reportTyping.isOtherParticipantTyping) && (
                     <div aria-live="polite" className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
                       <span className="flex gap-1" aria-hidden="true"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" /></span>
                       The other participant is typing…
@@ -1628,7 +1646,12 @@ function ParentReportsPageContent() {
                   </div>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                     <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
-                      <textarea value={replyText} onChange={e => { setReplyText(e.target.value); if (!selectedReport.isStandaloneStaffMessage) reportTyping.onDraftChange(Boolean(e.target.value.trim())); }}
+                      <textarea value={replyText} onChange={e => {
+                        setReplyText(e.target.value);
+                        const hasDraft = Boolean(e.target.value.trim());
+                        if (selectedReport.isStandaloneStaffMessage) staffConversationTyping.onDraftChange(hasDraft);
+                        else reportTyping.onDraftChange(hasDraft);
+                      }}
                         onKeyDown={e => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();

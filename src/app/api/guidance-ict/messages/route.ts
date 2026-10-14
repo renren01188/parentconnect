@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
 import { getIctFromToken } from "@/lib/getIctFromToken";
@@ -237,15 +237,23 @@ export async function GET(req: NextRequest) {
         }
 
         if (req.nextUrl.searchParams.get("summary") === "1") {
-            const { count, error } = await supabase
+            const seenAfter = Date.parse(req.nextUrl.searchParams.get("seenAfter") ?? "");
+            let unreadQuery = supabase
                 .from("staff_messages")
-                .select("id", { count: "exact", head: true })
+                .select("id, source_message_id")
                 .eq("sender_type", otherRole(session.type))
                 .eq("recipient_type", session.type)
                 .eq("recipient_id", session.id)
                 .eq("status", "unread");
+            if (Number.isFinite(seenAfter)) {
+                unreadQuery = unreadQuery.gt("created_at", new Date(seenAfter).toISOString());
+            }
+            const { data, error } = await unreadQuery;
             if (error) throw error;
-            return NextResponse.json({ success: true, unreadCount: count ?? 0 });
+            const unreadConversationIds = new Set((data ?? []).map((row) =>
+                Number(row.source_message_id) || Number(row.id)
+            ));
+            return NextResponse.json({ success: true, unreadCount: unreadConversationIds.size });
         }
 
         const [recipients, messagesResult] = await Promise.all([
@@ -401,8 +409,37 @@ export async function POST(req: NextRequest) {
             throw error;
         }
 
-        // Only send email for new messages, not replies
-        if (!rootId) {
+        if (rootId) {
+            // Replying acknowledges existing inbound messages without
+            // changing the saved conversation into a report status.
+            const now = new Date().toISOString();
+            const [{ error: rootReadError }, { error: repliesReadError }] = await Promise.all([
+                supabase.from("staff_messages")
+                    .update({ status: "read", updated_at: now })
+                    .eq("id", rootId)
+                    .eq("recipient_type", session.type)
+                    .eq("recipient_id", session.id)
+                    .eq("status", "unread"),
+                supabase.from("staff_messages")
+                    .update({ status: "read", updated_at: now })
+                    .eq("source_message_id", rootId)
+                    .eq("recipient_type", session.type)
+                    .eq("recipient_id", session.id)
+                    .eq("status", "unread"),
+            ]);
+            if (rootReadError) throw rootReadError;
+            if (repliesReadError) throw repliesReadError;
+        }
+
+        // Broadcast immediately after the durable write. Email delivery is a
+        // follow-up and must not hold the recipient's live inbox update.
+        await publishRealtimeInvalidation([
+            { role: session.type, id: session.id },
+            { role: recipientType, id: Number(rawRecipientId) },
+        ], "staff-messages");
+
+        // Only send email for new messages, not replies.
+        if (!rootId) after(async () => {
             try {
                 await sendStaffMessageEmail({
                     recipientEmail: recipient.email,
@@ -416,12 +453,7 @@ export async function POST(req: NextRequest) {
             } catch (emailError) {
                 console.error("Email notification failed:", emailError);
             }
-        }
-
-        await publishRealtimeInvalidation([
-            { role: session.type, id: session.id },
-            { role: recipientType, id: Number(rawRecipientId) },
-        ], "staff-messages");
+        });
 
         return NextResponse.json({ success: true }, { status: 201 });
     } catch (error) {
@@ -481,6 +513,11 @@ export async function PATCH(req: NextRequest) {
             .eq("status", "unread");
 
         if (repliesReadError) throw repliesReadError;
+
+        await publishRealtimeInvalidation([
+            { role: typedRoot.sender_type, id: Number(typedRoot.sender_id) },
+            { role: typedRoot.recipient_type, id: Number(typedRoot.recipient_id) },
+        ], "staff-messages");
 
         return NextResponse.json({ success: true });
     } catch (error) {

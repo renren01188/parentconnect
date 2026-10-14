@@ -33,6 +33,8 @@ export interface Report {
   category: ReportCategory;
   subject: string;
   message: string;
+  /** Original database timestamp used by Principal monitoring filters/exports. */
+  createdAt?: string;
   submitted_at: string;
   status: ReportStatus;
   attachment?: string;
@@ -197,7 +199,10 @@ export const MOCK_STUDENT_REPORTS: StudentReport[] = [
 
 // ─── Admin message types ──────────────────────────────────────────────────────
 export type AdminSender = "Parent" | "Principal" | "Guidance" | "Adviser" | "ICT";
-export type AdminMsgStatus = "New" | "Read" | "Replied";
+// `Sent` belongs exclusively to standalone staff conversations. `Replied`
+// remains for legacy/report-backed inbox items and must not be inferred from
+// a direct-message write.
+export type AdminMsgStatus = "New" | "Read" | "Sent" | "Replied";
 
 export interface AdminMessage {
   id: number;
