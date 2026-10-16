@@ -871,6 +871,13 @@ function ReportsPageContent() {
     const [studentReps, setStudentReps] = useState<StudentReport[]>([]);
     const [adminMsgs, setAdminMsgs] = useState<AdminMessage[]>([]);
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+    // A selected report can be loading while its participant sends a live
+    // reply. Queue one authoritative re-read after the older snapshot settles
+    // so the new message never waits for the Adviser to interact again.
+    const reportDetailRefreshQueuedRef = useRef<Set<number>>(new Set());
+    // Principal/staff conversations have their own inbox snapshot. Keep an
+    // older initial fetch from replacing the Realtime-triggered result.
+    const adminMessagesRequestVersionRef = useRef(0);
     // A Realtime refresh may begin while the first page snapshot is still
     // loading. Keep the newest response authoritative so that the older
     // snapshot cannot erase a just-submitted Student Report.
@@ -918,16 +925,22 @@ function ReportsPageContent() {
 
     const loadReportDetail = useCallback(async (id: number) => {
         const inFlight = reportDetailRequestsRef.current.get(id);
-        if (inFlight) return inFlight;
+        if (inFlight) {
+            reportDetailRefreshQueuedRef.current.add(id);
+            return inFlight;
+        }
 
         const request = (async () => {
-            const res = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${id}`, { cache: "no-store" });
-            const data = await res.json().catch(() => null);
-            if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
-            const report = (data?.reports?.[0] ?? null) as Report | null;
-            if (!report) return;
-            setReports((current) => current.map((item) => item.id === id ? report : item));
-            setSelectedReport((current) => current?.id === id ? report : current);
+            do {
+                reportDetailRefreshQueuedRef.current.delete(id);
+                const res = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${id}`, { cache: "no-store" });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.message || "Unable to load this conversation.");
+                const report = (data?.reports?.[0] ?? null) as Report | null;
+                if (!report) continue;
+                setReports((current) => current.map((item) => item.id === id ? report : item));
+                setSelectedReport((current) => current?.id === id ? report : current);
+            } while (reportDetailRefreshQueuedRef.current.has(id));
         })();
 
         reportDetailRequestsRef.current.set(id, request);
@@ -955,6 +968,7 @@ function ReportsPageContent() {
     }, []);
 
     const loadAdminMessages = useCallback(async () => {
+        const requestVersion = ++adminMessagesRequestVersionRef.current;
         const [res, staffRes] = await Promise.all([
             fetch("/api/reports/adviser-messages", { cache: "no-store" }),
             fetch("/api/reports/staff-messages?role=adviser&excludeIct=1", { cache: "no-store" }),
@@ -969,6 +983,9 @@ function ReportsPageContent() {
         if (!res.ok && !staffRes.ok) {
             throw new Error(data?.message || staffData?.message || "Unable to load principal messages.");
         }
+        // The latest request is the one started by the newest durable
+        // Realtime event. Ignore an earlier snapshot that raced it.
+        if (requestVersion !== adminMessagesRequestVersionRef.current) return [];
         const nextMessages = [
             ...(res.ok ? ((data?.principalMessages ?? []) as AdminMessage[]) : []),
             ...(staffRes.ok ? ((staffData?.messages ?? []) as AdminMessage[]) : []),

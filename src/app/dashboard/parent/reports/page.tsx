@@ -1,6 +1,6 @@
 "use client";
 import React, { Suspense, useState, useRef, useEffect, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, X, Clock, Paperclip, Send, Upload, CheckCircle, AlertCircle, AlertTriangle, ChevronDown, LoaderCircle } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import ParentReportsGuide from "../components/ParentReportsGuide";
@@ -34,6 +34,7 @@ type AdviserRecipient = {
 };
 
 type FilterTab = "All Messages" | "Unread" | "Principal" | "Adviser" | "Guidance";
+type ParentReportsPanel = "reports" | "schoolMessages";
 
 type StandaloneStaffMessage = {
   id: number;
@@ -834,6 +835,8 @@ function StudentConcernConsent({ onConfirm }: { onConfirm: () => Promise<void> }
 }
 
 function ParentReportsPageContent() {
+  const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { setUnreadReportsCount } = useNotifContext();
 
@@ -841,6 +844,7 @@ function ParentReportsPageContent() {
   const [advisers, setAdvisers] = useState<AdviserRecipient[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [activePanel, setActivePanel] = useState<ParentReportsPanel>("reports");
   const [activeFilter, setActiveFilter] = useState<FilterTab>("All Messages");
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -860,15 +864,29 @@ function ParentReportsPageContent() {
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const detailRefreshQueuedRef = useRef<Set<number>>(new Set());
   const reportListRequestVersion = useRef(0);
+  // Realtime callbacks are registered once by the shared dashboard channel.
+  // Keep the current open report in a ref so a Broadcast received immediately
+  // after a Parent selects a card cannot be handled with the prior selection.
+  const selectedReportIdRef = useRef<number | null>(null);
+  // URL selection is an entry point, not a command that should run again
+  // after every background list refresh. Without this guard, a stale
+  // `reportId` could replace the report the parent just clicked.
+  const lastAppliedRouteSelectionRef = useRef<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const lastScrolledConversationRef = useRef<string | null>(null);
   const cooldownMessage = reportCooldownMessage(reportSubmissionCooldownUntil, currentTime);
   const cancelTarget = reports.find((report) => report.id === cancelTargetId) ?? null;
+  const parentSubmittedReports = sortParentReportConversations(
+    reports.filter((report) => !report.isStandaloneStaffMessage),
+  );
+  const schoolMessages = sortParentReportConversations(
+    reports.filter((report) => report.isStandaloneStaffMessage),
+  );
 
   // All categories derived from all reports (for the pill row)
   const allUsedCategories = Array.from(
-    new Set(reports.flatMap(r => r.categories))
+    new Set(parentSubmittedReports.flatMap(r => r.categories))
   ).sort();
 
   const mergePendingMessages = useCallback((nextReports: Report[]) => {
@@ -956,7 +974,12 @@ function ParentReportsPageContent() {
         : report;
     }));
     setLoadError("");
-    setSelectedId((current) => current ?? nextReports[0]?.id ?? null);
+    const firstReport = nextReports.find((report) => !report.isStandaloneStaffMessage);
+    const firstSchoolMessage = nextReports.find((report) => report.isStandaloneStaffMessage);
+    setSelectedId((current) => current ?? firstReport?.id ?? firstSchoolMessage?.id ?? null);
+    // If the parent has no report records, show the available direct school
+    // conversation rather than rendering an empty Reports Panel beside it.
+    if (!firstReport && firstSchoolMessage) setActivePanel("schoolMessages");
   }, [mergePendingMessages]);
 
   const loadReportDetail = useCallback(async (id: number) => {
@@ -1041,7 +1064,10 @@ function ParentReportsPageContent() {
             : null,
         );
         setAdvisers(advisersRes.ok ? ((advisersData?.advisers ?? []) as AdviserRecipient[]) : []);
-        setSelectedId(nextReports[0]?.id ?? null);
+        const firstReport = nextReports.find((report) => !report.isStandaloneStaffMessage);
+        const firstSchoolMessage = nextReports.find((report) => report.isStandaloneStaffMessage);
+        setSelectedId(firstReport?.id ?? firstSchoolMessage?.id ?? null);
+        if (!firstReport && firstSchoolMessage) setActivePanel("schoolMessages");
       } catch (error) {
         if (!isMounted) return;
         console.error("Unable to load parent reports:", error);
@@ -1102,20 +1128,38 @@ function ParentReportsPageContent() {
   }, [loadReports]);
 
   // Mark unread staff messages only when the parent deliberately opens the conversation.
-  function handleSelect(id: number) {
-    setSelectedId(id);
+  function handleSelect(selected: Report) {
+    setActivePanel(selected.isStandaloneStaffMessage ? "schoolMessages" : "reports");
+    setSelectedId(selected.id);
     setReplyText("");
     setReplyAttachments([]);
-    const selected = reports.find(r => r.id === id);
+
+    // Keep the route aligned with the card that was clicked. This is a client
+    // replace, so it does not reload the dashboard, and it prevents a prior
+    // notification URL from re-selecting a different report after a refresh.
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("teacher");
+    if (selected.isStandaloneStaffMessage && selected.standaloneMessageId) {
+      params.delete("reportId");
+      params.set("conversation", `staff-message:${selected.standaloneMessageId}`);
+    } else {
+      params.delete("conversation");
+      params.set("reportId", String(selected.id));
+    }
+    const nextQuery = params.toString();
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+    }
+
     if (selected?.isStandaloneStaffMessage) {
       if (selected.unread) void markStandaloneMessageRead(selected);
       return;
     }
-    void loadReportDetail(id).catch((error) => {
+    void loadReportDetail(selected.id).catch((error) => {
       setLoadError(error instanceof Error ? error.message : "Unable to load this conversation.");
     });
     if (!selected?.unread || selected.reportStatus === "Resolved") return;
-    markReportRead(id).catch(() => null);
+    markReportRead(selected.id).catch(() => null);
   }
 
   useEffect(() => {
@@ -1123,6 +1167,14 @@ function ParentReportsPageContent() {
     const teacherParam = searchParams.get("teacher");
     const conversationParam = searchParams.get("conversation");
     const standaloneConversationId = /^staff-message:(\d+)$/.exec(conversationParam ?? "")?.[1];
+    const routeSelectionKey = standaloneConversationId
+      ? `staff-message:${standaloneConversationId}`
+      : Number.isSafeInteger(reportIdParam) && reportIdParam > 0
+        ? `report:${reportIdParam}`
+        : teacherParam
+          ? `teacher:${teacherParam.toLowerCase()}`
+          : null;
+    if (!routeSelectionKey || lastAppliedRouteSelectionRef.current === routeSelectionKey) return;
     const match = standaloneConversationId
       ? reports.find((report) => report.isStandaloneStaffMessage && report.standaloneMessageId === Number(standaloneConversationId))
       : Number.isSafeInteger(reportIdParam) && reportIdParam > 0
@@ -1131,6 +1183,8 @@ function ParentReportsPageContent() {
         ? reports.find(r => r.recipientName.toLowerCase() === teacherParam.toLowerCase())
         : undefined;
     if (match) {
+      lastAppliedRouteSelectionRef.current = routeSelectionKey;
+      setActivePanel(match.isStandaloneStaffMessage ? "schoolMessages" : "reports");
       setSelectedId(match.id);
       setReplyText("");
       setReplyAttachments([]);
@@ -1142,7 +1196,7 @@ function ParentReportsPageContent() {
     }
   }, [reports, searchParams, markReportRead, markStandaloneMessageRead]);
 
-  const selectedReport = reports.find(r => r.id === selectedId) ?? reports[0] ?? null;
+  const selectedReport = reports.find(r => r.id === selectedId) ?? null;
 
   useEffect(() => {
     if (!selectedReport || selectedReport.isStandaloneStaffMessage || selectedReport.detailsLoaded) return;
@@ -1151,10 +1205,12 @@ function ParentReportsPageContent() {
     });
   }, [selectedReport, loadReportDetail]);
   const requiresStudentConcernConsent = Boolean(
+    !selectedReport?.isStandaloneStaffMessage &&
     selectedReport?.subject.startsWith("[Student Concern] ") &&
     selectedReport.allowHistoryAccess !== true
   );
   const selectedReportId = selectedReport?.isStandaloneStaffMessage ? null : selectedReport?.id ?? null;
+  selectedReportIdRef.current = selectedReportId;
   const selectedStandaloneConversationId = selectedReport?.isStandaloneStaffMessage && selectedReport.standaloneMessageId
     ? `staff-message:${selectedReport.standaloneMessageId}`
     : null;
@@ -1166,13 +1222,16 @@ function ParentReportsPageContent() {
   const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
     reportTyping.onRealtimeEvent(event);
     if (event.kind === "typing") return;
-    // Refresh badges/status for every affected report. Only load messages for
-    // the open report, leaving its selected ID and draft untouched.
-    await Promise.all([
-      loadReports(),
-      event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
-    ]);
-  }, [loadReportDetail, loadReports, reportTyping, selectedReportId]);
+    // Read the selected conversation first. This gives an idle Parent the
+    // committed Guidance reply as soon as the report Broadcast arrives; the
+    // following summary refresh only reconciles list metadata and badges.
+    // The ref avoids a stale callback selecting the previous Panel-1 item.
+    const openReportId = selectedReportIdRef.current;
+    if (event.reportId !== null && event.reportId === openReportId) {
+      await loadReportDetail(event.reportId);
+    }
+    await loadReports();
+  }, [loadReportDetail, loadReports, reportTyping]);
 
   const handleLiveReportStatusUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
     if (event.kind !== "status") return;
@@ -1222,19 +1281,34 @@ function ParentReportsPageContent() {
     return () => window.clearTimeout(timer);
   }, [selectedConversationKey, selectedMessageCount]);
 
-  // Role tabs are assigned from the latest actual staff sender, not the
-  // report's current owner or escalation flags. This keeps each conversation
-  // in one staff tab and makes every badge mean exactly what its list shows.
-  const filteredReports = sortParentReportConversations(filterParentReportConversations(reports, {
+  // The two panels share an authorized parent snapshot but must never share
+  // a list. Direct staff messages stay out of report workflows and report
+  // records stay out of the School Messages Panel.
+  const activePanelItems = activePanel === "reports" ? parentSubmittedReports : schoolMessages;
+  const filteredPanelItems = sortParentReportConversations(filterParentReportConversations(activePanelItems, {
     tab: activeFilter,
-    category: categoryFilter,
+    category: activePanel === "reports" ? categoryFilter : "All",
   }));
-  const counts: Record<FilterTab, number> = countParentReportTabs(reports, {
-    category: categoryFilter,
+  const counts: Record<FilterTab, number> = countParentReportTabs(activePanelItems, {
+    category: activePanel === "reports" ? categoryFilter : "All",
   });
+  const unreadPanelCount = activePanelItems.filter((item) => item.unread).length;
   const guideHighlight = (target: string) => guideTarget === target
     ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-slate-100"
     : "";
+
+  function selectPanel(panel: ParentReportsPanel) {
+    setActivePanel(panel);
+    setActiveFilter("All Messages");
+    if (panel === "reports") setCategoryFilter("All");
+    const panelItems = panel === "reports" ? parentSubmittedReports : schoolMessages;
+    // Panel navigation alone is not a read acknowledgement. The current
+    // selection changes visually, while handleSelect remains the only place
+    // that opens an item and applies its established read-state behavior.
+    setSelectedId(panelItems[0]?.id ?? null);
+    setReplyText("");
+    setReplyAttachments([]);
+  }
 
 
   async function handleSendReply() {
@@ -1347,6 +1421,7 @@ function ParentReportsPageContent() {
       await loadReports().catch((error) => {
         console.error("Unable to refresh parent reports after submitting report:", error);
       });
+      setActivePanel("reports");
       setSelectedId(result.report.id);
     }
     setShowModal(false);
@@ -1406,10 +1481,53 @@ function ParentReportsPageContent() {
         <div className="flex min-w-0 flex-col gap-4 xl:min-h-0 xl:flex-1 xl:flex-row xl:overflow-hidden">
           {/* Left panel — report list */}
           <div className="flex w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:w-[420px] xl:flex-shrink-0">
+            <div className="border-b border-slate-100 p-3 sm:p-4">
+              <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Parent reports panels">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activePanel === "reports"}
+                  onClick={() => selectPanel("reports")}
+                  className="min-h-12 rounded-xl border px-3 py-2 text-left transition-colors"
+                  style={{
+                    borderColor: activePanel === "reports" ? "#2563eb" : "#e2e8f0",
+                    background: activePanel === "reports" ? "#eff6ff" : "#fff",
+                    color: activePanel === "reports" ? "#1d4ed8" : "#475569",
+                  }}
+                >
+                  <span className="block text-sm font-extrabold">Reports Panel</span>
+                  <span className="mt-0.5 block text-[10px] font-semibold opacity-80">{parentSubmittedReports.length} submitted report{parentSubmittedReports.length === 1 ? "" : "s"}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activePanel === "schoolMessages"}
+                  onClick={() => selectPanel("schoolMessages")}
+                  className="min-h-12 rounded-xl border px-3 py-2 text-left transition-colors"
+                  style={{
+                    borderColor: activePanel === "schoolMessages" ? "#2563eb" : "#e2e8f0",
+                    background: activePanel === "schoolMessages" ? "#eff6ff" : "#fff",
+                    color: activePanel === "schoolMessages" ? "#1d4ed8" : "#475569",
+                  }}
+                >
+                  <span className="block text-sm font-extrabold">School Messages Panel</span>
+                  <span className="mt-0.5 block text-[10px] font-semibold opacity-80">{schoolMessages.length} conversation{schoolMessages.length === 1 ? "" : "s"}</span>
+                </button>
+              </div>
+              <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-extrabold text-slate-700">{activePanel === "reports" ? "Reports Panel" : "School Messages Panel"}</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {activePanel === "reports"
+                    ? "Reports submitted through New Report."
+                    : "Direct messages from your Adviser, Guidance, or Principal."}
+                </p>
+                {unreadPanelCount > 0 && <p className="mt-1 text-[10px] font-bold text-blue-700">{unreadPanelCount} unread</p>}
+              </div>
+            </div>
             {/* Row 1 — Message type tabs */}
             <div
               data-parent-guide="message-filters"
-              aria-label="Report filters"
+              aria-label={`${activePanel === "reports" ? "Report" : "School message"} filters`}
               className={`flex items-center gap-1.5 overflow-x-auto overscroll-x-contain px-3 pb-2 pt-3 sm:px-4 ${guideHighlight("message-filters")}`}
               style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
             >
@@ -1435,7 +1553,7 @@ function ParentReportsPageContent() {
             </div>
 
             {/* Row 2 — Category filter dropdown */}
-            <div data-parent-guide="category-filter" className={`border-b border-slate-100 px-3 pb-3 ${guideHighlight("category-filter")}`}>
+            {activePanel === "reports" && <div data-parent-guide="category-filter" className={`border-b border-slate-100 px-3 pb-3 ${guideHighlight("category-filter")}`}>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Filter by Category</label>
               <div className="relative">
                 <select
@@ -1447,10 +1565,10 @@ function ParentReportsPageContent() {
                     background: categoryFilter !== "All" ? "#eff6ff" : "#fff",
                     color: categoryFilter !== "All" ? "#1d4ed8" : "#475569",
                   }}>
-                  <option value="All">All Categories ({reports.length})</option>
+                  <option value="All">All Categories ({parentSubmittedReports.length})</option>
                   {allUsedCategories.map(cat => (
                     <option key={cat} value={cat}>
-                      {cat} ({reports.filter(r => r.categories.includes(cat)).length})
+                      {cat} ({parentSubmittedReports.filter(r => r.categories.includes(cat)).length})
                     </option>
                   ))}
                 </select>
@@ -1459,7 +1577,7 @@ function ParentReportsPageContent() {
                   style={{ color: categoryFilter !== "All" ? "#2563eb" : "#94a3b8" }}
                 />
               </div>
-            </div>
+            </div>}
 
             {loadError && (
               <div className="mx-3 mb-3 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700">
@@ -1470,11 +1588,11 @@ function ParentReportsPageContent() {
             {/* Report list */}
             <div className="divide-y divide-slate-50 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
               {loading ? (
-                <p className="py-12 text-center text-sm text-slate-400">Loading reports...</p>
-              ) : filteredReports.length === 0 ? (
-                <p className="py-12 text-center text-sm text-slate-400">No messages found.</p>
-              ) : filteredReports.map(r => (
-                <button key={r.id} onClick={() => handleSelect(r.id)}
+                <p className="py-12 text-center text-sm text-slate-400">Loading {activePanel === "reports" ? "reports" : "school messages"}...</p>
+              ) : filteredPanelItems.length === 0 ? (
+                <p className="py-12 text-center text-sm text-slate-400">No {activePanel === "reports" ? "reports" : "school messages"} found.</p>
+              ) : filteredPanelItems.map(r => (
+                <button key={r.id} onClick={() => handleSelect(r)}
                   className={`w-full text-left px-4 py-3.5 flex flex-col gap-2 transition-colors hover:bg-blue-50/50 ${r.id === selectedId ? "bg-blue-50 border-l-[3px] border-l-blue-500" : "border-l-[3px] border-l-transparent"}`}>
                   <div className="flex items-center gap-2.5">
                     <span style={{ width: 36, height: 36, minWidth: 36, borderRadius: "50%", background: r.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{r.recipientInitials}</span>
@@ -1484,6 +1602,9 @@ function ParentReportsPageContent() {
                         <p className={`min-w-0 flex-1 text-sm truncate ${r.unread ? "font-bold text-slate-800" : "font-semibold text-slate-700"}`}>{r.subject}</p>
                       </div>
                       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                        {r.isStandaloneStaffMessage && (
+                          <span className="shrink-0 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[9px] font-bold text-violet-700">{r.recipientRole}</span>
+                        )}
                         {r.isStudentSubmittedConcern && (
                           <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">Student concern</span>
                         )}
@@ -1526,7 +1647,9 @@ function ParentReportsPageContent() {
                   <div className="flex flex-wrap items-center gap-3">
                     <span style={{ width: 46, height: 46, minWidth: 46, borderRadius: "50%", background: selectedReport.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15 }}>{selectedReport.recipientInitials}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="break-words text-base font-extrabold text-slate-800">{selectedReport.recipientName}</p>
+                      <p className="break-words text-base font-extrabold text-slate-800">
+                        {selectedReport.isStandaloneStaffMessage ? `School message from ${selectedReport.recipientName}` : selectedReport.recipientName}
+                      </p>
                       <p className="break-words text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
                     </div>
                     <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
@@ -1544,6 +1667,12 @@ function ParentReportsPageContent() {
                     <span className="text-slate-400 font-medium">Subject: </span>
                     <span className="font-semibold">{selectedReport.subject}</span>
                   </p>
+
+                  {selectedReport.isStandaloneStaffMessage && (
+                    <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-800">
+                      Direct school message from <strong>{selectedReport.recipientName}</strong> ({selectedReport.recipientRole}).
+                    </div>
+                  )}
 
                   {selectedReport.submittedByRole === "Subject Teacher" && (
                     <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-700">

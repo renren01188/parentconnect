@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const parentReports = read("src/app/dashboard/parent/reports/page.tsx");
 const guidanceReports = read("src/app/dashboard/guidance/reports/page.tsx");
+const reportMessageRoute = read("src/app/api/reports/parent-adviser/[id]/messages/route.ts");
 const staffMessages = read("src/app/api/reports/staff-messages/route.ts");
 const staffTyping = read("src/hooks/useStaffConversationTyping.ts");
 const reportTyping = read("src/hooks/useReportTyping.ts");
@@ -41,6 +42,15 @@ assert.match(guidanceReports, /const conversationId = data\?\.message\?\.id \? `
 assert.match(guidanceReports, /await loadGuidanceStaffMessages\(conversationId\)/);
 assert.match(parentReports, /useReportMessagesRealtime\(loadReports/);
 assert.match(guidanceReports, /useReportMessagesRealtime\(refreshGuidanceInbox/);
+
+// A Guidance report reply broadcasts to the owning Parent before the sender's
+// request completes. The Parent refreshes the selected report by its current
+// ID before reconciling the summary list, so an idle open thread cannot wait
+// for a reply, navigation, or full-page refresh.
+assert.match(reportMessageRoute, /const result = await insertMessage\(reportId, "guidance",[\s\S]*?if \(!result\.duplicate\) \{[\s\S]*?await deliverReportInvalidation\(report, reportId, result\.id\);[\s\S]*?return NextResponse\.json\(\{ success: true, messageId: result\.id \}\);/);
+assert.match(parentReports, /const selectedReportIdRef = useRef<number \| null>\(null\)/);
+assert.match(parentReports, /selectedReportIdRef\.current = selectedReportId;/);
+assert.match(parentReports, /const openReportId = selectedReportIdRef\.current;[\s\S]*?event\.reportId !== null && event\.reportId === openReportId[\s\S]*?await loadReportDetail\(event\.reportId\);[\s\S]*?await loadReports\(\);/);
 
 // Direct-message and report-thread typing share their existing protected
 // publishers and render a received indicator on both Reports pages.

@@ -280,7 +280,18 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   const hasUnreadStaffMessage = visibleMessages.some((msg) =>
     (msg.sender_role === "adviser" || msg.sender_role === "principal" || msg.sender_role === "guidance" || msg.sender_role === "subject_teacher") && !msg.read_by_parent
   );
-  const unread = !isResolved && hasUnreadStaffMessage;
+  // Guidance ticket acceptance is a durable workflow event, not necessarily
+  // a chat reply. Compare its saved decision time with the Parent's existing
+  // report acknowledgement so an accepted ticket updates the Reports badge
+  // once, and opening the report clears it through the normal read endpoint.
+  const ticketAcceptedAt = ticket?.status === "accepted" ? ticket.decided_at : null;
+  const ticketAcceptedAtMs = Date.parse(ticketAcceptedAt ?? "");
+  const parentSeenAtMs = Date.parse(row.parent_seen_at ?? "");
+  const acceptedTicketIsUnread = Boolean(
+    Number.isFinite(ticketAcceptedAtMs)
+    && (!Number.isFinite(parentSeenAtMs) || ticketAcceptedAtMs > parentSeenAtMs)
+  );
+  const unread = !isResolved && (hasUnreadStaffMessage || acceptedTicketIsUnread);
   const guidanceName = visibleMessages.find((msg) => msg.sender_role === "guidance")?.sender_name || "Guidance Counselor";
   const principalName = visibleMessages.find((msg) => msg.sender_role === "principal")?.sender_name || "Principal";
   const guidanceHasReplied = visibleMessages.some((msg) => msg.sender_role === "guidance");
@@ -351,6 +362,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     allowHistoryAccess: row.allow_history_access,
     ticketId: ticket?.id ?? null,
     ticketStatus: ticket?.status ?? null,
+    ticketAcceptedAt,
     ticketRejectionReason: ticket?.rejection_reason ?? null,
     canCancel,
     // The role tabs use the most recent actual staff sender. Do not infer a

@@ -21,6 +21,14 @@ assert.match(context, /setEscalatedCount\(activeGuidanceConcernCount \+ pendingT
   "The sidebar total must include active Guidance concerns and pending tickets.");
 assert.match(context, /if \(scope === "reports"\)[\s\S]*?refreshGuidanceCounts\(\)/,
   "Report Realtime invalidations must refresh the Guidance count.");
+assert.match(context, /if \(scope === "tickets"\)[\s\S]*?Promise\.all\(\[refreshGuidanceCounts\(\), refreshNotificationCounts\(\)\]\)/,
+  "A Parent-submitted Guidance ticket must refresh the Reports badge on every Guidance page.");
+assert.match(context, /const guidanceCountRequestVersionRef = useRef\(0\)/,
+  "The count provider must protect a live refresh from an older initial request.");
+assert.match(context, /const requestVersion = \+\+guidanceCountRequestVersionRef\.current/,
+  "Each Guidance count snapshot must have a monotonic request version.");
+assert.match(context, /if \(requestVersion !== guidanceCountRequestVersionRef\.current\) return;[\s\S]*?const nextCount = reportCount \+ reportStaffCount \+ pendingTicketCount/,
+  "A stale pre-ticket response must not overwrite the newer Realtime count.");
 assert.match(sidebar, /\{escalatedCount\} concern/,
   "The Guidance sidebar must render the active concern count.");
 assert.match(reportRoute, /\.eq\("escalated_to_guidance", true\)/,

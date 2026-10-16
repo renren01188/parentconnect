@@ -65,6 +65,15 @@ type ParentReportMessageNotification = {
   read_by_parent: boolean;
 };
 
+type AcceptedGuidanceTicketNotification = {
+  id: number;
+  report_id: number;
+  parent_id: number;
+  status: "accepted";
+  decided_at: string | null;
+  created_at: string;
+};
+
 type ParentDeletionNotification = {
   id: number;
   parent_id: number;
@@ -124,6 +133,47 @@ function messageNotificationText(message: StaffMessageNotification, senderName: 
   return subject
     ? `${senderName} sent an attachment about: ${subject}`
     : `${senderName} (${senderRole}) sent an attachment.`;
+}
+
+type StaffMessageConversationNotification = {
+  conversationId: number;
+  latestMessage: StaffMessageNotification;
+  unread: boolean;
+};
+
+/**
+ * `staff_messages` has one durable row per reply. The Parent notification feed
+ * is conversation-level, so combine a root message and every follow-up that
+ * shares its `source_message_id`. The most recent incoming row supplies the
+ * preview while any unread incoming row keeps the one conversation alerting.
+ */
+function collapseStaffMessageNotifications(rows: StaffMessageNotification[]) {
+  const conversations = new Map<number, StaffMessageConversationNotification>();
+
+  for (const message of rows) {
+    const messageId = Number(message.id);
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) continue;
+    const conversationId = Number(message.source_message_id) || messageId;
+    const unread = String(message.status ?? "").toLowerCase() === "unread";
+    const current = conversations.get(conversationId);
+
+    if (!current) {
+      conversations.set(conversationId, { conversationId, latestMessage: message, unread });
+      continue;
+    }
+
+    const currentTime = Date.parse(String(current.latestMessage.created_at));
+    const messageTime = Date.parse(String(message.created_at));
+    const isLater = messageTime > currentTime
+      || (messageTime === currentTime && messageId > Number(current.latestMessage.id));
+    conversations.set(conversationId, {
+      conversationId,
+      latestMessage: isLater ? message : current.latestMessage,
+      unread: current.unread || unread,
+    });
+  }
+
+  return [...conversations.values()];
 }
 
 /**
@@ -299,7 +349,7 @@ export async function GET() {
     // Subject Teacher reports remain in the existing report workflow. Their
     // notification is derived from that source row, so it cannot duplicate or
     // drift from the report sidebar's read state.
-    const [subjectTeacherReportsResult, studentConcernReportsResult, staffMessagesResult] = await Promise.all([
+    const [subjectTeacherReportsResult, studentConcernReportsResult, staffMessagesResult, acceptedGuidanceTicketsResult] = await Promise.all([
       studentNames.size > 0
         ? supabase
           .from("parent_adviser_reports")
@@ -337,13 +387,27 @@ export async function GET() {
         .gte("created_at", retentionStart)
         .order("created_at", { ascending: false })
         .limit(100),
+      // Ticket acceptance has a durable decision timestamp and is scoped to
+      // this exact Parent. It is the source of the Parent's one-per-ticket
+      // Guidance acceptance notification, including while they are offline.
+      supabase
+        .from("parent_report_guidance_tickets")
+        .select("id, report_id, parent_id, status, decided_at, created_at")
+        .eq("parent_id", session.id)
+        .eq("status", "accepted")
+        .not("decided_at", "is", null)
+        .gte("decided_at", retentionStart)
+        .order("decided_at", { ascending: false })
+        .limit(100),
     ]);
     const { data: subjectTeacherReportRows, error: subjectTeacherReportsError } = subjectTeacherReportsResult;
     const { data: studentConcernReportRows, error: studentConcernReportsError } = studentConcernReportsResult;
     if (subjectTeacherReportsError) throw subjectTeacherReportsError;
     if (studentConcernReportsError) throw studentConcernReportsError;
     if (staffMessagesResult.error) throw staffMessagesResult.error;
+    if (acceptedGuidanceTicketsResult.error) throw acceptedGuidanceTicketsResult.error;
     const staffMessageRows = (staffMessagesResult.data ?? []) as StaffMessageNotification[];
+    const acceptedGuidanceTickets = (acceptedGuidanceTicketsResult.data ?? []) as AcceptedGuidanceTicketNotification[];
     const reportNotificationsById = new Map<number, ParentReportNotification>();
     for (const row of [
       ...((subjectTeacherReportRows ?? []) as ParentReportNotification[]),
@@ -352,6 +416,21 @@ export async function GET() {
       reportNotificationsById.set(Number(row.id), row);
     }
     const reportNotificationRows = [...reportNotificationsById.values()];
+    const acceptedTicketReportIds = [...new Set(acceptedGuidanceTickets
+      .map((ticket) => Number(ticket.report_id))
+      .filter((reportId) => Number.isSafeInteger(reportId) && reportId > 0))];
+    const { data: acceptedTicketReportRows, error: acceptedTicketReportsError } = acceptedTicketReportIds.length > 0
+      ? await supabase
+        .from("parent_adviser_reports")
+        .select("id, student_name, subject, adviser_name, created_at, parent_seen_at")
+        .eq("parent_id", session.id)
+        .in("id", acceptedTicketReportIds)
+      : { data: [] as ParentReportNotification[], error: null };
+    if (acceptedTicketReportsError) throw acceptedTicketReportsError;
+    const acceptedTicketReportById = new Map<number, ParentReportNotification>(
+      ((acceptedTicketReportRows ?? []) as ParentReportNotification[])
+        .map((report) => [Number(report.id), report]),
+    );
     const { data: reportMessageNotificationRows, error: reportMessageNotificationsError } = reportNotificationRows.length > 0
       ? await supabase
         .from("parent_adviser_report_messages")
@@ -592,18 +671,17 @@ export async function GET() {
       }]
       : [];
 
-    const staffMessageNotificationRows = staffMessageRows
-      .map((message) => {
+    const staffMessageNotificationRows = collapseStaffMessageNotifications(staffMessageRows)
+      .map(({ conversationId, latestMessage: message, unread }) => {
         const messageId = Number(message.id);
         if (!Number.isSafeInteger(messageId) || messageId <= 0) return null;
-        const conversationId = Number(message.source_message_id) || messageId;
         const senderRole = staffRoleLabel(message.sender_type);
         const senderName = String(message.sender_name ?? "").trim() || senderRole;
-        const unread = String(message.status ?? "").toLowerCase() === "unread";
         return {
-          // This namespace cannot collide with announcement IDs. The original
-          // message ID stays on the item for secure read acknowledgement.
-          id: 1_500_000_000 + messageId,
+          // This namespace cannot collide with announcement IDs. Use the root
+          // conversation ID so a new reply updates this one notification
+          // rather than creating another Parent alert card.
+          id: 1_500_000_000 + conversationId,
           staffMessageId: messageId,
           staffMessageConversationId: conversationId,
           type: "message" as const,
@@ -627,7 +705,37 @@ export async function GET() {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...staffMessageNotificationRows]
+    const acceptedGuidanceTicketNotificationRows = acceptedGuidanceTickets
+      .map((ticket) => {
+        const report = acceptedTicketReportById.get(Number(ticket.report_id));
+        if (!report) return null;
+        const acceptedAt = ticket.decided_at ?? ticket.created_at;
+        const acceptedAtMs = Date.parse(acceptedAt);
+        const parentSeenAtMs = Date.parse(String(report.parent_seen_at ?? ""));
+        const unread = Number.isFinite(acceptedAtMs)
+          && (!Number.isFinite(parentSeenAtMs) || acceptedAtMs > parentSeenAtMs);
+        return {
+          // A ticket can transition from pending to accepted once. Its durable
+          // ticket ID is therefore the notification's idempotency key: retries
+          // and Realtime reconnects update this row instead of adding a copy.
+          id: 1_250_000_000 + Number(ticket.id),
+          reportId: Number(report.id),
+          type: "message" as const,
+          title: "Guidance accepted your ticket",
+          msg: `Your ticket for "${report.subject}" has been accepted. Continue the conversation in Reports.`,
+          time: timeLabel(acceptedAt),
+          category: "Guidance" as const,
+          unread,
+          tab: ["All", ...(unread ? ["Unread" as const] : []), "Guidance" as const],
+          teacherName: "Guidance Counselor",
+          senderName: "Guidance Counselor",
+          senderRole: "Guidance" as const,
+          createdAt: acceptedAt,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...staffMessageNotificationRows, ...acceptedGuidanceTicketNotificationRows]
       .concat(reportNotificationRows.map((report) => {
         const isStudentConcern = /^\[Student Concern\]\s*/i.test(String(report.subject ?? ""));
         const latestMessage = latestReportMessageById.get(Number(report.id));

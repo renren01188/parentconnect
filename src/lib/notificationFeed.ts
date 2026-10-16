@@ -10,6 +10,8 @@ export type NotificationFeedItem = {
   id: string | number;
   announcementId?: string | number | null;
   staffMessageId?: string | number | null;
+  /** Root direct-message ID. Replies share this stable conversation key. */
+  staffMessageConversationId?: string | number | null;
   senderRole?: string | null;
   category?: string | null;
   createdAt?: string | null;
@@ -27,6 +29,9 @@ type NotificationFeedMergeOptions = {
 };
 
 export function notificationFeedKey(item: NotificationFeedItem) {
+  if (item.staffMessageConversationId !== undefined && item.staffMessageConversationId !== null) {
+    return `staff-conversation:${item.staffMessageConversationId}`;
+  }
   if (item.staffMessageId !== undefined && item.staffMessageId !== null) {
     return `staff-message:${item.staffMessageId}`;
   }

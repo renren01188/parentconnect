@@ -10,6 +10,8 @@ const parentLayout = read("src/app/dashboard/parent/layout.tsx");
 const parentNotifications = read("src/app/dashboard/parent/context/NotificationContext.tsx");
 const parentNotificationsPage = read("src/app/dashboard/parent/notifications/page.tsx");
 const parentNotificationsRoute = read("src/app/api/parents/notifications/route.ts");
+const parentReportMapper = read("src/app/api/reports/parent-adviser/_lib.ts");
+const guidanceTicketDecisionRoute = read("src/app/api/reports/guidance/tickets/[id]/route.ts");
 const adviserAnnouncements = read("src/app/api/adviser/announcements/route.ts");
 
 assert.match(parentLayout, /<NotificationProvider>/, "The Parent layout must mount its shared notification provider on every dashboard route.");
@@ -23,5 +25,21 @@ assert.match(parentNotificationsPage, /loadNotifications\(\)/);
 assert.match(parentNotificationsRoute, /publishRealtimeInvalidation\(\[\{ role: "parent", id: session\.id \}\], "notifications"\)/, "Read state must synchronize across Parent tabs.");
 assert.match(adviserAnnouncements, /parent_announcement_notifications/, "Adviser announcements must create durable Parent notification rows.");
 assert.match(adviserAnnouncements, /publishRealtimeInvalidation\(realtimeRecipients, "announcements"\)/, "Adviser announcements must wake target Parent dashboards.");
+
+// Guidance acceptance is a durable ticket transition, not just a transient
+// client event. One ticket is allowed per report, and its saved acceptance
+// timestamp powers exactly one Parent notification/read state.
+assert.match(guidanceTicketDecisionRoute, /\.eq\("status", "pending"\)/);
+assert.match(guidanceTicketDecisionRoute, /parentId: report\.parent_id/);
+assert.match(guidanceTicketDecisionRoute, /kind: "status"/);
+assert.match(parentReportMapper, /const ticketAcceptedAt = ticket\?\.status === "accepted" \? ticket\.decided_at : null/);
+assert.match(parentReportMapper, /const acceptedTicketIsUnread = Boolean\(/);
+assert.match(parentReportMapper, /const unread = !isResolved && \(hasUnreadStaffMessage \|\| acceptedTicketIsUnread\)/);
+assert.match(parentNotificationsRoute, /from\("parent_report_guidance_tickets"\)[\s\S]*?\.eq\("parent_id", session\.id\)[\s\S]*?\.eq\("status", "accepted"\)/);
+assert.match(parentNotificationsRoute, /const acceptedTicketReportById = new Map<number, ParentReportNotification>/);
+assert.match(parentNotificationsRoute, /id: 1_250_000_000 \+ Number\(ticket\.id\)/);
+assert.match(parentNotificationsRoute, /title: "Guidance accepted your ticket"/);
+assert.match(parentNotificationsRoute, /reportId: Number\(report\.id\)/);
+assert.match(parentNotificationsRoute, /acceptedAtMs > parentSeenAtMs/);
 
 console.log("Parent notification Realtime coverage checks passed.");

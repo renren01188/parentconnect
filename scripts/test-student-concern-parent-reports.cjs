@@ -68,6 +68,33 @@ assert.match(parentNotificationContext, /scope === "reports" \|\| scope === "sta
 assert.doesNotMatch(parentDashboard, /FALLBACK_STUDENTS|REMOVED_REPORT_SAMPLE|REMOVED_MESSAGE_SAMPLE/);
 assert.doesNotMatch(parentData, /INITIAL_REPORTS|INITIAL_NOTIFICATIONS/);
 
+// Parent Reports deliberately keeps report records and standalone staff
+// conversations in distinct panels. Direct-message items never pass through
+// the report list, category filter, status timeline, or ticket controls.
+assert.match(parentReportsPage, /type ParentReportsPanel = "reports" \| "schoolMessages"/);
+assert.match(parentReportsPage, /const parentSubmittedReports = sortParentReportConversations\([\s\S]*?!report\.isStandaloneStaffMessage/);
+assert.match(parentReportsPage, /const schoolMessages = sortParentReportConversations\([\s\S]*?report\.isStandaloneStaffMessage/);
+assert.match(parentReportsPage, /const activePanelItems = activePanel === "reports" \? parentSubmittedReports : schoolMessages/);
+assert.match(parentReportsPage, /role="tablist" aria-label="Parent reports panels"/);
+assert.match(parentReportsPage, /Reports Panel/);
+assert.match(parentReportsPage, /School Messages Panel/);
+assert.match(parentReportsPage, /Direct messages from your Adviser, Guidance, or Principal\./);
+assert.match(parentReportsPage, /setActivePanel\(selected\.isStandaloneStaffMessage \? "schoolMessages" : "reports"\)/);
+assert.match(parentReportsPage, /activePanel === "reports" && <div data-parent-guide="category-filter"/);
+assert.match(parentReportsPage, /r\.isStandaloneStaffMessage && \([\s\S]*?\{r\.recipientRole\}/);
+assert.match(parentReportsPage, /selectedReport\.isStandaloneStaffMessage \? `School message from \$\{selectedReport\.recipientName\}`/);
+assert.match(parentReportsPage, /Direct school message from <strong>\{selectedReport\.recipientName\}<\/strong>/);
+assert.match(parentReportsPage, /!selectedReport\.isStandaloneStaffMessage && selectedReport\.reportStatus === "Resolved"/);
+
+// Selecting a card uses that exact report and canonicalizes the client route.
+// A previously opened `?reportId=` may be applied once for deep links, but a
+// background refresh must not overwrite a later manual selection with it.
+assert.match(parentReportsPage, /function handleSelect\(selected: Report\)/);
+assert.match(parentReportsPage, /params\.set\("reportId", String\(selected\.id\)\)/);
+assert.match(parentReportsPage, /router\.replace\(`\$\{pathname\}\?\$\{nextQuery\}`, \{ scroll: false \}\)/);
+assert.match(parentReportsPage, /lastAppliedRouteSelectionRef\.current === routeSelectionKey/);
+assert.match(parentReportsPage, /onClick=\{\(\) => handleSelect\(r\)\}/);
+
 // Refreshes only leave the dashboard for an explicit invalid/expired session.
 // Temporary profile/API failures retain the HttpOnly cookie and offer a retry.
 assert.match(parentSessionGate, /response\.status === 401 \|\| response\.status === 403/);

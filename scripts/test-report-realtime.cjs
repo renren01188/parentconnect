@@ -55,6 +55,9 @@ assert.match(realtimeSubscriber, /fetch\("\/api\/realtime\/channel"/);
 assert.match(adviserReports, /useReportMessagesRealtime\(refreshAdviserInbox/);
 assert.match(adviserReports, /event\.reportId !== null && event\.reportId === selectedReportId \? loadReportDetail\(event\.reportId\)/);
 assert.match(adviserReports, /setSelectedReport\(\(current\) => current\?\.id === id \? report : current\)/);
+assert.match(adviserReports, /reportDetailRefreshQueuedRef/);
+assert.match(adviserReports, /if \(inFlight\) \{[\s\S]*?reportDetailRefreshQueuedRef\.current\.add\(id\)[\s\S]*?return inFlight;/);
+assert.match(adviserReports, /do \{[\s\S]*?reportDetailRefreshQueuedRef\.current\.delete\(id\)[\s\S]*?\} while \(reportDetailRefreshQueuedRef\.current\.has\(id\)\)/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "reports"\)/);
 assert.match(reportRealtimeHook, /scheduleReportRefresh\(invalidation\)/);
 assert.match(
@@ -87,12 +90,18 @@ assert.match(guidanceReports, /role: "guidance"[\s\S]*?recipientId: payload\.rec
 assert.match(guidanceReports, /setSelectedAdminMsg\(\(current\) => \{[\s\S]*?requestedConversationId[\s\S]*?nextMessages\.find[\s\S]*?\?\? current/);
 assert.match(principalReports, /useReportMessagesRealtime\(refreshPrincipalInbox/);
 assert.match(principalReports, /Promise\.all\(\[loadPrincipalReports\(\), loadPrincipalMessages\(\)\]\)/);
+assert.match(principalReports, /principalMessagesRequestVersionRef/);
+assert.match(principalReports, /const requestVersion = \+\+principalMessagesRequestVersionRef\.current/);
+assert.match(principalReports, /if \(requestVersion !== principalMessagesRequestVersionRef\.current\) return;/);
 
 // Both Guidance and Adviser keep the selected standalone conversation in sync
 // when its inbox snapshot changes, so parent replies appear in-place in either
 // direction rather than requiring a navigation or page reload.
 assert.match(guidanceReports, /setSelectedAdminMsg\(\(current\) => \{[\s\S]*?requestedConversationId[\s\S]*?nextMessages\.find[\s\S]*?\?\? current/);
 assert.match(adviserReports, /setSelectedAdminMsg\(current => current[\s\S]*?adminMessageKey\(message\) === adminMessageKey\(current\)[\s\S]*?\?\? current/);
+assert.match(adviserReports, /adminMessagesRequestVersionRef/);
+assert.match(adviserReports, /const requestVersion = \+\+adminMessagesRequestVersionRef\.current/);
+assert.match(adviserReports, /if \(requestVersion !== adminMessagesRequestVersionRef\.current\) return \[\];/);
 assert.match(adviserReports, /role: "adviser"[\s\S]*?recipientId,/);
 
 // Public Student Reports wake the assigned Adviser and active Principal only

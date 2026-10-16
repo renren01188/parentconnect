@@ -49,11 +49,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [escalatedCount, setEscalatedCount] = useState(0);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
+  // A ticket can be submitted while the provider's initial count fetch is
+  // still pending. Only the newest authorized snapshot may update sidebar
+  // counts, otherwise that older response can erase the live ticket badge.
+  const guidanceCountRequestVersionRef = useRef(0);
   const ictBadgeVersionRef = useRef(0);
   const ictSeenAtRef = useRef(ictSeenTimestamp());
   const [principalAnnouncementUnreadCount, setPrincipalAnnouncementUnreadCount] = useState(0);
 
   const refreshGuidanceCounts = useCallback(async () => {
+    const requestVersion = ++guidanceCountRequestVersionRef.current;
     try {
       const [reportsRes, staffRes, ticketsRes] = await Promise.all([
         fetch("/api/reports/parent-adviser?role=guidance", { cache: "no-store" }),
@@ -96,6 +101,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             (message) => message.status === "New" && message.sender !== "ICT",
           ).length
         : 0;
+      // A later Realtime invalidation has already started a fresher count
+      // request. Do not let this stale pre-ticket snapshot hide its badge.
+      if (requestVersion !== guidanceCountRequestVersionRef.current) return;
       const nextCount = reportCount + reportStaffCount + pendingTicketCount;
       setUnreadCount(nextCount);
       setReportsUnreadCount(reportCount + reportStaffCount + pendingTicketCount);
@@ -114,6 +122,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         : 0;
       setEscalatedCount(activeGuidanceConcernCount + pendingTicketCount);
     } catch {
+      if (requestVersion !== guidanceCountRequestVersionRef.current) return;
       setUnreadCount(0);
       setReportsUnreadCount(0);
       setEscalatedCount(0);

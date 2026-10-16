@@ -82,6 +82,8 @@ export interface Report {
   allowHistoryAccess?: boolean | null;
   ticketId?: number | null;
   ticketStatus?: "pending" | "accepted" | "rejected" | null;
+  /** Saved acceptance time used to derive the durable Parent ticket notification. */
+  ticketAcceptedAt?: string | null;
   ticketRejectionReason?: string | null;
   /** Only reports originally submitted by this Parent can be cancelled. */
   canCancel?: boolean;

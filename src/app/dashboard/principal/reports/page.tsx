@@ -1286,6 +1286,9 @@ function PrincipalReportsPageContent() {
   const [loadingReports, setLoadingReports] = useState(true);
   const statusOverridesRef = useRef<Record<number, { status: ReportStatus; at: number }>>({});
   const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+  // A Realtime message can arrive before the first Reports-message snapshot
+  // resolves. Only allow the newest snapshot to replace the selected thread.
+  const principalMessagesRequestVersionRef = useRef(0);
   const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
   const [replyText, setReplyText] = useState("");
@@ -1509,6 +1512,7 @@ function PrincipalReportsPageContent() {
   }, [loadReportDetail]);
 
   const loadPrincipalMessages = useCallback(async (preferredConversationId?: string) => {
+    const requestVersion = ++principalMessagesRequestVersionRef.current;
     const res = await fetch("/api/reports/principal-messages", { cache: "no-store" });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -1518,6 +1522,10 @@ function PrincipalReportsPageContent() {
       console.warn("Principal messages are temporarily unavailable:", data?.message || res.statusText);
       return;
     }
+    // An older initial fetch must never erase a row loaded after a message
+    // invalidation; otherwise an idle Principal would only see it after a
+    // manual refresh or a reply.
+    if (requestVersion !== principalMessagesRequestVersionRef.current) return;
     setStaffRecipients((data?.staff ?? []) as StaffRecipient[]);
     setParentRecipients((data?.parents ?? []) as ParentRecipient[]);
     // Parent-report conversations belong in Escalated Reports, while the
