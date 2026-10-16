@@ -12,6 +12,7 @@ const realtimeHook = read("src/hooks/useStaffMessagesRealtime.ts");
 const sessionInvalidation = read("src/hooks/useSessionInvalidation.ts");
 const realtimeSubscriber = read("src/lib/subscribeRealtimeInvalidations.ts");
 const realtimeChannelRoute = read("src/app/api/realtime/channel/route.ts");
+const browserSupabase = read("src/lib/supabaseBrowser.ts");
 const ictNotifications = read("src/app/dashboard/ict/context/NotificationContext.tsx");
 const guidanceIctRoute = read("src/app/api/guidance-ict/messages/route.ts");
 const principalIctRoute = read("src/app/api/principal-ict/messages/route.ts");
@@ -145,6 +146,13 @@ assert.match(read("src/app/api/principal-ict/messages/route.ts"), /kind: "messag
 // A first subscription has the same short race window as a reconnect. Its
 // completion must therefore reconcile the page's protected snapshot too.
 assert.match(sessionInvalidation, /if \(status === "SUBSCRIBED"\) \{[\s\S]*?dispatch\(reconnectRefresh\)/);
+assert.match(sessionInvalidation, /export type RealtimeConnectionStatus = "CONNECTING" \| ChannelStatus/);
+assert.match(sessionInvalidation, /dispatchConnectionStatus\(status\)/);
+assert.match(sessionInvalidation, /if \(!client\) \{[\s\S]*?dispatchConnectionStatus\("CHANNEL_ERROR"\)/);
+assert.match(browserSupabase, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY[\s\S]*?NEXT_PUBLIC_SUPABASE_ANON_KEY/);
+assert.match(realtimeHook, /useSessionInvalidation\([\s\S]*?\(status\) => \{/);
+assert.match(realtimeHook, /connectionStatus === "SUBSCRIBED" \? 300_000 : 2_000/);
+assert.match(realtimeHook, /Checking for new messages automatically/);
 // Multiple role cookies can legitimately coexist in a testing or admin
 // browser. The mounted dashboard must request its own opaque capability
 // channel rather than accepting the endpoint's historical first-cookie role.

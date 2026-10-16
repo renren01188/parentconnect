@@ -9,6 +9,8 @@ import {
 } from "@/lib/subscribeRealtimeInvalidations";
 
 type InvalidationListener = (invalidation: RealtimeInvalidation) => void | Promise<void>;
+export type RealtimeConnectionStatus = "CONNECTING" | ChannelStatus;
+type ConnectionStatusListener = (status: RealtimeConnectionStatus) => void;
 
 const reconnectRefresh: RealtimeInvalidation = {
   scope: null,
@@ -25,16 +27,25 @@ const reconnectRefresh: RealtimeInvalidation = {
 // the same account topic. Keep one browser-local subscription and fan its
 // data-free events out to mounted consumers instead.
 const listeners = new Set<InvalidationListener>();
+const connectionStatusListeners = new Set<ConnectionStatusListener>();
 let channel: Awaited<ReturnType<typeof subscribeRealtimeInvalidations>> = null;
 let reconnectTimer: number | undefined;
 let connectAttempt = 0;
 let connecting = false;
 let connectionGeneration = 0;
 let clientForChannel: typeof supabaseBrowser | null = null;
+let lastConnectionStatus: RealtimeConnectionStatus = "CONNECTING";
 
 function dispatch(invalidation: RealtimeInvalidation) {
   for (const listener of listeners) {
     void Promise.resolve(listener(invalidation)).catch(() => null);
+  }
+}
+
+function dispatchConnectionStatus(status: RealtimeConnectionStatus) {
+  lastConnectionStatus = status;
+  for (const listener of connectionStatusListeners) {
+    listener(status);
   }
 }
 
@@ -60,6 +71,7 @@ function scheduleReconnect() {
 
 function handleStatus(status: ChannelStatus, generation: number) {
   if (generation !== connectionGeneration || listeners.size === 0) return;
+  dispatchConnectionStatus(status);
   if (status === "SUBSCRIBED") {
     connectAttempt = 0;
     // Reconcile after every successful join, including the first one. A row
@@ -78,9 +90,13 @@ function handleStatus(status: ChannelStatus, generation: number) {
 async function connectSharedChannel() {
   if (listeners.size === 0 || connecting) return;
   const client = supabaseBrowser;
-  if (!client) return;
+  if (!client) {
+    dispatchConnectionStatus("CHANNEL_ERROR");
+    return;
+  }
 
   connecting = true;
+  dispatchConnectionStatus("CONNECTING");
   clientForChannel = client;
   const generation = ++connectionGeneration;
   try {
@@ -119,6 +135,7 @@ function stopSharedChannelWhenUnused() {
   }
   connectionGeneration += 1;
   connectAttempt = 0;
+  lastConnectionStatus = "CONNECTING";
   removeSharedChannel();
   clientForChannel = null;
 }
@@ -128,12 +145,20 @@ function stopSharedChannelWhenUnused() {
  * and active page. Consumers still filter scopes before re-reading their own
  * server-authorized snapshot.
  */
-export function useSessionInvalidation(onInvalidate: InvalidationListener) {
+export function useSessionInvalidation(
+  onInvalidate: InvalidationListener,
+  onConnectionStatus?: ConnectionStatusListener,
+) {
   const callbackRef = useRef(onInvalidate);
+  const connectionStatusRef = useRef(onConnectionStatus);
 
   useEffect(() => {
     callbackRef.current = onInvalidate;
   }, [onInvalidate]);
+
+  useEffect(() => {
+    connectionStatusRef.current = onConnectionStatus;
+  }, [onConnectionStatus]);
 
   useEffect(() => {
     const listener: InvalidationListener = (invalidation) => callbackRef.current(invalidation);
@@ -145,4 +170,14 @@ export function useSessionInvalidation(onInvalidate: InvalidationListener) {
       stopSharedChannelWhenUnused();
     };
   }, []);
+
+  useEffect(() => {
+    if (!onConnectionStatus) return;
+    const listener: ConnectionStatusListener = (status) => connectionStatusRef.current?.(status);
+    connectionStatusListeners.add(listener);
+    listener(lastConnectionStatus);
+    return () => {
+      connectionStatusListeners.delete(listener);
+    };
+  }, [onConnectionStatus]);
 }
