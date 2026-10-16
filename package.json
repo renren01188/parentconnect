@@ -63,7 +63,9 @@
     "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs",
     "test:guardian-temp-password-delivery": "node scripts/test-guardian-temp-password-delivery.cjs",
     "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs",
-    "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs"
+    "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs",
+    "test:dashboard-idle-timeout": "node scripts/test-dashboard-idle-timeout.cjs",
+    "test:parent-report-adviser-link": "node scripts/test-parent-report-adviser-link.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

@@ -10,6 +10,8 @@ const sharedRoute = read("src/app/api/reports/staff-messages/route.ts");
 const ictInbox = read("src/app/dashboard/ict/inbox/page.tsx");
 const realtimeHook = read("src/hooks/useStaffMessagesRealtime.ts");
 const sessionInvalidation = read("src/hooks/useSessionInvalidation.ts");
+const realtimeSubscriber = read("src/lib/subscribeRealtimeInvalidations.ts");
+const realtimeChannelRoute = read("src/app/api/realtime/channel/route.ts");
 const ictNotifications = read("src/app/dashboard/ict/context/NotificationContext.tsx");
 const guidanceIctRoute = read("src/app/api/guidance-ict/messages/route.ts");
 const principalIctRoute = read("src/app/api/principal-ict/messages/route.ts");
@@ -143,6 +145,13 @@ assert.match(read("src/app/api/principal-ict/messages/route.ts"), /kind: "messag
 // A first subscription has the same short race window as a reconnect. Its
 // completion must therefore reconcile the page's protected snapshot too.
 assert.match(sessionInvalidation, /if \(status === "SUBSCRIBED"\) \{[\s\S]*?dispatch\(reconnectRefresh\)/);
+// Multiple role cookies can legitimately coexist in a testing or admin
+// browser. The mounted dashboard must request its own opaque capability
+// channel rather than accepting the endpoint's historical first-cookie role.
+assert.match(realtimeSubscriber, /dashboardRoleFromPathname/);
+assert.match(realtimeSubscriber, /\/api\/realtime\/channel\?role=\$\{encodeURIComponent\(role\)\}/);
+assert.match(realtimeChannelRoute, /async function recipientForRole\(role: DashboardRealtimeRole\)/);
+assert.match(realtimeChannelRoute, /requestedRole[\s\S]*?\? await recipientForRole\(requestedRole as DashboardRealtimeRole\)/);
 // Adviser sends, ICT replies, and ICT-created threads all identify the saved
 // conversation in the same data-free Realtime event.
 assert.match(read("src/app/api/adviser-ict/messages/route.ts"), /kind: "message",[\s\S]*?conversationId: conversationId\(rootId \?\? Number\(createdMessage\.id\)\)/);

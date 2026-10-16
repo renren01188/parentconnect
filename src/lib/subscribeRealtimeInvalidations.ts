@@ -27,6 +27,19 @@ export type RealtimeInvalidation = {
   sessionRevoked: boolean;
 };
 
+type DashboardRealtimeRole = "parent" | "adviser" | "guidance" | "principal" | "ict";
+
+/**
+ * Role cookies intentionally have different names so an authorized tester or
+ * administrator can be signed in to more than one dashboard in one browser.
+ * The shared Realtime channel must follow the dashboard being viewed, not the
+ * first valid role cookie found by the server.
+ */
+function dashboardRoleFromPathname(pathname: string): DashboardRealtimeRole | null {
+  const match = /^\/dashboard\/(parent|adviser|guidance|principal|ict)(?:\/|$)/.exec(pathname);
+  return (match?.[1] as DashboardRealtimeRole | undefined) ?? null;
+}
+
 /** Opens the current account's opaque, data-free broadcast channel. */
 export async function subscribeRealtimeInvalidations(
   client: SupabaseClient,
@@ -34,7 +47,11 @@ export async function subscribeRealtimeInvalidations(
   onStatus?: (status: ChannelStatus) => void,
 ): Promise<RealtimeChannel | null> {
   try {
-    const response = await fetch("/api/realtime/channel", { cache: "no-store" });
+    const role = typeof window === "undefined" ? null : dashboardRoleFromPathname(window.location.pathname);
+    const channelUrl = role
+      ? `/api/realtime/channel?role=${encodeURIComponent(role)}`
+      : "/api/realtime/channel";
+    const response = await fetch(channelUrl, { cache: "no-store" });
     const data = await response.json().catch(() => null);
     if (!response.ok || typeof data?.topic !== "string" || !data.topic) return null;
 

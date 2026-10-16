@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { adviserIsAssignedToStudent } from "@/lib/adviserAssignment";
 
 export type StudentReportRow = {
   id: number;
@@ -90,14 +91,5 @@ export async function findAssignedAdviser(grade: string, section: string) {
 
   if (error) throw error;
 
-  return (data ?? []).find((adviser) => {
-    const adviserSections = Array.isArray(adviser.sections) && adviser.sections.length > 0
-      ? adviser.sections
-      : adviser.section
-      ? [adviser.section]
-      : [];
-
-    return normalize(adviser.grade) === normalize(grade)
-      && adviserSections.some((item: string) => normalize(item) === normalize(section));
-  });
+  return (data ?? []).find((adviser) => adviserIsAssignedToStudent(adviser, { grade, section }));
 }

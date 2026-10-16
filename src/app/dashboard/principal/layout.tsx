@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Menu } from "lucide-react";
 import Link from "next/link";
 import SessionRevocationGuard from "@/components/SessionRevocationGuard";
+import IdleSessionTimeout from "@/components/IdleSessionTimeout";
 import Sidebar from "./components/Sidebar";
 import { NotificationProvider } from "./context/NotificationContext";
 
@@ -12,6 +13,7 @@ export default function PrincipalLayout({ children }: { children: React.ReactNod
 
   return (
     <NotificationProvider>
+      <IdleSessionTimeout role="principal" logoutEndpoint="/api/auth/principal/logout" loginPath="/login/principal" />
       <SessionRevocationGuard role="principal" loginPath="/login/principal" />
       {/* Full-height flex row: sidebar + content */}
       <div className="flex h-screen overflow-hidden bg-gray-50">

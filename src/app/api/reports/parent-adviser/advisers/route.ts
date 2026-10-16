@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getParentSession, initials } from "../_lib";
+import { adviserIsAssignedToStudent } from "@/lib/adviserAssignment";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
+}
+
+function studentFromRelation(value: unknown) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 export async function GET() {
@@ -32,7 +37,7 @@ export async function GET() {
 
     const recipients = [];
     for (const parentLink of parentLinks ?? []) {
-      const student = parentLink.students as unknown as {
+      const student = studentFromRelation(parentLink.students) as {
         student_id: string;
         first_name: string;
         middle_name?: string | null;
@@ -42,14 +47,9 @@ export async function GET() {
         section?: string | null;
       };
 
-      const adviser = (advisers ?? []).find((row) => {
-        const adviserSections = Array.isArray(row.sections) && row.sections.length > 0
-          ? row.sections
-          : row.section
-          ? [row.section]
-          : [];
-        return row.grade === student.grade && adviserSections.includes(student.section ?? "");
-      });
+      if (!student?.student_id) continue;
+
+      const adviser = (advisers ?? []).find((row) => adviserIsAssignedToStudent(row, student));
 
       if (!adviser) continue;
 

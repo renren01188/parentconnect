@@ -4,6 +4,7 @@ import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import { sendParentReportAdviserEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { adviserIsAssignedToStudent } from "@/lib/adviserAssignment";
 import {
   getAdviserSession,
   getGuidanceSession,
@@ -387,6 +388,7 @@ export async function POST(req: NextRequest) {
       .from("advisers")
       .select("id, first_name, last_name, email, grade, section, sections")
       .eq("id", adviserId)
+      .eq("status", "active")
       .limit(1);
 
     if (adviserError) throw adviserError;
@@ -440,13 +442,7 @@ export async function POST(req: NextRequest) {
       .filter(Boolean)
       .join(" ");
     const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
-    const adviserSections = Array.isArray(adviser.sections) && adviser.sections.length > 0
-      ? adviser.sections
-      : adviser.section
-      ? [adviser.section]
-      : [];
-
-    if (adviser.grade !== student.grade || !adviserSections.includes(student.section ?? "")) {
+    if (!adviserIsAssignedToStudent(adviser, student)) {
       return NextResponse.json(
         { success: false, message: "Selected adviser is not assigned to this student." },
         { status: 403 }

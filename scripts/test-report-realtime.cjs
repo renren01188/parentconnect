@@ -47,7 +47,8 @@ assert.match(realtimePublisher, /scope: "reports"/);
 assert.match(messageRoute, /parentId: report\.parent_id/);
 assert.match(messageRoute, /adviserId: principalConversation \|\| guidanceConversation \? null : report\.adviser_id/);
 assert.match(realtimeSubscriber, /\.on\("broadcast", \{ event: "invalidate" \}/);
-assert.match(realtimeSubscriber, /fetch\("\/api\/realtime\/channel"/);
+assert.match(realtimeSubscriber, /const channelUrl = role[\s\S]*?\/api\/realtime\/channel\?role=\$\{encodeURIComponent\(role\)\}/);
+assert.match(realtimeSubscriber, /fetch\(channelUrl/);
 
 // The Adviser page applies a report-specific refresh without a navigation,
 // preserves the selected conversation, and reconnects through the shared
@@ -64,6 +65,21 @@ assert.match(
   reportRealtimeHook,
   /if \(invalidation\.kind === "message"\)[\s\S]*?void refreshReport\(invalidation\)/,
   "a committed report message must begin its targeted refresh immediately",
+);
+assert.match(
+  reportRealtimeHook,
+  /reportRefreshInFlightRef[\s\S]*?queuedReportInvalidationRef/,
+  "bursts of durable message events must retain one authoritative follow-up refresh",
+);
+assert.match(
+  reportRealtimeHook,
+  /if \(isDurableMessage && reportRefreshInFlightRef\.current\)[\s\S]*?queuedReportInvalidationRef\.current = invalidation/,
+  "a later report reply must not race the currently loading detail snapshot",
+);
+assert.match(
+  reportRealtimeHook,
+  /const queuedInvalidation = queuedReportInvalidationRef\.current[\s\S]*?void refreshReport\(queuedInvalidation\)/,
+  "the queued report event must be re-read after the prior refresh completes",
 );
 assert.match(sessionInvalidation, /CHANNEL_ERROR.*TIMED_OUT.*CLOSED/s);
 assert.match(sessionInvalidation, /scheduleReconnect\(\)/);

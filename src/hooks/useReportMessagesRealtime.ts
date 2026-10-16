@@ -43,6 +43,12 @@ export function useReportMessagesRealtime(
   const refreshTimerRef = useRef<number | undefined>(undefined);
   const reportTimerRef = useRef<number | undefined>(undefined);
   const pendingReportUpdateRef = useRef<RealtimeInvalidation | null>(null);
+  // Durable message Broadcasts can arrive in a burst while the selected
+  // conversation is loading. Process them one at a time so a later event
+  // cannot be lost in the small window where an earlier detail request is
+  // completing and its page-level request queue is being cleared.
+  const reportRefreshInFlightRef = useRef(false);
+  const queuedReportInvalidationRef = useRef<RealtimeInvalidation | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
 
@@ -129,6 +135,18 @@ export function useReportMessagesRealtime(
   }, [refresh, scheduleRefresh]);
 
   const refreshReport = useCallback(async (invalidation: RealtimeInvalidation) => {
+    // Typing is ephemeral and belongs to the active composer only. Never
+    // queue it behind a network refresh or delay clearing the indicator.
+    const isDurableMessage = invalidation.kind === "message";
+    if (isDurableMessage && reportRefreshInFlightRef.current) {
+      // One authoritative follow-up read is enough: it happens after the
+      // current read and therefore contains every report reply committed up
+      // to the most recent Broadcast.
+      queuedReportInvalidationRef.current = invalidation;
+      return;
+    }
+
+    if (isDurableMessage) reportRefreshInFlightRef.current = true;
     try {
       if (reportUpdateRef.current) await reportUpdateRef.current(invalidation);
       else await refresh();
@@ -137,6 +155,18 @@ export function useReportMessagesRealtime(
       // The normal authorized inbox snapshot is the safe fallback for a stale
       // ID or a report that is no longer accessible to this account.
       scheduleRefresh();
+    } finally {
+      if (isDurableMessage) {
+        reportRefreshInFlightRef.current = false;
+        const queuedInvalidation = queuedReportInvalidationRef.current;
+        queuedReportInvalidationRef.current = null;
+        if (queuedInvalidation && mountedRef.current) {
+          // Start the follow-up asynchronously so the completed callback can
+          // finish cleanly, while still preserving event order for the open
+          // conversation.
+          void refreshReport(queuedInvalidation);
+        }
+      }
     }
   }, [refresh, scheduleRefresh]);
 

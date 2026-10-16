@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import { NotificationProvider } from "./context/NotificationContext";
 import SessionRevocationGuard from "@/components/SessionRevocationGuard";
+import IdleSessionTimeout from "@/components/IdleSessionTimeout";
 
 export default function GuidanceLayout({
   children,
@@ -19,6 +20,7 @@ export default function GuidanceLayout({
 
   return (
     <NotificationProvider>
+      <IdleSessionTimeout role="guidance" logoutEndpoint="/api/auth/guidance/logout" loginPath="/login/guidance" />
       <SessionRevocationGuard role="guidance" loginPath="/login/guidance" />
       <div
         className="guidance-shell-uniform flex min-h-screen flex-col overflow-x-clip bg-slate-100 md:h-screen md:flex-row md:overflow-hidden"

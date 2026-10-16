@@ -300,7 +300,7 @@ function StatusTimeline({ status }: { status: ReportStatus }) {
 }
 
 // ── New Report Modal ──────────────────────────────────────────────────────────
-function NewReportModal({ onClose, onSubmit, advisers, cooldownMessage }: {
+function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisersError, onRetryAdvisers, cooldownMessage }: {
   onClose: () => void;
   onSubmit: (data: {
     adviserId: number;
@@ -314,6 +314,9 @@ function NewReportModal({ onClose, onSubmit, advisers, cooldownMessage }: {
     termsAccepted: boolean;
   }) => Promise<void>;
   advisers: AdviserRecipient[];
+  advisersLoading: boolean;
+  advisersError: string;
+  onRetryAdvisers: () => void;
   cooldownMessage: string | null;
 }) {
   const [adviserIdx, setAdviserIdx] = useState(0);
@@ -334,6 +337,10 @@ function NewReportModal({ onClose, onSubmit, advisers, cooldownMessage }: {
   const confirmationCloseButtonRef = useRef<HTMLButtonElement>(null);
   const confirmationOpenerRef = useRef<HTMLElement | null>(null);
   const adviser = advisers[adviserIdx];
+
+  useEffect(() => {
+    setAdviserIdx((current) => Math.min(current, Math.max(0, advisers.length - 1)));
+  }, [advisers.length]);
 
   // Compute concern level silently (used on submit, not shown to parent)
   const allCats = DEFAULT_CATEGORIES.map(n => ({ name: n, pct: CONCERN_PERCENTAGES[n] }));
@@ -465,13 +472,22 @@ function NewReportModal({ onClose, onSubmit, advisers, cooldownMessage }: {
   }
 
   if (!adviser) {
+    const message = advisersLoading
+      ? "Finding the class adviser linked to your child…"
+      : advisersError || "No active class adviser is linked to your children yet.";
+
     return (
       <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
         <div style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: "min(500px, calc(100vw - 24px))", padding: 24 }} onClick={e => e.stopPropagation()}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>New Report</h2>
-              <p style={{ fontSize: 13, color: "#64748b", margin: "8px 0 0" }}>No class adviser is linked to your children yet.</p>
+              <p role={advisersLoading ? "status" : advisersError ? "alert" : undefined} style={{ fontSize: 13, color: advisersError ? "#b91c1c" : "#64748b", margin: "8px 0 0" }}>{message}</p>
+              {!advisersLoading && advisersError && (
+                <button type="button" onClick={onRetryAdvisers} style={{ marginTop: 16, padding: "9px 14px", borderRadius: 9, border: "none", background: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  Try Again
+                </button>
+              )}
             </div>
             <button onClick={onClose} style={{ padding: 6, borderRadius: 8, border: "none", background: "transparent", color: "#94a3b8", cursor: "pointer" }}><X style={{ width: 16, height: 16 }} /></button>
           </div>
@@ -842,6 +858,8 @@ function ParentReportsPageContent() {
 
   const [reports, setReports] = useState<Report[]>([]);
   const [advisers, setAdvisers] = useState<AdviserRecipient[]>([]);
+  const [advisersLoading, setAdvisersLoading] = useState(true);
+  const [advisersError, setAdvisersError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [activePanel, setActivePanel] = useState<ParentReportsPanel>("reports");
@@ -864,6 +882,7 @@ function ParentReportsPageContent() {
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const detailRefreshQueuedRef = useRef<Set<number>>(new Set());
   const reportListRequestVersion = useRef(0);
+  const advisersRequestVersion = useRef(0);
   // Realtime callbacks are registered once by the shared dashboard channel.
   // Keep the current open report in a ref so a Broadcast received immediately
   // after a Parent selects a card cannot be handled with the prior selection.
@@ -914,6 +933,26 @@ function ParentReportsPageContent() {
         messages: [...report.messages, ...stillPending],
       };
     });
+  }, []);
+
+  const loadAdvisers = useCallback(async () => {
+    const requestVersion = ++advisersRequestVersion.current;
+    setAdvisersLoading(true);
+    setAdvisersError("");
+
+    try {
+      const response = await fetch("/api/reports/parent-adviser/advisers", { cache: "no-store" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message || "Unable to load your child’s class adviser.");
+      if (requestVersion !== advisersRequestVersion.current) return;
+
+      setAdvisers((data?.advisers ?? []) as AdviserRecipient[]);
+    } catch (error) {
+      if (requestVersion !== advisersRequestVersion.current) return;
+      setAdvisersError(error instanceof Error ? error.message : "Unable to load your child’s class adviser.");
+    } finally {
+      if (requestVersion === advisersRequestVersion.current) setAdvisersLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -1035,14 +1074,12 @@ function ParentReportsPageContent() {
       try {
         setLoading(true);
         setLoadError("");
-        const [reportsRes, advisersRes, staffMessagesRes] = await Promise.all([
+        const [reportsRes, staffMessagesRes] = await Promise.all([
           fetch("/api/reports/parent-adviser?summary=1", { cache: "no-store" }),
-          fetch("/api/reports/parent-adviser/advisers", { cache: "no-store" }),
           fetch("/api/reports/staff-messages?role=parent", { cache: "no-store" }),
         ]);
-        const [reportsData, advisersData, staffMessagesData] = await Promise.all([
+        const [reportsData, staffMessagesData] = await Promise.all([
           reportsRes.json().catch(() => null),
-          advisersRes.json().catch(() => null),
           staffMessagesRes.json().catch(() => null),
         ]);
 
@@ -1063,7 +1100,6 @@ function ParentReportsPageContent() {
             ? reportsData.reportSubmissionCooldownUntil
             : null,
         );
-        setAdvisers(advisersRes.ok ? ((advisersData?.advisers ?? []) as AdviserRecipient[]) : []);
         const firstReport = nextReports.find((report) => !report.isStandaloneStaffMessage);
         const firstSchoolMessage = nextReports.find((report) => report.isStandaloneStaffMessage);
         setSelectedId(firstReport?.id ?? firstSchoolMessage?.id ?? null);
@@ -1077,12 +1113,13 @@ function ParentReportsPageContent() {
       }
     }
 
-    loadInitialData();
+    void loadAdvisers();
+    void loadInitialData();
 
     return () => {
       isMounted = false;
     };
-  }, [loadReports, mergePendingMessages]);
+  }, [loadAdvisers, loadReports, mergePendingMessages]);
 
   // Sync sidebar Reports badge — only truly unread reports
   useEffect(() => {
@@ -1468,7 +1505,7 @@ function ParentReportsPageContent() {
             <p className="text-slate-500 text-sm mt-0.5">Submit and monitor your concerns with your class adviser</p>
             {cooldownMessage && <p role="status" className="mt-2 text-xs font-bold text-amber-700">{cooldownMessage}</p>}
           </div>
-          <button onClick={() => setShowModal(true)} disabled={Boolean(cooldownMessage)}
+          <button onClick={() => { setShowModal(true); void loadAdvisers(); }} disabled={Boolean(cooldownMessage)}
             data-parent-guide="new-report"
             className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold shadow-sm transition-colors sm:w-auto ${guideHighlight("new-report")}`}
             style={{ background: cooldownMessage ? "#93c5fd" : "#2563eb", color: "#fff", cursor: cooldownMessage ? "not-allowed" : "pointer" }}
@@ -1855,7 +1892,7 @@ function ParentReportsPageContent() {
         </div>
       </div>
 
-      {showModal && <NewReportModal advisers={advisers} cooldownMessage={cooldownMessage} onClose={() => setShowModal(false)} onSubmit={handleNewReport} />}
+      {showModal && <NewReportModal advisers={advisers} advisersLoading={advisersLoading} advisersError={advisersError} onRetryAdvisers={() => { void loadAdvisers(); }} cooldownMessage={cooldownMessage} onClose={() => setShowModal(false)} onSubmit={handleNewReport} />}
       {showTicketModal && selectedReport && <GuidanceTicketModal report={selectedReport} onClose={() => setShowTicketModal(false)} onSubmitted={loadReports} />}
       {cancelTarget && <CancelReportModal report={cancelTarget} cancelling={cancellingReport} error={cancelError} onClose={() => { if (!cancellingReport) setCancelTargetId(null); }} onConfirm={handleCancelReport} />}
       <ParentReportsGuide onStepChange={setGuideTarget} />
