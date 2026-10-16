@@ -2128,6 +2128,37 @@ function PrincipalReportsPageContent() {
                         </div>
                       )}
                       <div className="mb-3 flex flex-wrap items-center gap-2">
+                        {conversationReplyAttachments.map((file, index) => (
+                          <div key={`${file.name}-${index}`} className="relative flex h-11 max-w-[150px] items-center gap-2 rounded-xl bg-white px-3 pr-7 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
+                            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <span className="truncate">{file.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => setConversationReplyAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white transition hover:bg-red-500"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end sm:gap-3">
+                        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                          <textarea
+                            value={conversationReply}
+                            onChange={(event) => { setConversationReply(event.target.value); staffConversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.shiftKey) {
+                                event.preventDefault();
+                                sendConversationReply();
+                              }
+                            }}
+                            placeholder={`Reply to ${selectedConversation.sender.name}...`}
+                            rows={2}
+                            className="min-h-[52px] min-w-0 w-full resize-none bg-transparent px-3.5 pb-2 pt-2.5 text-sm text-slate-700 outline-none"
+                          />
+                        </div>
+                        <div className="flex items-center justify-end gap-2 sm:contents">
                         <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                           <Paperclip className="h-4 w-4" />
                           <input
@@ -2145,36 +2176,6 @@ function PrincipalReportsPageContent() {
                             }}
                           />
                         </label>
-                        {conversationReplyAttachments.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="relative flex h-11 max-w-[150px] items-center gap-2 rounded-xl bg-white px-3 pr-7 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
-                            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                            <span className="truncate">{file.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => setConversationReplyAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
-                              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white transition hover:bg-red-500"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
-                        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
-                          <textarea
-                            value={conversationReply}
-                            onChange={(event) => { setConversationReply(event.target.value); staffConversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" && !event.shiftKey) {
-                                event.preventDefault();
-                                sendConversationReply();
-                              }
-                            }}
-                            placeholder={`Reply to ${selectedConversation.sender.name}...`}
-                            rows={2}
-                            className="min-h-[52px] min-w-0 w-full resize-none bg-transparent px-3.5 pb-2 pt-2.5 text-sm text-slate-700 outline-none"
-                          />
-                        </div>
                         <button
                           onClick={sendConversationReply}
                             disabled={sendingConversationReply || (!conversationReply.trim() && conversationReplyAttachments.length === 0)}
@@ -2183,6 +2184,7 @@ function PrincipalReportsPageContent() {
                         >
                           <Send className="h-4 w-4" />
                         </button>
+                        </div>
                       </div>
                     </div>
                   </>
@@ -2890,7 +2892,7 @@ function PrincipalReportsPageContent() {
                           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
                             This report has been resolved. Messaging is unavailable.
                           </div>
-                        ) : !canReply ? <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">Read-only monitoring. Guidance must escalate this report to the Principal before you can reply.</div> : <div className="flex items-end gap-3">
+                        ) : !canReply ? <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">Read-only monitoring. Guidance must escalate this report to the Principal before you can reply.</div> : <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
                           <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
                             <textarea
                               value={replyText}
@@ -2907,6 +2909,7 @@ function PrincipalReportsPageContent() {
                               disabled={isResolved}
                             />
                           </div>
+                          <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
                           <label className={`relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition ${isResolved ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-slate-100"}`}>
                             <Paperclip className="h-4 w-4" />
                             <input
@@ -2931,6 +2934,7 @@ function PrincipalReportsPageContent() {
                           >
                             <Send className="h-4 w-4" />
                           </button>
+                          </div>
                         </div>}
                       </div>
                     </div>

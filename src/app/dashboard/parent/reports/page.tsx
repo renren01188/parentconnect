@@ -1826,23 +1826,6 @@ function ParentReportsPageContent() {
                   ) : (
                   <>
                   <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
-                      <Paperclip className="w-4 h-4" />
-                      <input
-                        type="file"
-                        multiple
-                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                        className="absolute inset-0 cursor-pointer opacity-0"
-                        onChange={async (event) => {
-                          const files = Array.from(event.target.files ?? []);
-                          event.target.value = "";
-                          if (files.length === 0) return;
-                          const validFiles = files.filter((file) => file.size <= MAX_ATTACHMENT_BYTES);
-                          const next = await filesToAttachments(validFiles);
-                          setReplyAttachments((prev) => [...prev, ...next].slice(0, 5));
-                        }}
-                      />
-                    </label>
                     {replyAttachments.map((attachment, index) => (
                       <div key={`${attachment.name}-${index}`} className="relative flex h-11 max-w-[150px] items-center gap-2 rounded-xl bg-white px-3 pr-7 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
                         <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
@@ -1875,13 +1858,32 @@ function ParentReportsPageContent() {
                         rows={2}
                         className="w-full px-3.5 pt-2.5 pb-2 text-sm text-slate-700 outline-none resize-none placeholder:text-slate-400 bg-transparent" />
                     </div>
+                    <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
+                    <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
+                      <Paperclip className="w-4 h-4" />
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                        className="absolute inset-0 cursor-pointer opacity-0"
+                        onChange={async (event) => {
+                          const files = Array.from(event.target.files ?? []);
+                          event.target.value = "";
+                          if (files.length === 0) return;
+                          const validFiles = files.filter((file) => file.size <= MAX_ATTACHMENT_BYTES);
+                          const next = await filesToAttachments(validFiles);
+                          setReplyAttachments((prev) => [...prev, ...next].slice(0, 5));
+                        }}
+                      />
+                    </label>
                     <button onClick={handleSendReply} disabled={sendingReply || (!replyText.trim() && replyAttachments.length === 0)}
-                      className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition-colors sm:w-auto"
+                      className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition-colors"
                       style={{ background: !sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "#2563eb" : "#93c5fd", color: "#fff", cursor: !sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "pointer" : "not-allowed" }}
                       onMouseEnter={e => { if (!sendingReply && (replyText.trim() || replyAttachments.length > 0)) e.currentTarget.style.background = "#1d4ed8"; }}
                       onMouseLeave={e => { if (!sendingReply && (replyText.trim() || replyAttachments.length > 0)) e.currentTarget.style.background = "#2563eb"; }}>
                       <Send className="w-4 h-4" /> Send Message
                     </button>
+                    </div>
                   </div>
                   </>
                   )}

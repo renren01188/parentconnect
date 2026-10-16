@@ -2000,21 +2000,6 @@ function ReportsPageContent() {
                                         ) : (
                                             <>
                                                 <div className="mb-3 flex flex-wrap items-center gap-2">
-                                                    <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
-                                                        <Paperclip className="w-3.5 h-3.5" />
-                                                        <input
-                                                            type="file"
-                                                            multiple
-                                                            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                                                            className="absolute inset-0 cursor-pointer opacity-0"
-                                                            onChange={e => {
-                                                                const captured = Array.from(e.target.files ?? []);
-                                                                e.target.value = "";
-                                                                const valid = captured.filter(file => file.size <= MAX_ATTACHMENT_BYTES);
-                                                                if (valid.length > 0) setReplyAttachments(prev => [...prev, ...valid].slice(0, 5));
-                                                            }}
-                                                        />
-                                                    </label>
                                                     {selectedReport.status !== "Resolved" && (
                                                         <button onClick={() => setResolveTargetId(selectedReport.id)}
                                                             className="flex min-h-11 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100">
@@ -2051,10 +2036,27 @@ function ReportsPageContent() {
                                                             rows={2}
                                                             className="w-full px-3.5 pt-2.5 pb-2 text-sm text-slate-700 resize-none outline-none bg-transparent" />
                                                     </div>
+                                                    <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
+                                                    <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
+                                                        <Paperclip className="w-3.5 h-3.5" />
+                                                        <input
+                                                            type="file"
+                                                            multiple
+                                                            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                                                            className="absolute inset-0 cursor-pointer opacity-0"
+                                                            onChange={e => {
+                                                                const captured = Array.from(e.target.files ?? []);
+                                                                e.target.value = "";
+                                                                const valid = captured.filter(file => file.size <= MAX_ATTACHMENT_BYTES);
+                                                                if (valid.length > 0) setReplyAttachments(prev => [...prev, ...valid].slice(0, 5));
+                                                            }}
+                                                        />
+                                                    </label>
                                                     <button onClick={sendReply} disabled={sendingReply || (!replyText.trim() && replyAttachments.length === 0)}
-                                                        className={`flex min-h-11 w-full items-center justify-center rounded-xl p-2.5 transition sm:w-auto ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
+                                                        className={`flex min-h-11 shrink-0 items-center justify-center rounded-xl p-2.5 transition ${!sendingReply && (replyText.trim() || replyAttachments.length > 0) ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
                                                         {sendingReply ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                                     </button>
+                                                    </div>
                                                 </div>
                                             </>
                                         )}
@@ -2314,6 +2316,33 @@ function ReportsPageContent() {
                                         </div>
                                     )}
                                     <div className="mb-3 flex flex-wrap items-center gap-2">
+                                        {replyAttachments.map((file, index) => (
+                                            <div key={`${file.name}-${index}`} className="relative flex h-11 max-w-[150px] items-center gap-2 rounded-xl bg-white px-3 pr-7 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
+                                                <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                                <span className="truncate">{file.name}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setReplyAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
+                                                    className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white transition hover:bg-red-500"
+                                                >
+                                                    <X className="h-3 w-3" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end sm:gap-3">
+                                        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
+                                            <textarea
+                                                value={replyText}
+                                                onChange={e => { setReplyText(e.target.value); staffConversationTyping.onDraftChange(Boolean(e.target.value.trim())); }}
+                                                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                                                placeholder={`Reply to ${selectedAdminMsg.sender_name}... (Enter to send)`}
+                                                rows={2}
+                                                className="min-h-[52px] min-w-0 w-full resize-none bg-transparent px-3.5 pb-2 pt-2.5 text-sm text-slate-700 outline-none"
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center justify-end gap-2 sm:contents">
                                         <label className="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
                                             <Paperclip className="w-4 h-4" />
                                             <input
@@ -2329,31 +2358,6 @@ function ReportsPageContent() {
                                                 }}
                                             />
                                         </label>
-                                        {replyAttachments.map((file, index) => (
-                                            <div key={`${file.name}-${index}`} className="relative flex h-11 max-w-[150px] items-center gap-2 rounded-xl bg-white px-3 pr-7 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
-                                                <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                                <span className="truncate">{file.name}</span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setReplyAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
-                                                    className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white transition hover:bg-red-500"
-                                                >
-                                                    <X className="h-3 w-3" />
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
-                                        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
-                                            <textarea
-                                                value={replyText}
-                                                onChange={e => { setReplyText(e.target.value); staffConversationTyping.onDraftChange(Boolean(e.target.value.trim())); }}
-                                                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
-                                                placeholder={`Reply to ${selectedAdminMsg.sender_name}... (Enter to send)`}
-                                                rows={2}
-                                                className="min-h-[52px] min-w-0 w-full resize-none bg-transparent px-3.5 pb-2 pt-2.5 text-sm text-slate-700 outline-none"
-                                            />
-                                        </div>
 
                                         {/* Send button */}
                                         <button
@@ -2364,6 +2368,7 @@ function ReportsPageContent() {
                                         >
                                             {sendingReply ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                         </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

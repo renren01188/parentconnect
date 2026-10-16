@@ -13,6 +13,9 @@ const receiveSingleRoute = read("src/app/api/students/transfer-assign-rfid/route
 const studentsPage = read("src/app/dashboard/adviser/students/page.tsx");
 const transferPage = read("src/app/dashboard/adviser/transfer-level/page.tsx");
 const receiveModal = read("src/app/dashboard/adviser/students/TransferFromStandbyModal.tsx");
+const adviserSidebar = read("src/app/dashboard/adviser/components/Sidebar.tsx");
+const adviserNotificationContext = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
+const mailer = read("src/lib/mailer.ts");
 const realtime = read("src/lib/realtimeInvalidation.ts");
 
 // A pending transfer stays out of every active Students roster. This is the
@@ -32,6 +35,23 @@ assert.match(realtime, /adviserRecipientsForClass[\s\S]*?\.eq\("status", "active
 assert.match(standbyRoute, /\.eq\("transfer_status", "standby"\)[\s\S]*?\.eq\("target_grade",\s+grade\)[\s\S]*?\.eq\("target_section",\s+section\)/);
 assert.match(studentsPage, /fetch\("\/api\/students\/standby-summary", \{ cache: "no-store" \}\)/);
 assert.match(receiveModal, /fetch\(`\/api\/students\/standby\?\$\{qs\}`\)/);
+
+// The layout-wide Adviser provider owns the Students sidebar badge, so it
+// receives the target-class transfer invalidation even before Students opens.
+assert.match(adviserNotificationContext, /transferUnreadCount/);
+assert.match(adviserNotificationContext, /fetchJsonWithRetry<ReadyTransferSummaryResponse>\([\s\S]*?"\/api\/students\/standby-summary"/);
+assert.match(adviserNotificationContext, /scope === "reports" \|\| scope === "students"[\s\S]*?loadTransferCount\(\)/);
+assert.match(adviserSidebar, /Students", icon: Users, href: "\/dashboard\/adviser\/students", badgeKey: "transfers"/);
+assert.match(adviserSidebar, /pathname\.startsWith\("\/dashboard\/adviser\/students"\).*?dismissBadge\("transfers"\)/s);
+
+// A receiving Adviser email is sent only after every conditional standby
+// update succeeds. Re-submitting that batch cannot reach this code again.
+assert.match(mailer, /export async function sendAdviserTransferReadyEmail/);
+assert.match(transferQueueRoute, /import \{ sendAdviserTransferReadyEmail \} from "@\/lib\/mailer"/);
+assert.match(transferQueueRoute, /queuedStudents\?\.length \?\? 0\) !== ownedIds\.length[\s\S]*?notifyReceivingAdvisersByEmail/);
+assert.match(transferQueueRoute, /new Map<string, ReceivingAdviser>/);
+assert.match(transferQueueRoute, /Promise\.allSettled[\s\S]*?sendAdviserTransferReadyEmail/);
+assert.match(transferPage, /json\.emailNotification/);
 
 // Receipt is authorized against the exact target class, and writes the class
 // fields only while the row still has its pending state. This prevents a

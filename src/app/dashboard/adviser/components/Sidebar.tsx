@@ -13,7 +13,7 @@ import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard/adviser" },
-  { label: "Students", icon: Users, href: "/dashboard/adviser/students" },
+  { label: "Students", icon: Users, href: "/dashboard/adviser/students", badgeKey: "transfers" },
   { label: "RFID Attendance", icon: ScanLine, href: "/dashboard/adviser/attendance" },
   { label: "Reports", icon: FileText, href: "/dashboard/adviser/reports", badgeKey: "reports" },
   { label: "Contact ICT", icon: Monitor, href: "/dashboard/adviser/contact-ict", badgeKey: "ict" },
@@ -37,7 +37,7 @@ function Badge({ count }: { count: number }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { unreadCount, notifUnreadCount, ictUnreadCount } = useNotifContext();
+  const { unreadCount, notifUnreadCount, ictUnreadCount, transferUnreadCount } = useNotifContext();
   const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
@@ -45,7 +45,15 @@ export default function Sidebar() {
     reports: unreadCount,
     notifications: notifUnreadCount,
     ict: ictUnreadCount,
+    transfers: transferUnreadCount,
   });
+
+  // A direct URL visit does not run the Link click handler below. Treat the
+  // Students page itself as the acknowledgement point, matching the existing
+  // sidebar badge behaviour without changing the pending transfer records.
+  useEffect(() => {
+    if (pathname.startsWith("/dashboard/adviser/students")) dismissBadge("transfers");
+  }, [pathname, transferUnreadCount, dismissBadge]);
 
   useEffect(() => {
     const loadAdviser = () => fetch("/api/adviser/me", { cache: "no-store" }).then((r) => r.json()).then((json) => { if (json.success) setAdviser(json.adviser); }).catch(() => {});

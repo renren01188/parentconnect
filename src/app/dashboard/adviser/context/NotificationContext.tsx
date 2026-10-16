@@ -21,6 +21,12 @@ interface NotifContextType {
   ictUnreadCount: number;
   setIctUnreadCount: (n: number) => void;
   clearIctUnreadCount: () => void;
+
+  // Students nav badge — transfer requests awaiting this Adviser's receipt.
+  // This is intentionally separate from the Receive Transfer button count:
+  // the sidebar badge is an acknowledgement, while the button always shows
+  // the actual pending queue.
+  transferUnreadCount: number;
 }
 
 const NotifContext = createContext<NotifContextType>({
@@ -32,10 +38,12 @@ const NotifContext = createContext<NotifContextType>({
   ictUnreadCount: 0,
   setIctUnreadCount: () => { },
   clearIctUnreadCount: () => { },
+  transferUnreadCount: 0,
 });
 
 type IctMessagesResponse = { unreadCount?: number };
 type AdviserNotificationsResponse = { sidebarUnreadCount?: number; unreadCount?: number };
+type ReadyTransferSummaryResponse = { total?: number };
 
 function ictSeenTimestamp() {
   if (typeof window === "undefined") return 0;
@@ -48,6 +56,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifUnreadCount, setNotifUnreadCountState] = useState(0);
   const [ictUnreadCount, setIctUnreadCount] = useState(0);
+  const [transferUnreadCount, setTransferUnreadCount] = useState(0);
   const hasLoadedInitialCounts = useRef(false);
   const refreshByScopeRef = useRef<(scope: string | null) => void>(() => {});
   const notificationBadgeVersionRef = useRef(0);
@@ -83,6 +92,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     let reportCountRequest: Promise<void> | null = null;
     let ictCountRequest: Promise<void> | null = null;
     let notificationCountRequest: Promise<void> | null = null;
+    let transferCountRequest: Promise<void> | null = null;
 
     async function loadReportCount() {
       if (reportCountRequest) return reportCountRequest;
@@ -181,7 +191,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       return notificationCountRequest;
     }
 
-    const refreshAllCounts = () => Promise.all([loadReportCount(), loadIctCount(), loadNotifCount()]);
+    async function loadTransferCount() {
+      if (transferCountRequest) return transferCountRequest;
+      transferCountRequest = (async () => {
+        try {
+          // The endpoint applies the current Adviser's destination-grade and
+          // section authorization. Loading it from the layout keeps the
+          // Students badge live on every Adviser dashboard page.
+          const { response: res, data } = await fetchJsonWithRetry<ReadyTransferSummaryResponse>(
+            "/api/students/standby-summary",
+            { cache: "no-store" },
+          );
+          if (res.ok) setTransferUnreadCount(Math.max(0, Number(data?.total ?? 0)));
+        } catch {
+          // Retain the last confirmed count during a temporary failure.
+        } finally {
+          transferCountRequest = null;
+        }
+      })();
+      return transferCountRequest;
+    }
+
+    const refreshAllCounts = () => Promise.all([loadReportCount(), loadIctCount(), loadNotifCount(), loadTransferCount()]);
     // React Strict Mode deliberately runs effects twice in local development.
     // Do not turn that development-only check into a duplicate five-request
     // sidebar burst. A real remount gets a new provider/ref and still loads.
@@ -225,6 +256,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // page. Other student changes safely reconcile against the same
         // server-authorized count.
         void loadReportCount();
+        void loadTransferCount();
         notifyNotificationChange();
         return;
       }
@@ -237,6 +269,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         // profile snapshot. Let an ICT account/assignment update refresh that
         // snapshot on every Adviser route, not only while Profile is open.
         window.dispatchEvent(new Event("adviser-profile-updated"));
+        void loadTransferCount();
         return;
       }
       if (scope === "notifications" || scope === "announcements") {
@@ -274,6 +307,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ictUnreadCount,
       setIctUnreadCount,
       clearIctUnreadCount,
+      transferUnreadCount,
     }}>
       {children}
     </NotifContext.Provider>

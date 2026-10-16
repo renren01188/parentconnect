@@ -670,7 +670,7 @@ export default function ContactICTPage() {
                                         ))}
                                     </div>
                                 )}
-                                <div className="flex items-end gap-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
                                     <textarea
                                         value={reply}
                                         onChange={(event) => { setReply(event.target.value); conversationTyping.onDraftChange(Boolean(event.target.value.trim())); }}
@@ -682,8 +682,9 @@ export default function ContactICTPage() {
                                         }}
                                         placeholder={`Reply to ${selected.otherName}...`}
                                         rows={2}
-                                        className="flex-1 resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                        className="w-full min-w-0 resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100 sm:flex-1"
                                     />
+                                    <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
                                     <label className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition hover:bg-slate-50">
                                         <Paperclip className="h-4 w-4" />
                                         <input
@@ -707,6 +708,7 @@ export default function ContactICTPage() {
                                         {sendingReply ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                                         Reply
                                     </button>
+                                    </div>
                                 </div>
                             </div>
                         </>

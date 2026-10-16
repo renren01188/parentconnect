@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import bcrypt from "bcryptjs";
 import { adviserRecipientsForClass, publishRealtimeInvalidation, studentRealtimeRecipientsForStudents } from "@/lib/realtimeInvalidation";
+import { sendAdviserTransferReadyEmail } from "@/lib/mailer";
 
 type Body = {
   studentIds:    number[];
@@ -22,6 +23,94 @@ type Body = {
   targetSection: string;
   password:      string;
 };
+
+type ReceivingAdviser = {
+  id: number;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string | null;
+  suffix: string | null;
+  email: string | null;
+};
+
+type TransferEmailNotification = {
+  status: "sent" | "failed" | "skipped";
+  message: string;
+};
+
+function adviserFullName(adviser: ReceivingAdviser) {
+  return [adviser.first_name, adviser.middle_name, adviser.last_name, adviser.suffix]
+    .filter(Boolean)
+    .join(" ") || "Class Adviser";
+}
+
+async function notifyReceivingAdvisersByEmail({
+  recipientIds,
+  sourceGrade,
+  sourceSections,
+  targetGrade,
+  targetSection,
+}: {
+  recipientIds: number[];
+  sourceGrade: string;
+  sourceSections: string[];
+  targetGrade: string;
+  targetSection: string;
+}): Promise<TransferEmailNotification> {
+  const uniqueIds = [...new Set(recipientIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) {
+    return { status: "skipped", message: "No receiving Adviser was available for an email notification." };
+  }
+
+  const { data, error } = await supabase
+    .from("advisers")
+    .select("id, first_name, middle_name, last_name, suffix, email")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("Could not load receiving Adviser email addresses:", error.message);
+    return { status: "failed", message: "The transfer was saved, but the receiving Adviser email could not be prepared." };
+  }
+
+  const recipients = new Map<string, ReceivingAdviser>();
+  for (const adviser of (data ?? []) as ReceivingAdviser[]) {
+    const email = String(adviser.email ?? "").trim().toLowerCase();
+    if (email) recipients.set(email, adviser);
+  }
+  if (recipients.size === 0) {
+    return { status: "skipped", message: "The transfer was saved, but the receiving Adviser has no registered email address." };
+  }
+
+  // This function is reached only after the conditional standby update has
+  // changed every requested student. A retry of the same submission cannot
+  // reach it because those students are no longer transfer_status = null.
+  // One normalized email address receives one notice for the whole batch.
+  const outcomes = await Promise.allSettled(
+    [...recipients.entries()].map(([email, adviser]) => sendAdviserTransferReadyEmail({
+      adviserEmail: email,
+      adviserName: adviserFullName(adviser),
+      sourceGrade,
+      sourceSection: sourceSections.join(", "),
+      targetGrade,
+      targetSection,
+    })),
+  );
+  const sent = outcomes.filter((outcome) => outcome.status === "fulfilled").length;
+  const failed = outcomes.length - sent;
+  if (failed > 0) {
+    console.error("One or more receiving Adviser transfer emails failed to send.");
+    return {
+      status: "failed",
+      message: sent > 0
+        ? "The transfer was saved, but one receiving Adviser email could not be delivered."
+        : "The transfer was saved, but the receiving Adviser email could not be delivered.",
+    };
+  }
+
+  return {
+    status: "sent",
+    message: "The receiving Adviser was notified by email.",
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -221,6 +310,14 @@ export async function POST(req: NextRequest) {
     );
     await publishRealtimeInvalidation([...studentRecipients, ...targetAdviserRecipients], "students");
 
+    const emailNotification = await notifyReceivingAdvisersByEmail({
+      recipientIds: targetAdviserRecipients.map((recipient) => recipient.id),
+      sourceGrade: adviser.grade ?? "Your previous grade",
+      sourceSections: [...new Set(ownedStudents.map((student) => student.section).filter(Boolean))],
+      targetGrade: normalizedTargetGrade,
+      targetSection: normalizedTargetSection,
+    });
+
     return NextResponse.json({
       success:  true,
       message:  `${ownedIds.length} student${ownedIds.length !== 1 ? "s" : ""} placed on standby for transfer to ${normalizedTargetGrade} · ${normalizedTargetSection}.`,
@@ -231,6 +328,7 @@ export async function POST(req: NextRequest) {
         grade:      s.grade,
         section:    s.section,
       })),
+      emailNotification,
     });
 
   } catch (error: any) {

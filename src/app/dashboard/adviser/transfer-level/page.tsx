@@ -138,6 +138,7 @@ function TransferModal({
   const [submitting,     setSubmitting]     = useState(false);
   const [apiError,       setApiError]       = useState("");
   const [success,        setSuccess]        = useState(false);
+  const [emailNotice,    setEmailNotice]    = useState<{ status: "sent" | "failed" | "skipped"; message: string } | null>(null);
   const [sections,       setSections]       = useState<string[]>([]);
   const [loadingSections,setLoadingSections]= useState(false);
 
@@ -187,6 +188,14 @@ function TransferModal({
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.message || "Transfer failed.");
+      if (json.emailNotification && typeof json.emailNotification.message === "string") {
+        setEmailNotice({
+          status: json.emailNotification.status === "sent" || json.emailNotification.status === "failed"
+            ? json.emailNotification.status
+            : "skipped",
+          message: json.emailNotification.message,
+        });
+      }
       setSuccess(true);
     } catch (e: unknown) {
       setApiError(getErrorMessage(e));
@@ -319,6 +328,17 @@ function TransferModal({
                   ))}
                 </div>
               </div>
+              {emailNotice && (
+                <div className={`w-full rounded-xl border px-4 py-3 text-left text-xs font-medium ${
+                  emailNotice.status === "sent"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : emailNotice.status === "failed"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                }`}>
+                  {emailNotice.message}
+                </div>
+              )}
             </div>
           )}
 
