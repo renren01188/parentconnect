@@ -230,7 +230,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     // While the modal is open, show an adviser decision without asking the
     // parent to close/reopen it. The event carries no decision content.
     useSessionInvalidation((event) => {
-        if (event.scope === "attendance") setLettersRefreshKey((key) => key + 1);
+        if (!event.scope || event.scope === "attendance") setLettersRefreshKey((key) => key + 1);
     });
 
     async function handleSubmitRequest() {
@@ -624,6 +624,10 @@ export default function ParentAttendancePage() {
         () => fetchAttendance({ background: true }),
     );
     useSessionInvalidation((event) => {
+        if (!event.scope) {
+            scheduleAttendanceRefresh();
+            return;
+        }
         if (event.scope === "students" || event.scope === "accounts") {
             void refreshSession();
             return;

@@ -15,6 +15,8 @@ type Body = {
   password: string;
 };
 
+class TransferStateConflict extends Error {}
+
 export async function POST(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
@@ -32,8 +34,9 @@ export async function POST(req: NextRequest) {
       : Array.isArray(body.assignments)
         ? body.assignments.map((a) => a.studentId)
         : [];
+    const uniqueStudentIds = [...new Set(studentIds.filter((id): id is number => Number.isInteger(id) && id > 0))];
 
-    if (studentIds.length === 0) {
+    if (uniqueStudentIds.length === 0) {
       return NextResponse.json(
         { success: false, message: "No students selected for transfer." },
         { status: 400 }
@@ -44,6 +47,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, message: "Password is required to authorize this transfer." },
         { status: 400 }
+      );
+    }
+
+    const adviserSections = adviser.sections?.length
+      ? adviser.sections
+      : adviser.section ? [adviser.section] : [];
+    if (!adviser.grade || adviserSections.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "Your account has no active class assignment to receive transfers." },
+        { status: 403 },
       );
     }
 
@@ -70,8 +83,8 @@ export async function POST(req: NextRequest) {
 
     const { data: studentRows, error: fetchErr } = await supabase
       .from("students")
-      .select("id, student_id, first_name, last_name, transfer_status, target_grade, target_section")
-      .in("id", studentIds);
+      .select("id, student_id, first_name, last_name, transfer_status, target_grade, target_section, archive_status")
+      .in("id", uniqueStudentIds);
 
     if (fetchErr) throw fetchErr;
 
@@ -84,7 +97,7 @@ export async function POST(req: NextRequest) {
       full_name: string;
     }[] = [];
 
-    for (const studentId of studentIds) {
+    for (const studentId of uniqueStudentIds) {
       const student = studentMap.get(studentId);
       if (!student) {
         errors.push(`Student ID ${studentId} not found.`);
@@ -94,8 +107,16 @@ export async function POST(req: NextRequest) {
         errors.push(`${student.first_name} ${student.last_name} is not on standby.`);
         continue;
       }
+      if (student.archive_status !== "active") {
+        errors.push(`${student.first_name} ${student.last_name} is no longer an active student.`);
+        continue;
+      }
       if (!student.target_grade || !student.target_section) {
         errors.push(`${student.first_name} ${student.last_name} has no target grade/section set.`);
+        continue;
+      }
+      if (student.target_grade !== adviser.grade || !adviserSections.includes(student.target_section)) {
+        errors.push(`${student.first_name} ${student.last_name} is assigned to a different receiving class.`);
         continue;
       }
 
@@ -133,7 +154,7 @@ export async function POST(req: NextRequest) {
 
       const newClassSession = sectionRow?.class_session ?? "Morning";
 
-      const { error: updateErr } = await supabase
+      const { data: activatedStudent, error: updateErr } = await supabase
         .from("students")
         .update({
           grade: student.target_grade,
@@ -143,9 +164,18 @@ export async function POST(req: NextRequest) {
           target_grade: null,
           target_section: null,
         })
-        .eq("id", student.studentId);;
+        .eq("id", student.studentId)
+        .eq("archive_status", "active")
+        .eq("transfer_status", "standby")
+        .eq("target_grade", student.target_grade)
+        .eq("target_section", student.target_section)
+        .select("id")
+        .maybeSingle();
 
       if (updateErr) throw updateErr;
+      if (!activatedStudent) {
+        throw new TransferStateConflict(`${student.full_name} is no longer pending transfer. Refresh the list and try again.`);
+      }
       results.push({ id: student.studentId, full_name: student.full_name });
     }
 
@@ -162,6 +192,9 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     console.error("POST /api/students/transfer-assign-rfid-batch error:", error);
     const message = error instanceof Error ? error.message : "Server error.";
+    if (error instanceof TransferStateConflict) {
+      return NextResponse.json({ success: false, message }, { status: 409 });
+    }
     return NextResponse.json(
       { success: false, message },
       { status: 500 }

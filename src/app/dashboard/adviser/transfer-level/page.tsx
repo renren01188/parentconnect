@@ -596,7 +596,7 @@ export default function TransferLevelPage() {
     await fetchStudents(page, { background: true });
   });
   useSessionInvalidation((event) => {
-    if (event.scope === "students" || event.scope === "accounts") {
+    if (!event.scope || event.scope === "students" || event.scope === "accounts") {
       scheduleTransferRosterRefresh();
     }
   });

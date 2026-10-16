@@ -2167,7 +2167,7 @@ export default function UserManagementPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
   useSessionInvalidation((event) => {
-    if (event.scope === "accounts" || event.scope === "students" || event.scope === "audit") {
+    if (!event.scope || event.scope === "accounts" || event.scope === "students" || event.scope === "audit") {
       return loadData({ background: true });
     }
   });

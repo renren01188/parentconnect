@@ -1323,7 +1323,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
 
     useEffect(() => { fetchRequests(); }, [fetchRequests]);
     useSessionInvalidation((event) => {
-        if (event.scope === "attendance") return fetchRequests();
+        if (!event.scope || event.scope === "attendance") return fetchRequests();
     });
 
     async function handleApprove(id: number) {
@@ -1889,6 +1889,12 @@ export default function AdviserAttendancePage() {
     });
     const scheduleStudentsRefresh = useDebouncedRealtimeRefresh(() => loadStudents());
     useSessionInvalidation((event) => {
+        if (!event.scope) {
+            scheduleStudentsRefresh();
+            scheduleAttendanceRefresh();
+            void loadClassSession();
+            return;
+        }
         if (event.scope === "attendance") {
             scheduleAttendanceRefresh();
         }

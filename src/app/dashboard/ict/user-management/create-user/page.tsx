@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   User, BookOpen, Monitor, Eye, EyeOff, ChevronDown,
   CheckCircle, Clock, ArrowLeft, Send, AlertTriangle,
@@ -1316,6 +1317,15 @@ export default function CreateUserPage() {
   useEffect(() => {
     void loadRecentlyCreated();
   }, [loadRecentlyCreated]);
+
+  // The creation form itself must preserve in-progress input. Only the
+  // read-only "recently created" panel is reconciled after a shared-channel
+  // join/reconnect or a change made by another authorized ICT session.
+  useSessionInvalidation(({ scope }) => {
+    if (!scope || scope === "accounts" || scope === "students" || scope === "audit") {
+      void loadRecentlyCreated();
+    }
+  });
 
   function selectType(t: AccountType) {
     setAccountType(t); setFormKey(k => k + 1);

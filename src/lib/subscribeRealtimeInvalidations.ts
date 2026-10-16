@@ -51,7 +51,14 @@ export async function subscribeRealtimeInvalidations(
     const channelUrl = role
       ? `/api/realtime/channel?role=${encodeURIComponent(role)}`
       : "/api/realtime/channel";
-    const response = await fetch(channelUrl, { cache: "no-store" });
+    // This capability request is authenticated with the role cookie created
+    // by the login response. Make the credential and cache rules explicit so
+    // a dashboard mounted immediately after login never reuses a stale
+    // capability response from the login route.
+    const response = await fetch(channelUrl, {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
     const data = await response.json().catch(() => null);
     if (!response.ok || typeof data?.topic !== "string" || !data.topic) return null;
 

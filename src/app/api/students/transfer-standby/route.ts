@@ -35,10 +35,13 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json()) as Body;
     const { studentIds, targetGrade, targetSection, password } = body;
+    const requestedStudentIds = Array.isArray(studentIds)
+      ? [...new Set(studentIds.filter((id): id is number => Number.isInteger(id) && id > 0))]
+      : [];
 
     // ── Validate input ────────────────────────────────────────────────────────
 
-    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+    if (requestedStudentIds.length === 0) {
       return NextResponse.json(
         { success: false, message: "No students selected for transfer." },
         { status: 400 }
@@ -56,6 +59,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, message: "Target section is required." },
         { status: 400 }
+      );
+    }
+
+    const normalizedTargetGrade = targetGrade.trim();
+    const normalizedTargetSection = targetSection.trim();
+    const { data: targetClass, error: targetClassError } = await supabase
+      .from("sections")
+      .select("id")
+      .eq("grade", normalizedTargetGrade)
+      .eq("name", normalizedTargetSection)
+      .maybeSingle();
+    if (targetClassError) throw targetClassError;
+    if (!targetClass) {
+      return NextResponse.json(
+        { success: false, message: "Choose an existing destination grade level and section." },
+        { status: 400 },
+      );
+    }
+
+    // Pending transfers must have a real receiving Adviser. Otherwise a
+    // student could leave the source roster with no authorized person able to
+    // accept the transfer from Receive Transfer.
+    const targetAdviserRecipients = await adviserRecipientsForClass(normalizedTargetGrade, normalizedTargetSection);
+    if (targetAdviserRecipients.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "The destination section does not have an active Adviser to receive this transfer." },
+        { status: 409 },
       );
     }
 
@@ -101,8 +131,10 @@ export async function POST(req: NextRequest) {
     let studentsQuery = supabase
       .from("students")
       .select("id, student_id, first_name, last_name, grade, section, transfer_status")
-      .in("id", studentIds)
-      .eq("grade", adviser.grade);
+      .in("id", requestedStudentIds)
+      .eq("grade", adviser.grade)
+      .eq("archive_status", "active")
+      .is("transfer_status", null);
 
     if (adviserSections.length > 0) {
       const orFilter = adviserSections.map((s) => `section.eq.${s}`).join(",");
@@ -119,9 +151,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Do not silently place only part of a submitted batch on standby. A
+    // student that is already pending, archived, or belongs to another
+    // adviser must be resolved before this transfer can be submitted again.
+    if (ownedStudents.length !== requestedStudentIds.length) {
+      return NextResponse.json(
+        { success: false, message: "One or more selected students are no longer active in your section or already have a pending transfer. Refresh the list and try again." },
+        { status: 409 },
+      );
+    }
+
     // ── Reject if any student is already in the target grade + section ─────────
     const alreadyThere = ownedStudents.filter(
-      (s) => s.grade === targetGrade.trim() && s.section === targetSection.trim()
+      (s) => s.grade === normalizedTargetGrade && s.section === normalizedTargetSection
     );
     if (alreadyThere.length > 0) {
       const names = alreadyThere.map((s) => `${s.first_name} ${s.last_name}`).join(", ");
@@ -130,8 +172,8 @@ export async function POST(req: NextRequest) {
         {
           success: false,
           message: isPlural
-            ? `${names} are already in ${targetGrade} · ${targetSection}. Please choose a different section.`
-            : `${names} is already in ${targetGrade} · ${targetSection}. Please choose a different section.`,
+            ? `${names} are already in ${normalizedTargetGrade} · ${normalizedTargetSection}. Please choose a different section.`
+            : `${names} is already in ${normalizedTargetGrade} · ${normalizedTargetSection}. Please choose a different section.`,
         },
         { status: 400 }
       );
@@ -151,29 +193,37 @@ export async function POST(req: NextRequest) {
     //   ALTER TABLE students ADD COLUMN IF NOT EXISTS target_grade     TEXT DEFAULT NULL;
     //   ALTER TABLE students ADD COLUMN IF NOT EXISTS target_section   TEXT DEFAULT NULL;
 
-    const { error: updateErr } = await supabase
+    const { data: queuedStudents, error: updateErr } = await supabase
       .from("students")
       .update({
         transfer_status: "standby",
-        target_grade:    targetGrade.trim(),
-        target_section:  targetSection.trim(),
+        target_grade:    normalizedTargetGrade,
+        target_section:  normalizedTargetSection,
       })
-      .in("id", ownedIds);
+      .in("id", ownedIds)
+      .eq("archive_status", "active")
+      .is("transfer_status", null)
+      .select("id");
 
     if (updateErr) throw updateErr;
+    if ((queuedStudents?.length ?? 0) !== ownedIds.length) {
+      return NextResponse.json(
+        { success: false, message: "A selected student changed while the transfer was being submitted. Refresh the list and try again." },
+        { status: 409 },
+      );
+    }
 
     // The originating class, every linked Parent, Principal, ICT, and the
     // target class must see the queue change immediately. Resolve both sides
     // before emitting one deduped, data-free student event.
-    const [studentRecipients, targetAdviserRecipients] = await Promise.all([
-      studentRealtimeRecipientsForStudents(ownedIds.map((id) => ({ studentDbId: id }))),
-      adviserRecipientsForClass(targetGrade, targetSection),
-    ]);
+    const studentRecipients = await studentRealtimeRecipientsForStudents(
+      ownedIds.map((id) => ({ studentDbId: id })),
+    );
     await publishRealtimeInvalidation([...studentRecipients, ...targetAdviserRecipients], "students");
 
     return NextResponse.json({
       success:  true,
-      message:  `${ownedIds.length} student${ownedIds.length !== 1 ? "s" : ""} placed on standby for transfer to ${targetGrade} · ${targetSection}.`,
+      message:  `${ownedIds.length} student${ownedIds.length !== 1 ? "s" : ""} placed on standby for transfer to ${normalizedTargetGrade} · ${normalizedTargetSection}.`,
       standby:  ownedStudents.map((s) => ({
         id:         s.id,
         student_id: s.student_id,

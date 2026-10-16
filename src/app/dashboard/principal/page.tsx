@@ -396,7 +396,7 @@ export default function Page() {
     300,
   );
   useSessionInvalidation((event) => {
-    if (["attendance", "students", "accounts", "reports", "announcements", "dashboard"].includes(event.scope ?? "")) {
+    if (!event.scope || ["attendance", "students", "accounts", "reports", "announcements", "dashboard"].includes(event.scope)) {
       scheduleDashboardRefresh();
     }
   });

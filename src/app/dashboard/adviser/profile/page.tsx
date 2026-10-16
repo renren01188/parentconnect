@@ -942,7 +942,7 @@ export default function AdviserProfilePage() {
     // sessions are not Supabase Auth sessions. ICT now emits a targeted,
     // data-free account invalidation after an approval or assignment change.
     useSessionInvalidation((event) => {
-        if (event.scope === "accounts" && !showSettings) return loadProfile({ background: true });
+        if ((!event.scope || event.scope === "accounts") && !showSettings) return loadProfile({ background: true });
     });
 
     const initials = profile ? getInitials(profile.first_name, profile.last_name) : "??";

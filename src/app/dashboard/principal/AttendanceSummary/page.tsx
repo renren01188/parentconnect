@@ -1472,7 +1472,7 @@ export default function AttendanceSummaryPage() {
     () => setReloadKey((key) => key + 1),
   );
   useSessionInvalidation(({ scope }) => {
-    if (["attendance", "students", "dashboard"].includes(scope ?? "")) {
+    if (!scope || ["attendance", "students", "dashboard"].includes(scope)) {
       scheduleAttendanceRefresh();
     }
   });

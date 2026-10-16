@@ -59,7 +59,11 @@ export default function GuidanceLoginPage() {
       if (!data.passwordSet) {
         router.push("/set-password/guidance");
       } else {
-        router.push("/dashboard/guidance");
+        // Avoid mounting an authenticated dashboard against the client-side
+        // router's pre-login cache; this guarantees the Realtime capability
+        // request observes the fresh role cookie.
+        window.location.assign("/dashboard/guidance");
+        return;
       }
       router.refresh();
     } catch {

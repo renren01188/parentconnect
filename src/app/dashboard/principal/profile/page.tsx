@@ -659,7 +659,7 @@ export default function AccountProfilePage() {
   }, [profileRefreshKey, router]);
 
   useSessionInvalidation((event) => {
-    if (event.scope === "accounts" && !showSettingsModal) setProfileRefreshKey((key) => key + 1);
+    if ((!event.scope || event.scope === "accounts") && !showSettingsModal) setProfileRefreshKey((key) => key + 1);
   });
 
   const fullName = [profile.firstName, profile.middleName, profile.lastName, profile.suffix]

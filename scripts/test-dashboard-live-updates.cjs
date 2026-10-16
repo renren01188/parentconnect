@@ -14,8 +14,12 @@ const realtime = read("src/lib/realtimeInvalidation.ts");
 
 assert.match(sessionInvalidation, /const listeners = new Set/);
 assert.match(invalidationSubscription, /\.channel\(data\.topic\)/);
+assert.match(invalidationSubscription, /credentials: "same-origin"/);
 assert.match(sessionInvalidation, /removeChannel\(current\)/);
 assert.match(sessionInvalidation, /stopSharedChannelWhenUnused/);
+assert.match(sessionInvalidation, /listeners\.size === 0 \|\| connecting \|\| channel/);
+assert.match(sessionInvalidation, /channel && lastConnectionStatus === "SUBSCRIBED"/);
+assert.match(sessionInvalidation, /listener\(reconnectRefresh\)/);
 assert.match(reportsRealtime, /useSessionInvalidation/);
 assert.match(staffRealtime, /useSessionInvalidation/);
 assert.match(realtime, /A browser receiving one must\s+\*\s+re-read its normal, server-authorized API view/);
@@ -66,13 +70,13 @@ const userManagement = read("src/app/dashboard/ict/user-management/page.tsx");
 assert.match(parentNotifications, /scope === "attendance"/, "Parent notification counts must refresh for attendance writes.");
 assert.match(adviserNotifications, /scope === "attendance"/, "Adviser notification views must refresh for attendance writes.");
 assert.match(principalAttendance, /useSessionInvalidation/);
-assert.match(principalAttendance, /\["attendance", "students", "dashboard"\]/);
+assert.match(principalAttendance, /!scope \|\| \["attendance", "students", "dashboard"\]/);
 assert.match(principalAttendance, /useDebouncedRealtimeRefresh/);
 assert.match(ictDashboard, /\["accounts", "students", "audit", "announcements", "dashboard"\]/);
 assert.match(ictDashboard, /useDebouncedRealtimeRefresh/);
 assert.match(guidanceDashboard, /\["reports", "tickets", "audit"\]/);
 assert.match(guidanceDashboard, /useDebouncedRealtimeRefresh/);
-assert.match(userManagement, /event\.scope === "accounts" \|\| event\.scope === "students" \|\| event\.scope === "audit"/);
+assert.match(userManagement, /!event\.scope \|\| event\.scope === "accounts" \|\| event\.scope === "students" \|\| event\.scope === "audit"/);
 
 for (const file of [
   "src/app/api/reports/parent-adviser/[id]/messages/route.ts",
@@ -151,12 +155,12 @@ const guidanceProfilePage = read("src/app/dashboard/guidance/profile/page.tsx");
 assert.match(adviserNotificationContext, /scope === "accounts"[\s\S]*?adviser-profile-updated/);
 assert.match(adviserSidebar, /fetch\("\/api\/adviser\/me", \{ cache: "no-store" \}\)/);
 assert.match(adviserStudentsPage, /const scheduleStudentsRefresh = useDebouncedRealtimeRefresh\([\s\S]*?fetchStudents\(page, \{ background: true \}\)/);
-assert.match(adviserStudentsPage, /event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleStudentsRefresh\(\)/);
+assert.match(adviserStudentsPage, /!event\.scope \|\| event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleStudentsRefresh\(\)/);
 assert.match(adviserStudentDetail, /useSessionInvalidation/);
 assert.match(adviserStudentDetail, /liveUpdatePending/);
 assert.match(adviserStudentDetail, /void loadStudent\(\{ background: true \}\)/);
 assert.match(adviserTransferPage, /const scheduleTransferRosterRefresh = useDebouncedRealtimeRefresh\([\s\S]*?fetchStudents\(page, \{ background: true \}\)/);
-assert.match(adviserTransferPage, /event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleTransferRosterRefresh\(\)/);
+assert.match(adviserTransferPage, /!event\.scope \|\| event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleTransferRosterRefresh\(\)/);
 assert.match(adviserAttendancePage, /event\.scope === "students" \|\| event\.scope === "accounts"\) \{[\s\S]*?scheduleStudentsRefresh\(\);[\s\S]*?scheduleAttendanceRefresh\(\);/);
 
 // Guidance tickets are notifications as well as workload items. Account
@@ -169,5 +173,35 @@ assert.match(guidanceSidebar, /guidance-profile-updated/);
 assert.match(guidanceProfilePage, /pendingAccountRefreshRef/);
 assert.match(guidanceProfilePage, /if \(settingsOpen\) \{[\s\S]*?pendingAccountRefreshRef\.current = true/);
 assert.match(guidanceProfilePage, /if \(settingsOpen \|\| !pendingAccountRefreshRef\.current\) return;[\s\S]*?setProfileRefreshKey/);
+
+// A page can mount just after login while the layout is already joining its
+// authorized Realtime topic. Every independently loaded, changing view must
+// accept the scope:null recovery event, rather than waiting for a second
+// mutation or a browser refresh.
+const freshLoginRecoveryPages = [
+  "src/app/dashboard/parent/page.tsx",
+  "src/app/dashboard/parent/attendance/page.tsx",
+  "src/app/dashboard/parent/profile/page.tsx",
+  "src/app/dashboard/parent/ParentSessionGate.tsx",
+  "src/app/dashboard/adviser/page.tsx",
+  "src/app/dashboard/adviser/attendance/page.tsx",
+  "src/app/dashboard/adviser/students/page.tsx",
+  "src/app/dashboard/adviser/students/[id]/page.tsx",
+  "src/app/dashboard/adviser/transfer-level/page.tsx",
+  "src/app/dashboard/adviser/profile/page.tsx",
+  "src/app/dashboard/guidance/profile/page.tsx",
+  "src/app/dashboard/principal/page.tsx",
+  "src/app/dashboard/principal/AttendanceSummary/page.tsx",
+  "src/app/dashboard/principal/audit-trail/page.tsx",
+  "src/app/dashboard/principal/profile/page.tsx",
+  "src/app/dashboard/ict/user-management/page.tsx",
+  "src/app/dashboard/ict/StudentProfiles/page.tsx",
+  "src/app/dashboard/ict/audit-trail/page.tsx",
+  "src/app/dashboard/ict/profile/page.tsx",
+  "src/app/dashboard/ict/user-management/create-user/page.tsx",
+];
+for (const file of freshLoginRecoveryPages) {
+  assert.match(read(file), /!event\.scope|!scope|event\.scope &&/, `${file} must reconcile its initial snapshot after a shared-channel join.`);
+}
 
 console.log("Dashboard live-update coverage checks passed.");

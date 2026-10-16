@@ -51,7 +51,10 @@ export default function PrincipalLoginPage() {
       if (!data.passwordSet) {
         router.push("/set-password/principal");
       } else {
-        router.push("/dashboard/principal");
+        // Load the dashboard only after the login response's role cookie is
+        // visible to the protected Realtime channel endpoint.
+        window.location.assign("/dashboard/principal");
+        return;
       }
       router.refresh();
     } catch {

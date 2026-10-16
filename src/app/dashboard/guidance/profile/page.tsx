@@ -150,7 +150,7 @@ export default function ProfilePage() {
   }, [profileRefreshKey]);
 
   useSessionInvalidation((event) => {
-    if (event.scope !== "accounts") return;
+    if (event.scope && event.scope !== "accounts") return;
     if (settingsOpen) {
       pendingAccountRefreshRef.current = true;
       return;

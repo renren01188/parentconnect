@@ -88,7 +88,10 @@ function handleStatus(status: ChannelStatus, generation: number) {
 }
 
 async function connectSharedChannel() {
-  if (listeners.size === 0 || connecting) return;
+  // The dashboard layout commonly mounts before an active page. Once its
+  // authorized channel is live, later consumers must attach to that same
+  // channel rather than replace it and create a brief event-loss window.
+  if (listeners.size === 0 || connecting || channel) return;
   const client = supabaseBrowser;
   if (!client) {
     dispatchConnectionStatus("CHANNEL_ERROR");
@@ -163,7 +166,15 @@ export function useSessionInvalidation(
   useEffect(() => {
     const listener: InvalidationListener = (invalidation) => callbackRef.current(invalidation);
     listeners.add(listener);
-    void connectSharedChannel();
+    if (channel && lastConnectionStatus === "SUBSCRIBED") {
+      // A page can mount after the layout's shared channel has joined. Its
+      // initial snapshot may have raced a write that the already-mounted
+      // layout received, so reconcile this new consumer without reopening the
+      // socket or waiting for another data change.
+      void Promise.resolve(listener(reconnectRefresh)).catch(() => null);
+    } else {
+      void connectSharedChannel();
+    }
 
     return () => {
       listeners.delete(listener);

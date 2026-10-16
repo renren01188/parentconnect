@@ -84,7 +84,7 @@ export default function ParentSessionGate({ children }: { children: React.ReactN
   // adds a listener without opening a duplicate Realtime subscription.
   useSessionInvalidation((event) => {
     if (!session) return;
-    if (event.scope === "accounts" || event.scope === "students") {
+    if (!event.scope || event.scope === "accounts" || event.scope === "students") {
       void refreshSession();
     }
   });

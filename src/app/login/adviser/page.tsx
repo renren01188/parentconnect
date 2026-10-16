@@ -54,7 +54,10 @@ export default function AdviserLoginPage() {
       if (!data.passwordSet) {
         router.push("/set-password/adviser");
       } else {
-        router.push("/dashboard/adviser");
+        // A document navigation starts the Realtime channel only after the
+        // new role cookie is available to the Reports and Contact ICT pages.
+        window.location.assign("/dashboard/adviser");
+        return;
       }
       router.refresh();
 

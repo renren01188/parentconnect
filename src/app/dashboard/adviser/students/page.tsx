@@ -479,7 +479,7 @@ function AdviserStudentsPageContent() {
     ]);
   });
   useSessionInvalidation((event) => {
-    if (event.scope === "students" || event.scope === "accounts") {
+    if (!event.scope || event.scope === "students" || event.scope === "accounts") {
       scheduleStudentsRefresh();
     }
   });

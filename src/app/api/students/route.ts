@@ -185,6 +185,11 @@ async function listAdviserRoster(grade: string, section: string) {
       .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, class_session, created_at, archive_status")
       .eq("grade", grade)
       .eq("section", section)
+      .eq("archive_status", "active")
+      // A pending level transfer remains visible only in Receive Transfer.
+      // It must not become an active member of either Adviser's roster until
+      // the receiving Adviser explicitly accepts it.
+      .is("transfer_status", null)
       .order("last_name", { ascending: true })
       .order("first_name", { ascending: true })
       .range(from, from + pageSize - 1);

@@ -136,7 +136,9 @@ export async function adviserRecipientsForClass(grade: string | null | undefined
     const { data, error } = await supabase
       .from("advisers")
       .select("id, grade, section, sections")
-      .eq("grade", normalizedGrade);
+      .eq("grade", normalizedGrade)
+      .eq("status", "active")
+      .neq("archive_status", "archived");
     if (error) {
       console.warn("Unable to resolve class adviser Realtime recipients:", error.message);
       return [] as RealtimeRecipient[];

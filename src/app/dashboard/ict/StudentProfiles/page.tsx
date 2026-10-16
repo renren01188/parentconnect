@@ -314,7 +314,7 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
   // Attendance settings are shared by all ICT sessions. Re-read the server
   // snapshot when another administrator saves settings or checks credits.
   useSessionInvalidation(({ scope }) => {
-    if (scope === "dashboard") void loadSettings();
+    if (!scope || scope === "dashboard") void loadSettings();
   });
 
   async function saveSettings() {
@@ -417,7 +417,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
   // Another ICT session may start, end, or reschedule a class while this
   // control panel is open. Keep this open modal in sync without polling.
   useSessionInvalidation(({ scope }) => {
-    if (scope === "dashboard") setSessionRefreshKey((key) => key + 1);
+    if (!scope || scope === "dashboard") setSessionRefreshKey((key) => key + 1);
   });
 
   // Load today's sessions on mount and after an authorized class-session
@@ -1986,10 +1986,10 @@ export default function StudentManagementPage() {
   // School-year and attendance-setting writes use the dashboard scope, while
   // section writes use accounts, so refresh their reference snapshots too.
   useSessionInvalidation((event) => {
-    if (event.scope === "students" || event.scope === "accounts") {
+    if (!event.scope || event.scope === "students" || event.scope === "accounts") {
       setStudentRefreshKey((key) => key + 1);
     }
-    if (event.scope === "dashboard" || event.scope === "accounts") {
+    if (!event.scope || event.scope === "dashboard" || event.scope === "accounts") {
       setReferenceRefreshKey((key) => key + 1);
     }
   });

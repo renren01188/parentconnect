@@ -21,6 +21,11 @@ const guidanceTicketRoute = read("src/app/api/reports/parent-adviser/[id]/ticket
 const guidanceNotificationContext = read("src/app/dashboard/guidance/context/NotificationContext.tsx");
 const reportPresenceRoute = read("src/app/api/reports/parent-adviser/[id]/realtime/route.ts");
 const guidanceStatusRoute = read("src/app/api/reports/guidance/[id]/status/route.ts");
+const guardianLogin = read("src/app/login/guardian/page.tsx");
+const adviserLogin = read("src/app/login/adviser/page.tsx");
+const guidanceLogin = read("src/app/login/guidance/page.tsx");
+const principalLogin = read("src/app/login/principal/page.tsx");
+const ictLogin = read("src/app/login/ict/page.tsx");
 
 // A committed message must publish its invalidation before its serverless
 // request resolves. `after()` is reserved for non-interactive audit/email work.
@@ -49,6 +54,7 @@ assert.match(messageRoute, /adviserId: principalConversation \|\| guidanceConver
 assert.match(realtimeSubscriber, /\.on\("broadcast", \{ event: "invalidate" \}/);
 assert.match(realtimeSubscriber, /const channelUrl = role[\s\S]*?\/api\/realtime\/channel\?role=\$\{encodeURIComponent\(role\)\}/);
 assert.match(realtimeSubscriber, /fetch\(channelUrl/);
+assert.match(realtimeSubscriber, /credentials:\s*"same-origin"/);
 
 // The Adviser page applies a report-specific refresh without a navigation,
 // preserves the selected conversation, and reconnects through the shared
@@ -83,6 +89,30 @@ assert.match(
 );
 assert.match(sessionInvalidation, /CHANNEL_ERROR.*TIMED_OUT.*CLOSED/s);
 assert.match(sessionInvalidation, /scheduleReconnect\(\)/);
+assert.match(
+  reportRealtimeHook,
+  /const \[connectionStatus, setConnectionStatus\] = useState<RealtimeConnectionStatus>\("CONNECTING"\)/,
+  "Reports must treat the first post-login channel join as pending rather than assume a socket is already authorized.",
+);
+assert.match(
+  reportRealtimeHook,
+  /connectionStatus === "SUBSCRIBED" \? 300_000 : 2_000/,
+  "Reports must reconcile quickly while a first-login Realtime join is unavailable, then return to the quiet fallback.",
+);
+assert.match(
+  reportRealtimeHook,
+  /currentConnectionStatusRef\.current = status[\s\S]*?connectionStatusRef\.current\?\.\(status\)/,
+  "Reports typing consumers must receive the actual shared-channel lifecycle status.",
+);
+
+// Login ends with a clean dashboard document, not a client-router transition
+// that could mount a Realtime consumer before its newly issued role cookie is
+// observable by the protected capability endpoint.
+assert.match(guardianLogin, /window\.location\.assign\("\/dashboard\/parent"\)/);
+assert.match(adviserLogin, /window\.location\.assign\("\/dashboard\/adviser"\)/);
+assert.match(guidanceLogin, /window\.location\.assign\("\/dashboard\/guidance"\)/);
+assert.match(principalLogin, /window\.location\.assign\("\/dashboard\/principal"\)/);
+assert.match(ictLogin, /window\.location\.assign\("\/dashboard\/ict"\)/);
 
 // A New Message is a standalone staff conversation. It must publish to the
 // selected parent before the response completes, and Parent Reports handles

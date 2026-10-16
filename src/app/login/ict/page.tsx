@@ -52,7 +52,10 @@ export default function ICTLoginPage() {
       if (!data.passwordSet) {
         router.push("/set-password/ict");
       } else {
-        router.push("/dashboard/ict");
+        // A clean post-login navigation prevents the Inbox from requesting an
+        // authorized Realtime topic against a stale pre-login client state.
+        window.location.assign("/dashboard/ict");
+        return;
       }
       router.refresh();
     } catch {

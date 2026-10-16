@@ -21,6 +21,17 @@ function createActorKey() {
 }
 
 /**
+ * Contact ICT used route-specific keys before all inboxes adopted the shared
+ * `staff-message:<root id>` key. Compare the durable root so a sender with an
+ * already-open legacy tab and a recipient on the current ICT Inbox still see
+ * each other's typing state.
+ */
+function savedConversationRootId(value: string | null | undefined) {
+  const match = String(value ?? "").match(/^(?:staff-message|adviser-ict|guidance-ict|principal-ict):([1-9][0-9]*)$/);
+  return match ? Number(match[1]) : null;
+}
+
+/**
  * Reuses the authenticated account Realtime channel for Contact ICT and ICT
  * Inbox typing state. Events are authorization-checked by the server against
  * the saved conversation and expire locally if a browser disconnects.
@@ -96,10 +107,12 @@ export function useStaffConversationTyping(conversationId: string | null, role: 
   }, [conversationId, publish, stopTyping]);
 
   const onRealtimeEvent = useCallback((event: RealtimeInvalidation) => {
+    const eventRootId = savedConversationRootId(event.conversationId);
+    const selectedRootId = savedConversationRootId(conversationId);
     if (
       event.kind !== "typing" ||
       event.scope !== "staff-messages" ||
-      event.conversationId !== conversationId ||
+      (!eventRootId || !selectedRootId || eventRootId !== selectedRootId) ||
       event.actorKey === actorKeyRef.current
     ) return;
 

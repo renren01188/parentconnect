@@ -356,7 +356,7 @@ export default function AuditTrailPage() {
   // The existing SSE stream covers same-instance inserts. A protected
   // Broadcast also covers writes made by another deployed instance.
   useSessionInvalidation((event) => {
-    if (event.scope === "audit") return fetchEvents({ background: true });
+    if (!event.scope || event.scope === "audit") return fetchEvents({ background: true });
   });
 
   useEffect(() => {

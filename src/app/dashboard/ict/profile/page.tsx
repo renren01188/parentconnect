@@ -117,7 +117,7 @@ export default function ICTProfilePage() {
   }, [router, profileRefreshKey]);
 
   useSessionInvalidation((event) => {
-    if (event.scope === "accounts" && !isEditing) setProfileRefreshKey((key) => key + 1);
+    if ((!event.scope || event.scope === "accounts") && !isEditing) setProfileRefreshKey((key) => key + 1);
   });
 
   const handleSave = async () => {

@@ -65,7 +65,8 @@
     "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs",
     "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs",
     "test:dashboard-idle-timeout": "node scripts/test-dashboard-idle-timeout.cjs",
-    "test:parent-report-adviser-link": "node scripts/test-parent-report-adviser-link.cjs"
+    "test:parent-report-adviser-link": "node scripts/test-parent-report-adviser-link.cjs",
+    "test:student-transfer-flow": "node scripts/test-student-transfer-flow.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

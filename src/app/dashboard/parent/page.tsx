@@ -387,6 +387,10 @@ export default function ParentDashboard() {
         () => loadParentStudent({ background: true }),
     );
     useSessionInvalidation((event) => {
+        if (!event.scope) {
+            scheduleDashboardRefresh();
+            return;
+        }
         if (event.scope === "students" || event.scope === "accounts") {
             void refreshSession();
             return;

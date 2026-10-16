@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
-import type { ChannelStatus, RealtimeInvalidation } from "@/lib/subscribeRealtimeInvalidations";
+import { useSessionInvalidation, type RealtimeConnectionStatus } from "@/hooks/useSessionInvalidation";
+import type { RealtimeInvalidation } from "@/lib/subscribeRealtimeInvalidations";
 
 type RefreshReports = () => void | Promise<void>;
 type RefreshReport = (invalidation: RealtimeInvalidation) => void | Promise<void>;
@@ -19,7 +19,7 @@ type ReportRealtimeOptions = {
   /** Refreshes a role's authorized student-report list in place. */
   onStudentReportUpdate?: RefreshReports;
   /** Reconnect recovery keeps ephemeral typing UI from becoming stale. */
-  onConnectionStatus?: (status: ChannelStatus) => void;
+  onConnectionStatus?: (status: RealtimeConnectionStatus) => void;
 };
 
 /**
@@ -32,6 +32,7 @@ export function useReportMessagesRealtime(
   options: ReportRealtimeOptions = {},
 ) {
   const [liveUpdateNotice, setLiveUpdateNotice] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionStatus>("CONNECTING");
   const refreshRef = useRef(refreshReports);
   const reportUpdateRef = useRef<RefreshReport | undefined>(options.onReportUpdate);
   const reportStatusUpdateRef = useRef<RefreshReport | undefined>(options.onReportStatusUpdate);
@@ -39,6 +40,7 @@ export function useReportMessagesRealtime(
   const staffMessageUpdateRef = useRef<RefreshReport | undefined>(options.onStaffMessageUpdate);
   const studentReportUpdateRef = useRef<RefreshReports | undefined>(options.onStudentReportUpdate);
   const connectionStatusRef = useRef<ReportRealtimeOptions["onConnectionStatus"]>(options.onConnectionStatus);
+  const currentConnectionStatusRef = useRef<RealtimeConnectionStatus>("CONNECTING");
   const mountedRef = useRef(true);
   const refreshTimerRef = useRef<number | undefined>(undefined);
   const reportTimerRef = useRef<number | undefined>(undefined);
@@ -97,7 +99,12 @@ export function useReportMessagesRealtime(
     refreshInFlightRef.current = true;
     try {
       await refreshRef.current();
-      if (mountedRef.current) setLiveUpdateNotice(null);
+      // A successful HTTP snapshot is useful recovery, but it must not imply
+      // that the live channel has joined. During the first moments after
+      // login, the cookie-backed channel capability can still be retrying.
+      if (mountedRef.current && currentConnectionStatusRef.current === "SUBSCRIBED") {
+        setLiveUpdateNotice(null);
+      }
     } catch {
       if (mountedRef.current) setLiveUpdateNotice("Live updates are reconnecting. Existing reports remain available.");
     } finally {
@@ -193,72 +200,92 @@ export function useReportMessagesRealtime(
     }, 75);
   }, [refreshReport]);
 
-  useSessionInvalidation((invalidation) => {
-    if (invalidation.scope === "reports") {
-      if (invalidation.kind === "status" && reportStatusUpdateRef.current) {
-        void refreshReportStatus(invalidation);
+  useSessionInvalidation(
+    (invalidation) => {
+      if (invalidation.scope === "reports") {
+        if (invalidation.kind === "status" && reportStatusUpdateRef.current) {
+          void refreshReportStatus(invalidation);
+          return;
+        }
+        if (invalidation.reportId) scheduleReportRefresh(invalidation);
+        else scheduleRefresh();
         return;
       }
-      if (invalidation.reportId) scheduleReportRefresh(invalidation);
-      else scheduleRefresh();
-      return;
-    }
-    if (invalidation.scope === "tickets") {
-      // Tickets are server-authorized and need only their own lightweight
-      // snapshot; reloading every report would disrupt an open conversation.
-      if (ticketUpdateRef.current) {
-        void Promise.resolve(ticketUpdateRef.current()).catch(scheduleRefresh);
-      } else {
-        scheduleRefresh();
-      }
-      return;
-    }
-    if (invalidation.scope === "staff-messages") {
-      if (invalidation.kind === "typing") {
-        staffMessageUpdateRef.current?.(invalidation);
+      if (invalidation.scope === "tickets") {
+        // Tickets are server-authorized and need only their own lightweight
+        // snapshot; reloading every report would disrupt an open conversation.
+        if (ticketUpdateRef.current) {
+          void Promise.resolve(ticketUpdateRef.current()).catch(scheduleRefresh);
+        } else {
+          scheduleRefresh();
+        }
         return;
       }
-      // A direct staff message has a canonical conversation key. Give the
-      // mounted Reports inbox first chance to reload that view immediately so
-      // an already-open thread receives the durable row without a navigation
-      // or a reply from the recipient. Keep the full inbox refresh as a safe
-      // fallback for a stale or inaccessible conversation.
-      if (staffMessageUpdateRef.current) {
-        void Promise.resolve(staffMessageUpdateRef.current(invalidation)).catch(scheduleRefresh);
-      } else {
+      if (invalidation.scope === "staff-messages") {
+        if (invalidation.kind === "typing") {
+          staffMessageUpdateRef.current?.(invalidation);
+          return;
+        }
+        // A direct staff message has a canonical conversation key. Give the
+        // mounted Reports inbox first chance to reload that view immediately so
+        // an already-open thread receives the durable row without a navigation
+        // or a reply from the recipient. Keep the full inbox refresh as a safe
+        // fallback for a stale or inaccessible conversation.
+        if (staffMessageUpdateRef.current) {
+          void Promise.resolve(staffMessageUpdateRef.current(invalidation)).catch(scheduleRefresh);
+        } else {
+          scheduleRefresh();
+        }
+        return;
+      }
+      if (invalidation.scope === "students") {
+        // Student Reports have their own authorized feed on the Adviser page.
+        // Updating that state directly keeps its active list/detail mounted.
+        if (studentReportUpdateRef.current) {
+          void Promise.resolve(studentReportUpdateRef.current()).catch(scheduleRefresh);
+        }
+        return;
+      }
+      if (!invalidation.scope) {
+        // Shared-channel reconnect: recover the server snapshot once, without
+        // navigating away or clearing the selected conversation and its draft.
         scheduleRefresh();
       }
-      return;
-    }
-    if (invalidation.scope === "students") {
-      // Student Reports have their own authorized feed on the Adviser page.
-      // Updating that state directly keeps its active list/detail mounted.
-      if (studentReportUpdateRef.current) {
-        void Promise.resolve(studentReportUpdateRef.current()).catch(scheduleRefresh);
+    },
+    (status) => {
+      currentConnectionStatusRef.current = status;
+      connectionStatusRef.current?.(status);
+      if (!mountedRef.current) return;
+      setConnectionStatus(status);
+      if (status === "SUBSCRIBED") {
+        setLiveUpdateNotice(null);
+        return;
       }
-      return;
-    }
-    if (!invalidation.scope) {
-      // Shared-channel reconnect: recover the server snapshot once, without
-      // navigating away or clearing the selected conversation and its draft.
-      connectionStatusRef.current?.("SUBSCRIBED");
-      scheduleRefresh();
-    }
-  });
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        setLiveUpdateNotice("Live updates are reconnecting. Checking for new reports automatically.");
+        void refresh();
+      }
+    },
+  );
 
-  // Realtime is the normal path. A quiet visibility-aware fallback protects a
-  // browser that was suspended without continuously polling the database.
+  // Broadcast is the normal immediate-delivery path. If first-login session
+  // propagation or a browser extension delays the socket join, reconcile the
+  // already-authorized snapshot every two seconds while visible. Once joined,
+  // keep the original quiet suspended-browser safeguard instead.
   useEffect(() => {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const fallbackTimer = window.setInterval(refreshWhenVisible, 300_000);
+    const fallbackTimer = window.setInterval(
+      refreshWhenVisible,
+      connectionStatus === "SUBSCRIBED" ? 300_000 : 2_000,
+    );
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(fallbackTimer);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [refresh]);
+  }, [connectionStatus, refresh]);
 
   return liveUpdateNotice;
 }

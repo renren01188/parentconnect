@@ -220,7 +220,11 @@ function GuardianLoginPageContent() {
           ? `/login/guardian/verify-temp-password?expiresAt=${encodeURIComponent(expiresAt)}`
           : "/login/guardian/verify-temp-password");
       } else {
-        router.push("/dashboard/parent");
+        // Start the dashboard from a new document after the server has set
+        // the parent session cookie. App-router navigation can otherwise mount
+        // the Reports client before its Realtime capability request sees this
+        // just-created cookie.
+        window.location.assign("/dashboard/parent");
       }
     } catch {
       setError("Cannot connect to server. Please check your connection.");

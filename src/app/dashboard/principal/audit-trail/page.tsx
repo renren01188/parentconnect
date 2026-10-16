@@ -337,7 +337,7 @@ export default function AuditTrailPage() {
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
   useSessionInvalidation((event) => {
-    if (event.scope === "audit") return fetchEvents({ background: true });
+    if (!event.scope || event.scope === "audit") return fetchEvents({ background: true });
   });
 
   useEffect(() => {

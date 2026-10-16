@@ -276,7 +276,7 @@ export default function StudentViewPage() {
   // once the form is not being edited. During an edit we defer the refresh so
   // another user's change never overwrites unsaved input.
   useSessionInvalidation((event) => {
-    if (event.scope !== "students" && event.scope !== "accounts") return;
+    if (event.scope && event.scope !== "students" && event.scope !== "accounts") return;
     if (editing || saving || showConfirm) {
       setLiveUpdatePending(true);
       return;

@@ -688,7 +688,11 @@ export async function PATCH(req: NextRequest) {
       await publishRealtimeInvalidation(recipients, {
         scope: "staff-messages",
         kind: "typing",
-        conversationId: String(conversationId),
+        // Older Contact ICT tabs used route-specific keys such as
+        // `adviser-ict:123`. Re-broadcast the one canonical saved-root key so
+        // a current ICT Inbox, which uses `staff-message:123`, receives the
+        // typing state immediately during and after a rolling deployment.
+        conversationId: `staff-message:${rootId}`,
         actorKey,
         active,
       });

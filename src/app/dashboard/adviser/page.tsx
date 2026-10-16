@@ -150,7 +150,7 @@ export default function AdviserDashboardPage() {
     () => loadDashboard({ background: true }),
   );
   useSessionInvalidation((event) => {
-    if (["attendance", "students", "accounts", "reports", "dashboard"].includes(event.scope ?? "")) {
+    if (!event.scope || ["attendance", "students", "accounts", "reports", "dashboard"].includes(event.scope)) {
       scheduleDashboardRefresh();
     }
   });

@@ -641,7 +641,7 @@ export default function ProfilePage() {
     }, [router, profileRefreshKey]);
 
     useSessionInvalidation((event) => {
-        if (event.scope === "accounts" && !showSettings) setProfileRefreshKey((key) => key + 1);
+        if ((!event.scope || event.scope === "accounts") && !showSettings) setProfileRefreshKey((key) => key + 1);
     });
 
     async function saveProfile(updated: ProfileData, currentPassword: string) {

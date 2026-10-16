@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     const { data: studentRows, error: studentErr } = await supabase
       .from("students")
-      .select("id, student_id, first_name, last_name, grade, section, transfer_status, target_grade, target_section")
+      .select("id, student_id, first_name, last_name, grade, section, transfer_status, target_grade, target_section, archive_status")
       .eq("id", studentId)
       .limit(1);
 
@@ -88,6 +88,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (student.archive_status !== "active") {
+      return NextResponse.json(
+        { success: false, message: "This student is no longer active and cannot be received." },
+        { status: 409 },
+      );
+    }
+
     if (!student.target_grade || !student.target_section) {
       return NextResponse.json(
         {
@@ -95,6 +102,16 @@ export async function POST(req: NextRequest) {
           message: "Student standby record is missing target grade or section. Please contact ICT.",
         },
         { status: 422 }
+      );
+    }
+
+    const adviserSections = adviser.sections?.length
+      ? adviser.sections
+      : adviser.section ? [adviser.section] : [];
+    if (!adviser.grade || !adviserSections.includes(student.target_section) || student.target_grade !== adviser.grade) {
+      return NextResponse.json(
+        { success: false, message: "This pending transfer is assigned to a different receiving class." },
+        { status: 403 },
       );
     }
 
@@ -148,7 +165,7 @@ export async function POST(req: NextRequest) {
 
     const newClassSession = sectionRow?.class_session ?? "Morning";
 
-    const { error: updateErr } = await supabase
+    const { data: activatedStudent, error: updateErr } = await supabase
       .from("students")
       .update({
         rfid_card: normalizedRfid,
@@ -159,9 +176,21 @@ export async function POST(req: NextRequest) {
         target_grade: null,
         target_section: null,
       })
-      .eq("id", studentId);
+      .eq("id", studentId)
+      .eq("archive_status", "active")
+      .eq("transfer_status", "standby")
+      .eq("target_grade", student.target_grade)
+      .eq("target_section", student.target_section)
+      .select("id")
+      .maybeSingle();
 
     if (updateErr) throw updateErr;
+    if (!activatedStudent) {
+      return NextResponse.json(
+        { success: false, message: "This transfer is no longer pending. Refresh the list and try again." },
+        { status: 409 },
+      );
+    }
 
     const currentRecipients = await studentRealtimeRecipientsForStudents([{ studentDbId: Number(student.id) }]);
     await publishRealtimeInvalidation([...previousRecipients, ...currentRecipients], "students");
