@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   ArrowLeft, CheckCircle, AlertCircle,
   CreditCard, Phone, Mail, GraduationCap, Edit2,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { getStudentAge } from "@/lib/studentAge";
 import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
@@ -208,6 +209,7 @@ export default function StudentViewPage() {
   const [saveError,   setSaveError]   = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [liveUpdatePending, setLiveUpdatePending] = useState(false);
 
   const [sections,        setSections]        = useState<string[]>([]);
   const [loadingSections, setLoadingSections] = useState(false);
@@ -227,10 +229,12 @@ export default function StudentViewPage() {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const parentAccountLinked = student?.parent_account_linked === true;
 
-  useEffect(() => {
+  const loadStudent = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
     if (!id) return;
-    async function load() {
-      setLoading(true); setFetchError("");
+    if (!background) {
+      setLoading(true);
+      setFetchError("");
+    }
       try {
         const res  = await fetch(`/api/students/${id}`);
         const json = await res.json();
@@ -260,10 +264,31 @@ export default function StudentViewPage() {
         setOriginalSection(d.section || "");
       } catch (error: unknown) {
         setFetchError(error instanceof Error ? error.message : "Failed to load student.");
-      } finally { setLoading(false); }
-    }
-    load();
+      } finally {
+        if (!background) setLoading(false);
+      }
   }, [id]);
+
+  useEffect(() => { void loadStudent(); }, [loadStudent]);
+
+  // A student can be updated, moved, or archived by ICT while the Adviser is
+  // viewing this detail page. Re-read the normal authorized API view in place
+  // once the form is not being edited. During an edit we defer the refresh so
+  // another user's change never overwrites unsaved input.
+  useSessionInvalidation((event) => {
+    if (event.scope !== "students" && event.scope !== "accounts") return;
+    if (editing || saving || showConfirm) {
+      setLiveUpdatePending(true);
+      return;
+    }
+    void loadStudent({ background: true });
+  });
+
+  useEffect(() => {
+    if (!liveUpdatePending || editing || saving || showConfirm) return;
+    setLiveUpdatePending(false);
+    void loadStudent({ background: true });
+  }, [editing, liveUpdatePending, loadStudent, saving, showConfirm]);
 
   useEffect(() => {
     if (!form.grade) { setSections([]); return; }
@@ -468,6 +493,12 @@ export default function StudentViewPage() {
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4">
               <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
               <p className="text-sm text-red-600">{saveError}</p>
+            </div>
+          )}
+          {liveUpdatePending && (
+            <div role="status" className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-sm text-amber-800">This student was updated elsewhere. Finish or cancel your edit to load the latest details.</p>
             </div>
           )}
 

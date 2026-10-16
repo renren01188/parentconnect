@@ -11,6 +11,13 @@ const parentReportsRoute = read("src/app/api/reports/parent-adviser/route.ts");
 const parentReportMapper = read("src/app/api/reports/parent-adviser/_lib.ts");
 const parentReportsPage = read("src/app/dashboard/parent/reports/page.tsx");
 const parentDashboard = read("src/app/dashboard/parent/page.tsx");
+const parentNotifications = read("src/app/api/parents/notifications/route.ts");
+const parentNotificationContext = read("src/app/dashboard/parent/context/NotificationContext.tsx");
+const parentSessionGate = read("src/app/dashboard/parent/ParentSessionGate.tsx");
+const parentProfile = read("src/app/dashboard/parent/profile/page.tsx");
+const parentData = read("src/app/dashboard/parent/data.ts");
+const adviserReportsPage = read("src/app/dashboard/adviser/reports/page.tsx");
+const studentReportStatusRoute = read("src/app/api/student-reports/[id]/status/route.ts");
 
 // The Adviser forwarding action must resolve a real parent/student link
 // before it either looks for or creates a Parent Report. This prevents a
@@ -48,5 +55,36 @@ assert.match(parentReportsPage, /Student concern/);
 assert.match(parentReportsPage, /Student-submitted concern/);
 assert.match(parentDashboard, /r\.isStudentSubmittedConcern \? "Student concern"/);
 assert.match(parentDashboard, /\["attendance", "reports", "notifications", "announcements", "staff-messages"\]/);
+
+// The Parent Notifications feed derives forwarded Student Concerns from the
+// same parent-and-student-scoped report row and uses the saved Adviser message
+// as its visible text/read state. It never needs sample dashboard data.
+assert.match(parentNotifications, /\.eq\("parent_id", session\.id\)[\s\S]*?\.in\("student_id", \[\.\.\.studentNames\.keys\(\)\]\)[\s\S]*?\.ilike\("subject", "\[Student Concern\]%"\)/);
+assert.match(parentNotifications, /\.from\("parent_adviser_report_messages"\)[\s\S]*?\.in\("sender_role", \["adviser", "guidance", "principal", "subject_teacher"\]\)/);
+assert.match(parentNotifications, /title: isStudentConcern \? report\.subject : "New Subject Teacher Report"/);
+assert.match(parentNotifications, /msg: messageBody \|\| report\.subject/);
+assert.match(parentNotifications, /await publishRealtimeInvalidation\(\[\{ role: "parent", id: session\.id \}\], "reports"\)/);
+assert.match(parentNotificationContext, /scope === "reports" \|\| scope === "staff-messages"[\s\S]*?refreshUnreadReportsCount\(\), refreshNotificationFeed\(\)/);
+assert.doesNotMatch(parentDashboard, /FALLBACK_STUDENTS|REMOVED_REPORT_SAMPLE|REMOVED_MESSAGE_SAMPLE/);
+assert.doesNotMatch(parentData, /INITIAL_REPORTS|INITIAL_NOTIFICATIONS/);
+
+// Refreshes only leave the dashboard for an explicit invalid/expired session.
+// Temporary profile/API failures retain the HttpOnly cookie and offer a retry.
+assert.match(parentSessionGate, /response\.status === 401 \|\| response\.status === 403/);
+assert.match(parentSessionGate, /Your session has not been signed out\./);
+assert.match(parentSessionGate, /Try again/);
+assert.match(parentProfile, /res\.status === 401 \|\| res\.status === 403/);
+assert.match(parentProfile, /setLoadError\(data\?\.message \|\| "Unable to load your profile\. Please try again\."\)/);
+
+// Parent notification is a terminal action for resolving a student concern.
+// Keep the visual control inert and enforce the same rule if a stale modal or
+// direct request tries to resolve it after a live update.
+assert.match(adviserReportsPage, /const isParentNotified = notifiedStudentReports\.has\(selectedStudRep\.id\)/);
+assert.match(adviserReportsPage, /disabled=\{isParentNotified \|\| resolvingStudent\}/);
+assert.match(adviserReportsPage, /if \(!isParentNotified\) setStudentResolveTargetId\(selectedStudRep\.id\)/);
+assert.match(adviserReportsPage, /Resolve unavailable/);
+assert.match(adviserReportsPage, /if \(notifiedStudentReports\.has\(studentResolveTargetId\)\)[\s\S]*?setStudentResolveTargetId\(null\)[\s\S]*?return;/);
+assert.match(studentReportStatusRoute, /select\("id, student_id, student_name, status, notified_parent"\)/);
+assert.match(studentReportStatusRoute, /if \(existing\.notified_parent && nextStatus === "resolved"\)[\s\S]*?status: 409/);
 
 console.log("student concern parent-report linkage and delivery checks passed");

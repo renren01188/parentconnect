@@ -11,6 +11,8 @@ const ictInbox = read("src/app/dashboard/ict/inbox/page.tsx");
 const realtimeHook = read("src/hooks/useStaffMessagesRealtime.ts");
 const sessionInvalidation = read("src/hooks/useSessionInvalidation.ts");
 const ictNotifications = read("src/app/dashboard/ict/context/NotificationContext.tsx");
+const guidanceIctRoute = read("src/app/api/guidance-ict/messages/route.ts");
+const principalIctRoute = read("src/app/api/principal-ict/messages/route.ts");
 
 const contactPairs = [
   {
@@ -73,6 +75,12 @@ for (const pair of contactPairs) {
   assert.match(context, /contact-ict-seen-at/);
   assert.match(context, /seenAfter/);
 }
+
+// ICT's role-pair endpoints are also safe to call directly in either
+// direction. Their recipient lookup must resolve the matching role table,
+// never an unrelated Adviser record.
+assert.match(guidanceIctRoute, /\.from\("guidance_counselors"\)[\s\S]*?id: `guidance:\$\{row\.id\}`/);
+assert.match(principalIctRoute, /\.from\("principals"\)[\s\S]*?\.eq\("is_active", true\)[\s\S]*?id: `principal:\$\{row\.id\}`/);
 
 // These providers live in their respective dashboard layouts, not on Contact
 // ICT. An ICT reply must therefore refresh the badge while the recipient is
@@ -153,6 +161,16 @@ assert.match(adviserContact, /const conversationId = `staff-message:\$\{created\
 assert.match(adviserContact, /setConversations\(\(current\) => \[\s*conversation,/);
 assert.match(adviserContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
 assert.match(adviserContact, /messagesRequestVersionRef\.current \+= 1/);
+// Principal uses the same durable-response rendering as Adviser and Guidance.
+// The sender must see both a new root and a reply without waiting for another
+// user action or a second request to complete.
+const principalContact = read("src/app/dashboard/principal/contact-ict/page.tsx");
+assert.match(principalContact, /type CreatedStaffMessage/);
+assert.match(principalContact, /The API has already committed the row/);
+assert.match(principalContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
+assert.match(principalContact, /setConversations\(\(current\) => \[/);
+assert.match(principalContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
+assert.match(principalContact, /messagesRequestVersionRef\.current \+= 1/);
 // Both panes publish local typing state and consume the other participant's
 // data-free Realtime typing event for the active canonical conversation.
 assert.match(adviserContact, /conversationTyping\.onRealtimeEvent/);
@@ -199,7 +217,7 @@ assert.match(
 );
 assert.match(
   guidanceSidebar,
-  /badgeKey === "ict" \? ictUnreadCount/,
+  /ict: ictUnreadCount/,
   "Guidance Contact ICT sidebar badge must use the dedicated ICT unread count",
 );
 
@@ -225,7 +243,7 @@ assert.match(
 );
 assert.match(
   adviserSidebar,
-  /label === "Reports" \? unreadCount[\s\S]*?label === "Contact ICT" \? ictUnreadCount/,
+  /reports: unreadCount,[\s\S]*?ict: ictUnreadCount/,
   "Adviser sidebar must map report and Contact ICT badges to separate counts",
 );
 assert.match(
@@ -305,8 +323,35 @@ assert.match(
 );
 assert.match(
   principalSidebar,
-  /badgeKey === "reports" \? reportCount \+ adviserMessageCount[\s\S]*?badgeKey === "ict" \? ictMessageCount/,
+  /reports: reportCount \+ adviserMessageCount,[\s\S]*?ict: ictMessageCount/,
   "Principal sidebar must map report and Contact ICT badges to separate counts",
 );
+
+// The initial foreground fetch and the post-subscription Realtime refresh can
+// overlap. A newer background snapshot may populate Panel 1 first, but it
+// must not leave the original page-load indicator visible once it settles.
+for (const [name, source] of [
+  ["ICT Inbox", ictInbox],
+  ["Adviser Contact ICT", adviserContact],
+  ["Guidance Contact ICT", guidanceContact],
+  ["Principal Contact ICT", principalContact],
+]) {
+  assert.match(
+    source,
+    /finally \{[\s\S]*?if \(!background\) setLoading\(false\);[\s\S]*?\}/,
+    `${name} must always clear a completed foreground loader`,
+  );
+  assert.doesNotMatch(
+    source,
+    /if \(!background && requestVersion === messagesRequestVersionRef\.current\) setLoading\(false\);/,
+    `${name} must not let a newer background refresh strand its loader`,
+  );
+  assert.match(source, /!loading && error/, `${name} must expose request errors`);
+  assert.match(
+    source,
+    /!loading && !error && filteredConversations\.length === 0/,
+    `${name} must expose an empty state after loading`,
+  );
+}
 
 console.log("Contact ICT Realtime and unread-state checks passed");

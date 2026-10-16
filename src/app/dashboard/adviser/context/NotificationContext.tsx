@@ -217,13 +217,26 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         void loadIctCount();
         return;
       }
-      if (scope === "reports") {
+      if (scope === "reports" || scope === "students") {
+        // Public student-report submissions are deliberately delivered on the
+        // assigned Adviser's existing `students` channel.  The Reports badge
+        // includes those New student reports, so it must re-read its
+        // authorized report snapshot here even when Reports is not the active
+        // page. Other student changes safely reconcile against the same
+        // server-authorized count.
         void loadReportCount();
         notifyNotificationChange();
         return;
       }
-      if (scope === "attendance" || scope === "students") {
+      if (scope === "attendance") {
         notifyNotificationChange();
+        return;
+      }
+      if (scope === "accounts") {
+        // The Sidebar is mounted by the Adviser layout but owns its own
+        // profile snapshot. Let an ICT account/assignment update refresh that
+        // snapshot on every Adviser route, not only while Profile is open.
+        window.dispatchEvent(new Event("adviser-profile-updated"));
         return;
       }
       if (scope === "notifications" || scope === "announcements") {

@@ -97,7 +97,7 @@ export async function GET() {
             String(report.status ?? "").toLowerCase() !== "resolved" &&
             !readKeys.has(principalReportReadKey(report.id))
         ).length;
-        const unreadCount = reportUnreadCount;
+        const unreadCount = notifications.filter((notification) => !notification.read).length;
 
         return NextResponse.json({ success: true, notifications, unreadCount, reportUnreadCount });
     } catch (error) {

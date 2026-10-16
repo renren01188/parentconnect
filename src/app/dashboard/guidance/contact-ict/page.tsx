@@ -370,7 +370,10 @@ export default function ContactICTPage() {
             }
             return false;
         } finally {
-            if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
+            // Realtime may refresh before the initial request returns. Clear
+            // the foreground loader when that request settles even if its
+            // snapshot is no longer the latest one.
+            if (!background) setLoading(false);
         }
     }, [setIctUnreadCount]);
 

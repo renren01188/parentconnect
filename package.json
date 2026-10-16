@@ -62,7 +62,8 @@
     "test:principal-panel3-display": "node scripts/test-principal-panel3-display.cjs",
     "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs",
     "test:guardian-temp-password-delivery": "node scripts/test-guardian-temp-password-delivery.cjs",
-    "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs"
+    "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs",
+    "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

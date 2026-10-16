@@ -979,7 +979,18 @@ function ParentReportsPageContent() {
         const report = (data?.reports?.[0] ?? null) as Report | null;
         if (!report) continue;
         const [mergedReport] = mergePendingMessages([report]);
-        setReports((current) => current.map((item) => item.id === id ? mergedReport : item));
+        setReports((current) => {
+          const alreadyInInbox = current.some((item) => item.id === id);
+          if (!alreadyInInbox) {
+            // A report Broadcast can arrive while the summary request that
+            // introduces this conversation is still in flight. Preserve the
+            // complete authorized detail snapshot instead of dropping the
+            // message and leaving the Parent to refresh manually.
+            return sortParentReportConversations([...current, mergedReport]);
+          }
+          return current.map((item) => item.id === id ? mergedReport : item);
+        });
+        setSelectedId((current) => current ?? id);
         setLoadError("");
       } while (detailRefreshQueuedRef.current.has(id));
     })();
@@ -1174,12 +1185,21 @@ function ParentReportsPageContent() {
     ]);
   }, [loadReportDetail, loadReports, selectedReportId]);
 
+  const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
+    staffConversationTyping.onRealtimeEvent(event);
+    if (event.kind === "typing") return;
+    // The staff endpoint returns an already-authorized, complete standalone
+    // thread. Refresh it immediately so an open Parent conversation renders
+    // the saved sender and timestamp without waiting for another action.
+    await loadReports();
+  }, [loadReports, staffConversationTyping]);
+
   // Matches Contact ICT's lifecycle while applying selected-report updates in
   // place instead of replacing the conversation with an inbox summary.
   const liveUpdateNotice = useReportMessagesRealtime(loadReports, {
     onReportUpdate: handleLiveReportUpdate,
     onReportStatusUpdate: handleLiveReportStatusUpdate,
-    onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
+    onStaffMessageUpdate: handleLiveStaffMessageUpdate,
     onConnectionStatus: (status) => {
       if (status === "CLOSED") {
         reportTyping.clearOtherTyping();

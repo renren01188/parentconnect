@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   CheckCircle2,
@@ -90,6 +90,10 @@ export default function ProfilePage() {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
+  // Do not overwrite a draft while the settings panel is open. Retain the
+  // account invalidation and reconcile the protected profile snapshot as
+  // soon as the user closes that panel.
+  const pendingAccountRefreshRef = useRef(false);
 
   const fullName = getGuidanceFullName(profile);
   const initials = getGuidanceInitials(profile);
@@ -146,8 +150,19 @@ export default function ProfilePage() {
   }, [profileRefreshKey]);
 
   useSessionInvalidation((event) => {
-    if (event.scope === "accounts" && !settingsOpen) setProfileRefreshKey((key) => key + 1);
+    if (event.scope !== "accounts") return;
+    if (settingsOpen) {
+      pendingAccountRefreshRef.current = true;
+      return;
+    }
+    setProfileRefreshKey((key) => key + 1);
   });
+
+  useEffect(() => {
+    if (settingsOpen || !pendingAccountRefreshRef.current) return;
+    pendingAccountRefreshRef.current = false;
+    setProfileRefreshKey((key) => key + 1);
+  }, [settingsOpen]);
 
   const sendApprovalRequest = async () => {
     if (!approvalUnlocked || !canSendApproval || approvalSaving) return;

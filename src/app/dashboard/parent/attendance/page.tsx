@@ -5,11 +5,8 @@
 /**
  * FILE: app/dashboard/parent/attendance/page.tsx
  *
- * Two enrolled children:
- *   - Carlos Santos Doe  → Grade 6 - Rizal  (different adviser, schedule, stats)
- *   - Maria Santos Doe   → Grade 1 - Mabuhay
- *
- * Selecting a student updates stats + attendance table.
+ * Loads the signed-in parent's linked students and their attendance records.
+ * Selecting a student updates the stats and attendance table.
  * Month dropdown updates the table rows for the active student.
  * Design matches screenshot exactly (blue sidebar, light-blue-gray bg, white cards).
  */

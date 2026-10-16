@@ -27,7 +27,10 @@ assert.match(server, /kind: "typing"/);
 assert.match(server, /conversationId: String\(conversationId\)/);
 assert.match(typingHook, /status: "typing"/);
 assert.match(typingHook, /event\.conversationId !== conversationId/);
-assert.match(typingHook, /window\.setTimeout\(clearOtherTyping, 3000\)/);
+assert.match(typingHook, /TYPING_HEARTBEAT_MS = 1_000/);
+assert.match(typingHook, /lastActivePublishAtRef/);
+assert.match(typingHook, /now - lastActivePublishAtRef\.current >= TYPING_HEARTBEAT_MS/);
+assert.match(typingHook, /window\.setTimeout\(clearOtherTyping, OTHER_TYPING_EXPIRY_MS\)/);
 assert.match(typingHook, /return \(\) => \{[\s\S]*stopTyping\(\);[\s\S]*clearOtherTyping\(\);/);
 assert.match(staffRealtimeHook, /invalidation\.kind === "typing"/);
 assert.match(staffRealtimeHook, /conversationUpdateRef\.current\?\.\(invalidation\)/);
@@ -58,6 +61,9 @@ for (const file of [
   assert.match(source, /useReportTyping/);
   assert.match(source, /isOtherParticipantTyping/);
   assert.match(source, /The other participant is typing/);
+  assert.match(source, /const handleLiveStaffMessageUpdate = useCallback/);
+  assert.match(source, /staffConversationTyping\.onRealtimeEvent\(event\)[\s\S]*?if \(event\.kind === "typing"\) return/);
+  assert.match(source, /onStaffMessageUpdate: handleLiveStaffMessageUpdate/);
 }
 
 // Standalone conversations created through New Message use the same typing
@@ -70,7 +76,7 @@ for (const [source, role] of [
 ]) {
   assert.match(source, /useStaffConversationTyping/);
   assert.match(source, new RegExp(`"${role}"`));
-  assert.match(source, /onStaffMessageUpdate: staffConversationTyping\.onRealtimeEvent/);
+  assert.match(source, /onStaffMessageUpdate: handleLiveStaffMessageUpdate/);
   assert.match(source, /staffConversationTyping\.onDraftChange\(Boolean\(/);
   assert.match(source, /staffConversationTyping\.stopTyping\(\)/);
 }
@@ -78,7 +84,8 @@ for (const [source, role] of [
 assert.match(parentReports, /useReportTyping/);
 assert.match(parentReports, /useStaffConversationTyping/);
 assert.match(parentReports, /selectedStandaloneConversationId/);
-assert.match(parentReports, /onStaffMessageUpdate: staffConversationTyping\.onRealtimeEvent/);
+assert.match(parentReports, /onStaffMessageUpdate: handleLiveStaffMessageUpdate/);
+assert.match(parentReports, /const handleLiveStaffMessageUpdate = useCallback/);
 assert.match(parentReports, /staffConversationTyping\.onDraftChange\(hasDraft\)/);
 assert.match(parentReports, /staffConversationTyping\.clearOtherTyping\(\)/);
 

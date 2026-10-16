@@ -29,7 +29,7 @@ assert.match(parentContext, /if \(kind === "typing"\) return;/);
 assert.match(staffMessages, /recipient_type: "parent"/);
 assert.match(staffMessages, /status: "unread"/);
 assert.match(staffMessages, /\{ role: "parent", id: recipient\.parentId \}/);
-assert.match(staffMessages, /\], "staff-messages"\);/);
+assert.match(staffMessages, /scope: "staff-messages",\s*kind: "message",\s*conversationId: `staff-message:\$\{Number\(createdMessage\.id\)\}`,\s*messageId: Number\(createdMessage\.id\)/);
 
 // A Parent dashboard preview retains the authoritative conversation key, so
 // opening or marking it read updates the same staff_messages state as Reports.

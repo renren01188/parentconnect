@@ -5,7 +5,7 @@ import { sendStudentReportAdviserEmail } from "@/lib/mailer";
 import { verifyGoogleRecaptcha } from "@/lib/googleRecaptcha";
 import { consumePublicRateLimit, isPublicRateLimitUnavailableError } from "@/lib/publicRateLimit";
 import { logAudit } from "@/lib/audit";
-import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishStudentReportsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { getPrincipalSession } from "../reports/parent-adviser/_lib";
 import {
@@ -335,13 +335,9 @@ export async function POST(req: NextRequest) {
     }
 
     // The report is committed before the notification is broadcast. The
-    // assigned Adviser's Reports page re-reads only its authorized
-    // Student Reports list, so a public submit appears without a reload.
-    if (Number.isSafeInteger(Number(adviser.id)) && Number(adviser.id) > 0) {
-      await publishRealtimeInvalidation([
-        { role: "adviser", id: Number(adviser.id) },
-      ], "students");
-    }
+    // assigned Adviser and Principal monitoring view each re-read only their
+    // authorized Student Reports snapshot, so a public submit appears live.
+    await publishStudentReportsRealtimeInvalidation(adviser.id);
 
     if (insertedReport && adviser.email) {
       try {

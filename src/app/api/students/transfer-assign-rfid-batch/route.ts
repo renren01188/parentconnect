@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import bcrypt from "bcryptjs";
+import { publishRealtimeInvalidation, studentRealtimeRecipientsForStudents } from "@/lib/realtimeInvalidation";
 
 type LegacyAssignment = { studentId: number; rfidCard?: string };
 type Body = {
@@ -113,6 +114,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Resolve the source audiences while every row still belongs to its old
+    // class. A single event is emitted after the full batch succeeds.
+    const previousRecipients = await studentRealtimeRecipientsForStudents(
+      validStudents.map((student) => ({ studentDbId: student.studentId })),
+    );
+
     const results = [];
     for (const student of validStudents) {
       // Look up the class_session of the target section
@@ -141,6 +148,11 @@ export async function POST(req: NextRequest) {
       if (updateErr) throw updateErr;
       results.push({ id: student.studentId, full_name: student.full_name });
     }
+
+    const currentRecipients = await studentRealtimeRecipientsForStudents(
+      results.map((student) => ({ studentDbId: student.id })),
+    );
+    await publishRealtimeInvalidation([...previousRecipients, ...currentRecipients], "students");
 
     return NextResponse.json({
       success: true,

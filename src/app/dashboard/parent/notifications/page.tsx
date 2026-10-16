@@ -21,7 +21,7 @@ import {
 } from "../data";
 
 type PageNotification = Notification & {
-  source?: "database" | "mock";
+  source?: "database";
   announcementId?: number;
   announcementTitle?: string;
   notificationIds?: number[];

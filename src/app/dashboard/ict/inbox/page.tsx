@@ -503,7 +503,10 @@ export default function ICTInboxPage() {
       }
       return false;
     } finally {
-      if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
+      // A Realtime background refresh can supersede the first page-load
+      // request. It must not keep Panel 1's foreground loader visible after
+      // that original request has settled.
+      if (!background) setLoading(false);
     }
   }, []);
 

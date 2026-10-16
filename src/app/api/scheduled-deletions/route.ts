@@ -7,7 +7,13 @@ import { archiveTarget, restoreArchivedTarget } from "@/lib/permanentDeletion";
 import { restoreDeletionTarget, suspendDeletionTarget } from "@/lib/deletionAccess";
 import { sendAccountDeletionRevertedEmail, sendAccountDeletionScheduledEmail, sendIctDeletionRequestEmail, sendStudentDeletionRevertedEmail, sendStudentDeletionScheduledEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  publishAccountRealtimeInvalidation,
+  publishRealtimeInvalidation,
+  publishStudentRealtimeInvalidation,
+  type RealtimeRecipient,
+  type RealtimeRecipientRole,
+} from "@/lib/realtimeInvalidation";
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
@@ -48,6 +54,65 @@ type RegisteredParent = {
   parent_last_name: string | null;
   parent_suffix: string | null;
 };
+
+type ScheduledDeletionRealtimeTarget = {
+  target_type: string;
+  target_id: string | number;
+  requested_by_role?: string | null;
+  requested_by_id?: string | number | null;
+};
+
+function realtimeRecipientForDeletionTarget(item: ScheduledDeletionRealtimeTarget): RealtimeRecipient | null {
+  const id = Number(item.target_id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const roles: Record<string, RealtimeRecipientRole> = {
+    parent: "parent",
+    adviser: "adviser",
+    guidance: "guidance",
+    principal: "principal",
+    ict: "ict",
+  };
+  const role = roles[item.target_type];
+  return role ? { role, id } : null;
+}
+
+function realtimeRecipientForDeletionRequester(item: ScheduledDeletionRealtimeTarget): RealtimeRecipient | null {
+  const id = Number(item.requested_by_id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const role = item.requested_by_role === "Adviser"
+    ? "adviser"
+    : item.requested_by_role === "ICT"
+      ? "ict"
+      : null;
+  return role ? { role, id } : null;
+}
+
+/**
+ * A deletion queue update changes ICT's list and can change the target
+ * account's access or in-app notice. Signal only those accounts; their
+ * dashboards re-read the normal protected endpoints after the event.
+ */
+async function publishScheduledDeletionInvalidations(
+  items: ScheduledDeletionRealtimeTarget[],
+  options: { studentChanged?: boolean } = {},
+) {
+  const targets = items
+    .flatMap((item) => [
+      realtimeRecipientForDeletionTarget(item),
+      realtimeRecipientForDeletionRequester(item),
+    ])
+    .filter((target): target is RealtimeRecipient => Boolean(target));
+  const parentTargets = targets.filter((target) => target.role === "parent");
+  await Promise.all([
+    publishAccountRealtimeInvalidation(targets),
+    publishRealtimeInvalidation(parentTargets, "notifications"),
+    options.studentChanged
+      ? Promise.all(items
+        .filter((item) => item.target_type === "student")
+        .map((item) => publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) })))
+      : Promise.resolve(),
+  ]);
+}
 
 
 export async function GET() {
@@ -252,6 +317,7 @@ export async function POST(req: NextRequest) {
         try { await sendIctDeletionRequestEmail({ recipientEmail: admin.email, adviserName, requestCount: rows.length }); }
         catch (mailError) { console.error("ICT deletion-request email failed:", mailError); }
       }));
+      await publishScheduledDeletionInvalidations(data ?? []);
       return NextResponse.json({ success: true, deletions: data, message: "Deletion request sent to ICT for approval." });
     }
     const allowedIctTypes = new Set(["parent", "adviser", "guidance", "ict", "student"]);
@@ -345,6 +411,7 @@ export async function POST(req: NextRequest) {
         module: "User Management",
         details: `Scheduled bulk deletion for ${successfulRows.length} account${successfulRows.length === 1 ? "" : "s"}; ${rejectedRequestedParents.length + failedScheduledRows.length} selected parent account(s) failed. Parent accounts receive an in-app notification only after scheduling. Reason: ${reason.trim()}`,
       });
+      await publishScheduledDeletionInvalidations(successfulRows);
       return NextResponse.json({
         success: true,
         deletions: successfulRows,
@@ -363,6 +430,7 @@ export async function POST(req: NextRequest) {
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", data.id);
       } catch (mailError) { console.error("Account deletion-schedule email failed:", mailError); }
     }
+    await publishScheduledDeletionInvalidations([data]);
     return NextResponse.json({ success: true, deletion: data, message: "Deletion scheduled for 30 days from today." });
   } catch (error) { return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Unable to schedule deletion." }, { status: 500 }); }
 }
@@ -395,9 +463,6 @@ export async function PATCH(req: NextRequest) {
       if (item.status === "Archived") await restoreArchivedTarget(item);
       // Clears a waiting-period suspension only for an explicitly selected parent.
       await restoreDeletionTarget(item);
-      if (item.status === "Archived" && item.target_type === "student") {
-        await publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) });
-      }
       await logAudit({
         action: item.status === "Archived" ? "Record Restored" : "Revert Deletion",
         performedBy: getIctName(ict),
@@ -418,15 +483,13 @@ export async function PATCH(req: NextRequest) {
         }
         catch (mailError) { console.error("Deletion-revert email failed:", mailError); }
       }
+      await publishScheduledDeletionInvalidations([item], { studentChanged: item.status === "Archived" });
       return NextResponse.json({ success: true });
     }
     if (action === "delete-now") {
       if (!ict || item.status !== "Scheduled") return NextResponse.json({ success: false, message: "Only ICT can archive a scheduled record immediately." }, { status: 403 });
       await archiveTarget(item, { id: ict.id, name: getIctName(ict), role: "ICT Admin" });
       await supabase.from("scheduled_deletions").update({ status: "Archived", archived_at: new Date().toISOString(), archived_by: String(ict.id), archive_reason: item.reason }).eq("id", deletionId).eq("status", "Scheduled");
-      if (item.target_type === "student") {
-        await publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) });
-      }
       await logAudit({
         action: "Record Archived",
         performedBy: getIctName(ict),
@@ -442,6 +505,7 @@ export async function PATCH(req: NextRequest) {
         newStatus: "Archived",
         details: `Archived this ${item.target_type} record immediately; related history remains preserved.`,
       });
+      await publishScheduledDeletionInvalidations([item], { studentChanged: true });
       return NextResponse.json({ success: true, message: "Record archived. Related history has been preserved." });
     }
     if (!ict || !["approve", "reject"].includes(action) || item.status !== "PendingICT") return NextResponse.json({ success: false, message: "Only ICT can review a pending adviser request." }, { status: 403 });
@@ -472,6 +536,7 @@ export async function PATCH(req: NextRequest) {
         await supabase.from("scheduled_deletions").update({ notice_sent_at: new Date().toISOString() }).eq("id", deletionId);
       } catch (mailError) { console.error("Account deletion approval email failed:", mailError); }
     }
+    await publishScheduledDeletionInvalidations([item]);
     return NextResponse.json({ success: true });
   } catch (error) { return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Unable to update deletion." }, { status: 500 }); }
 }

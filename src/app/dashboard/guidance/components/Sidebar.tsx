@@ -7,6 +7,7 @@ import {
   Bell, FileText, HeartHandshake, LayoutDashboard, Menu, Megaphone, Monitor, X,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
+import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 import { useNotifContext } from "../context/NotificationContext";
 import {
   getGuidanceFullName,
@@ -33,6 +34,12 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const [profile, setProfile] = useState<GuidanceProfile | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
+  const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
+    reports: reportsUnreadCount,
+    announcements: principalAnnouncementUnreadCount,
+    ict: ictUnreadCount,
+    notifications: notifUnreadCount,
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -70,7 +77,6 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const profileName = profile ? getGuidanceFullName(profile) : "Guidance Counselor";
   const profileInitials = profile ? getGuidanceInitials(profile) : "GC";
   const isActive = (href: string) => href === "/dashboard/guidance" ? pathname === href : pathname.startsWith(href);
-  const badgeFor = (badgeKey?: string) => badgeKey === "reports" ? reportsUnreadCount : badgeKey === "announcements" ? principalAnnouncementUnreadCount : badgeKey === "ict" ? ictUnreadCount : badgeKey === "notifications" ? notifUnreadCount : 0;
   const closeMenu = () => setMobileOpen(false);
   return (
     <>
@@ -90,7 +96,7 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
-            return <Link key={item.href} href={item.href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-sky-100 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{item.label}</span><Badge count={badgeFor(item.badgeKey)} /></Link>;
+            return <Link key={item.href} href={item.href} onClick={() => { dismissBadge(item.badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-sky-100 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{item.label}</span><Badge count={visibleBadgeCount(item.badgeKey)} /></Link>;
           })}
         </nav>
 

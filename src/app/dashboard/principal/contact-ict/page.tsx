@@ -24,7 +24,7 @@ type MessageAttachment = {
 
 type ThreadMessage = {
     id: number;
-    senderRole: "Adviser" | "ICT";
+    senderRole: "Principal" | "ICT";
     senderName: string;
     isCurrentUser: boolean;
     body: string;
@@ -37,7 +37,7 @@ type Conversation = {
     id: number;
     conversationId: string;
     recipientId: string;
-    otherRole: "Adviser" | "ICT";
+    otherRole: "Principal" | "ICT";
     otherName: string;
     otherProfilePicture?: string | null;
     subject: string;
@@ -49,9 +49,15 @@ type Conversation = {
     thread: ThreadMessage[];
 };
 
+type CreatedStaffMessage = {
+    id: number;
+    created_at: string;
+    sender_name?: string | null;
+};
+
 type PrincipalIctMessagesResponse = {
     success: boolean;
-    message?: string;
+    message?: string | CreatedStaffMessage;
     conversations?: Conversation[];
     recipients?: Recipient[];
     unreadCount?: number;
@@ -103,6 +109,10 @@ function initials(name: string) {
 function formatAttachmentSize(size: number) {
     if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function responseErrorMessage(data: PrincipalIctMessagesResponse | null, fallback: string) {
+    return typeof data?.message === "string" ? data.message : fallback;
 }
 
 // Preserve an ICT reply received through Realtime while a slower previous
@@ -339,7 +349,7 @@ export default function ContactICTPage() {
         if (!background) setError(null);
         try {
             const { response: res, data } = await fetchJsonWithRetry<PrincipalIctMessagesResponse>("/api/principal-ict/messages", { cache: "no-store" });
-            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to load ICT messages.");
+            if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to load ICT messages."));
 
             if (requestVersion !== messagesRequestVersionRef.current) return true;
 
@@ -358,7 +368,10 @@ export default function ContactICTPage() {
             }
             return false;
         } finally {
-            if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
+            // Realtime may refresh before the initial request returns. Clear
+            // the foreground loader when that request settles even if its
+            // snapshot is no longer the latest one.
+            if (!background) setLoading(false);
         }
     }, [setIctUnreadCount]);
 
@@ -401,12 +414,52 @@ export default function ContactICTPage() {
             headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
             body: JSON.stringify(payload),
         });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send message.");
+        const data = await res.json().catch(() => null) as PrincipalIctMessagesResponse | null;
+        if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to send message."));
         newMessageAttemptRef.current = null;
-        // Keep Panel 1 and the selected thread in place after a successful
-        // send. The background refresh reconciles the new database row without
-        // showing the initial "Loading messages..." state again.
+
+        // The API has already committed the row. Put it in both Principal
+        // panels now rather than making the sender wait for a follow-up list
+        // fetch; ICT receives the same Realtime invalidation independently.
+        if (data.message && typeof data.message !== "string") {
+            const recipient = recipients.find((item) => item.id === payload.recipientId);
+            if (recipient) {
+                const created = data.message;
+                const conversationId = `staff-message:${created.id}`;
+                const sentMessage: ThreadMessage = {
+                    id: created.id,
+                    senderRole: "Principal",
+                    senderName: created.sender_name || "Principal",
+                    isCurrentUser: true,
+                    body: payload.message,
+                    attachments: payload.attachments,
+                    sentAt: created.created_at,
+                    status: "Read",
+                };
+                const conversation: Conversation = {
+                    id: created.id,
+                    conversationId,
+                    recipientId: recipient.id,
+                    otherRole: "ICT",
+                    otherName: recipient.name,
+                    subject: payload.subject,
+                    body: payload.message,
+                    sentAt: created.created_at,
+                    updatedAt: created.created_at,
+                    status: "Read",
+                    isUnread: false,
+                    thread: [sentMessage],
+                };
+
+                messagesRequestVersionRef.current += 1;
+                setConversations((current) => [
+                    conversation,
+                    ...current.filter((item) => item.conversationId !== conversationId),
+                ]);
+                setSelectedId(conversationId);
+                setMobileConversationOpen(true);
+            }
+        }
         void loadMessages(true);
     }
 
@@ -426,12 +479,39 @@ export default function ContactICTPage() {
                 headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
                 body: JSON.stringify(payload),
             });
-            const data = await res.json().catch(() => null);
-            if (!res.ok || !data?.success) throw new Error(data?.message || "Unable to send reply.");
+            const data = await res.json().catch(() => null) as PrincipalIctMessagesResponse | null;
+            if (!res.ok || !data?.success) throw new Error(responseErrorMessage(data, "Unable to send reply."));
             replyAttemptRef.current = null;
             setReply("");
             setReplyAttachments([]);
             conversationTyping.stopTyping();
+
+            if (data.message && typeof data.message !== "string") {
+                const created = data.message;
+                const sentMessage: ThreadMessage = {
+                    id: created.id,
+                    senderRole: "Principal",
+                    senderName: created.sender_name || "Principal",
+                    isCurrentUser: true,
+                    body: payload.message,
+                    attachments: payload.attachments,
+                    sentAt: created.created_at,
+                    status: "Replied",
+                };
+                messagesRequestVersionRef.current += 1;
+                setConversations((current) => current.map((conversation) => {
+                    if (conversation.conversationId !== selected.conversationId) return conversation;
+                    if (conversation.thread.some((message) => message.id === sentMessage.id)) return conversation;
+                    return {
+                        ...conversation,
+                        body: payload.message || conversation.body,
+                        updatedAt: created.created_at,
+                        status: "Replied",
+                        isUnread: false,
+                        thread: [...conversation.thread, sentMessage],
+                    };
+                }));
+            }
             void loadMessages(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Unable to send reply.");

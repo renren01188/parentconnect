@@ -3,6 +3,7 @@ import { getIctFromToken } from "@/lib/getIctFromToken";
 import { deliveryFromChannels, mapAttendanceNotificationSettings } from "@/lib/attendanceNotificationSettings";
 import { getSemaphoreCreditBalance } from "@/lib/smsProvider";
 import { supabase } from "@/lib/supabase";
+import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 const noStoreHeaders = { "Cache-Control": "private, no-store" };
 const MIN_CHECK_INTERVAL_MS = 30_000;
@@ -21,6 +22,11 @@ async function currentSettingsRow() {
   if (error) throw error;
   if (!data) throw new Error("Attendance notification settings have not been initialized.");
   return data;
+}
+
+async function publishAttendanceSettingsRefresh() {
+  const recipients = await recipientsForRoles(["ict"]);
+  await publishRealtimeInvalidation(recipients, "dashboard");
 }
 
 export async function POST() {
@@ -51,6 +57,7 @@ export async function POST() {
         .select("sms_enabled, email_enabled, sms_low_credit_threshold, sms_credit_balance, sms_credits_checked_at, sms_credits_check_error, updated_at")
         .single();
       if (error) throw error;
+      await publishAttendanceSettingsRefresh();
       return NextResponse.json({ success: true, settings: settingsResponse(data) }, { headers: noStoreHeaders });
     } catch (error) {
       // A stale balance must not be represented as current or estimated.
@@ -65,6 +72,7 @@ export async function POST() {
         .select("sms_enabled, email_enabled, sms_low_credit_threshold, sms_credit_balance, sms_credits_checked_at, sms_credits_check_error, updated_at")
         .single();
       if (updateError) throw updateError;
+      await publishAttendanceSettingsRefresh();
       console.warn("Semaphore credit check failed:", error instanceof Error ? error.message : "Unknown error");
       return NextResponse.json(
         { success: false, message: "Unable to check credits.", settings: settingsResponse(data) },

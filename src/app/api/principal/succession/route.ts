@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { sendPrincipalTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { logAudit } from "@/lib/audit";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -160,6 +161,14 @@ export async function POST(req: NextRequest) {
         ? "Principal ownership transferred; the prior Principal session was revoked."
         : "Initial Principal account created.",
     });
+
+    // ICT's user list and any session for the replaced Principal refresh as
+    // soon as the durable account handoff succeeds. The target-only revocation
+    // marker never tells unrelated ICT accounts to sign out.
+    await publishAccountRealtimeInvalidation(
+      [{ role: "principal", id: principalId }],
+      { sessionRevoked: Boolean(previousPrincipal) },
+    );
 
     const response = NextResponse.json({
       success: true,

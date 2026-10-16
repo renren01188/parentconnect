@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { normalizeRfidCard } from "@/lib/rfid";
+import { publishRealtimeInvalidation, studentRealtimeRecipientsForStudents } from "@/lib/realtimeInvalidation";
 
 type Body = {
   studentId: number;
@@ -97,6 +98,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Capture the source class before the move. After the update the normal
+    // resolver supplies the new class, so one event can refresh both views.
+    const previousRecipients = await studentRealtimeRecipientsForStudents([{ studentDbId: Number(student.id) }]);
+
     // ── 2. Check RFID is not already taken (global, same as register-rfid) ───
 
     const { data: rfidOwners, error: rfidErr } = await supabase
@@ -157,6 +162,9 @@ export async function POST(req: NextRequest) {
       .eq("id", studentId);
 
     if (updateErr) throw updateErr;
+
+    const currentRecipients = await studentRealtimeRecipientsForStudents([{ studentDbId: Number(student.id) }]);
+    await publishRealtimeInvalidation([...previousRecipients, ...currentRecipients], "students");
 
     return NextResponse.json({
       success: true,

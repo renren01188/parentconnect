@@ -1,5 +1,6 @@
 import { logAudit } from "@/lib/audit";
 import { supabase } from "@/lib/supabase";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 export interface AdviserTransferResult {
   transfer_id: number;
@@ -57,6 +58,15 @@ export async function processDueAdviserTransfers() {
       metadata: { transferId: item.transfer_id, outgoingAdviserId: item.outgoing_adviser_id, incomingAdviserId: item.incoming_adviser_id },
     })),
   ]);
+
+  if (completed.length) {
+    await publishAccountRealtimeInvalidation(
+      completed.flatMap((item) => [
+        { role: "adviser" as const, id: Number(item.outgoing_adviser_id) },
+        { role: "adviser" as const, id: Number(item.incoming_adviser_id) },
+      ]),
+    );
+  }
 
   return { completed, failed, unavailable: false };
 }

@@ -178,7 +178,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (scope === "tickets") {
-      await refreshGuidanceCounts();
+      // Tickets are also rendered in Guidance's Notifications feed. Keep its
+      // persisted unread count current on every dashboard page, not only
+      // after the Notifications screen is opened.
+      await Promise.all([refreshGuidanceCounts(), refreshNotificationCounts()]);
       return;
     }
     if (scope === "staff-messages") {
@@ -187,6 +190,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     if (scope === "notifications" || scope === "announcements") {
       await refreshNotificationCounts();
+      return;
+    }
+    if (scope === "accounts") {
+      // The Sidebar owns a small profile snapshot independently from the
+      // active Profile page. Let it refetch after an ICT approval or account
+      // edit without adding a second Realtime subscription to the layout.
+      window.dispatchEvent(new Event("guidance-profile-updated"));
       return;
     }
     // Only a reconnect needs a complete badge reconciliation. Account/profile

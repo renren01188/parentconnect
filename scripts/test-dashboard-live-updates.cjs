@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -20,6 +21,9 @@ assert.match(staffRealtime, /useSessionInvalidation/);
 assert.match(realtime, /A browser receiving one must\s+\*\s+re-read its normal, server-authorized API view/);
 assert.match(realtime, /publishAttendanceRealtimeInvalidation/);
 assert.match(realtime, /publishAccountRealtimeInvalidation/);
+assert.match(realtime, /publishStudentsRealtimeInvalidation/);
+assert.match(realtime, /studentRealtimeRecipientsForStudents/);
+assert.match(realtime, /if \(!options\.sessionRevoked\) \{[\s\S]*?publishRealtimeInvalidation\(\[\.\.\.ictRecipients, \.\.\.targets\], "accounts"\)/);
 
 for (const file of [
   "src/app/dashboard/parent/reports/page.tsx",
@@ -101,5 +105,69 @@ assert.match(read("src/app/api/ict/user-management/route.ts"), /publishStudentRe
 assert.match(read("src/app/api/students/route.ts"), /publishStudentRealtimeInvalidation/);
 assert.match(realtime, /publishStudentRealtimeInvalidation[\s\S]*?recipientsForRoles\(\["ict"\]\)/);
 assert.match(read("src/app/api/excuse-letters/route.ts"), /publishAttendanceRealtimeInvalidation/);
+
+// Shared operational changes must wake every affected dashboard even when the
+// user is not on the feature page that performed the write.
+const classSessionRoute = read("src/app/api/attendance/class-session/route.ts");
+const schoolYearRoute = read("src/app/api/school-year/route.ts");
+const studentImportRoute = read("src/app/api/students/import/route.ts");
+const scheduledDeletionRoute = read("src/app/api/scheduled-deletions/route.ts");
+const studentProfiles = read("src/app/dashboard/ict/StudentProfiles/page.tsx");
+assert.match(classSessionRoute, /recipientsForRoles\(\["parent"\]\)/);
+assert.match(classSessionRoute, /publishRealtimeInvalidation\(parentRecipients, "attendance"\)/);
+assert.match(schoolYearRoute, /publishSchoolYearRealtimeInvalidation/);
+assert.match(studentImportRoute, /publishStudentsRealtimeInvalidation/);
+assert.match(studentImportRoute, /publishAccountRealtimeInvalidation/);
+assert.match(read("src/app/api/student-reports/route.ts"), /publishStudentReportsRealtimeInvalidation/);
+assert.match(read("src/app/api/student-reports/[id]/status/route.ts"), /publishStudentReportsRealtimeInvalidation/);
+assert.match(read("src/app/api/subject-teacher-reports/route.ts"), /publishReportRealtimeInvalidation/);
+assert.match(read("src/app/dashboard/principal/reports/page.tsx"), /onStudentReportUpdate: loadPrincipalReports/);
+assert.match(scheduledDeletionRoute, /publishScheduledDeletionInvalidations/);
+assert.match(scheduledDeletionRoute, /publishAccountRealtimeInvalidation\(targets\)/);
+assert.match(scheduledDeletionRoute, /publishRealtimeInvalidation\(parentTargets, "notifications"\)/);
+assert.match(studentProfiles, /function ClassControlModal[\s\S]*?scope === "dashboard"[\s\S]*?sessionRefreshKey/);
+
+for (const file of [
+  "src/app/api/principal/notifications/read/route.ts",
+  "src/app/api/guidance/notifications/read/route.ts",
+  "src/app/api/ict/notifications/read/route.ts",
+]) {
+  assert.match(read(file), /publishRealtimeInvalidation/, `${file} must synchronize persisted read state across the user's open tabs.`);
+}
+
+// Adviser layout and roster views must refresh their own authorized snapshots
+// after account or student changes, not only their sidebar summaries.
+const adviserNotificationContext = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
+const adviserSidebar = read("src/app/dashboard/adviser/components/Sidebar.tsx");
+const adviserStudentsPage = read("src/app/dashboard/adviser/students/page.tsx");
+const adviserStudentDetail = read("src/app/dashboard/adviser/students/[id]/page.tsx");
+const adviserTransferPage = read("src/app/dashboard/adviser/transfer-level/page.tsx");
+const adviserAttendancePage = read("src/app/dashboard/adviser/attendance/page.tsx");
+const guidanceNotificationContext = read("src/app/dashboard/guidance/context/NotificationContext.tsx");
+const guidanceNotificationsPage = read("src/app/dashboard/guidance/notifications/page.tsx");
+const guidanceSidebar = read("src/app/dashboard/guidance/components/Sidebar.tsx");
+const guidanceProfilePage = read("src/app/dashboard/guidance/profile/page.tsx");
+
+assert.match(adviserNotificationContext, /scope === "accounts"[\s\S]*?adviser-profile-updated/);
+assert.match(adviserSidebar, /fetch\("\/api\/adviser\/me", \{ cache: "no-store" \}\)/);
+assert.match(adviserStudentsPage, /const scheduleStudentsRefresh = useDebouncedRealtimeRefresh\([\s\S]*?fetchStudents\(page, \{ background: true \}\)/);
+assert.match(adviserStudentsPage, /event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleStudentsRefresh\(\)/);
+assert.match(adviserStudentDetail, /useSessionInvalidation/);
+assert.match(adviserStudentDetail, /liveUpdatePending/);
+assert.match(adviserStudentDetail, /void loadStudent\(\{ background: true \}\)/);
+assert.match(adviserTransferPage, /const scheduleTransferRosterRefresh = useDebouncedRealtimeRefresh\([\s\S]*?fetchStudents\(page, \{ background: true \}\)/);
+assert.match(adviserTransferPage, /event\.scope === "students" \|\| event\.scope === "accounts"[\s\S]*?scheduleTransferRosterRefresh\(\)/);
+assert.match(adviserAttendancePage, /event\.scope === "students" \|\| event\.scope === "accounts"\) \{[\s\S]*?scheduleStudentsRefresh\(\);[\s\S]*?scheduleAttendanceRefresh\(\);/);
+
+// Guidance tickets are notifications as well as workload items. Account
+// approvals must refresh the persistent Sidebar profile without clobbering a
+// Profile settings draft; the deferred snapshot is loaded once it closes.
+assert.match(guidanceNotificationContext, /if \(scope === "tickets"\) \{[\s\S]*?Promise\.all\(\[refreshGuidanceCounts\(\), refreshNotificationCounts\(\)\]\)/);
+assert.match(guidanceNotificationsPage, /scope === "tickets"/);
+assert.match(guidanceNotificationContext, /scope === "accounts"[\s\S]*?guidance-profile-updated/);
+assert.match(guidanceSidebar, /guidance-profile-updated/);
+assert.match(guidanceProfilePage, /pendingAccountRefreshRef/);
+assert.match(guidanceProfilePage, /if \(settingsOpen\) \{[\s\S]*?pendingAccountRefreshRef\.current = true/);
+assert.match(guidanceProfilePage, /if \(settingsOpen \|\| !pendingAccountRefreshRef\.current\) return;[\s\S]*?setProfileRefreshKey/);
 
 console.log("Dashboard live-update coverage checks passed.");

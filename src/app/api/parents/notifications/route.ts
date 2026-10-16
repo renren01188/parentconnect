@@ -47,12 +47,22 @@ type AttendanceRead = {
   attendance_log_id: number;
 };
 
-type SubjectTeacherReportNotification = {
+type ParentReportNotification = {
   id: number;
   student_name: string;
   subject: string;
+  adviser_name: string | null;
   created_at: string;
   parent_seen_at: string | null;
+};
+
+type ParentReportMessageNotification = {
+  report_id: number;
+  sender_role: "adviser" | "guidance" | "principal" | "subject_teacher";
+  sender_name: string | null;
+  body: string | null;
+  created_at: string;
+  read_by_parent: boolean;
 };
 
 type ParentDeletionNotification = {
@@ -289,18 +299,32 @@ export async function GET() {
     // Subject Teacher reports remain in the existing report workflow. Their
     // notification is derived from that source row, so it cannot duplicate or
     // drift from the report sidebar's read state.
-    const [subjectTeacherReportsResult, staffMessagesResult] = await Promise.all([
+    const [subjectTeacherReportsResult, studentConcernReportsResult, staffMessagesResult] = await Promise.all([
       studentNames.size > 0
         ? supabase
           .from("parent_adviser_reports")
-          .select("id, student_name, subject, created_at, parent_seen_at")
+          .select("id, student_name, subject, adviser_name, created_at, parent_seen_at")
           .in("parent_id", parentIds)
           .in("student_id", [...studentNames.keys()])
           .contains("categories", ["Subject Teacher"])
           .gte("created_at", retentionStart)
           .order("created_at", { ascending: false })
           .limit(100)
-        : Promise.resolve({ data: [] as SubjectTeacherReportNotification[], error: null }),
+        : Promise.resolve({ data: [] as ParentReportNotification[], error: null }),
+      // Student concerns forwarded by the Adviser are report conversations,
+      // not announcement rows. Keep this notification tied to both the signed
+      // in Parent and one of that Parent's linked students.
+      studentNames.size > 0
+        ? supabase
+          .from("parent_adviser_reports")
+          .select("id, student_name, subject, adviser_name, created_at, parent_seen_at")
+          .eq("parent_id", session.id)
+          .in("student_id", [...studentNames.keys()])
+          .ilike("subject", "[Student Concern]%")
+          .gte("created_at", retentionStart)
+          .order("created_at", { ascending: false })
+          .limit(100)
+        : Promise.resolve({ data: [] as ParentReportNotification[], error: null }),
       // Direct staff-to-parent messages use their own durable unread state in
       // staff_messages. This keeps the Parent notification and report inboxes
       // in agreement without a second, potentially drifting notification row.
@@ -315,9 +339,32 @@ export async function GET() {
         .limit(100),
     ]);
     const { data: subjectTeacherReportRows, error: subjectTeacherReportsError } = subjectTeacherReportsResult;
+    const { data: studentConcernReportRows, error: studentConcernReportsError } = studentConcernReportsResult;
     if (subjectTeacherReportsError) throw subjectTeacherReportsError;
+    if (studentConcernReportsError) throw studentConcernReportsError;
     if (staffMessagesResult.error) throw staffMessagesResult.error;
     const staffMessageRows = (staffMessagesResult.data ?? []) as StaffMessageNotification[];
+    const reportNotificationsById = new Map<number, ParentReportNotification>();
+    for (const row of [
+      ...((subjectTeacherReportRows ?? []) as ParentReportNotification[]),
+      ...((studentConcernReportRows ?? []) as ParentReportNotification[]),
+    ]) {
+      reportNotificationsById.set(Number(row.id), row);
+    }
+    const reportNotificationRows = [...reportNotificationsById.values()];
+    const { data: reportMessageNotificationRows, error: reportMessageNotificationsError } = reportNotificationRows.length > 0
+      ? await supabase
+        .from("parent_adviser_report_messages")
+        .select("report_id, sender_role, sender_name, body, created_at, read_by_parent")
+        .in("report_id", reportNotificationRows.map((report) => report.id))
+        .in("sender_role", ["adviser", "guidance", "principal", "subject_teacher"])
+        .order("created_at", { ascending: true })
+      : { data: [] as ParentReportMessageNotification[], error: null };
+    if (reportMessageNotificationsError) throw reportMessageNotificationsError;
+    const latestReportMessageById = new Map<number, ParentReportMessageNotification>();
+    for (const message of (reportMessageNotificationRows ?? []) as ParentReportMessageNotification[]) {
+      latestReportMessageById.set(Number(message.report_id), message);
+    }
 
     const notifications = collapseAnnouncementNotifications(
       (notificationRows ?? []) as ParentNotificationRow[],
@@ -581,21 +628,39 @@ export async function GET() {
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
     const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...staffMessageNotificationRows]
-      .concat(((subjectTeacherReportRows ?? []) as SubjectTeacherReportNotification[]).map((report) => {
-        const unread = !report.parent_seen_at;
+      .concat(reportNotificationRows.map((report) => {
+        const isStudentConcern = /^\[Student Concern\]\s*/i.test(String(report.subject ?? ""));
+        const latestMessage = latestReportMessageById.get(Number(report.id));
+        const unread = latestMessage ? !latestMessage.read_by_parent : !report.parent_seen_at;
+        const senderRole = latestMessage?.sender_role === "subject_teacher"
+          ? "Subject Teacher"
+          : latestMessage?.sender_role === "principal"
+            ? "Principal"
+            : latestMessage?.sender_role === "guidance"
+              ? "Guidance"
+              : "Adviser";
+        const senderName = String(latestMessage?.sender_name ?? report.adviser_name ?? senderRole).trim() || senderRole;
+        const createdAt = latestMessage?.created_at ?? report.created_at;
+        const messageBody = String(latestMessage?.body ?? "").trim();
+        const category = senderRole === "Adviser" || senderRole === "Subject Teacher"
+          ? "Teacher" as const
+          : senderRole;
         return {
           // Keep report notification IDs distinct from persisted announcement
           // notification IDs; reportId is the authoritative target.
           id: 1_000_000_000 + report.id,
           reportId: report.id,
           type: "message" as const,
-          title: "New Subject Teacher Report",
-          msg: `A Subject Teacher submitted a concern for ${report.student_name}: ${report.subject}.`,
-          time: timeLabel(report.created_at),
-          category: "Teacher",
+          title: isStudentConcern ? report.subject : "New Subject Teacher Report",
+          msg: messageBody || report.subject,
+          time: timeLabel(createdAt),
+          category,
           unread,
-          tab: ["All", ...(unread ? ["Unread" as const] : []), "Teacher" as const],
-          createdAt: report.created_at,
+          tab: ["All", ...(unread ? ["Unread" as const] : []), category],
+          teacherName: senderName,
+          senderName,
+          senderRole,
+          createdAt,
         };
       }))
       .filter((row) => row !== null)
@@ -659,6 +724,7 @@ export async function PATCH(req: NextRequest) {
       ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
       ...(Array.isArray(body.reportIds) ? body.reportIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0) : []),
     ];
+    const acknowledgedReportIds: number[] = [];
     const staffMessageConversationIds = [
       ...(Number.isSafeInteger(Number(body.staffMessageConversationId)) && Number(body.staffMessageConversationId) > 0
         ? [Number(body.staffMessageConversationId)]
@@ -690,6 +756,12 @@ export async function PATCH(req: NextRequest) {
       if (error) throw error;
     }
 
+    if (notificationId || notificationIds.length > 0 || parentDeletionNotificationIds.length > 0) {
+      // Marking an announcement or deletion notice read is durable state too:
+      // any other open Parent tab must reconcile its sidebar/feed immediately.
+      await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "notifications");
+    }
+
     if (reportIds.length > 0) {
       const { data: ownedReports, error: ownedReportsError } = await supabase
         .from("parent_adviser_reports")
@@ -714,6 +786,7 @@ export async function PATCH(req: NextRequest) {
         ]);
         if (reportUpdate.error) throw reportUpdate.error;
         if (messageUpdate.error) throw messageUpdate.error;
+        acknowledgedReportIds.push(...ownedReportIds);
       }
     }
 
@@ -773,6 +846,14 @@ export async function PATCH(req: NextRequest) {
         .from("parent_attendance_notification_reads")
         .upsert(readRows, { onConflict: "parent_id,attendance_log_id" });
       if (error) throw error;
+      await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "notifications");
+    }
+
+    if (acknowledgedReportIds.length > 0) {
+      // A concern notification and its Parent Reports entry intentionally
+      // share one saved read state. Update every open Parent sidebar without
+      // requiring the Reports page to mount or a browser refresh.
+      await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "reports");
     }
 
     return NextResponse.json({ success: true });

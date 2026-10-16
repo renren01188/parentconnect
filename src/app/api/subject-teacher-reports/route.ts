@@ -5,6 +5,7 @@ import { sendSubjectTeacherReportNotificationEmail } from "@/lib/mailer";
 import { getVerifiedSubjectTeacher, SUBJECT_TEACHER_REPORT_COOKIE } from "@/lib/subjectTeacherReportAuth";
 import { findAssignedAdviser, fullName, normalize } from "@/app/api/student-reports/_lib";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function trimmed(value: unknown) {
   return String(value ?? "").trim();
@@ -154,6 +155,16 @@ export async function POST(req: NextRequest) {
       }
       throw reportError;
     }
+
+    // This durable report uses the same authorized Parent/Adviser/Principal
+    // inboxes as a parent-submitted concern. Broadcast only an opaque refresh
+    // after the RPC commits, so no participant needs to reload manually.
+    await publishReportRealtimeInvalidation({
+      parentId: parent.id,
+      adviserId: adviser.id,
+      reportId: Number((report as { id?: number } | null)?.id),
+      kind: "status",
+    });
 
     const emailResults = await Promise.allSettled([
       sendSubjectTeacherReportNotificationEmail({

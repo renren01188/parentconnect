@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { sendIctTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -111,6 +112,8 @@ export async function POST(req: NextRequest) {
         { status: 503 },
       );
     }
+
+    await publishAccountRealtimeInvalidation([{ role: "ict", id: Number(createdIct.id) }]);
 
     return NextResponse.json({
       success: true,

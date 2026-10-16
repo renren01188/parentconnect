@@ -7,6 +7,7 @@ import {
   LayoutDashboard, FileText, CreditCard, Bell, Shield, Activity, X, Monitor,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
+import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS: {
@@ -49,6 +50,11 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
   const pathname = usePathname();
   const { reportCount, adviserMessageCount, ictMessageCount, principalNotifCount } = useNotifContext();
   const [principal, setPrincipal] = useState<PrincipalSummary | null>(null);
+  const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
+    reports: reportCount + adviserMessageCount,
+    ict: ictMessageCount,
+    notifications: principalNotifCount,
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -143,17 +149,16 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
             const active = href === "/dashboard/principal"
               ? pathname === href
               : pathname.startsWith(href);
-            const badge =
-              badgeKey === "reports" ? reportCount + adviserMessageCount :
-                badgeKey === "ict" ? ictMessageCount :
-                  badgeKey === "notifications" ? principalNotifCount :
-                    0;
+            const badge = visibleBadgeCount(badgeKey);
 
             return (
               <Link
                 key={label}
                 href={href}
-                onClick={onClose}
+                onClick={() => {
+                  dismissBadge(badgeKey);
+                  onClose?.();
+                }}
                 className={[
                   "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all",
                   active

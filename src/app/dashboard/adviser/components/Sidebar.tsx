@@ -8,15 +8,16 @@ import {
   ArrowUpCircle, GraduationCap, Menu, X,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
+import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 import { useNotifContext } from "../context/NotificationContext";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard/adviser" },
   { label: "Students", icon: Users, href: "/dashboard/adviser/students" },
   { label: "RFID Attendance", icon: ScanLine, href: "/dashboard/adviser/attendance" },
-  { label: "Reports", icon: FileText, href: "/dashboard/adviser/reports" },
-  { label: "Contact ICT", icon: Monitor, href: "/dashboard/adviser/contact-ict" },
-  { label: "Notifications", icon: Bell, href: "/dashboard/adviser/notifications" },
+  { label: "Reports", icon: FileText, href: "/dashboard/adviser/reports", badgeKey: "reports" },
+  { label: "Contact ICT", icon: Monitor, href: "/dashboard/adviser/contact-ict", badgeKey: "ict" },
+  { label: "Notifications", icon: Bell, href: "/dashboard/adviser/notifications", badgeKey: "notifications" },
 ];
 
 interface AdviserInfo {
@@ -40,9 +41,14 @@ export default function Sidebar() {
   const [adviser, setAdviser] = useState<AdviserInfo | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
+  const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
+    reports: unreadCount,
+    notifications: notifUnreadCount,
+    ict: ictUnreadCount,
+  });
 
   useEffect(() => {
-    const loadAdviser = () => fetch("/api/adviser/me").then((r) => r.json()).then((json) => { if (json.success) setAdviser(json.adviser); }).catch(() => {});
+    const loadAdviser = () => fetch("/api/adviser/me", { cache: "no-store" }).then((r) => r.json()).then((json) => { if (json.success) setAdviser(json.adviser); }).catch(() => {});
     loadAdviser();
     window.addEventListener("adviser-profile-updated", loadAdviser);
     return () => window.removeEventListener("adviser-profile-updated", loadAdviser);
@@ -78,10 +84,10 @@ export default function Sidebar() {
         <div className="border-b border-emerald-500/40 px-5 py-5"><Link href="/dashboard/adviser" onClick={closeMenu} aria-label="Go to adviser dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15"><GraduationCap className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-emerald-200">Adviser</p></div></Link></div>
 
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-          {NAV_ITEMS.map(({ label, icon: Icon, href }) => {
+          {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
             const active = href === "/dashboard/adviser" ? pathname === href : pathname.startsWith(href);
-            const badgeCount = label === "Reports" ? unreadCount : label === "Notifications" ? notifUnreadCount : label === "Contact ICT" ? ictUnreadCount : 0;
-            return <Link key={label} href={href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-emerald-100 hover:bg-emerald-500/40 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
+            const badgeCount = visibleBadgeCount(badgeKey);
+            return <Link key={label} href={href} onClick={() => { dismissBadge(badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-emerald-100 hover:bg-emerald-500/40 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
           })}
           <div className="my-2 border-t border-emerald-500/30" />
           <Link href="/dashboard/adviser/transfer-level" onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${isTransferActive ? "bg-amber-400 text-amber-900 shadow-sm" : "border border-amber-400/30 text-amber-200 hover:bg-amber-500/20 hover:text-amber-100"}`}><ArrowUpCircle className="h-4 w-4 shrink-0" /><span className="flex-1 leading-tight">Transfer New Level</span></Link>

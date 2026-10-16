@@ -311,6 +311,12 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
 
   useEffect(() => { void loadSettings(); }, [loadSettings]);
 
+  // Attendance settings are shared by all ICT sessions. Re-read the server
+  // snapshot when another administrator saves settings or checks credits.
+  useSessionInvalidation(({ scope }) => {
+    if (scope === "dashboard") void loadSettings();
+  });
+
   async function saveSettings() {
     const lowCreditThreshold = Number(threshold);
     if (!Number.isInteger(lowCreditThreshold) || lowCreditThreshold < 0 || lowCreditThreshold > 1_000_000) {
@@ -406,8 +412,16 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
   const [afternoonSaved, setAfternoonSaved] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
   const [apiError, setApiError] = useState("");
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
 
-  // Load today's sessions from the database on mount
+  // Another ICT session may start, end, or reschedule a class while this
+  // control panel is open. Keep this open modal in sync without polling.
+  useSessionInvalidation(({ scope }) => {
+    if (scope === "dashboard") setSessionRefreshKey((key) => key + 1);
+  });
+
+  // Load today's sessions on mount and after an authorized class-session
+  // invalidation. The Broadcast itself contains no schedule data.
   useEffect(() => {
     async function fetchSessions() {
       setLoadingSession(true);
@@ -441,7 +455,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
       }
     }
     fetchSessions();
-  }, []);
+  }, [sessionRefreshKey]);
 
   function handleAction(session: ClassSession, action: "start" | "end") {
     setApiError("");
@@ -1900,6 +1914,9 @@ export default function StudentManagementPage() {
   } | null>(null);
   const [syLoading, setSyLoading] = useState(true);
   const [showSchoolYearModal, setShowSchoolYearModal] = useState(false);
+  // Re-read reference data when another ICT session changes the school year
+  // or section catalogue. Keep the current filters and open modals intact.
+  const [referenceRefreshKey, setReferenceRefreshKey] = useState(0);
   // Fetch grades on mount
   useEffect(() => {
     async function fetchGrades() {
@@ -1908,7 +1925,7 @@ export default function StudentManagementPage() {
       if (data.success) setGrades(data.grades);
     }
     fetchGrades();
-  }, []);
+  }, [referenceRefreshKey]);
 
   useEffect(() => {
     async function fetchSchoolYear() {
@@ -1924,7 +1941,7 @@ export default function StudentManagementPage() {
       }
     }
     fetchSchoolYear();
-  }, []);
+  }, [referenceRefreshKey]);
 
   // Fetch sections when grade changes
   useEffect(() => {
@@ -1935,7 +1952,7 @@ export default function StudentManagementPage() {
       if (data.success) setSections(data.sections);
     }
     fetchSections();
-  }, [gradeFilter]);
+  }, [gradeFilter, referenceRefreshKey]);
 
   // Same for RFID tab
   useEffect(() => {
@@ -1946,7 +1963,7 @@ export default function StudentManagementPage() {
       if (data.success) setRfidSections(data.sections);
     }
     fetchRfidSections();
-  }, [rfidGradeFilter]);
+  }, [rfidGradeFilter, referenceRefreshKey]);
 
   useEffect(() => {
     async function fetchStudents() {
@@ -1966,9 +1983,14 @@ export default function StudentManagementPage() {
 
   // Keep the active filters and modal state intact while refetching the
   // protected ICT student snapshot after an authorized profile/RFID change.
+  // School-year and attendance-setting writes use the dashboard scope, while
+  // section writes use accounts, so refresh their reference snapshots too.
   useSessionInvalidation((event) => {
     if (event.scope === "students" || event.scope === "accounts") {
       setStudentRefreshKey((key) => key + 1);
+    }
+    if (event.scope === "dashboard" || event.scope === "accounts") {
+      setReferenceRefreshKey((key) => key + 1);
     }
   });
 

@@ -1894,6 +1894,11 @@ export default function AdviserAttendancePage() {
         }
         if (event.scope === "students" || event.scope === "accounts") {
             scheduleStudentsRefresh();
+            // Assignment and roster changes can alter which class's logs this
+            // Adviser is authorized to see. Keep the visible tracker in sync
+            // with the refreshed roster instead of waiting for another RFID
+            // scan to arrive.
+            scheduleAttendanceRefresh();
         }
         if (event.scope === "dashboard") void loadClassSession();
     });

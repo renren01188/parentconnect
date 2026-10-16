@@ -9,6 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const messages = read("src/app/api/reports/parent-adviser/[id]/messages/route.ts");
 const typing = read("src/app/api/reports/parent-adviser/[id]/realtime/route.ts");
 const reports = read("src/app/api/reports/parent-adviser/route.ts");
+const reportTyping = read("src/hooks/useReportTyping.ts");
 const guidanceStatus = read("src/app/api/reports/guidance/[id]/status/route.ts");
 const parentPage = read("src/app/dashboard/parent/reports/page.tsx");
 const adviserPage = read("src/app/dashboard/adviser/reports/page.tsx");
@@ -29,6 +30,16 @@ for (const source of [messages, typing]) {
 assert.match(messages, /adviserId: principalConversation \|\| guidanceConversation \? null : report\.adviser_id/);
 assert.match(messages, /kind: "message"/);
 assert.match(typing, /kind: "typing"/);
+
+// Report typing is an ephemeral Supabase Broadcast. Continued input renews
+// the activity before the remote UI's expiry, while the scope/actor checks
+// keep Parent and Adviser events isolated to the open report conversation.
+assert.match(reportTyping, /const TYPING_HEARTBEAT_MS = 1_000/);
+assert.match(reportTyping, /now - lastActivePublishAtRef\.current >= TYPING_HEARTBEAT_MS/);
+assert.match(reportTyping, /publish\(reportId, true\)/);
+assert.match(reportTyping, /event\.scope !== "reports"/);
+assert.match(reportTyping, /event\.reportId !== reportId/);
+assert.match(reportTyping, /event\.actorKey === actorKey/);
 
 // A ticket accepted by a different counselor is neither visible nor writable
 // by this counselor. Ticketless legacy escalations remain supported.

@@ -542,7 +542,12 @@ export async function POST(req: NextRequest) {
       await publishRealtimeInvalidation([
         { role: current.type, id: current.id },
         { role: "parent", id: recipient.parentId },
-      ], "staff-messages");
+      ], {
+        scope: "staff-messages",
+        kind: "message",
+        conversationId: `staff-message:${Number(createdMessage.id)}`,
+        messageId: Number(createdMessage.id),
+      });
 
       // Email is independent of the durable message and the live UI signal.
       // It remains post-response so a slow mail provider cannot block send.

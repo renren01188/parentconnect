@@ -245,10 +245,8 @@ export async function POST(request: NextRequest) {
         const failed = results.find((item) => !item.completed);
         if (failed) return NextResponse.json({ success: false, message: failed.failure_reason || "The transfer could not be completed." }, { status: 409 });
         if (results.length === conflicts.length && results.every((item) => item.completed)) {
-          await publishAccountRealtimeInvalidation([
-            { role: "adviser", id: incoming.id },
-            ...outgoingIds.map((id) => ({ role: "adviser" as const, id })),
-          ]);
+          // processDueAdviserTransfers already published one deduped account
+          // event for every completed handover, including this immediate one.
           return NextResponse.json({ success: true, immediate: true, transferIds: results.map((item) => item.transfer_id) });
         }
         if (!processed.unavailable) throw new Error("The immediate transfer was not confirmed by the database.");

@@ -367,7 +367,10 @@ export default function ContactICTPage() {
       }
       return false;
     } finally {
-      if (!background && requestVersion === messagesRequestVersionRef.current) setLoading(false);
+      // A Realtime background refresh can supersede the first page-load
+      // request. It may populate the conversation list before that original
+      // request finishes, but must not leave its foreground loader visible.
+      if (!background) setLoading(false);
     }
   }, [setIctUnreadCount]);
 

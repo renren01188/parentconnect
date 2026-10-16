@@ -203,24 +203,23 @@ async function recipientsFor(session: Session): Promise<Recipient[]> {
     }
 
     const { data, error } = await supabase
-        .from("advisers")
-        .select("id, first_name, middle_name, last_name, suffix, email, grade, section, status")
+        .from("guidance_counselors")
+        .select("id, first_name, middle_name, last_name, suffix, email, status")
         .eq("status", "active")
         .order("last_name", { ascending: true });
 
     if (error) throw error;
 
     return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
-        id: `adviser:${row.id}`,
+        id: `guidance:${row.id}`,
         role: "Guidance" as const,
         name: fullName([
             row.first_name as string | null,
             row.middle_name as string | null,
             row.last_name as string | null,
             row.suffix as string | null,
-        ]) || "Adviser",
+        ]) || "Guidance Counselor",
         email: String(row.email ?? ""),
-        meta: [row.grade, row.section].filter(Boolean).join(" - "),
     }));
 }
 

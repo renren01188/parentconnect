@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
+import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 
 const mainNav = [
   { label: "Dashboard", href: "/dashboard/ict", icon: LayoutDashboard },
@@ -43,6 +44,10 @@ export default function Sidebar() {
   const [ictUser, setIctUser] = useState<IctSummary | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
+  const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
+    inbox: inboxUnreadCount,
+    announcements: annUnreadCount,
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -100,8 +105,8 @@ export default function Sidebar() {
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
           {mainNav.map(({ label, href, icon: Icon }) => {
             const active = isActive(href);
-            const badgeCount = href === "/dashboard/ict/inbox" && !active ? inboxUnreadCount : href === "/dashboard/ict/Announcements" ? annUnreadCount : 0;
-            return <Link key={href} href={href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
+            const badgeKey = href === "/dashboard/ict/inbox" ? "inbox" : href === "/dashboard/ict/Announcements" ? "announcements" : undefined;
+            return <Link key={href} href={href} onClick={() => { dismissBadge(badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={visibleBadgeCount(badgeKey)} /></Link>;
           })}
         </nav>
 

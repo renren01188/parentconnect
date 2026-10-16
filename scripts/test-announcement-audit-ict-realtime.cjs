@@ -72,7 +72,8 @@ assert.match(ictMutationRoute, /await publishRealtimeInvalidation\(recipients, "
 
 // Recipient pages already subscribe to the opaque per-account announcement
 // invalidation, and Parent prunes deleted records from its complete API feed.
-assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "reports" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "attendance"/);
 assert.match(parentNotifications, /mergeNotificationFeed\(current, snapshot, \{ removeMissing: true \}\)/);
 assert.match(parentNotificationsRoute, /ict_announcements[\s\S]*?\.contains\("audience", \["Parents"\]\)/);
 assert.match(adviserContext, /scope === "notifications" \|\| scope === "announcements"/);

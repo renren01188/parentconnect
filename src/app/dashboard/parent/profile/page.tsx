@@ -591,14 +591,22 @@ export default function ProfilePage() {
     useEffect(() => {
         async function loadProfile() {
             try {
-                const res = await fetch("/api/parents/me");
-                const data = await res.json();
+                const res = await fetch("/api/parents/me", { cache: "no-store" });
+                const data = await res.json().catch(() => null);
 
-                if (!data.success) {
-                    router.push("/login/guardian");
+                if (!res.ok || !data?.success) {
+                    // ParentSessionGate owns the normal authenticated-session
+                    // check. Do not turn a temporary API/database response on
+                    // Profile into a client-side logout after a page refresh.
+                    if (res.status === 401 || res.status === 403) {
+                        router.replace("/login/guardian");
+                        return;
+                    }
+                    setLoadError(data?.message || "Unable to load your profile. Please try again.");
                     return;
                 }
 
+                setLoadError("");
                 setProfile({
                     firstName: data.parent.firstName || "",
                     middleName: data.parent.middleName || "",

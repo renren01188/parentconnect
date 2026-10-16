@@ -14,7 +14,7 @@ type ReportRealtimeOptions = {
   onReportStatusUpdate?: RefreshReport;
   /** Refreshes a role's authorized ticket list and ticket-derived badges in place. */
   onTicketUpdate?: RefreshReports;
-  /** Delivers an ephemeral standalone staff-conversation event without a list refresh. */
+  /** Delivers a standalone staff-conversation event to the mounted inbox. */
   onStaffMessageUpdate?: RefreshReport;
   /** Refreshes a role's authorized student-report list in place. */
   onStudentReportUpdate?: RefreshReports;
@@ -145,6 +145,14 @@ export function useReportMessagesRealtime(
       void refreshReport(invalidation);
       return;
     }
+    if (invalidation.kind === "message") {
+      // A durable message has already committed before its data-free Supabase
+      // Broadcast is sent. Fetch the affected conversation immediately rather
+      // than waiting for summary batching, so the recipient sees it in the
+      // open report thread without a navigation or full-page refresh.
+      void refreshReport(invalidation);
+      return;
+    }
     pendingReportUpdateRef.current = invalidation;
     if (reportTimerRef.current !== undefined) window.clearTimeout(reportTimerRef.current);
     reportTimerRef.current = window.setTimeout(() => {
@@ -180,7 +188,16 @@ export function useReportMessagesRealtime(
         staffMessageUpdateRef.current?.(invalidation);
         return;
       }
-      scheduleRefresh();
+      // A direct staff message has a canonical conversation key. Give the
+      // mounted Reports inbox first chance to reload that view immediately so
+      // an already-open thread receives the durable row without a navigation
+      // or a reply from the recipient. Keep the full inbox refresh as a safe
+      // fallback for a stale or inaccessible conversation.
+      if (staffMessageUpdateRef.current) {
+        void Promise.resolve(staffMessageUpdateRef.current(invalidation)).catch(scheduleRefresh);
+      } else {
+        scheduleRefresh();
+      }
       return;
     }
     if (invalidation.scope === "students") {

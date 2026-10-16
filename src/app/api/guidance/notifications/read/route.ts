@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 export async function PATCH(req: NextRequest) {
     try {
@@ -24,6 +25,8 @@ export async function PATCH(req: NextRequest) {
                 if (error) throw error;
             }
 
+            await publishRealtimeInvalidation([{ role: "guidance", id: guidance.id }], "notifications");
+
             return NextResponse.json({ success: true });
         }
 
@@ -35,6 +38,7 @@ export async function PATCH(req: NextRequest) {
                     { onConflict: "guidance_id,notif_key" }
                 );
             if (error) throw error;
+            await publishRealtimeInvalidation([{ role: "guidance", id: guidance.id }], "notifications");
             return NextResponse.json({ success: true });
         }
 

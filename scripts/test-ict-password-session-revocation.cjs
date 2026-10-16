@@ -12,6 +12,8 @@ const middleware = read("src/middleware.ts");
 const helper = read("src/lib/passwordSessionRevocation.ts");
 const store = read("src/lib/passwordSessionRevocationStore.ts");
 const sessionRoute = read("src/app/api/auth/session/route.ts");
+const principalSuccession = read("src/app/api/principal/succession/route.ts");
+const sessionGuard = read("src/components/SessionRevocationGuard.tsx");
 
 for (const role of ["guidance", "adviser"]) {
   assert.match(
@@ -64,11 +66,20 @@ assert.match(subscriber, /sessionRevoked: payload\?\.sessionRevoked === true/);
 assert.match(sessionRoute, /parent_token/);
 assert.match(sessionRoute, /adviser_token/);
 assert.match(sessionRoute, /guidance_token/);
+assert.match(sessionRoute, /principal_token/);
+assert.match(sessionRoute, /getPrincipalSession/);
+assert.match(sessionGuard, /"principal"/);
+assert.match(
+  principalSuccession,
+  /publishAccountRealtimeInvalidation\([\s\S]*?\[\{ role: "principal", id: principalId \}\],[\s\S]*?sessionRevoked: Boolean\(previousPrincipal\)/,
+  "Principal succession must notify the former Principal session",
+);
 
 for (const [file, role] of [
   ["src/app/dashboard/parent/layout.tsx", "parent"],
   ["src/app/dashboard/adviser/layout.tsx", "adviser"],
   ["src/app/dashboard/guidance/layout.tsx", "guidance"],
+  ["src/app/dashboard/principal/layout.tsx", "principal"],
 ]) {
   assert.match(read(file), new RegExp(`<SessionRevocationGuard role="${role}"`));
 }

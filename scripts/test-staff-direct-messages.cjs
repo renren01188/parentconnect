@@ -40,7 +40,9 @@ for (const [source, role] of [
   [adviserReports, "adviser"],
 ]) {
   assert.match(source, /useReportMessagesRealtime\(/);
-  assert.match(source, /onStaffMessageUpdate: staffConversationTyping\.onRealtimeEvent/);
+  assert.match(source, /onStaffMessageUpdate: handleLiveStaffMessageUpdate/);
+  assert.match(source, /const handleLiveStaffMessageUpdate = useCallback/);
+  assert.match(source, /staffConversationTyping\.onRealtimeEvent\(event\)[\s\S]*?if \(event\.kind === "typing"\) return/);
   assert.match(source, new RegExp(`useStaffConversationTyping\\([\\s\\S]*?"${role}"`));
   assert.match(source, /staffConversationTyping\.onDraftChange\(Boolean\(/);
   assert.match(source, /staffConversationTyping\.isOtherParticipantTyping/);
@@ -49,13 +51,22 @@ assert.match(realtimeHook, /invalidation\.scope === "staff-messages"[\s\S]*?inva
 assert.match(typingHook, /status: "typing"/);
 assert.match(staffRoute, /nextStatus === "typing"[\s\S]*?publishRealtimeInvalidation\(recipients, \{/);
 
+// The initial New Message row now names its canonical thread in the durable
+// invalidation. A recipient with that thread already open can reload it at
+// once instead of waiting for a generic inbox refresh or another message.
+assert.match(
+  staffRoute,
+  /recipient_type: "parent"[\s\S]*?scope: "staff-messages",[\s\S]*?kind: "message",[\s\S]*?conversationId: `staff-message:\$\{Number\(createdMessage\.id\)\}`,[\s\S]*?messageId: Number\(createdMessage\.id\)/,
+);
+assert.match(realtimeHook, /if \(staffMessageUpdateRef\.current\) \{[\s\S]*?staffMessageUpdateRef\.current\(invalidation\)[\s\S]*?catch\(scheduleRefresh\)/);
+
 // Direct-message unread counts use their own message snapshots. A read or
 // reply broadcasts the same scope, so the sidebar count is reconciled live.
-assert.match(adviserContext, /fetch\("\/api\/reports\/staff-messages\?role=adviser"/);
-assert.match(adviserContext, /const unreadDirectStaffMessages = directStaffMessages\.filter/);
+assert.match(adviserContext, /fetch\("\/api\/reports\/staff-messages\?role=adviser[^"`]*/);
+assert.match(adviserContext, /const unreadReportStaffMessages = directStaffMessages\.filter/);
 assert.match(adviserContext, /void loadReportCount\(\);[\s\S]*?void loadIctCount\(\);/);
-assert.match(guidanceContext, /fetch\("\/api\/reports\/staff-messages\?role=guidance"/);
-assert.match(guidanceContext, /filter\(m => m\.status === "New"\)/);
+assert.match(guidanceContext, /fetch\("\/api\/reports\/staff-messages\?role=guidance[^"`]*/);
+assert.match(guidanceContext, /\(message\) => message\.status === "New" && message\.sender !== "ICT"/);
 assert.match(adviserReports, /const newAdmin = adminMsgs\.filter\(m => m\.status === "New"\)\.length/);
 assert.match(guidanceReports, /const unreadDirectStaffMessages = adminMsgs\.filter\(\(message\) => message\.status === "New"\)\.length/);
 assert.match(staffRoute, /status: "read"[\s\S]*?publishRealtimeInvalidation\(recipients, "staff-messages"\)/);

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 export async function PATCH(req: NextRequest) {
     try {
@@ -20,6 +21,7 @@ export async function PATCH(req: NextRequest) {
             );
 
         if (error) throw error;
+        await publishRealtimeInvalidation([{ role: "ict", id: ict.id }], "notifications");
         return NextResponse.json({ success: true });
     } catch (error) {
         console.error("PATCH /api/ict/notifications/read error:", error);

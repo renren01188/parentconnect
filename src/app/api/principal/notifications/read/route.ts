@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
+import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const isValidPrincipalNotificationKey = (key: unknown): key is string =>
     typeof key === "string" && [
@@ -36,6 +37,8 @@ export async function PATCH(req: NextRequest) {
                 if (error) throw error;
             }
 
+            await publishRealtimeInvalidation([{ role: "principal", id: principal.id }], "notifications");
+
             return NextResponse.json({ success: true });
         }
 
@@ -48,6 +51,7 @@ export async function PATCH(req: NextRequest) {
                 );
 
             if (error) throw error;
+            await publishRealtimeInvalidation([{ role: "principal", id: principal.id }], "notifications");
             return NextResponse.json({ success: true });
         }
 

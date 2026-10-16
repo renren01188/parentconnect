@@ -8,6 +8,7 @@ import {
   Bell, Menu, UserRound, X,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
+import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 import { useNotifContext } from "../context/NotificationContext";
 import { useParentSession } from "../ParentSessionGate";
 
@@ -48,6 +49,10 @@ export default function Sidebar() {
   const [parent, setParent] = useState<ParentSummary | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
+  const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
+    reports: unreadReportsCount,
+    notifications: unreadCount,
+  });
 
   useEffect(() => {
     const loadParent = () => {
@@ -103,8 +108,8 @@ export default function Sidebar() {
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
           {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
             const active = href === "/dashboard/parent" ? pathname === href : pathname.startsWith(href);
-            const badgeCount = badgeKey === "reports" ? unreadReportsCount : badgeKey === "notifications" ? unreadCount : 0;
-            return <Link key={label} href={href} onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
+            const badgeCount = visibleBadgeCount(badgeKey);
+            return <Link key={label} href={href} onClick={() => { dismissBadge(badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-slate-400 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
           })}
         </nav>
 

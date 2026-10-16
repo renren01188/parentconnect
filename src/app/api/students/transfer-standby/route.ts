@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import bcrypt from "bcryptjs";
+import { adviserRecipientsForClass, publishRealtimeInvalidation, studentRealtimeRecipientsForStudents } from "@/lib/realtimeInvalidation";
 
 type Body = {
   studentIds:    number[];
@@ -160,6 +161,15 @@ export async function POST(req: NextRequest) {
       .in("id", ownedIds);
 
     if (updateErr) throw updateErr;
+
+    // The originating class, every linked Parent, Principal, ICT, and the
+    // target class must see the queue change immediately. Resolve both sides
+    // before emitting one deduped, data-free student event.
+    const [studentRecipients, targetAdviserRecipients] = await Promise.all([
+      studentRealtimeRecipientsForStudents(ownedIds.map((id) => ({ studentDbId: id }))),
+      adviserRecipientsForClass(targetGrade, targetSection),
+    ]);
+    await publishRealtimeInvalidation([...studentRecipients, ...targetAdviserRecipients], "students");
 
     return NextResponse.json({
       success:  true,

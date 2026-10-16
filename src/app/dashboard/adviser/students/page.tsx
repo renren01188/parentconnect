@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import type { ReadyTransferSummary } from "./TransferFromStandbyModal";
 
 // These modal workflows are only needed after a user clicks an action. Loading
@@ -403,7 +404,6 @@ function AdviserStudentsPageContent() {
   // ── Receive Transfer modal (incoming) ──
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [readyTransferSummary, setReadyTransferSummary] = useState<ReadyTransferSummary | null>(null);
-  const readyTransferRefreshTimer = useRef<number | null>(null);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [rfidTarget, setRfidTarget] = useState<Student | null>(null);
@@ -415,9 +415,11 @@ function AdviserStudentsPageContent() {
 
   useEffect(() => { setPage(1); }, [debSearch, filter, activeSection]);
 
-  const fetchStudents = useCallback(async (p: number) => {
-    setLoading(true);
-    setError(null);
+  const fetchStudents = useCallback(async (p: number, { background = false }: { background?: boolean } = {}) => {
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const qs = new URLSearchParams({
         page: String(p), limit: "5", filter,
@@ -443,7 +445,7 @@ function AdviserStudentsPageContent() {
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [debSearch, filter, activeSection, includePendingAbsences]);
 
@@ -467,17 +469,20 @@ function AdviserStudentsPageContent() {
 
   useEffect(() => { void refreshReadyTransferSummary(); }, [refreshReadyTransferSummary]);
 
-  useSessionInvalidation((event) => {
-    if (event.scope !== "students" && event.scope !== "accounts") return;
-    if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
-    readyTransferRefreshTimer.current = window.setTimeout(() => {
-      void refreshReadyTransferSummary();
-    }, 150);
+  // ICT changes can add, move, archive, or update a student while this page
+  // is open. Refresh the same authorized roster snapshot as the initial
+  // load, not merely the transfer-summary chip.
+  const scheduleStudentsRefresh = useDebouncedRealtimeRefresh(async () => {
+    await Promise.all([
+      fetchStudents(page, { background: true }),
+      refreshReadyTransferSummary(),
+    ]);
   });
-
-  useEffect(() => () => {
-    if (readyTransferRefreshTimer.current) clearTimeout(readyTransferRefreshTimer.current);
-  }, []);
+  useSessionInvalidation((event) => {
+    if (event.scope === "students" || event.scope === "accounts") {
+      scheduleStudentsRefresh();
+    }
+  });
 
   const handleOpenDelete = async (s: Student) => {
     if (s.parent_email !== undefined) { setDeleteTarget(s); return; }

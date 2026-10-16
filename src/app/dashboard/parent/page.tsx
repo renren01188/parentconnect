@@ -18,7 +18,6 @@ interface StudentInfo {
     name: string;
     studentId: string;
     grade: string;
-    adviser: string;
     initials: string;
     avatarColor: string;
     stats: {
@@ -35,47 +34,6 @@ interface StudentInfo {
     checkInDay: string;
     isAtSchool: boolean;
 }
-
-const FALLBACK_STUDENTS: StudentInfo[] = [
-    {
-        id: "1", name: "Carlos Santos Doe", studentId: "SES-2026-0891",
-        grade: "Grade 6 - Rizal", adviser: "Mr. Jose Reyes", initials: "CS",
-        avatarColor: "#2563eb",
-        checkInTime: "07:30 AM", checkInDay: "Monday, November 22, 2026", isAtSchool: true,
-        stats: {
-            totalPresent: "148", presentDelta: "+3 this month", presentUp: true,
-            absentDays: "2", absentDelta: "-1 vs last mo.", absentUp: false,
-            lateDays: "3", lateDelta: "+1 this month", lateUp: true,
-            attendanceRate: "96.1%", rateLabel: "Excellent",
-        },
-        attendance: [
-            { date: "Nov 22, 2026", day: "Monday", status: "Present", timeIn: "07:30 AM", timeOut: "04:00 PM", rfid: "Verified" },
-            { date: "Nov 21, 2026", day: "Friday", status: "Present", timeIn: "07:35 AM", timeOut: "04:00 PM", rfid: "Verified" },
-            { date: "Nov 20, 2026", day: "Thursday", status: "Late", timeIn: "08:20 AM", timeOut: "04:00 PM", rfid: "Verified" },
-            { date: "Nov 19, 2026", day: "Wednesday", status: "Present", timeIn: "07:28 AM", timeOut: "04:00 PM", rfid: "Verified" },
-            { date: "Nov 18, 2026", day: "Tuesday", status: "Absent", timeIn: "—", timeOut: "—", rfid: "No Scan" },
-        ],
-    },
-    {
-        id: "2", name: "Maria Santos Doe", studentId: "SES-2026-1234",
-        grade: "Grade 1 - Mabuhay", adviser: "Ms. Ana Cruz", initials: "MS",
-        avatarColor: "#3b82f6",
-        checkInTime: "07:45 AM", checkInDay: "Monday, November 22, 2026", isAtSchool: true,
-        stats: {
-            totalPresent: "142", presentDelta: "+5 this month", presentUp: true,
-            absentDays: "3", absentDelta: "-2 vs last mo.", absentUp: false,
-            lateDays: "5", lateDelta: "+2 this month", lateUp: true,
-            attendanceRate: "94.7%", rateLabel: "Excellent",
-        },
-        attendance: [
-            { date: "Nov 22, 2026", day: "Monday", status: "Present", timeIn: "07:45 AM", timeOut: "03:30 PM", rfid: "Verified" },
-            { date: "Nov 21, 2026", day: "Friday", status: "Late", timeIn: "08:15 AM", timeOut: "03:30 PM", rfid: "Verified" },
-            { date: "Nov 20, 2026", day: "Thursday", status: "Present", timeIn: "07:50 AM", timeOut: "03:30 PM", rfid: "Verified" },
-            { date: "Nov 19, 2026", day: "Wednesday", status: "Present", timeIn: "07:40 AM", timeOut: "03:30 PM", rfid: "Verified" },
-            { date: "Nov 18, 2026", day: "Tuesday", status: "Absent", timeIn: "—", timeOut: "—", rfid: "No Scan" },
-        ],
-    },
-];
 
 type ParentNotificationPreview = {
     id: number;
@@ -145,24 +103,51 @@ function parentReportDateLabel(value: unknown) {
     });
 }
 
-/*
-const REMOVED_REPORT_SAMPLE = [
-    { title: "Q2 Progress Report", meta: "New · Nov 15, 2026", isNew: true },
-    { title: "Q1 Progress Report", meta: "Viewed · Aug 20, 2026", isNew: false },
-    { title: "Conduct & Behavior", meta: "Viewed · Oct 1, 2026", isNew: false },
-];
-
-const REMOVED_MESSAGE_SAMPLE = [
-    { initials: "AC", name: "Ms. Ana Cruz", preview: "Maria's project ...", color: "#6366f1" },
-    { initials: "SO", name: "School Office", preview: "PTC forms due ...", color: "#64748b" },
-    { initials: "PR", name: "Mr. Reyes", preview: "School perfor...", color: "#0ea5e9" },
-];
-
-// Attendance week dots (Mon–Fri)
-*/
-
 const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const MANILA_TIME_ZONE = "Asia/Manila";
+
+function studentAvatarColor(studentId: string) {
+    const palette = ["#2563eb", "#0ea5e9", "#4f46e5", "#7c3aed", "#0891b2"];
+    const hash = [...studentId].reduce((total, character) => total + character.charCodeAt(0), 0);
+    return palette[hash % palette.length];
+}
+
+function emptyStudentInfo(student: { id: number; name: string; lrn: string; grade: string; section: string }): StudentInfo {
+    const name = String(student.name ?? "").trim() || "Student";
+    const studentId = String(student.lrn ?? "").trim();
+    const initials = name
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase())
+        .join("") || "ST";
+    const checkInDay = new Intl.DateTimeFormat("en-US", {
+        timeZone: MANILA_TIME_ZONE,
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+    }).format(new Date());
+
+    return {
+        id: String(student.id),
+        name,
+        studentId,
+        grade: [student.grade, student.section].filter(Boolean).join(" - "),
+        initials,
+        avatarColor: studentAvatarColor(studentId || String(student.id)),
+        stats: {
+            totalPresent: "0", presentDelta: "No attendance records", presentUp: false,
+            absentDays: "0", absentDelta: "No attendance records", absentUp: false,
+            lateDays: "0", lateDelta: "No attendance records", lateUp: false,
+            attendanceRate: "0.0%", rateLabel: "No attendance records",
+        },
+        attendance: [],
+        checkInTime: "Not yet in",
+        checkInDay,
+        isAtSchool: false,
+    };
+}
 
 function manilaDateKey(value = new Date()) {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -242,33 +227,18 @@ export default function ParentDashboard() {
                     return;
                 }
 
-                const linkedStudentRows = (data.students ?? [data.student]) as Array<{
+                const linkedStudentRows = (
+                    Array.isArray(data.students) && data.students.length > 0
+                        ? data.students
+                        : data.student ? [data.student] : []
+                ) as Array<{
                     id: number;
                     name: string;
                     lrn: string;
                     grade: string;
                     section: string;
                 }>;
-                const linkedStudents: StudentInfo[] = linkedStudentRows.map((studentRow, index: number) => {
-                    const template = FALLBACK_STUDENTS[index % FALLBACK_STUDENTS.length];
-                    const name = studentRow.name || "Student";
-                    const initials = name
-                        .split(" ")
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .map((part: string) => part[0]?.toUpperCase())
-                        .join("");
-
-                    return {
-                        ...template,
-                        id: String(studentRow.id),
-                        name,
-                        studentId: studentRow.lrn,
-                        grade: `${studentRow.grade} - ${studentRow.section}`,
-                        adviser: "Class Adviser",
-                        initials: initials || "ST",
-                    };
-                });
+                const linkedStudents = linkedStudentRows.map(emptyStudentInfo);
 
                 const firstStudent = linkedStudents[0];
                 setParentName(data.parent.name || "Parent");
@@ -299,24 +269,28 @@ export default function ParentDashboard() {
                 linkedStudents.forEach((s, i) => {
                     const data = attendanceResults[i];
                     if (!data?.success) return;
-                    const total = data.stats.present + data.stats.late + data.stats.absent + data.stats.excused;
-                    const rate = total > 0 ? ((data.stats.present + data.stats.late) / total * 100).toFixed(1) : "0.0";
+                    const present = Number(data.stats?.present ?? 0);
+                    const late = Number(data.stats?.late ?? 0);
+                    const absent = Number(data.stats?.absent ?? 0);
+                    const excused = Number(data.stats?.excused ?? 0);
+                    const total = present + late + absent + excused;
+                    const rate = total > 0 ? ((present + late) / total * 100).toFixed(1) : "0.0";
                     s.stats = {
-                        totalPresent: String(data.stats.present),
-                        presentDelta: "",
+                        totalPresent: String(present),
+                        presentDelta: total > 0 ? "" : "No attendance records",
                         presentUp: true,
-                        absentDays: String(data.stats.absent),
-                        absentDelta: "",
+                        absentDays: String(absent),
+                        absentDelta: total > 0 ? "" : "No attendance records",
                         absentUp: false,
-                        lateDays: String(data.stats.late),
-                        lateDelta: "",
+                        lateDays: String(late),
+                        lateDelta: total > 0 ? "" : "No attendance records",
                         lateUp: false,
                         attendanceRate: `${rate}%`,
-                        rateLabel: Number(rate) >= 95 ? "Excellent" : Number(rate) >= 85 ? "Good" : "Needs Attention",
+                        rateLabel: total === 0 ? "No attendance records" : Number(rate) >= 95 ? "Excellent" : Number(rate) >= 85 ? "Good" : "Needs Attention",
                     };
                     // Keep every saved date for the overall stats, then let
                     // WeekDots select only the current Manila school week.
-                    s.attendance = data.records.map((r: any) => {
+                    s.attendance = Array.isArray(data.records) ? data.records.map((r: any) => {
                         const dateObj = new Date(`${r.attendance_date}T00:00:00Z`);
                         return {
                             attendanceDate: r.attendance_date,
@@ -327,14 +301,14 @@ export default function ParentDashboard() {
                             timeOut: r.time_out ?? "—",
                             rfid: r.time_in ? "Verified" : "No Scan",
                         };
-                    });
+                    }) : [];
                     // Check-in info from today's record
                     const todayIso = manilaDateKey();
-                    const todayRecord = data.records.find((r: any) => r.attendance_date === todayIso);
-                    s.isAtSchool = !!todayRecord?.time_in;
-                    s.checkInTime = todayRecord?.time_in
+                    const todayRecord = s.attendance.find((record) => record.attendanceDate === todayIso);
+                    s.isAtSchool = Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—");
+                    s.checkInTime = todayRecord?.timeIn && todayRecord.timeIn !== "—"
                         ? (() => {
-                            const [h, m] = todayRecord.time_in.split(":");
+                            const [h, m] = todayRecord.timeIn.split(":");
                             const hour = Number(h);
                             const suffix = hour >= 12 ? "PM" : "AM";
                             return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${suffix}`;
@@ -396,7 +370,9 @@ export default function ParentDashboard() {
                     })));
                 }
             } catch {
-                router.push("/login/guardian");
+                // ParentSessionGate owns authentication redirects. A failed
+                // dashboard snapshot must retain the verified session instead
+                // of turning a transient data error into a logout.
             } finally {
                 if (!background) setProfileLoading(false);
             }

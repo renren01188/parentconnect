@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendStudentConcernParentNotificationEmail } from "@/lib/mailer";
-import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishReportRealtimeInvalidation, publishStudentReportsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { listMessages, toAdviserReport } from "@/app/api/reports/parent-adviser/_lib";
 import type { StudentReportRow } from "../../_lib";
 
@@ -198,6 +198,10 @@ export async function POST(
       .eq("id", reportId);
 
     if (updateError) throw updateError;
+
+    // The parent conversation is a distinct report event below. Refresh the
+    // original student-concern queue and Principal monitoring separately.
+    await publishStudentReportsRealtimeInvalidation(adviser.id);
 
     const messages = await listMessages([parentReport.id]);
     const adviserReport = toAdviserReport(parentReport, messages.get(parentReport.id) ?? []);

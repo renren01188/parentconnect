@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { publishRealtimeInvalidation, studentRealtimeRecipientsForStudents } from "@/lib/realtimeInvalidation";
 
 export async function GET(req: NextRequest) {
   try {
@@ -139,6 +140,17 @@ export async function DELETE(req: NextRequest) {
     if ((rejected?.length ?? 0) !== studentIds.length) {
       return NextResponse.json({ success: false, message: "A transfer changed while it was being rejected. Refresh the list and try again." }, { status: 409 });
     }
+
+    // Rejection returns the students to their originating class. Include the
+    // target adviser explicitly because the persisted class is still the
+    // original one at this point.
+    const studentRecipients = await studentRealtimeRecipientsForStudents(
+      (rejected ?? []).map((student) => ({ studentDbId: Number(student.id) })),
+    );
+    await publishRealtimeInvalidation([
+      ...studentRecipients,
+      { role: "adviser", id: adviser.id },
+    ], "students");
 
     return NextResponse.json({ success: true, rejected: rejected?.map(student => student.id) ?? [] });
   } catch (error: unknown) {

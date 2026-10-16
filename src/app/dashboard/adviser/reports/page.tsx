@@ -1061,9 +1061,17 @@ function ReportsPageContent() {
         await Promise.all([loadReports(), loadAdminMessages()]);
     }, [loadAdminMessages, loadReports]);
 
+    const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
+        staffConversationTyping.onRealtimeEvent(event);
+        if (event.kind === "typing") return;
+        // Keep the active direct-staff thread mounted and refetch its
+        // canonical saved snapshot as soon as the other participant writes.
+        await loadAdminMessages();
+    }, [loadAdminMessages, staffConversationTyping]);
+
     const liveUpdateNotice = useReportMessagesRealtime(refreshAdviserInbox, {
         onReportUpdate: handleLiveReportUpdate,
-        onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
+        onStaffMessageUpdate: handleLiveStaffMessageUpdate,
         onStudentReportUpdate: loadStudentReports,
         onConnectionStatus: (status) => {
             if (status === "CLOSED") {
@@ -1172,6 +1180,14 @@ function ReportsPageContent() {
 
     async function confirmStudentResolve() {
         if (studentResolveTargetId === null || resolvingStudent) return;
+        if (notifiedStudentReports.has(studentResolveTargetId)) {
+            // The report can receive a Realtime update while the confirmation
+            // modal is open. Keep that stale modal from resolving a concern
+            // after its parent has been notified.
+            setStudentResolveTargetId(null);
+            setActionError("This student report cannot be resolved after the parent has been notified.");
+            return;
+        }
         setResolvingStudent(true);
         try {
             const res = await fetch(`/api/student-reports/${studentResolveTargetId}/status`, {
@@ -2033,6 +2049,7 @@ function ReportsPageContent() {
                         {/* ── Student report detail ── */}
                         {leftTab === "Student" && selectedStudRep && (() => {
                             const isLocked = !unlockedStudentReports.has(selectedStudRep.id) && selectedStudRep.status === "New";
+                            const isParentNotified = notifiedStudentReports.has(selectedStudRep.id);
 
                             // ── LOCKED view ──
                             if (isLocked) return (
@@ -2148,9 +2165,16 @@ function ReportsPageContent() {
                                         <div className="flex flex-wrap gap-2 mb-4">
 
                                             {selectedStudRep.status !== "Resolved" && (
-                                                <button onClick={() => setStudentResolveTargetId(selectedStudRep.id)}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200 hover:bg-emerald-100 transition">
-                                                    <CheckCircle className="w-3.5 h-3.5" /> Resolve
+                                                <button
+                                                    type="button"
+                                                    disabled={isParentNotified || resolvingStudent}
+                                                    title={isParentNotified ? "This report cannot be resolved after the parent has been notified." : undefined}
+                                                    onClick={() => {
+                                                        if (!isParentNotified) setStudentResolveTargetId(selectedStudRep.id);
+                                                    }}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200 hover:bg-emerald-100 transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 disabled:hover:bg-slate-100"
+                                                >
+                                                    <CheckCircle className="w-3.5 h-3.5" /> {isParentNotified ? "Resolve unavailable" : "Resolve"}
                                                 </button>
                                             )}
                                             {/* Notify Parent — disabled after first send to prevent duplicate reports */}

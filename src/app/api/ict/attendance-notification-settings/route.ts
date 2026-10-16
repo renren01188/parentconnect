@@ -9,6 +9,7 @@ import {
   type AttendanceNotificationDelivery,
 } from "@/lib/attendanceNotificationSettings";
 import { supabase } from "@/lib/supabase";
+import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 const noStoreHeaders = { "Cache-Control": "private, no-store" };
 const deliveries = new Set<AttendanceNotificationDelivery>(["sms", "email", "both", "none"]);
@@ -22,6 +23,11 @@ function responseSettings(settings: Awaited<ReturnType<typeof getAttendanceNotif
     ...settings,
     delivery: deliveryFromChannels(settings.smsEnabled, settings.emailEnabled),
   };
+}
+
+async function publishAttendanceSettingsRefresh() {
+  const recipients = await recipientsForRoles(["ict"]);
+  await publishRealtimeInvalidation(recipients, "dashboard");
 }
 
 export async function GET() {
@@ -67,6 +73,8 @@ export async function PUT(request: NextRequest) {
       .maybeSingle();
     if (error) throw error;
     if (!data) return NextResponse.json({ success: false, message: "Attendance notification settings have not been initialized." }, { status: 409 });
+
+    await publishAttendanceSettingsRefresh();
 
     return NextResponse.json(
       { success: true, settings: responseSettings(mapAttendanceNotificationSettings(data)) },

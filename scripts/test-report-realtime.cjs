@@ -57,6 +57,11 @@ assert.match(adviserReports, /event\.reportId !== null && event\.reportId === se
 assert.match(adviserReports, /setSelectedReport\(\(current\) => current\?\.id === id \? report : current\)/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "reports"\)/);
 assert.match(reportRealtimeHook, /scheduleReportRefresh\(invalidation\)/);
+assert.match(
+  reportRealtimeHook,
+  /if \(invalidation\.kind === "message"\)[\s\S]*?void refreshReport\(invalidation\)/,
+  "a committed report message must begin its targeted refresh immediately",
+);
 assert.match(sessionInvalidation, /CHANNEL_ERROR.*TIMED_OUT.*CLOSED/s);
 assert.match(sessionInvalidation, /scheduleReconnect\(\)/);
 
@@ -66,6 +71,11 @@ assert.match(sessionInvalidation, /scheduleReconnect\(\)/);
 assert.match(staffMessagesRoute, /recipient_type: "parent"[\s\S]*?await publishRealtimeInvalidation\([\s\S]*?\{ role: current\.type, id: current\.id \}[\s\S]*?\{ role: "parent", id: recipient\.parentId \}[\s\S]*?"staff-messages"/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "staff-messages"\)[\s\S]*?scheduleRefresh\(\)/);
 assert.match(parentReports, /useReportMessagesRealtime\(loadReports/);
+assert.match(
+  parentReports,
+  /const alreadyInInbox = current\.some\(\(item\) => item\.id === id\)[\s\S]*?sortParentReportConversations\(\[\.\.\.current, mergedReport\]\)/,
+  "a detail Broadcast must retain the correct Parent conversation if its summary request is still in flight",
+);
 assert.match(
   parentReports,
   /loaded\?\.detailsLoaded && !report\.isStandaloneStaffMessage[\s\S]*?\? \{ \.\.\.report, messages: loaded\.messages, detailsLoaded: true \}[\s\S]*?: report/,
@@ -85,17 +95,20 @@ assert.match(guidanceReports, /setSelectedAdminMsg\(\(current\) => \{[\s\S]*?req
 assert.match(adviserReports, /setSelectedAdminMsg\(current => current[\s\S]*?adminMessageKey\(message\) === adminMessageKey\(current\)[\s\S]*?\?\? current/);
 assert.match(adviserReports, /role: "adviser"[\s\S]*?recipientId,/);
 
-// Public Student Reports wake the assigned Adviser only after the row is
-// committed; the client refreshes its Student Reports state in place.
-assert.match(studentReportsRoute, /import \{ publishRealtimeInvalidation \} from "@\/lib\/realtimeInvalidation"/);
-assert.match(studentReportsRoute, /await publishRealtimeInvalidation\(\[\s*\{ role: "adviser", id: Number\(adviser\.id\) \},\s*\], "students"\)/);
+// Public Student Reports wake the assigned Adviser and active Principal only
+// after the row is committed; each client refreshes its protected monitoring
+// snapshot in place.
+assert.match(studentReportsRoute, /import \{ publishStudentReportsRealtimeInvalidation \} from "@\/lib\/realtimeInvalidation"/);
+assert.match(studentReportsRoute, /await publishStudentReportsRealtimeInvalidation\(adviser\.id\)/);
+assert.match(realtimePublisher, /export async function publishStudentReportsRealtimeInvalidation\(adviserId\?: number \| null\)/);
 assert.match(reportRealtimeHook, /onStudentReportUpdate\?: RefreshReports/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "students"\)/);
 assert.match(adviserReports, /onStudentReportUpdate: loadStudentReports/);
+assert.match(principalReports, /onStudentReportUpdate: loadPrincipalReports/);
 
 // A submitted Guidance ticket has a dedicated, post-commit invalidation.
-// Guidance refreshes only its authorized ticket snapshot, so its ticket list
-// and both sidebar/top-bar counts update while the page remains open.
+// Guidance refreshes its authorized ticket snapshot and the ticket-backed
+// Notifications feed, so both kinds of sidebar count update in place.
 assert.match(realtimePublisher, /\| "tickets"/);
 assert.match(realtimeSubscriber, /\["reports", "tickets", "staff-messages"/);
 assert.match(guidanceTicketRoute, /import \{ publishRealtimeInvalidation, publishReportRealtimeInvalidation \}/);
@@ -104,7 +117,7 @@ assert.match(guidanceTicketRoute, /includeGuidance: false/);
 assert.match(reportRealtimeHook, /onTicketUpdate\?: RefreshReports/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "tickets"\)/);
 assert.match(guidanceReports, /onTicketUpdate: async \(\) => \{ await refreshTickets\("background"\); \}/);
-assert.match(guidanceNotificationContext, /if \(scope === "tickets"\)[\s\S]*?await refreshGuidanceCounts\(\)/);
+assert.match(guidanceNotificationContext, /if \(scope === "tickets"\)[\s\S]*?Promise\.all\(\[refreshGuidanceCounts\(\), refreshNotificationCounts\(\)\]\)/);
 
 // After Guidance accepts a ticket, report messages and ephemeral typing use
 // the accepted counselor's opaque channel. Older ticketless escalations keep
@@ -137,7 +150,8 @@ assert.match(reportPresenceRoute, /includeAdviser: !principalConversation && !gu
 assert.match(reportPresenceRoute, /includePrincipals: principalConversation/);
 assert.match(reportPresenceRoute, /if \(role === "guidance"\) \{[\s\S]*?if \(report\.escalated_to_principal\)/);
 assert.match(parentReports, /event\.reportId !== null && event\.reportId === selectedReportId \? loadReportDetail\(event\.reportId\)/);
-assert.match(principalReports, /event\.reportId !== null && event\.reportId === selectedReportId \? loadReportDetail\(event\.reportId\)/);
+assert.match(principalReports, /const refreshReportDetailAfterInFlight = useCallback/);
+assert.match(principalReports, /event\.reportId !== null && event\.reportId === selectedReportId[\s\S]*?refreshReportDetailAfterInFlight\(event\.reportId\)/);
 assert.match(principalReports, /useReportTyping\(selectedReportId, "principal"\)/);
 assert.match(principalReports, /reportTyping\.onDraftChange\(Boolean\(event\.target\.value\.trim\(\)\)\)/);
 assert.match(guidanceStatusRoute, /if \(escalatedToPrincipal\) updatePayload\.escalated_to_principal = true/);

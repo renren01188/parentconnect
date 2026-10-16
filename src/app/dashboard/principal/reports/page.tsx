@@ -1492,6 +1492,22 @@ function PrincipalReportsPageContent() {
     }
   }, []);
 
+  const refreshReportDetailAfterInFlight = useCallback(async (id: number) => {
+    // The initial detail request can still be running when its first
+    // Realtime message arrives. Waiting for that stale snapshot and then
+    // starting a fresh request guarantees the new row is not lost until the
+    // Principal interacts with the composer or reloads the page.
+    const inFlight = reportDetailRequestsRef.current.get(id);
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // The targeted request below is the authoritative recovery path.
+      }
+    }
+    await loadReportDetail(id);
+  }, [loadReportDetail]);
+
   const loadPrincipalMessages = useCallback(async (preferredConversationId?: string) => {
     const res = await fetch("/api/reports/principal-messages", { cache: "no-store" });
     const data = await res.json().catch(() => null);
@@ -1546,17 +1562,30 @@ function PrincipalReportsPageContent() {
     // limited to the selected report, keeping this conversation mounted.
     await Promise.all([
       loadPrincipalReports(),
-      event.reportId !== null && event.reportId === selectedReportId ? loadReportDetail(event.reportId) : Promise.resolve(),
+      event.reportId !== null && event.reportId === selectedReportId
+        ? refreshReportDetailAfterInFlight(event.reportId)
+        : Promise.resolve(),
     ]);
-  }, [loadPrincipalReports, loadReportDetail, reportTyping, selectedReportId]);
+  }, [loadPrincipalReports, refreshReportDetailAfterInFlight, reportTyping, selectedReportId]);
 
   const refreshPrincipalInbox = useCallback(async () => {
     await Promise.all([loadPrincipalReports(), loadPrincipalMessages()]);
   }, [loadPrincipalMessages, loadPrincipalReports]);
 
+  const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
+    staffConversationTyping.onRealtimeEvent(event);
+    if (event.kind === "typing") return;
+    // This source has already excluded Contact ICT rows. Fetch it straight
+    // away so a staff New Message or reply appears in the open Reports panel.
+    await loadPrincipalMessages();
+  }, [loadPrincipalMessages, staffConversationTyping]);
+
   const liveUpdateNotice = useReportMessagesRealtime(refreshPrincipalInbox, {
     onReportUpdate: handleLiveReportUpdate,
-    onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
+    onStaffMessageUpdate: handleLiveStaffMessageUpdate,
+    // Student concerns share the Principal monitoring panel but are a
+    // different protected endpoint from parent-report conversations.
+    onStudentReportUpdate: loadPrincipalReports,
     onConnectionStatus: (status) => {
       if (status === "CLOSED") {
         reportTyping.clearOtherTyping();

@@ -39,7 +39,8 @@ assert.match(deletionRoute, /await publishRealtimeInvalidation\(recipients, "ann
 // the Parent/Adviser notification UIs, with no router or full-page refresh.
 assert.match(guidancePage, /Promise\.all\(\[loadMyAnnouncements\(\), loadIncomingAnnouncements\(\)\]\)/);
 assert.match(guidancePage, /fontFamily: '\"DM Sans\", \"Segoe UI\", system-ui, sans-serif'/);
-assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "reports" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "attendance"/);
 assert.match(parentNotifications, /notificationRefreshVersion/);
 assert.match(parentNotifications, /mergeNotificationFeed\(current, snapshot, \{ removeMissing: true \}\)/);
 assert.match(notificationFeed, /removeMissing = false/);

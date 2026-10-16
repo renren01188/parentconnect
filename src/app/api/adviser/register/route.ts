@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { sendAdviserTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
+import { publishAccountRealtimeInvalidation, publishPublicSectionsInvalidation } from "@/lib/realtimeInvalidation";
 
 type AdviserAssignmentRecord = {
   id: number;
@@ -293,6 +294,13 @@ export async function POST(req: NextRequest) {
         { status: 503 },
       );
     }
+
+    // The account and its assignment are now durable. Refresh every open ICT
+    // User Management view and the public report form's section catalogue.
+    await Promise.all([
+      publishAccountRealtimeInvalidation([{ role: "adviser", id: Number(createdAdviser.id) }]),
+      publishPublicSectionsInvalidation(),
+    ]);
 
     return NextResponse.json({
       success: true,

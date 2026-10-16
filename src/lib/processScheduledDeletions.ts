@@ -1,6 +1,13 @@
 import { supabase } from "@/lib/supabase";
 import { archiveTarget } from "@/lib/permanentDeletion";
 import { logAudit } from "@/lib/audit";
+import { publishAccountRealtimeInvalidation, publishStudentRealtimeInvalidation, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
+
+function realtimeRoleForDeletionTarget(targetType: string): RealtimeRecipientRole | null {
+  return targetType === "parent" || targetType === "adviser" || targetType === "guidance" || targetType === "principal" || targetType === "ict"
+    ? targetType
+    : null;
+}
 
 /**
  * Archives every deletion request whose 30-day recovery period has elapsed.
@@ -50,6 +57,12 @@ export async function processDueScheduledDeletions() {
         details: `Archived this ${item.target_type} after its 30-day waiting period.`,
         metadata: { scheduledDeletionId: item.id },
       });
+      if (item.target_type === "student") {
+        await publishStudentRealtimeInvalidation({ studentDbId: Number(item.target_id) });
+      } else {
+        const role = realtimeRoleForDeletionTarget(item.target_type);
+        await publishAccountRealtimeInvalidation(role ? [{ role, id: Number(item.target_id) }] : []);
+      }
       archived.push(item.id);
     } catch (archiveError) {
       // Leave a failed item scheduled so a later processor run can retry it.

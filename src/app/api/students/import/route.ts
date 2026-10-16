@@ -6,6 +6,7 @@ import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { normalizeSf1Name, parseSf1Name, type Sf1Name } from "@/lib/sf1Name";
 import { logAudit } from "@/lib/audit";
 import { isFamilyRole, normalizeParentPhone, provisionParentForStudent } from "@/lib/parentEnrollment";
+import { publishAccountRealtimeInvalidation, publishStudentsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 type ImportRow = {
   lrn: string; firstName: string; middleName: string | null; lastName: string; suffix: string | null;
@@ -179,6 +180,20 @@ export async function PUT(request: NextRequest) {
     // Reconciliation only adds missing links; it never removes a staff-created link.
     await Promise.all((created ?? []).map((student) => reconcileParentStudentLinks({ studentDbId: student.id })));
     await logAudit({ action: "Students Imported", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: `${created?.length ?? 0} students`, targetRole: "Student", targetType: "Student Import", targetId: section, relatedStudentId: (created ?? []).map(student => student.student_id).join(","), newStatus: "Imported", module: "Students", details: `Imported ${created?.length ?? 0} student record(s) from SF1 into ${adviser.grade} ${section}.` });
+    await Promise.all([
+      publishStudentsRealtimeInvalidation((created ?? []).map((student) => ({ studentDbId: Number(student.id) }))),
+      // Provisioning may have created or linked a Parent account. Refresh the
+      // protected ICT account list and the affected account(s), never the
+      // imported roster itself through an account event.
+      provisionedParents.length
+        ? publishAccountRealtimeInvalidation(
+            provisionedParents
+              .map((parent) => Number(parent.parentId))
+              .filter((id) => Number.isSafeInteger(id) && id > 0)
+              .map((id) => ({ role: "parent" as const, id })),
+          )
+        : Promise.resolve(),
+    ]);
     return NextResponse.json({ success: true, count: created?.length ?? 0, provisionedParents: provisionedParents.length });
   } catch (error) { return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Import failed. Ensure the SF1 migration has been run." }, { status: 500 }); }
 }

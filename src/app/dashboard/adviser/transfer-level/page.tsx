@@ -10,6 +10,8 @@ import {
   Eye, EyeOff, GraduationCap, ShieldAlert, XCircle,
   CheckCircle2, ChevronDown, Users, Filter, Trash2,
 } from "lucide-react";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -554,9 +556,11 @@ export default function TransferLevelPage() {
 
   useEffect(() => { setPage(1); }, [debSearch]);
 
-  const fetchStudents = useCallback(async (p: number) => {
-    setLoading(true);
-    setError(null);
+  const fetchStudents = useCallback(async (p: number, { background = false }: { background?: boolean } = {}) => {
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const qs   = new URLSearchParams({
         page: String(p), limit: "10",
@@ -577,11 +581,25 @@ export default function TransferLevelPage() {
     } catch (e: unknown) {
       setError(getErrorMessage(e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [debSearch, selectedSection]);
 
   useEffect(() => { fetchStudents(page); }, [fetchStudents, page]);
+
+  // Transfers, imports, and ICT roster updates can change this queue while
+  // the Adviser is idle. Re-read the existing authorized roster in place and
+  // clear its selection so a stale student cannot be transferred twice.
+  const scheduleTransferRosterRefresh = useDebouncedRealtimeRefresh(async () => {
+    setSelectedIds(new Set());
+    setSelectedStudents(new Map());
+    await fetchStudents(page, { background: true });
+  });
+  useSessionInvalidation((event) => {
+    if (event.scope === "students" || event.scope === "accounts") {
+      scheduleTransferRosterRefresh();
+    }
+  });
 
   // Selection helpers
   const allSelected  = pagination.total > 0 && selectedIds.size === pagination.total;

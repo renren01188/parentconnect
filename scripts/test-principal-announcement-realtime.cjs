@@ -37,7 +37,8 @@ assert.match(mutationRoute, /await publishRealtimeInvalidation\(recipients, "ann
 // Both notification pages already consume the one-account Realtime channel.
 // Parent uses a complete server snapshot, so a deleted item is pruned instead
 // of being retained by an optimistic merge.
-assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "reports" \|\| scope === "staff-messages"/);
+assert.match(parentContext, /scope === "notifications" \|\| scope === "announcements" \|\| scope === "attendance"/);
 assert.match(parentNotifications, /mergeNotificationFeed\(current, snapshot, \{ removeMissing: true \}\)/);
 assert.match(parentNotificationsRoute, /PRINCIPAL_PARENT_AUDIENCE_VALUES/);
 assert.match(adviserContext, /scope === "notifications" \|\| scope === "announcements"/);

@@ -1104,10 +1104,19 @@ function ReportsPageContent() {
         await Promise.all([loadGuidanceReports(), loadGuidanceStaffMessages()]);
     }, [loadGuidanceReports, loadGuidanceStaffMessages]);
 
+    const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
+        staffConversationTyping.onRealtimeEvent(event);
+        if (event.kind === "typing") return;
+        // Direct staff messages remain separate from Contact ICT. Reload only
+        // this Reports-panel feed so the selected conversation updates in
+        // place and its saved metadata remains authoritative.
+        await loadGuidanceStaffMessages();
+    }, [loadGuidanceStaffMessages, staffConversationTyping]);
+
     const liveUpdateNotice = useReportMessagesRealtime(refreshGuidanceInbox, {
         onReportUpdate: handleLiveReportUpdate,
         onTicketUpdate: async () => { await refreshTickets("background"); },
-        onStaffMessageUpdate: staffConversationTyping.onRealtimeEvent,
+        onStaffMessageUpdate: handleLiveStaffMessageUpdate,
         onConnectionStatus: (status) => {
             if (status === "CLOSED") {
                 reportTyping.clearOtherTyping();

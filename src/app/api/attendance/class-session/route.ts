@@ -382,7 +382,17 @@ export async function POST(req: NextRequest) {
     if (error) throw error;
 
     await logAudit({ action: "Class Session Updated", performedById: ict.id, performedBy: [ict.first_name, ict.middle_name, ict.last_name, ict.suffix].filter(Boolean).join(" ") || "ICT Admin", performedByRole: "ICT Admin", module: "Class Session Control", targetType: "Class Session", targetId: data.id, targetUser: `${session_type} session`, targetRole: "Class Session", previousStatus: action === "end" ? "Active" : undefined, newStatus: String(data.status), details: `${action === "start" ? "Started" : action === "end" ? "Ended" : "Updated schedule for"} the ${session_type} class session on ${today}.` });
-    await publishRealtimeInvalidation(await recipientsForRoles(["ict", "adviser", "principal"]), "dashboard");
+    // Staff consume class-session changes from their dashboard scope, while
+    // every linked Parent attendance/dashboard view already refreshes on the
+    // narrower attendance scope. The Broadcast contains no schedule data.
+    const [staffRecipients, parentRecipients] = await Promise.all([
+      recipientsForRoles(["ict", "adviser", "principal"]),
+      recipientsForRoles(["parent"]),
+    ]);
+    await Promise.all([
+      publishRealtimeInvalidation(staffRecipients, "dashboard"),
+      publishRealtimeInvalidation(parentRecipients, "attendance"),
+    ]);
 
     return NextResponse.json({
       success: true,

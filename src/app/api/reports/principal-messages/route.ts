@@ -384,6 +384,17 @@ function isPrincipalIctPair(row: StaffMessageRow) {
   );
 }
 
+/**
+ * Legacy Adviserâ€“Principal threads persist their read state in older tables.
+ * Reuse the normal Reports invalidation scope so the mounted page and the
+ * dashboard-level badge source re-read the authoritative inbox immediately.
+ */
+async function publishPrincipalReportsReadInvalidation(principalId: number) {
+  await publishRealtimeInvalidation([
+    { role: "principal", id: principalId },
+  ], { scope: "staff-messages", kind: "status" });
+}
+
 function buildUnifiedStaffConversations(principal: PrincipalSession, rows: StaffMessageRow[]) {
   const roots = rows.filter((row) => !Number(row.source_message_id));
 
@@ -829,6 +840,7 @@ export async function PATCH(req: NextRequest) {
         .eq("status", "unread");
       if (rootUpdateError) throw rootUpdateError;
 
+      await publishPrincipalReportsReadInvalidation(principal.id);
       return NextResponse.json({ success: true });
     }
 
@@ -876,6 +888,7 @@ export async function PATCH(req: NextRequest) {
         .in("id", ids);
 
       if (error) throw error;
+      await publishPrincipalReportsReadInvalidation(principal.id);
       return NextResponse.json({ success: true });
     }
 
@@ -925,6 +938,7 @@ export async function PATCH(req: NextRequest) {
         .in("id", ids);
 
       if (error) throw error;
+      await publishPrincipalReportsReadInvalidation(principal.id);
       return NextResponse.json({ success: true });
     }
 

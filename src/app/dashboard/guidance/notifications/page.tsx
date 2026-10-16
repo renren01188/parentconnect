@@ -129,7 +129,10 @@ export default function GuidanceNotificationsPage() {
 
   useVisibleRefresh(loadNotifications);
   useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") return loadNotifications();
+    // Guidance tickets are part of this feed too. A ticket write emits the
+    // dedicated scope so a Parent submission appears without opening or
+    // refreshing this page first.
+    if (!scope || scope === "reports" || scope === "tickets" || scope === "notifications" || scope === "announcements") return loadNotifications();
   });
 
   useEffect(() => {

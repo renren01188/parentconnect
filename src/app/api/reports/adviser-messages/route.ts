@@ -459,6 +459,15 @@ export async function PATCH(req: NextRequest) {
           }
 
           if (replyResult.error) throw replyResult.error;
+
+          // Legacy Adviserâ€“Principal threads are still shown in the current
+          // Reports inbox. Wake the idle Principal immediately after the
+          // durable reply commits instead of waiting for a later send or
+          // manual reload to refresh that thread.
+          await publishRealtimeInvalidation([
+            { role: "adviser", id: Number(adviser.id) },
+            { role: "principal", id: Number(receivedMsg.principal_id) },
+          ], { scope: "staff-messages", kind: "message" });
         }
 
         return NextResponse.json({ success: true });
@@ -534,6 +543,13 @@ export async function PATCH(req: NextRequest) {
       }
 
       if (followUpResult.error) throw followUpResult.error;
+
+      // This branch handles a legacy Adviser follow-up after a Principal
+      // reply. It has the same live delivery contract as a new conversation.
+      await publishRealtimeInvalidation([
+        { role: "adviser", id: Number(adviser.id) },
+        { role: "principal", id: Number(sentMsg.principal_id) },
+      ], { scope: "staff-messages", kind: "message" });
     }
 
     const { error: sentUpdateError } = await supabase
@@ -732,6 +748,14 @@ async function createPrincipalMessage({
   } else if (error) {
     throw error;
   }
+
+  // Older Adviserâ€“Principal rows are retained for existing conversations.
+  // They share the modern Reports inbox, so publish the same data-free event
+  // used by the unified staff_messages path once this row is committed.
+  await publishRealtimeInvalidation([
+    { role: "adviser", id: Number(adviser.id) },
+    { role: "principal", id: Number(principalId) },
+  ], { scope: "staff-messages", kind: "message" });
 
   const principalRow = principal as PrincipalRow;
   const principalName = fullName([

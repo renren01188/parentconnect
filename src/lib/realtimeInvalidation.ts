@@ -123,6 +123,42 @@ function assignedToStudent(adviser: { grade?: string | null; section?: string | 
 }
 
 /**
+ * Resolves the adviser(s) assigned to a particular class without exposing the
+ * class details in a Realtime message. Transfer queues need this before a
+ * student actually moves into the target class.
+ */
+export async function adviserRecipientsForClass(grade: string | null | undefined, section: string | null | undefined) {
+  const normalizedGrade = grade?.trim() ?? "";
+  const normalizedSection = section?.trim() ?? "";
+  if (!normalizedGrade || !normalizedSection) return [] as RealtimeRecipient[];
+
+  try {
+    const { data, error } = await supabase
+      .from("advisers")
+      .select("id, grade, section, sections")
+      .eq("grade", normalizedGrade);
+    if (error) {
+      console.warn("Unable to resolve class adviser Realtime recipients:", error.message);
+      return [] as RealtimeRecipient[];
+    }
+
+    return (data ?? [])
+      .filter((adviser) => assignedToStudent(adviser, {
+        id: 1,
+        student_id: "realtime-class-recipient",
+        grade: normalizedGrade,
+        section: normalizedSection,
+      }))
+      .map((adviser) => Number(adviser.id))
+      .filter((id) => Number.isSafeInteger(id) && id > 0)
+      .map((id) => ({ role: "adviser" as const, id }));
+  } catch (error) {
+    console.warn("Unable to resolve class adviser Realtime recipients:", error);
+    return [] as RealtimeRecipient[];
+  }
+}
+
+/**
  * Resolves only accounts that can legitimately be affected by an attendance
  * change: the child's linked parents, the assigned adviser(s), and active
  * principals.  The emitted event contains no student, attendance, or excuse
@@ -200,6 +236,61 @@ export async function publishStudentRealtimeInvalidation(input: { studentDbId?: 
 }
 
 /**
+ * A bulk import or transfer can affect several students at once. Resolve all
+ * of their existing authorized audiences first, then send a single deduped
+ * event so a dashboard refreshes once rather than once for every student.
+ */
+export async function studentRealtimeRecipientsForStudents(inputs: Array<{ studentDbId?: number | null; studentId?: string | null }>) {
+  const uniqueInputs = Array.from(new Map(
+    inputs
+      .filter((input) => (
+        (Number.isSafeInteger(Number(input.studentDbId)) && Number(input.studentDbId) > 0)
+        || Boolean(input.studentId?.trim())
+      ))
+      .map((input) => [
+        Number.isSafeInteger(Number(input.studentDbId)) && Number(input.studentDbId) > 0
+          ? `id:${Number(input.studentDbId)}`
+          : `lrn:${input.studentId!.trim()}`,
+        input,
+      ]),
+  ).values());
+  if (!uniqueInputs.length) return [] as RealtimeRecipient[];
+
+  const [studentRecipientGroups, ictRecipients] = await Promise.all([
+    Promise.all(uniqueInputs.map((input) => attendanceRecipientsForStudent(input))),
+    recipientsForRoles(["ict"]),
+  ]);
+  return [...studentRecipientGroups.flat(), ...ictRecipients];
+}
+
+export async function publishStudentsRealtimeInvalidation(inputs: Array<{ studentDbId?: number | null; studentId?: string | null }>) {
+  await publishRealtimeInvalidation(await studentRealtimeRecipientsForStudents(inputs), "students");
+}
+
+/**
+ * Student concern reports are an adviser/principal workflow, not a student
+ * profile update. Keep their audience separate from the broader profile
+ * invalidation (which also includes linked parents and ICT).
+ */
+export async function publishStudentReportsRealtimeInvalidation(adviserId?: number | null) {
+  const { data: principals, error } = await supabase
+    .from("principals")
+    .select("id")
+    .eq("status", "active")
+    .eq("is_active", true)
+    .neq("archive_status", "archived");
+  if (error) console.warn("Unable to resolve Principal student-report recipients:", error.message);
+
+  const recipients: RealtimeRecipient[] = [
+    ...(Number.isSafeInteger(Number(adviserId)) && Number(adviserId) > 0
+      ? [{ role: "adviser" as const, id: Number(adviserId) }]
+      : []),
+    ...(!error ? (principals ?? []).map((principal) => ({ role: "principal" as const, id: Number(principal.id) })) : []),
+  ];
+  await publishRealtimeInvalidation(recipients, "students");
+}
+
+/**
  * User Management changes always refresh ICT's own authorized list and may
  * additionally refresh the affected account. Callers never need to expose an
  * account's details in a Realtime payload.
@@ -209,14 +300,17 @@ export async function publishAccountRealtimeInvalidation(
   options: { sessionRevoked?: boolean } = {},
 ) {
   const ictRecipients = await recipientsForRoles(["ict"]);
-  // ICT must refresh its list, but it is never a recipient of a password
-  // reset logout event.  The affected account receives a separate, targeted
-  // signal after the durable revocation marker has been written.
-  await publishRealtimeInvalidation(ictRecipients, "accounts");
-  await publishRealtimeInvalidation(
-    targets,
-    options.sessionRevoked ? { scope: "accounts", sessionRevoked: true } : "accounts",
-  );
+  // A normal update is one deduped Broadcast, including when ICT updates an
+  // ICT account. A session-revocation marker remains targeted so other ICT
+  // accounts refresh their list without being told to log out.
+  if (!options.sessionRevoked) {
+    await publishRealtimeInvalidation([...ictRecipients, ...targets], "accounts");
+    return;
+  }
+  await Promise.all([
+    publishRealtimeInvalidation(ictRecipients, "accounts"),
+    publishRealtimeInvalidation(targets, { scope: "accounts", sessionRevoked: true }),
+  ]);
 }
 
 function channelSecret() {

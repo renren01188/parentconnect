@@ -13,6 +13,8 @@ const principalReports = read("src/app/dashboard/principal/reports/page.tsx");
 const parentReports = read("src/app/dashboard/parent/reports/page.tsx");
 const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
 const adviserData = read("src/app/dashboard/adviser/data.ts");
+const adviserMessages = read("src/app/api/reports/adviser-messages/route.ts");
+const reportRealtimeHook = read("src/hooks/useReportMessagesRealtime.ts");
 
 // A direct parent conversation must retain the real participant role rather
 // than falling through to the Adviser label used by legacy staff messages.
@@ -62,6 +64,20 @@ assert.doesNotMatch(principalReports, /selectedConversation\.status &&/);
 assert.match(staffMessages, /\{ role: current\.type, id: current\.id \},[\s\S]*?\{ role: "parent", id: recipient\.parentId \}/);
 assert.match(parentReports, /useReportMessagesRealtime\(loadReports/);
 assert.match(principalReports, /useReportMessagesRealtime\(refreshPrincipalInbox/);
+assert.match(principalReports, /const refreshReportDetailAfterInFlight = useCallback/);
+assert.match(principalReports, /const inFlight = reportDetailRequestsRef\.current\.get\(id\)[\s\S]*?await loadReportDetail\(id\)/);
+assert.match(principalReports, /event\.reportId !== null && event\.reportId === selectedReportId[\s\S]*?refreshReportDetailAfterInFlight\(event\.reportId\)/);
+assert.match(reportRealtimeHook, /if \(invalidation\.kind === "message"\)[\s\S]*?void refreshReport\(invalidation\)/);
+
+// The current staff-message path and the retained Adviserâ€“Principal path
+// must both wake an idle Principal Reports inbox. The page re-reads the
+// server-authorized thread, preventing optimistic duplication.
+assert.match(adviserMessages, /Legacy Adviser[^\n]*Principal[\s\S]*?publishRealtimeInvalidation\([\s\S]*?\{ role: "principal", id: Number\(principalId\) \}[\s\S]*?scope: "staff-messages", kind: "message"/);
+assert.match(adviserMessages, /idle Principal immediately[\s\S]*?publishRealtimeInvalidation\([\s\S]*?\{ role: "principal", id: Number\(receivedMsg\.principal_id\) \}/);
+assert.match(principalMessages, /async function publishPrincipalReportsReadInvalidation\(principalId: number\)/);
+assert.match(principalMessages, /scope: "staff-messages", kind: "status"/);
+assert.match(principalMessages, /await publishPrincipalReportsReadInvalidation\(principal\.id\);/);
+assert.match(notificationContext, /if \(scope === "staff-messages"\)[\s\S]*?refreshAdviserMessages\(\)/);
 
 // The composer keeps a dedicated, fixed-size send action at every width.
 assert.match(principalReports, /grid-cols-\[minmax\(0,1fr\)_auto\]/);
