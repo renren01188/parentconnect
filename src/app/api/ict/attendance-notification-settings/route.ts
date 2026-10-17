@@ -4,6 +4,7 @@ import {
   channelsForDelivery,
   deliveryFromChannels,
   getAttendanceNotificationSettings,
+  initializeAttendanceNotificationSettings,
   mapAttendanceNotificationSettings,
   normalizeLowCreditThreshold,
   type AttendanceNotificationDelivery,
@@ -60,6 +61,9 @@ export async function PUT(request: NextRequest) {
     }
 
     const channels = channelsForDelivery(body.delivery as AttendanceNotificationDelivery);
+    // Older deployments may have the table but not its singleton row. Create
+    // the defaults without overwriting an existing ICT configuration.
+    await initializeAttendanceNotificationSettings();
     const { data, error } = await supabase
       .from("attendance_notification_settings")
       .update({
@@ -72,7 +76,7 @@ export async function PUT(request: NextRequest) {
       .select("sms_enabled, email_enabled, sms_low_credit_threshold, sms_credit_balance, sms_credits_checked_at, sms_credits_check_error, updated_at")
       .maybeSingle();
     if (error) throw error;
-    if (!data) return NextResponse.json({ success: false, message: "Attendance notification settings have not been initialized." }, { status: 409 });
+    if (!data) throw new Error("Attendance notification settings could not be saved.");
 
     await publishAttendanceSettingsRefresh();
 

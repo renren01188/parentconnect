@@ -13,17 +13,6 @@ import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
-function Toggle({ enabled, onChange, disabled, label }: { enabled: boolean; onChange: () => void; disabled?: boolean; label: string }) {
-    return (
-        <button type="button" onClick={onChange} disabled={disabled} aria-label={label} aria-pressed={enabled}
-            className="relative inline-flex h-11 w-12 shrink-0 items-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-            style={{ background: enabled ? "#2563eb" : "#cbd5e1" }}>
-            <span className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform"
-                style={{ transform: enabled ? "translateX(22px)" : "translateX(2px)" }} />
-        </button>
-    );
-}
-
 // ─── Password input ───────────────────────────────────────────────────────────
 function PwInput({ value, onChange, placeholder, error }: {
     value: string; onChange: (v: string) => void;
@@ -625,8 +614,13 @@ export default function ProfilePage() {
                     if (!preferencesRes.ok || !preferencesData.success) {
                         throw new Error(preferencesData.message || "Unable to load attendance notification preferences.");
                     }
-                    setEmailNotif(Boolean(preferencesData.preferences?.emailEnabled));
-                    setSmsNotif(Boolean(preferencesData.preferences?.smsEnabled));
+                    const emailEnabled = Boolean(preferencesData.preferences?.emailEnabled);
+                    const smsEnabled = Boolean(preferencesData.preferences?.smsEnabled);
+                    setEmailNotif(emailEnabled);
+                    setSmsNotif(smsEnabled);
+                    if (emailEnabled && smsEnabled) {
+                        setNotificationPreferencesError("Choose Email, SMS, or Neither for attendance notifications.");
+                    }
                 } catch (preferencesError) {
                     setNotificationPreferencesError(preferencesError instanceof Error ? preferencesError.message : "Unable to load attendance notification preferences.");
                 }
@@ -837,22 +831,23 @@ export default function ProfilePage() {
                         {/* Notifications */}
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">Notifications</h2>
-                            <p className="text-xs text-slate-400 mb-4">Choose how to receive RFID attendance alerts for your child.</p>
-                            <div className="flex flex-col gap-4">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p className="text-xs font-semibold text-slate-700">Email Notifications</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">Send attendance alerts to your email address</p>
-                                    </div>
-                                    <Toggle enabled={emailNotif} onChange={() => void saveNotificationPreferences(!emailNotif, smsNotif)} disabled={savingNotificationPreferences} label="Toggle attendance email notifications" />
-                                </div>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p className="text-xs font-semibold text-slate-700">SMS Notifications</p>
-                                        <p className="text-[10px] text-slate-400 mt-0.5">Send attendance alerts to your mobile number</p>
-                                    </div>
-                                    <Toggle enabled={smsNotif} onChange={() => void saveNotificationPreferences(emailNotif, !smsNotif)} disabled={savingNotificationPreferences} label="Toggle attendance SMS notifications" />
-                                </div>
+                            <p className="text-xs text-slate-400 mb-4">Choose one way to receive RFID attendance alerts for every child linked to your account.</p>
+                            <div className="flex flex-col gap-2" role="radiogroup" aria-label="Attendance notification method">
+                                <button type="button" role="radio" aria-checked={emailNotif && !smsNotif} onClick={() => void saveNotificationPreferences(true, false)} disabled={savingNotificationPreferences}
+                                    className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${emailNotif && !smsNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
+                                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${emailNotif && !smsNotif ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}>{emailNotif && !smsNotif && <CheckCircle className="h-3.5 w-3.5 text-white" />}</span>
+                                    <span><span className="block text-xs font-semibold text-slate-700">Email notifications</span><span className="mt-0.5 block text-[10px] text-slate-400">Send attendance alerts only to your email address.</span></span>
+                                </button>
+                                <button type="button" role="radio" aria-checked={smsNotif && !emailNotif} onClick={() => void saveNotificationPreferences(false, true)} disabled={savingNotificationPreferences}
+                                    className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${smsNotif && !emailNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
+                                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${smsNotif && !emailNotif ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}>{smsNotif && !emailNotif && <CheckCircle className="h-3.5 w-3.5 text-white" />}</span>
+                                    <span><span className="block text-xs font-semibold text-slate-700">SMS notifications</span><span className="mt-0.5 block text-[10px] text-slate-400">Send attendance alerts only to your mobile number.</span></span>
+                                </button>
+                                <button type="button" role="radio" aria-checked={!emailNotif && !smsNotif} onClick={() => void saveNotificationPreferences(false, false)} disabled={savingNotificationPreferences}
+                                    className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${!emailNotif && !smsNotif ? "border-slate-500 bg-slate-50" : "border-slate-200 hover:border-slate-300"}`}>
+                                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${!emailNotif && !smsNotif ? "border-slate-600 bg-slate-600" : "border-slate-300 bg-white"}`}>{!emailNotif && !smsNotif && <CheckCircle className="h-3.5 w-3.5 text-white" />}</span>
+                                    <span><span className="block text-xs font-semibold text-slate-700">Neither</span><span className="mt-0.5 block text-[10px] text-slate-400">Record attendance without sending notifications to this account.</span></span>
+                                </button>
                                 {savingNotificationPreferences && <p className="text-[10px] text-slate-400">Saving attendance notification preferences…</p>}
                                 {notificationPreferencesNotice && <p className="text-[10px] font-semibold text-emerald-600">{notificationPreferencesNotice}</p>}
                                 {notificationPreferencesError && <p className="text-[10px] font-semibold text-red-600">{notificationPreferencesError}</p>}

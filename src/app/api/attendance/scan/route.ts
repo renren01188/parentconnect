@@ -35,8 +35,6 @@ const RFID_TIME_OUT_MIN_DELAY_SECONDS = Math.max(
     Number(process.env.RFID_TIME_OUT_MIN_DELAY_SECONDS ?? process.env.RFID_SCAN_DEBOUNCE_SECONDS ?? 60 * 60) || 60 * 60,
   ),
 );
-const SCHEDULED_ATTENDANCE_SMS_WORKER = process.env.ATTENDANCE_SMS_SCHEDULED_WORKER === "true";
-const SCHEDULED_ATTENDANCE_EMAIL_WORKER = process.env.ATTENDANCE_EMAIL_SCHEDULED_WORKER === "true";
 
 function getToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -146,18 +144,20 @@ function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAtten
           // The trigger normally creates this job atomically. This fallback
           // preserves existing installations; its conflict key keeps it idempotent.
           await enqueueAttendanceSms(input);
-          if (!SCHEDULED_ATTENDANCE_SMS_WORKER) {
-            await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
-          }
+          // Always make the first delivery attempt for this scan. A scheduled
+          // worker can still retry temporary failures, but a successful tap
+          // must never wait for a deployment-specific Cron configuration.
+          await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
         },
       },
       {
         channel: "email",
         run: async () => {
           await enqueueAttendanceEmail(input);
-          if (!SCHEDULED_ATTENDANCE_EMAIL_WORKER) {
-            await processAttendanceEmailJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
-          }
+          // As with SMS, make the initial send attempt without depending on a
+          // deployment Cron. A notification failure is recorded on the job
+          // and never affects the attendance event already saved above.
+          await processAttendanceEmailJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
         },
       },
     ]);

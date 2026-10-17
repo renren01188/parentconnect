@@ -24,6 +24,8 @@ type AttendanceNotificationSettingsRow = {
 
 export const DEFAULT_SMS_LOW_CREDIT_THRESHOLD = 50;
 
+const SETTINGS_COLUMNS = "sms_enabled, email_enabled, sms_low_credit_threshold, sms_credit_balance, sms_credits_checked_at, sms_credits_check_error, updated_at";
+
 export function deliveryFromChannels(smsEnabled: boolean, emailEnabled: boolean): AttendanceNotificationDelivery {
   if (smsEnabled && emailEnabled) return "both";
   if (smsEnabled) return "sms";
@@ -64,12 +66,40 @@ export function mapAttendanceNotificationSettings(row: AttendanceNotificationSet
 export async function getAttendanceNotificationSettings(): Promise<AttendanceNotificationSettings> {
   const { data, error } = await supabase
     .from("attendance_notification_settings")
-    .select("sms_enabled, email_enabled, sms_low_credit_threshold, sms_credit_balance, sms_credits_checked_at, sms_credits_check_error, updated_at")
+    .select(SETTINGS_COLUMNS)
     .eq("id", true)
     .maybeSingle();
 
   if (error) throw error;
-  if (!data) throw new Error("Attendance notification settings have not been initialized.");
+  if (!data) return initializeAttendanceNotificationSettings();
+  return mapAttendanceNotificationSettings(data as AttendanceNotificationSettingsRow);
+}
+
+/**
+ * Ensures older or newly deployed databases have the singleton settings row.
+ * `ignoreDuplicates` means it cannot overwrite settings an ICT administrator
+ * has already saved, even when two requests initialize it at the same time.
+ */
+export async function initializeAttendanceNotificationSettings(): Promise<AttendanceNotificationSettings> {
+  const { error } = await supabase
+    .from("attendance_notification_settings")
+    .upsert(
+      {
+        id: true,
+        sms_enabled: true,
+        email_enabled: false,
+        sms_low_credit_threshold: DEFAULT_SMS_LOW_CREDIT_THRESHOLD,
+      },
+      { onConflict: "id", ignoreDuplicates: true },
+    );
+  if (error) throw error;
+
+  const { data, error: readError } = await supabase
+    .from("attendance_notification_settings")
+    .select(SETTINGS_COLUMNS)
+    .eq("id", true)
+    .single();
+  if (readError) throw readError;
   return mapAttendanceNotificationSettings(data as AttendanceNotificationSettingsRow);
 }
 

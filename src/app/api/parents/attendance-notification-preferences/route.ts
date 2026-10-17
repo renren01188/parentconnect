@@ -73,6 +73,11 @@ export async function PATCH(request: NextRequest) {
     if (typeof body.emailEnabled !== "boolean" || typeof body.smsEnabled !== "boolean") {
       return NextResponse.json({ success: false, message: "Choose valid email and SMS notification preferences." }, { status: 400 });
     }
+    // ICT may enable both channels for the school, but a Parent chooses at
+    // most one personal delivery address. They may still opt out entirely.
+    if (body.emailEnabled && body.smsEnabled) {
+      return NextResponse.json({ success: false, message: "Choose Email, SMS, or Neither for attendance notifications." }, { status: 400 });
+    }
 
     const { data, error } = await supabase
       .from("parents")
