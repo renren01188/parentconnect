@@ -477,8 +477,8 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
       : advisersError || "No active class adviser is linked to your children yet.";
 
     return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
-        <div style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: "min(500px, calc(100vw - 24px))", padding: 24 }} onClick={e => e.stopPropagation()}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-6" onClick={onClose}>
+        <div role="dialog" aria-modal="true" aria-label="New report" className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl sm:p-6" onClick={e => e.stopPropagation()}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>New Report</h2>
@@ -497,12 +497,12 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }} onClick={onClose}>
-      <div style={{ position: "relative", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: "min(500px, calc(100vw - 24px))", maxHeight: "calc(100dvh - 24px)", overflowY: "auto", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-6" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="new-parent-report-title" className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "22px 24px 16px", borderBottom: "1px solid #f1f5f9" }}>
           <div>
-            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>New Report</h2>
+            <h2 id="new-parent-report-title" style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>New Report</h2>
             <p style={{ fontSize: 13, color: "#94a3b8", margin: "4px 0 0" }}>Submit a concern to your class adviser</p>
           </div>
           <button onClick={onClose} style={{ padding: 6, borderRadius: 8, border: "none", background: "transparent", color: "#94a3b8", cursor: "pointer" }}><X style={{ width: 16, height: 16 }} /></button>
@@ -634,11 +634,12 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
             </div>
 
             {/* Actions */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 14, borderTop: "1px solid #f1f5f9" }}>
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
               <button type="button" onClick={onClose}
-                style={{ padding: "9px 20px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#fff", color: "#475569", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-600 sm:w-auto">Cancel</button>
               <button type="button" onClick={openConfirmationModal} disabled={!canSubmit}
-                style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 20px", borderRadius: 10, border: "none", background: canSubmit ? "#2563eb" : "#93c5fd", color: "#fff", fontSize: 13, fontWeight: 700, cursor: canSubmit ? "pointer" : "not-allowed" }}>
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2 text-sm font-bold text-white sm:w-auto"
+                style={{ background: canSubmit ? "#2563eb" : "#93c5fd", cursor: canSubmit ? "pointer" : "not-allowed" }}>
                 {isSubmitting ? (
                   <>
                     <LoaderCircle className="animate-spin" style={{ width: 13, height: 13 }} /> Submitting...
@@ -654,7 +655,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
         )}
         {showConsent && !submitted && (
           <div
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-3 sm:p-6"
+            className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-3 sm:p-6"
             onClick={(event) => {
               event.stopPropagation();
               if (event.target === event.currentTarget) closeConfirmationModal();
@@ -781,9 +782,9 @@ function GuidanceTicketModal({ report, onClose, onSubmitted }: { report: Report;
       await onSubmitted(); onClose();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit ticket."); } finally { setSaving(false); }
   };
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4" onClick={onClose}>
-    <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-      <div className="mb-5 flex items-start justify-between"><div><h2 className="text-lg font-extrabold text-slate-900">Submit Ticket to Guidance</h2><p className="mt-1 text-sm text-slate-500">This reuses the current report.</p></div><button onClick={onClose}><X className="h-5 w-5 text-slate-400" /></button></div>
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-4" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-labelledby="guidance-ticket-title" className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl sm:p-6" onClick={(event) => event.stopPropagation()}>
+      <div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><h2 id="guidance-ticket-title" className="break-words text-lg font-extrabold text-slate-900">Submit Ticket to Guidance</h2><p className="mt-1 break-words text-sm text-slate-500">This reuses the current report.</p></div><button type="button" aria-label="Close guidance ticket" onClick={onClose} className="shrink-0 rounded-lg p-2"><X className="h-5 w-5 text-slate-400" /></button></div>
       {error && <p className="mb-3 rounded-lg bg-red-50 p-3 text-xs font-bold text-red-700">{error}</p>}
       <label className="mb-3 block text-sm font-bold text-slate-700">Concern<input value={concern} readOnly aria-readonly="true" className="mt-1.5 w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-normal text-slate-600" /></label>
       <label className="mb-3 block text-sm font-bold text-slate-700">Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={4} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2 font-normal" /></label>
@@ -802,12 +803,12 @@ function CancelReportModal({ report, onClose, onConfirm, cancelling, error }: {
 }) {
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-4"
       onClick={() => { if (!cancelling) onClose(); }}
     >
-      <div role="dialog" aria-modal="true" aria-labelledby="cancel-parent-report-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-labelledby="cancel-parent-report-title" className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl sm:p-6" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h2 id="cancel-parent-report-title" className="text-lg font-extrabold text-slate-900">Cancel this report?</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
               <strong>{report.subject}</strong> will be removed from your active reports. Authorized school staff will retain it for follow-up and audit history.
@@ -878,6 +879,9 @@ function ParentReportsPageContent() {
   const [sendingReply, setSendingReply] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const markingReadIds = useRef<Set<number>>(new Set());
+  // The initial list selects a card for layout, but only an explicit click or
+  // report-link navigation opens a conversation and acknowledges its replies.
+  const openedConversationIdRef = useRef<number | null>(null);
   const pendingMessagesRef = useRef<Map<number, ChatMessage[]>>(new Map());
   const detailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const detailRefreshQueuedRef = useRef<Set<number>>(new Set());
@@ -1166,6 +1170,7 @@ function ParentReportsPageContent() {
 
   // Mark unread staff messages only when the parent deliberately opens the conversation.
   function handleSelect(selected: Report) {
+    openedConversationIdRef.current = selected.id;
     setActivePanel(selected.isStandaloneStaffMessage ? "schoolMessages" : "reports");
     setSelectedId(selected.id);
     setReplyText("");
@@ -1221,6 +1226,7 @@ function ParentReportsPageContent() {
         : undefined;
     if (match) {
       lastAppliedRouteSelectionRef.current = routeSelectionKey;
+      openedConversationIdRef.current = match.id;
       setActivePanel(match.isStandaloneStaffMessage ? "schoolMessages" : "reports");
       setSelectedId(match.id);
       setReplyText("");
@@ -1234,6 +1240,18 @@ function ParentReportsPageContent() {
   }, [reports, searchParams, markReportRead, markStandaloneMessageRead]);
 
   const selectedReport = reports.find(r => r.id === selectedId) ?? null;
+
+  // A reply in the report that the Parent deliberately has open is visible
+  // immediately, but is not a new inbox item for that same Parent. Other
+  // conversations keep their unread highlight until the Parent opens them.
+  useEffect(() => {
+    if (!selectedReport?.unread || openedConversationIdRef.current !== selectedReport.id) return;
+    if (selectedReport.isStandaloneStaffMessage) {
+      void markStandaloneMessageRead(selectedReport);
+      return;
+    }
+    if (selectedReport.reportStatus !== "Resolved") void markReportRead(selectedReport.id);
+  }, [markReportRead, markStandaloneMessageRead, selectedReport?.id, selectedReport?.isStandaloneStaffMessage, selectedReport?.reportStatus, selectedReport?.unread]);
 
   useEffect(() => {
     if (!selectedReport || selectedReport.isStandaloneStaffMessage || selectedReport.detailsLoaded) return;
@@ -1517,7 +1535,7 @@ function ParentReportsPageContent() {
 
         <div className="flex min-w-0 flex-col gap-4 xl:min-h-0 xl:flex-1 xl:flex-row xl:overflow-hidden">
           {/* Left panel — report list */}
-          <div className="flex w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:w-[420px] xl:flex-shrink-0">
+          <div className={`${selectedReport ? "hidden xl:flex" : "flex"} w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:w-[420px] xl:flex-shrink-0`}>
             <div className="border-b border-slate-100 p-3 sm:p-4">
               <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Parent reports panels">
                 <button
@@ -1674,13 +1692,16 @@ function ParentReportsPageContent() {
           </div>
 
           {/* Right panel — detail */}
-          <div data-parent-guide="conversation-detail" className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-h-[calc(100dvh-1.5rem)] xl:max-h-none ${guideHighlight("conversation-detail")}`}>
+          <div data-parent-guide="conversation-detail" className={`${selectedReport ? "flex" : "hidden xl:flex"} min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-h-[calc(100dvh-10rem)] sm:max-h-[calc(100dvh-9rem)] xl:max-h-none ${guideHighlight("conversation-detail")} `}>
             {!selectedReport ? (
               <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">Select a conversation</div>
             ) : (
               <>
                 {/* Report header */}
                 <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
+                  <button type="button" onClick={() => setSelectedId(null)} className="inline-flex min-h-10 w-fit items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 xl:hidden">
+                    ← All conversations
+                  </button>
                   <div className="flex flex-wrap items-center gap-3">
                     <span style={{ width: 46, height: 46, minWidth: 46, borderRadius: "50%", background: selectedReport.recipientColor, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15 }}>{selectedReport.recipientInitials}</span>
                     <div className="flex-1 min-w-0">

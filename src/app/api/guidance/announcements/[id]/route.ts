@@ -76,12 +76,10 @@ export async function PATCH(
     const previousAudience = String(existing.audience ?? "");
     const roles = new Set<RealtimeRecipientRole>(["guidance"]);
     if (existing.status === "Published") {
-      roles.add("principal");
       if (previousAudience === "Parents" || previousAudience === "Both") roles.add("parent");
       if (previousAudience === "Class Advisers" || previousAudience === "Both") roles.add("adviser");
     }
     if (data.status === "Published") {
-      roles.add("principal");
       if (nextAudience === "Parents" || nextAudience === "Both") roles.add("parent");
       if (nextAudience === "Class Advisers" || nextAudience === "Both") roles.add("adviser");
     }
@@ -151,10 +149,9 @@ export async function DELETE(
 
     // The recipient dashboards re-read their own protected notification feed.
     // Parent and Adviser are included only when the deleted announcement was
-    // actually addressed to them; Principal retains its existing oversight
-    // feed for all Guidance announcements.
+    // actually addressed to them.
     const audience = String(announcement.audience ?? "");
-    const recipientRoles: RealtimeRecipientRole[] = announcement.status === "Published" ? ["principal"] : [];
+    const recipientRoles: RealtimeRecipientRole[] = [];
     if (announcement.status === "Published" && (audience === "Parents" || audience === "Both")) recipientRoles.push("parent");
     if (announcement.status === "Published" && (audience === "Class Advisers" || audience === "Both")) recipientRoles.push("adviser");
     const recipients = await recipientsForRoles(recipientRoles);

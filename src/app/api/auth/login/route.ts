@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
 import {
   checkLoginProtection,
@@ -12,14 +11,12 @@ import {
   rememberLoginGuard,
 } from "@/lib/loginProtection";
 import { parentAccountAccessIssue } from "@/lib/parentAccountAccess";
-import { getJwtSecret } from "@/lib/authSecret";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import {
   legacyTemporaryPasswordExpiryEpochSeconds,
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
-
-const SECRET = getJwtSecret();
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -152,22 +149,10 @@ export async function POST(req: NextRequest) {
       } : {}),
     };
 
-    const token = await new SignJWT(payload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime(temporaryPasswordExpirySeconds ?? "24h")
-      .sign(SECRET);
+    const { token } = await issueDashboardIdleSession(payload);
 
     const cookieStore = await cookies();
-    cookieStore.set("parent_token", token, {
-      httpOnly: true,
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: temporaryPasswordExpirySeconds
-        ? Math.max(1, temporaryPasswordExpirySeconds - Math.floor(Date.now() / 1_000))
-        : 60 * 60 * 24,
-      path:     "/",
-    });
+    cookieStore.set("parent_token", token, dashboardSessionCookieOptions);
 
     // ── Audit log ──
     await logAudit({

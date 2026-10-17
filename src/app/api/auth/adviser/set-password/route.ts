@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -71,19 +72,9 @@ export async function POST(req: NextRequest) {
 
     // Re-issue token with passwordSet: true
     const newPayload = { ...payload, passwordSet: true, sessionIssuedAt: Date.now() };
-    const newToken = await new SignJWT(newPayload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    const { token: newToken } = await issueDashboardIdleSession(newPayload);
 
-    cookieStore.set("adviser_token", newToken, {
-      httpOnly: true,
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge:   60 * 60 * 8,
-      path:     "/",
-    });
+    cookieStore.set("adviser_token", newToken, dashboardSessionCookieOptions);
 
     return NextResponse.json({
       success: true,

@@ -1063,7 +1063,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4">
-            <div className="my-auto w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 bg-gradient-to-r from-emerald-50 to-white">
                     <div className="flex items-center gap-3">
@@ -1080,7 +1080,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                     </button>
                 </div>
 
-                <div className="p-6">
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
                     {/* Section info pill */}
                     <div className="mb-5 flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
                         <IdCard className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -1413,12 +1413,12 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
-            <div className="w-full max-w-4xl max-h-[calc(100vh-40px)] overflow-visible rounded-2xl bg-white shadow-2xl border border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm sm:p-5">
+            <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl">
 
                 {/* Header */}
-                <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
-                    <div>
+                <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h3 className="text-base font-bold text-slate-800">Excuse Letter Approval</h3>
                         <p className="text-xs text-slate-400 mt-0.5">Review parent-submitted excuse letters and mark each request.</p>
                     </div>
@@ -1433,7 +1433,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
                     </div>
                 </div>
 
-                <div className="max-h-[calc(100vh-140px)] overflow-y-auto p-6" style={{ overflowY: "scroll" }}>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
 
                     {/* Loading */}
                     {isLoading && (
@@ -2538,7 +2538,7 @@ export default function AdviserAttendancePage() {
             {/* Register RFID Modal */}
             {showRegisterRfid && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4">
-                    <div className="my-auto w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+                    <div className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-2xl">
                         <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                             <div className="min-w-0">
                                 <h3 className="text-base font-bold text-slate-800">Register RFID</h3>

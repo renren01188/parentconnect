@@ -27,6 +27,17 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Keep dashboard navigation usable with touch and a mouse wheel without
+   showing a permanent scrollbar in the compact mobile/tablet sidebars. */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Google renders its checkbox in a fixed-width iframe. Scale it only on
    phone-sized viewports so the unchanged CAPTCHA remains fully usable. */
 .report-captcha-shell {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
+import { isAttendedAttendanceStatus } from "@/lib/attendanceRate.cjs";
 
 const MANILA_TIME_ZONE = "Asia/Manila";
 const PAGE_SIZE = 1000;
@@ -194,12 +195,14 @@ export async function GET() {
       let presentCount = 0;
       let absentCount = 0;
       let lateCount = 0;
+      let attendedCount = 0;
       let recordCount = 0;
 
       for (const studentId of eligibleStudentIds) {
         const record = recordsByStudentAndDate.get(studentId)?.get(date);
         if (!record) continue;
         recordCount++;
+        if (isAttendedAttendanceStatus(record.status)) attendedCount++;
         if (record.status === "Present" || record.status === "On Time") presentCount++;
         else if (record.status === "Late") lateCount++;
         else if (record.status === "Absent") absentCount++;
@@ -211,7 +214,7 @@ export async function GET() {
         present: denominator ? Math.round((presentCount / denominator) * 100) : 0,
         absent: denominator ? Math.round((absentCount / denominator) * 100) : 0,
         late: denominator ? Math.round((lateCount / denominator) * 100) : 0,
-        attendancePercent: denominator ? Math.round(((presentCount + lateCount) / denominator) * 100) : 0,
+        attendancePercent: denominator ? Math.round((attendedCount / denominator) * 100) : 0,
         hasRecords: recordCount > 0,
       };
     });

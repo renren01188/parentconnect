@@ -59,6 +59,23 @@ function getAvatarColor(name: string) {
     for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
     return colors[Math.abs(h) % colors.length];
 }
+function reportActivityTime(report: Report) {
+    const timestamp = Date.parse(report.lastActivityAt ?? report.createdAt ?? "");
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+function newestReportFirst(a: Report, b: Report) {
+    return reportActivityTime(b) - reportActivityTime(a) || b.id - a.id;
+}
+function newestGroupFirst(a: ParentGroup, b: ParentGroup) {
+    return newestReportFirst(a.reports[0]!, b.reports[0]!);
+}
+function adminMessageActivityTime(message: AdminMessage) {
+    const timestamp = Date.parse(message.latest_created_at ?? message.latest_sent_at ?? message.sent_at);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+function newestAdminMessageFirst(a: AdminMessage, b: AdminMessage) {
+    return adminMessageActivityTime(b) - adminMessageActivityTime(a) || b.id - a.id;
+}
 function getStatusStyle(status: ReportStatus | "ResolvedByPrincipal") {
     switch (status) {
         case "New": return "bg-sky-500 text-white";
@@ -124,7 +141,7 @@ function groupByParent(reports: Report[]): ParentGroup[] {
         if (r.concernLevel > map[r.parent_name].maxConcernLevel) map[r.parent_name].maxConcernLevel = r.concernLevel;
     }
     for (const g of Object.values(map)) {
-        g.reports.sort((a, b) => b.concernLevel - a.concernLevel);
+        g.reports.sort(newestReportFirst);
     }
     return Object.values(map);
 }
@@ -266,10 +283,10 @@ function ExportReportsModal({
     }
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-5" onClick={onClose}>
-            <div className="w-full max-w-[520px] rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden" onClick={(event) => event.stopPropagation()}>
-                <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
-                    <div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
+            <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h2 className="text-xl font-extrabold text-slate-900">Export Concerns</h2>
                         <p className="text-sm text-slate-400 mt-1">Choose a file type and which concern records to include.</p>
                     </div>
@@ -278,7 +295,8 @@ function ExportReportsModal({
                     </button>
                 </div>
 
-                <div className="px-6 py-5 flex flex-col gap-5">
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+                  <div className="flex flex-col gap-5">
                     <div>
                         <p className="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">File Type</p>
                         <div className="grid grid-cols-2 gap-2">
@@ -338,14 +356,15 @@ function ExportReportsModal({
                         </p>
                         <p className="mt-1 text-[11px] text-slate-400">{filters.join(" · ")}</p>
                     </div>
+                  </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-slate-100 bg-slate-50">
-                    <button onClick={onClose} className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-bold hover:bg-slate-50 transition">Cancel</button>
+                <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-end sm:px-6 sm:py-4">
+                    <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 sm:w-auto">Cancel</button>
                     <button
                         onClick={handleExport}
                         disabled={!canExport || exporting}
-                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition ${canExport && !exporting ? "bg-sky-500 hover:bg-sky-600" : "bg-sky-300 cursor-not-allowed"}`}
+                        className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white transition sm:w-auto ${canExport && !exporting ? "bg-sky-500 hover:bg-sky-600" : "bg-sky-300 cursor-not-allowed"}`}
                     >
                         <FileDown className="w-4 h-4" />
                         {exporting ? "Exporting..." : "Export"}
@@ -456,24 +475,24 @@ function NewMessageModal({
     }
 
     return (
-        <div className="guidance-new-message-overlay fixed inset-0 z-50 bg-black/45 flex items-start justify-end p-5" onClick={onClose}>
-            <div className="guidance-new-message-modal bg-white rounded-2xl shadow-2xl w-[480px] max-h-[calc(100vh-40px)] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
-                <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
-                    <div>
+        <div className="guidance-new-message-overlay fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5 md:justify-end" onClick={onClose}>
+            <div className="guidance-new-message-modal flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h2 className="text-xl font-extrabold text-slate-900">Send a Concern</h2>
                         <p className="text-sm text-slate-400 mt-1">Send a message about an escalated case</p>
                     </div>
                     <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400"><X className="w-4 h-4" /></button>
                 </div>
                 {submitted ? (
-                    <div className="flex flex-col items-center gap-3 py-10 px-6">
+                    <div className="flex flex-col items-center gap-3 px-4 py-8 sm:px-6 sm:py-10">
                         <div className="w-14 h-14 rounded-full bg-sky-100 flex items-center justify-center"><CheckCircle className="w-7 h-7 text-sky-500" /></div>
                         <p className="text-base font-bold text-slate-900">Message Sent!</p>
                         <p className="text-sm text-slate-400 text-center">Your message has been sent to {selectedRecipient?.name}.</p>
                         <button onClick={onClose} className="mt-2 px-7 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold transition">Done</button>
                     </div>
                 ) : (
-                    <div className="px-6 py-5 flex flex-col gap-5">
+                    <div className="flex flex-col gap-4 px-4 py-4 sm:gap-5 sm:px-6 sm:py-5">
                         {submitError && (
                             <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700">
                                 {submitError}
@@ -705,10 +724,10 @@ function NewMessageModal({
                                 </div>
                             )}
                         </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                            <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                            <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto">Cancel</button>
                             <button onClick={handleSubmit} disabled={!canSubmit}
-                                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition ${canSubmit ? "bg-sky-500 hover:bg-sky-600" : "bg-sky-300 cursor-not-allowed"}`}>
+                                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition sm:w-auto ${canSubmit ? "bg-sky-500 hover:bg-sky-600" : "bg-sky-300 cursor-not-allowed"}`}>
                                 <Send className="w-3.5 h-3.5" /> {sending ? "Sending..." : "Send Message"}
                             </button>
                         </div> {/* end SLIDE 3 */}
@@ -787,7 +806,7 @@ function ReportsPageContent() {
         const data = await res.json().catch(() => null);
         if (requestVersion !== guidanceReportRequestVersionRef.current) return;
         if (!res.ok) throw new Error(data?.message || "Unable to load guidance reports.");
-        const nextReports = (data?.reports ?? []) as Report[];
+        const nextReports = ((data?.reports ?? []) as Report[]).sort(newestReportFirst);
         setReports((current) => nextReports.map((report) => {
             const loaded = current.find((item) => item.id === report.id);
             return loaded?.detailsLoaded
@@ -1000,9 +1019,9 @@ function ReportsPageContent() {
             console.warn("Guidance staff messages are temporarily unavailable:", data?.message || res.statusText);
             return;
         }
-        const nextMessages = ((data?.messages ?? []) as AdminMessage[]).filter(
-            (message) => message.sender !== "ICT" && message.message_sender !== "ICT"
-        );
+        const nextMessages = ((data?.messages ?? []) as AdminMessage[])
+            .filter((message) => message.sender !== "ICT" && message.message_sender !== "ICT")
+            .sort(newestAdminMessageFirst);
         setAdminMsgs(nextMessages);
         setStaffRecipients(((data?.recipients ?? []) as StaffRecipient[])
             .filter((recipient) => recipient.type === "staff" && recipient.role !== "ICT" && ["Adviser", "Guidance", "Principal"].includes(recipient.role))
@@ -1073,8 +1092,10 @@ function ReportsPageContent() {
     }, [reports, adminMsgs, tickets, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
-    const parentGroups = groupByParent(reports)
-        .sort((a, b) => b.maxConcernLevel - a.maxConcernLevel);
+    const parentGroups = groupByParent(reports).sort(newestGroupFirst);
+    const selectedParentReports = selectedParent
+        ? reports.filter((report) => report.parent_name === selectedParent.parent_name).sort(newestReportFirst)
+        : [];
 
     const principalMsgs = adminMsgs;
     const selectedReportId = selectedReport?.id ?? null;
@@ -1264,6 +1285,18 @@ function ReportsPageContent() {
         }
     }
 
+    // Preserve unread highlights in other rows, while treating an incoming
+    // reply in Guidance's currently open Panel 2 conversation as read.
+    useEffect(() => {
+        if (leftTab !== "Parent" || viewStep !== "detail" || !selectedReport?.hasUnreadForGuidance) return;
+        void markGuidanceSeen(selectedReport.id);
+    }, [leftTab, selectedReport?.hasUnreadForGuidance, selectedReport?.id, viewStep]);
+
+    useEffect(() => {
+        if (leftTab !== "Principal" || viewStep !== "detail" || selectedAdminMsg?.status !== "New") return;
+        void markAdminRead(selectedAdminMsg.id);
+    }, [leftTab, selectedAdminMsg?.id, selectedAdminMsg?.status, viewStep]);
+
     async function escalateToPrincipal(report: Report) {
         if (report.status === "Resolved" || escalatingReportId === report.id || escalationInFlightRef.current.has(report.id)) return;
         escalationInFlightRef.current.add(report.id);
@@ -1337,9 +1370,20 @@ function ReportsPageContent() {
                     sent_at: new Date().toLocaleString(),
                     attachments: cleanedAttachments,
                 };
+                const latestCreatedAt = new Date().toISOString();
                 setAdminMsgs((current) => current.map((message) => message.id === selectedAdminMsg.id
-                    ? { ...message, status: "Sent", replies: [...(message.replies ?? []), newReply] }
-                    : message));
+                    ? {
+                        ...message,
+                        status: "Sent" as AdminMsgStatus,
+                        replies: [...(message.replies ?? []), newReply],
+                        latest_message: textToSend,
+                        latest_sender: "Guidance" as const,
+                        latest_sender_name: "You",
+                        latest_sender_is_current: true,
+                        latest_sent_at: latestCreatedAt,
+                        latest_created_at: latestCreatedAt,
+                    }
+                    : message).sort(newestAdminMessageFirst));
                 setSelectedAdminMsg((current) => current
                     ? { ...current, status: "Sent", replies: [...(current.replies ?? []), newReply] }
                     : current);
@@ -1366,6 +1410,13 @@ function ReportsPageContent() {
                         const data = await res.json().catch(() => null);
                         throw new Error(data?.message || "Unable to send guidance reply.");
                     }
+                    const latestActivityAt = new Date().toISOString();
+                    setReports((current) => current.map((report) => report.id === selectedReport.id
+                        ? { ...report, lastActivityAt: latestActivityAt }
+                        : report).sort(newestReportFirst));
+                    setSelectedReport((current) => current?.id === selectedReport.id
+                        ? { ...current, lastActivityAt: latestActivityAt }
+                        : current);
                     reportTyping.stopTyping();
                     // The message endpoint persists the Replied status with
                     // the message. Avoid an extra status request and do the
@@ -1702,13 +1753,13 @@ function ReportsPageContent() {
                                         </div>
                                     </div>
                                     <div className="mt-3">
-                                        {selectedParent.reports.every(r => r.status === "Resolved") && (
+                                        {selectedParentReports.every(r => r.status === "Resolved") && (
                                             <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-sky-100 text-sky-700">✅ All Resolved</span>
                                         )}
                                     </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
-                                    {selectedParent.reports.map(r => {
+                                    {selectedParentReports.map(r => {
                                         const isActive = selectedReport?.id === r.id;
                                         const isEscalatedToPrincipal = principalEscalated[r.id];
                                         const isEscalated = guidanceEscalated[r.id] || isEscalatedToPrincipal;
@@ -2302,8 +2353,8 @@ function ReportsPageContent() {
 
             {/* Escalate to Principal Confirmation Modal */}
             {escalateTarget !== null && (
-                <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden">
+                <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-4">
+                    <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-sm flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl">
                         {escalateSuccess ? (
                             <div className="flex flex-col items-center gap-3 py-10 px-6 text-center">
                                 <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center">
@@ -2322,25 +2373,25 @@ function ReportsPageContent() {
                             </div>
                         ) : (
                             <>
-                                <div className="px-6 py-5 border-b border-slate-100">
+                                <div className="border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
                                     <h2 className="text-lg font-extrabold text-slate-900">Escalate to Principal?</h2>
                                     <p className="text-sm text-slate-400 mt-1">
                                         Are you sure you want to escalate this report to the Principal?
                                     </p>
                                 </div>
-                                <div className="flex items-center justify-end gap-3 px-6 py-4">
-                                    {escalateError && <p className="mr-auto max-w-[180px] text-xs font-semibold text-red-600">{escalateError}</p>}
+                                <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-end sm:gap-3 sm:px-6 sm:py-4">
+                                    {escalateError && <p className="text-xs font-semibold text-red-600 sm:mr-auto sm:max-w-[180px]">{escalateError}</p>}
                                     <button
                                         onClick={() => { setEscalateTarget(null); setEscalateError(""); }}
                                         disabled={escalatingReportId === escalateTarget.id}
-                                        className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition"
+                                        className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto"
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         onClick={() => void escalateToPrincipal(escalateTarget)}
                                         disabled={escalatingReportId === escalateTarget.id}
-                                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                                     >
                                         <TriangleAlert className="w-3.5 h-3.5" /> {escalatingReportId === escalateTarget.id ? "Escalating..." : "Yes, Escalate"}
                                     </button>

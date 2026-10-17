@@ -39,6 +39,7 @@ export function fullName(row: {
 export function toAdviserStudentReport(row: StudentReportRow) {
   return {
     id: row.id,
+    createdAt: row.created_at,
     student_name: row.student_name,
     student_id: row.student_id,
     grade_level: row.grade,

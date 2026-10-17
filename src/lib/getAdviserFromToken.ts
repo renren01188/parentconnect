@@ -2,6 +2,7 @@ import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
+import { isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 
 const SECRET = getJwtSecret();
@@ -26,7 +27,7 @@ export async function getAdviserFromToken(): Promise<AdviserPayload | null> {
     if (!token) return null;
     const { payload } = await jwtVerify(token, SECRET);
     const tokenAdviser = payload as unknown as AdviserPayload;
-    if (tokenAdviser.role !== "adviser") return null;
+    if (tokenAdviser.role !== "adviser" || !isCurrentDashboardIdleSession(payload)) return null;
 
     // Grade and section are authorisation data, not just display data.  A JWT can
     // outlive an ICT-approved assignment change, so always resolve these fields

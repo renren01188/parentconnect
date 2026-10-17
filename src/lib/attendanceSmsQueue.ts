@@ -20,6 +20,7 @@ export type AttendanceSmsInput = {
   studentName: string;
   attendanceDate: string;
   timeLogged: string;
+  attendanceType: "Time In" | "Time Out";
 };
 
 const MONTHS = [
@@ -51,8 +52,15 @@ export function formatAttendanceSmsTime(time: string) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
 
-export function buildAttendanceSmsMessage(input: Pick<AttendanceSmsInput, "studentName" | "attendanceDate" | "timeLogged">) {
-  return `PConnect: Your child, ${input.studentName}, recorded attendance at Santiago Elementary School on ${formatAttendanceSmsDate(input.attendanceDate)} at ${formatAttendanceSmsTime(input.timeLogged)}.`;
+function attendanceGreeting(time: string) {
+  const [rawHour = "0"] = time.split(":");
+  const hour24 = Number(rawHour);
+  return Number.isFinite(hour24) && hour24 < 12 ? "Good morning" : "Good afternoon";
+}
+
+export function buildAttendanceSmsMessage(input: Pick<AttendanceSmsInput, "studentName" | "attendanceDate" | "timeLogged" | "attendanceType">) {
+  const action = input.attendanceType === "Time Out" ? "leaving" : "entering";
+  return `PConnect: ${attendanceGreeting(input.timeLogged)}! ${input.studentName} scanned their RFID tag upon ${action} the classroom on ${formatAttendanceSmsDate(input.attendanceDate)} at ${formatAttendanceSmsTime(input.timeLogged)}.`;
 }
 
 function registeredParents(rows: ParentContact[]) {

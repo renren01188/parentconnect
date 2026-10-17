@@ -18,7 +18,8 @@ function hasUnreadForPrincipal({ status, principalHasRead, messages, isStudentCo
     // A student concern opens with the Adviser-forwarded notification rather
     // than a parent-authored message. Once its agreement is accepted, that
     // newly visible conversation is unread for the Principal until opened.
-    (isStudentConcern || messages.some((message) => message.sender_role === "parent"))
+    // Subject Teacher reports likewise begin with the teacher's message.
+    (isStudentConcern || messages.some((message) => message.sender_role === "parent" || message.sender_role === "subject_teacher"))
   );
 }
 

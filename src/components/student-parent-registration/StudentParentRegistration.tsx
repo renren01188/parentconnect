@@ -834,13 +834,13 @@ export function StudentParentRegistration({
                 <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
               </div>
             </div>
-            <div className="flex gap-3 pt-2 border-t border-slate-100">
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-2 sm:flex-row">
               <button type="button" onClick={() => setApprovalPhase(null)}
-                className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto">
                 <ArrowLeft className="w-4 h-4" /> Edit
               </button>
               <button type="button" onClick={handleSendForApproval} disabled={loading}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-lg transition ${btnPrimary} ${btnPrimaryDisabled} disabled:opacity-60`}>
+                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-bold text-white transition sm:flex-1 ${btnPrimary} ${btnPrimaryDisabled} disabled:opacity-60`}>
                 {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Sending…</> : <><Send className="w-4 h-4" /> Send for Principal Approval</>}
               </button>
             </div>
@@ -866,13 +866,13 @@ export function StudentParentRegistration({
               </p>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
               <button onClick={reset}
-                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-5 rounded-xl text-sm transition-colors shadow-sm shadow-emerald-200">
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600">
                 <UserPlus className="w-4 h-4" /> Add Another
               </button>
               <Link href={studentsListHref}
-                className="flex items-center gap-2 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold py-3 px-5 rounded-xl text-sm transition-colors">
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">
                 View Students
               </Link>
             </div>
@@ -901,12 +901,12 @@ export function StudentParentRegistration({
               ))}
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
 
               {/* STEP 0 — Student Info */}
               {step === 0 && (
                 <div className="flex flex-col gap-5">
-                  <div className="flex items-center justify-between gap-3 mb-1">
+                  <div className="mb-1 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
                         <GraduationCap className="w-4 h-4 text-emerald-600" />
@@ -914,7 +914,7 @@ export function StudentParentRegistration({
                       <h2 className="font-bold text-slate-800">Student Information</h2>
                     </div>
                     <button type="button" onClick={addAnotherStudent}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold transition-colors">
+                      className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100 sm:w-auto">
                       <Plus className="w-3.5 h-3.5" /> Add Another Student
                     </button>
                   </div>
@@ -942,7 +942,7 @@ export function StudentParentRegistration({
                       </button>
                     ))}
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="First Name" required error={E.firstName}>
                       <input className={E.firstName ? inputErr : inputOk} placeholder="e.g. Maria"
                         value={form.firstName} onChange={e => set("firstName", e.target.value)} onBlur={() => touch("firstName")} />
@@ -952,7 +952,7 @@ export function StudentParentRegistration({
                         value={form.lastName} onChange={e => set("lastName", e.target.value)} onBlur={() => touch("lastName")} />
                     </Field>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Middle Name" required error={E.middleName} hint={!E.middleName ? "Type N/A if no middle name" : undefined}>
                       <input className={E.middleName ? inputErr : inputOk} placeholder="e.g. Reyes or N/A"
                         value={form.middleName} onChange={e => set("middleName", e.target.value)} onBlur={() => touch("middleName")} />
@@ -1000,7 +1000,7 @@ export function StudentParentRegistration({
                       ))}
                     </div>
                   </Field>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Birth Date"><input type="date" className={inputOk} value={form.birthDate} onChange={e => set("birthDate", e.target.value)} /></Field>
                     <Field label="Learning Modality">
                       <div className="relative">
@@ -1386,22 +1386,22 @@ export function StudentParentRegistration({
               )}
 
               {/* Nav buttons */}
-              <div className="flex justify-between mt-8 pt-5 border-t border-slate-100">
+              <div className="mt-8 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
                 {step > 0 ? (
                   <button onClick={() => { setStep(s => s - 1); setTryNext(false); }}
-                    className="flex items-center gap-2 px-5 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold rounded-xl text-sm transition-colors">
+                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:w-auto">
                     <ArrowLeft className="w-4 h-4" /> Back
                   </button>
                 ) : <div />}
 
                 {step < STEPS.length - 1 ? (
                   <button onClick={handleNext}
-                    className={`flex items-center gap-2 px-5 py-2.5 text-white font-bold rounded-xl text-sm transition-colors ${btnPrimary}`}>
+                    className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition-colors sm:w-auto ${btnPrimary}`}>
                     Next <ArrowRight className="w-4 h-4" />
                   </button>
                 ) : (
                   <button onClick={requirePrincipalApproval ? handleProceedToApproval : handleSubmit} disabled={loading}
-                    className={`flex items-center gap-2 px-6 py-2.5 text-white font-bold rounded-xl text-sm transition-colors ${btnPrimary} ${btnPrimaryDisabled}`}>
+                    className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-6 py-2.5 text-sm font-bold text-white transition-colors sm:w-auto ${btnPrimary} ${btnPrimaryDisabled}`}>
                     {loading ? (
                       <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
@@ -1424,7 +1424,7 @@ export function StudentParentRegistration({
 
   if (embedded) return <div className="p-2 font-sans">{inner}</div>;
   return (
-    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-100 min-h-screen font-sans">
+    <main className="min-h-screen flex-1 overflow-y-auto bg-slate-100 px-3 py-5 font-sans sm:px-4 sm:py-6 md:px-6">
       {inner}
     </main>
   );

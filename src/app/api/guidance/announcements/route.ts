@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     if (status === "Published") {
       await notifyRecipients(ann, audience);
 
-      const recipientRoles: RealtimeRecipientRole[] = ["principal"];
+      const recipientRoles: RealtimeRecipientRole[] = [];
       if (audience === "Parents" || audience === "Both") recipientRoles.push("parent");
       if (audience === "Class Advisers" || audience === "Both") recipientRoles.push("adviser");
       const recipients = await recipientsForRoles(recipientRoles);

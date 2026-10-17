@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SignJWT } from "jose";
 import { supabase } from "@/lib/supabase";
 import { logSecurityAlert } from "@/lib/audit";
-import { hashesMatch, isAllowedSubjectTeacherEmail, normalizeDepEdEmail, otpHash, signingKey, SUBJECT_TEACHER_OTP_MAX_ATTEMPTS, SUBJECT_TEACHER_REPORT_COOKIE } from "@/lib/subjectTeacherReportAuth";
+import { isAllowedSubjectTeacherEmail, normalizeDepEdEmail, otpHash, signingKey, SUBJECT_TEACHER_REPORT_COOKIE } from "@/lib/subjectTeacherReportAuth";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,33 +14,16 @@ export async function POST(req: NextRequest) {
     };
     if (!isAllowedSubjectTeacherEmail(normalizedEmail) || !/^\d{6}$/.test(String(otp ?? ""))) return invalid();
 
-    const { data: record, error } = await supabase
-      .from("subject_teacher_report_otps")
-      .select("otp_hash, expires_at, attempts")
-      .eq("email", normalizedEmail)
-      .maybeSingle();
-    if (error) throw error;
-    if (!record || new Date(record.expires_at).getTime() <= Date.now() || record.attempts >= SUBJECT_TEACHER_OTP_MAX_ATTEMPTS) return invalid();
-
     const submittedHash = otpHash(normalizedEmail, String(otp));
-    if (!hashesMatch(record.otp_hash, submittedHash)) {
-      await supabase.from("subject_teacher_report_otps")
-        .update({ attempts: Math.min(record.attempts + 1, SUBJECT_TEACHER_OTP_MAX_ATTEMPTS) })
-        .eq("email", normalizedEmail)
-        .eq("otp_hash", record.otp_hash);
-      return invalid();
-    }
-
-    const { data: consumed, error: consumeError } = await supabase
-      .from("subject_teacher_report_otps")
-      .delete()
-      .eq("email", normalizedEmail)
-      .eq("otp_hash", record.otp_hash)
-      .gt("expires_at", new Date().toISOString())
-      .lt("attempts", SUBJECT_TEACHER_OTP_MAX_ATTEMPTS)
-      .select("email");
+    // The database locks this OTP row while comparing, incrementing failed
+    // attempts, and consuming a valid code. Concurrent guesses cannot bypass
+    // the five-attempt limit.
+    const { data: consumed, error: consumeError } = await supabase.rpc("consume_subject_teacher_report_otp", {
+      p_email: normalizedEmail,
+      p_otp_hash: submittedHash,
+    });
     if (consumeError) throw consumeError;
-    if (!consumed?.length) return invalid();
+    if (consumed !== true) return invalid();
 
     const token = await new SignJWT({ role: "subject_teacher_report", email: normalizedEmail })
       .setProtectedHeader({ alg: "HS256" })

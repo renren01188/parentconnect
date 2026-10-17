@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { getJwtSecret } from "@/lib/authSecret";
+import { dashboardSessionCookies, DashboardRole, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import {
   ICT_PASSWORD_SESSION_REVOCATION_ACTION,
@@ -10,8 +11,6 @@ import {
 } from "@/lib/passwordSessionRevocation";
 
 const SECRET = getJwtSecret();
-
-type DashboardRole = "adviser" | "guidance" | "principal" | "ict" | "parent";
 
 const dashboardRoutes: Record<DashboardRole, { cookie: string; dashboard: string; login: string; setPassword: string }> = {
   adviser: {
@@ -60,7 +59,7 @@ async function getAuthorizedDashboard(req: NextRequest, excludedRole?: Dashboard
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== role) continue;
+      if (verified.payload.role !== role || !isCurrentDashboardIdleSession(verified.payload)) continue;
 
       if (verified.payload.passwordSet === false) {
         if (role === "parent" && verified.payload.temporaryPasswordVerified !== true) {
@@ -89,6 +88,34 @@ function parentApiAuthFailure(message: string, status: number, clearSession = fa
   const response = NextResponse.json({ success: false, message }, { status });
   if (clearSession) response.cookies.delete("parent_token");
   return response;
+}
+
+/**
+ * API handlers already perform role authorization. This middleware adds one
+ * shared session-expiry boundary so an expired cookie cannot reach a handler
+ * that still has legacy, route-local token parsing.
+ */
+async function expiredDashboardApiSession(req: NextRequest) {
+  for (const role of Object.keys(dashboardSessionCookies) as DashboardRole[]) {
+    const cookieName = dashboardSessionCookies[role];
+    const token = req.cookies.get(cookieName)?.value;
+    if (!token) continue;
+
+    try {
+      const verified = await jwtVerify(token, SECRET);
+      if (verified.payload.role !== role || !isCurrentDashboardIdleSession(verified.payload)) {
+        throw new Error("Invalid dashboard session");
+      }
+    } catch {
+      const response = NextResponse.json(
+        { success: false, message: "Your session expired after 30 minutes of inactivity. Please sign in again." },
+        { status: 401 },
+      );
+      response.cookies.delete(cookieName);
+      return response;
+    }
+  }
+  return null;
 }
 
 async function parentCanAccess(parentId: number) {
@@ -140,6 +167,22 @@ async function passwordSessionCanAccess(
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Login and signup routes must remain reachable even if a browser still
+  // carries an expired cookie that will be replaced by a successful sign-in.
+  const isPublicSessionBootstrapApi = pathname === "/api/auth/login"
+    || pathname === "/api/auth/adviser/login"
+    || pathname === "/api/auth/guidance/login"
+    || pathname === "/api/auth/principal/login"
+    || pathname === "/api/auth/ict/login"
+    || pathname === "/api/parents/signup"
+    || pathname === "/api/parents/check-email"
+    || pathname === "/api/parents/verify-temp-password"
+    || pathname === "/api/parents/resend-temp-password";
+  if (pathname.startsWith("/api/") && !isPublicSessionBootstrapApi) {
+    const expiredResponse = await expiredDashboardApiSession(req);
+    if (expiredResponse) return expiredResponse;
+  }
+
   const isPublicParentApi = pathname === "/api/parents/signup"
     || pathname === "/api/parents/check-email"
     // A new account has no parent ID yet. This endpoint validates the signed
@@ -161,7 +204,7 @@ export async function middleware(req: NextRequest) {
     if (!token) return parentApiAuthFailure("Not authenticated.", 401);
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "parent") {
+      if (verified.payload.role !== "parent" || !isCurrentDashboardIdleSession(verified.payload)) {
         return parentApiAuthFailure("Not authenticated.", 401, true);
       }
       const parentId = Number(verified.payload.id);
@@ -185,7 +228,7 @@ export async function middleware(req: NextRequest) {
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "adviser") throw new Error("Invalid role");
+      if (verified.payload.role !== "adviser" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       const adviserId = Number(verified.payload.id);
       if (!(await passwordSessionCanAccess("adviser", adviserId, verified.payload))) throw new Error("Session revoked");
       if (adviserPasswordSetup) {
@@ -213,7 +256,7 @@ export async function middleware(req: NextRequest) {
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "guidance") throw new Error("Invalid role");
+      if (verified.payload.role !== "guidance" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       const guidanceId = Number(verified.payload.id);
       if (!(await passwordSessionCanAccess("guidance", guidanceId, verified.payload))) throw new Error("Session revoked");
       if (guidancePasswordSetup) {
@@ -240,7 +283,7 @@ export async function middleware(req: NextRequest) {
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "principal") throw new Error("Invalid role");
+      if (verified.payload.role !== "principal" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       if (principalPasswordSetup && verified.payload.passwordSet !== false) {
         return NextResponse.redirect(new URL("/dashboard/principal", req.url));
       }
@@ -292,7 +335,7 @@ export async function middleware(req: NextRequest) {
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "ict") throw new Error("Invalid role");
+      if (verified.payload.role !== "ict" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       if (ictPasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
@@ -316,7 +359,7 @@ export async function middleware(req: NextRequest) {
 
     try {
       const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role !== "parent") throw new Error("Invalid role");
+      if (verified.payload.role !== "parent" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       if (verified.payload.passwordSet === false) {
         if (verified.payload.temporaryPasswordVerified !== true) {
           return NextResponse.redirect(new URL("/login/guardian/verify-temp-password", req.url));
@@ -338,5 +381,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/adviser/:path*", "/dashboard/guidance/:path*", "/dashboard/principal/:path*", "/dashboard/ict/:path*", "/dashboard/parent/:path*", "/set-password/adviser/:path*", "/set-password/guidance/:path*", "/set-password/principal/:path*", "/set-password/ict/:path*", "/api/parents/:path*", "/api/excuse-letters/:path*", "/api/attendance/parent-history"],
+  matcher: ["/dashboard/adviser/:path*", "/dashboard/guidance/:path*", "/dashboard/principal/:path*", "/dashboard/ict/:path*", "/dashboard/parent/:path*", "/set-password/adviser/:path*", "/set-password/guidance/:path*", "/set-password/principal/:path*", "/set-password/ict/:path*", "/api/:path*"],
 };

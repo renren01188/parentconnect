@@ -8,15 +8,16 @@ import { ContactRecaptcha } from "@/components/ContactRecaptcha";
 type FormState = {
   teacherFirstName: string; teacherMiddleName: string; teacherLastName: string; teacherSuffix: string;
   studentFirstName: string; studentMiddleName: string; studentLastName: string; studentSuffix: string;
-  gradeLevel: string; section: string; concern: string;
+  gradeLevel: string; section: string; categories: string[]; concern: string;
 };
 
 const blankForm: FormState = {
   teacherFirstName: "", teacherMiddleName: "", teacherLastName: "", teacherSuffix: "",
   studentFirstName: "", studentMiddleName: "", studentLastName: "", studentSuffix: "",
-  gradeLevel: "", section: "", concern: "",
+  gradeLevel: "", section: "", categories: [], concern: "",
 };
 const suffixes = ["", "Jr.", "Sr.", "II", "III", "IV"];
+const reportCategories = ["Academic Concern", "Health/Medical", "Behavioral Issue", "Attendance", "Other", "Permission Request", "General Inquiry"] as const;
 const inputClass = "w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 transition placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-violet-400";
 const nameFields = new Set<keyof FormState>([
   "teacherFirstName", "teacherMiddleName", "teacherLastName", "teacherSuffix",
@@ -45,6 +46,7 @@ export default function SubjectTeacherReportPage() {
   const [termsScrolled, setTermsScrolled] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const termsRef = useRef<HTMLDivElement>(null);
+  const reportSubmissionRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   useEffect(() => {
     if (stage !== "form") return;
@@ -54,10 +56,33 @@ export default function SubjectTeacherReportPage() {
       .catch(() => setError("Unable to load grade levels and sections. Please refresh and try again."));
   }, [stage]);
 
+  useEffect(() => {
+    if (!termsOpen) return;
+
+    const markTermsReadWhenFullyVisible = () => {
+      const element = termsRef.current;
+      if (element && element.scrollHeight <= element.clientHeight + 4) setTermsScrolled(true);
+    };
+
+    const frame = window.requestAnimationFrame(markTermsReadWhenFullyVisible);
+    window.addEventListener("resize", markTermsReadWhenFullyVisible);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", markTermsReadWhenFullyVisible);
+    };
+  }, [termsOpen]);
+
   const setField = (field: keyof FormState, value: string) => setForm((current) => ({
     ...current,
     [field]: nameFields.has(field) ? value.toUpperCase() : value,
     ...(field === "gradeLevel" ? { section: "" } : {}),
+  }));
+
+  const toggleCategory = (category: typeof reportCategories[number]) => setForm((current) => ({
+    ...current,
+    categories: current.categories.includes(category)
+      ? current.categories.filter((item) => item !== category)
+      : [...current.categories, category],
   }));
 
   const sendOtp = async () => {
@@ -66,7 +91,13 @@ export default function SubjectTeacherReportPage() {
       const response = await fetch("/api/subject-teacher-reports/send-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, recaptchaToken: captchaToken }) });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.success) { setCaptchaResetSignal((value) => value + 1); return setError(data?.message || "Unable to send the verification code."); }
-      setOtpSent(true); setNotice(data.message || "Verification code sent. Check your DepEd email.");
+      setOtpSent(true);
+      // Google reCAPTCHA response tokens are single-use. Clear the token and
+      // reset the widget now so a later resend cannot reuse an already
+      // consumed token.
+      setCaptchaToken("");
+      setCaptchaResetSignal((value) => value + 1);
+      setNotice(data.message || "Verification code sent. Check your DepEd email. Complete the CAPTCHA again to request a new code.");
     } catch { setError("Cannot connect to the server. Please try again."); }
     finally { setSendingOtp(false); }
   };
@@ -84,8 +115,9 @@ export default function SubjectTeacherReportPage() {
 
   const openTerms = (event: FormEvent) => {
     event.preventDefault(); setError("");
-    const required: Array<keyof FormState> = ["teacherFirstName", "teacherLastName", "studentFirstName", "studentLastName", "gradeLevel", "section", "concern"];
+    const required: Array<Exclude<keyof FormState, "categories">> = ["teacherFirstName", "teacherLastName", "studentFirstName", "studentLastName", "gradeLevel", "section", "concern"];
     if (required.some((field) => !form[field].trim())) return setError("Complete all required fields before reviewing the Terms of Agreement.");
+    if (form.categories.length === 0) return setError("Select at least one concern category before reviewing the Terms of Agreement.");
     setTermsOpen(true); setTermsScrolled(false); setTermsAccepted(false);
   };
 
@@ -93,7 +125,11 @@ export default function SubjectTeacherReportPage() {
     if (!termsAccepted || !termsScrolled) return;
     setError(""); setSubmitting(true);
     try {
-      const response = await fetch("/api/subject-teacher-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, termsAccepted: true }) });
+      const fingerprint = JSON.stringify(form);
+      if (reportSubmissionRef.current?.fingerprint !== fingerprint) {
+        reportSubmissionRef.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      const response = await fetch("/api/subject-teacher-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, termsAccepted: true, submissionKey: reportSubmissionRef.current.key }) });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.success) { setTermsOpen(false); return setError(data?.message || "Unable to submit the report."); }
       setTermsOpen(false); setStage("success");
@@ -115,7 +151,9 @@ export default function SubjectTeacherReportPage() {
 
       {stage === "verify" && <section><div className="mb-7 text-center"><span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-violet-100 text-violet-600"><ShieldCheck className="h-7 w-7" /></span><h2 className="text-2xl font-extrabold text-slate-800">Verify your DepEd email</h2><p className="mt-2 text-sm text-slate-500">Gmail and other email domains are not accepted.</p></div>
         <div className="space-y-4"><div><Label>DepEd email address</Label><input type="email" autoComplete="email" placeholder="name@deped.gov.ph" value={email} onChange={(event) => setEmail(event.target.value)} className={inputClass} /></div>
-          <ContactRecaptcha resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+          <div className="flex justify-center">
+            <ContactRecaptcha resetSignal={captchaResetSignal} onTokenChange={setCaptchaToken} />
+          </div>
           <button type="button" onClick={sendOtp} disabled={sendingOtp || !email || !captchaToken} className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-3 font-bold text-white transition hover:bg-violet-700 disabled:opacity-60"><Mail className="h-4 w-4" />{sendingOtp ? "Sending..." : otpSent ? "Resend OTP" : "Send OTP"}</button>
           {otpSent && <><div><Label>Six-digit OTP</Label><input inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="123456" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))} className={`${inputClass} text-center font-mono text-lg tracking-[0.35em]`} /></div><button type="button" onClick={verifyOtp} disabled={verifying || otp.length !== 6} className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-800 py-3 font-bold text-white transition hover:bg-slate-900 disabled:opacity-60"><KeyRound className="h-4 w-4" />{verifying ? "Verifying..." : "Proceed"}</button></>}
         </div></section>}
@@ -123,6 +161,7 @@ export default function SubjectTeacherReportPage() {
       {stage === "form" && <section><div className="mb-7 text-center"><span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-violet-100 text-violet-600"><CheckCircle className="h-7 w-7" /></span><h2 className="text-2xl font-extrabold text-slate-800">Subject Teacher Report Form</h2><p className="mt-2 text-sm text-slate-500">Your verified DepEd email is protected. Student details must match the school record.</p></div>
         <form onSubmit={openTerms} className="space-y-5"><fieldset className="rounded-xl border border-slate-200 p-4"><legend className="px-2 text-sm font-bold text-slate-700">Subject Teacher</legend><div className="grid gap-3 sm:grid-cols-2"><div><Label>First Name</Label><input required value={form.teacherFirstName} onChange={e => setField("teacherFirstName", e.target.value)} className={inputClass} /></div><div><Label>Last Name</Label><input required value={form.teacherLastName} onChange={e => setField("teacherLastName", e.target.value)} className={inputClass} /></div><div><Label optional>Middle Name</Label><input value={form.teacherMiddleName} onChange={e => setField("teacherMiddleName", e.target.value)} className={inputClass} /></div><div><Label optional>Suffix</Label><select value={form.teacherSuffix} onChange={e => setField("teacherSuffix", e.target.value)} className={inputClass}>{suffixes.map(suffix => <option key={suffix} value={suffix}>{suffix || "None"}</option>)}</select></div></div></fieldset>
           <fieldset className="rounded-xl border border-slate-200 p-4"><legend className="px-2 text-sm font-bold text-slate-700">Student</legend><div className="grid gap-3 sm:grid-cols-2"><div><Label>Student First Name</Label><input required value={form.studentFirstName} onChange={e => setField("studentFirstName", e.target.value)} className={inputClass} /></div><div><Label>Student Last Name</Label><input required value={form.studentLastName} onChange={e => setField("studentLastName", e.target.value)} className={inputClass} /></div><div><Label optional>Student Middle Name</Label><input value={form.studentMiddleName} onChange={e => setField("studentMiddleName", e.target.value)} className={inputClass} /></div><div><Label optional>Student Suffix</Label><select value={form.studentSuffix} onChange={e => setField("studentSuffix", e.target.value)} className={inputClass}>{suffixes.map(suffix => <option key={suffix} value={suffix}>{suffix || "None"}</option>)}</select></div><div><Label>Student Grade Level</Label><select required value={form.gradeLevel} onChange={e => setField("gradeLevel", e.target.value)} className={inputClass}><option value="">Select grade level</option>{Object.keys(gradeSections).map(grade => <option key={grade} value={grade}>{grade}</option>)}</select></div><div><Label>Student Section</Label><select required disabled={!form.gradeLevel} value={form.section} onChange={e => setField("section", e.target.value)} className={inputClass}><option value="">Select section</option>{sections.map(section => <option key={section} value={section}>{section}</option>)}</select></div></div></fieldset>
+          <fieldset className="rounded-xl border border-slate-200 p-4"><legend className="px-2 text-sm font-bold text-slate-700">Categories <span className="text-red-500">*</span> <span className="text-xs font-normal text-slate-400">Select all that apply</span></legend><div className="mt-1 flex flex-wrap gap-2">{reportCategories.map((category) => { const selected = form.categories.includes(category); return <label key={category} className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${selected ? "border-violet-500 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:border-violet-300"}`}><input type="checkbox" checked={selected} onChange={() => toggleCategory(category)} className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />{category}</label>; })}</div></fieldset>
           <div><Label>Concern or Message</Label><textarea required rows={6} maxLength={5000} value={form.concern} onChange={e => setField("concern", e.target.value)} onKeyDown={event => { if (event.key === "Enter") event.stopPropagation(); }} placeholder="Describe the concern or message clearly." className={inputClass} /></div>
           <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-3 font-bold text-white transition hover:bg-violet-700"><Send className="h-4 w-4" /> Review Terms of Agreement</button>
         </form></section>}

@@ -38,13 +38,6 @@ export async function GET() {
       .order("created_at", { ascending: false });
     if (ictError) throw ictError;
 
-    const { data: guidanceAnns, error: guidanceError } = await supabase
-      .from("guidance_announcements")
-      .select("id, title, message, guidance_name, audience, created_at")
-      .eq("status", "Published")
-      .order("created_at", { ascending: false });
-    if (guidanceError) throw guidanceError;
-
     const myAnns = (mine ?? []).map((announcement) => ({
       ...announcement,
       id: String(announcement.id),
@@ -59,15 +52,6 @@ export async function GET() {
       senderName: announcement.adviser_name,
       source: "adviser" as const,
     }));
-    const guidanceShaped = (guidanceAnns ?? []).map((announcement) => ({
-      id: "guidance-" + String(announcement.id),
-      title: announcement.title ?? "Guidance Announcement",
-      message: announcement.message,
-      audience: "From: Guidance",
-      created_at: announcement.created_at,
-      senderName: announcement.guidance_name,
-      source: "guidance" as const,
-    }));
     const ictShaped = (ictAnns ?? []).map((announcement) => ({
       id: "ict-" + String(announcement.id),
       title: announcement.title,
@@ -78,7 +62,7 @@ export async function GET() {
       source: "ict" as const,
     }));
 
-    const announcements = [...myAnns, ...adviserShaped, ...guidanceShaped, ...ictShaped]
+    const announcements = [...myAnns, ...adviserShaped, ...ictShaped]
       .sort((left, right) => new Date(right.created_at ?? 0).getTime() - new Date(left.created_at ?? 0).getTime());
 
     return NextResponse.json({ success: true, announcements });

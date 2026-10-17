@@ -44,25 +44,10 @@ export async function deliverIctAnnouncement(
   }
 
   if (audience.includes("Class Advisers")) {
-    const { data: advisers, error: adviserError } = await supabase
-      .from("advisers")
-      .select("id");
-    if (adviserError) throw adviserError;
-    if (advisers?.length) {
-      const rows = advisers.map((adviser: { id: number }) => ({
-        adviser_id: adviser.id,
-        announcement_id: announcement.id,
-        notif_key: `ict-announcement-${announcement.id}`,
-        title: `[ICT] ${announcement.title}`,
-        message: announcement.message,
-        type: "announcement",
-        date: "today",
-        read: false,
-      }));
-      const { error } = await supabase.from("adviser_notifications").insert(rows);
-      if (error) throw error;
-    }
-
+    // Advisers read ICT announcements from the ICT source table using their
+    // own per-user read receipts. `adviser_notifications.announcement_id`
+    // references the legacy `announcements` table, so writing an ICT ID there
+    // would fail after the source announcement was already created.
     const { data: adviserRows, error } = await supabase
       .from("advisers")
       .select("email, first_name, last_name")

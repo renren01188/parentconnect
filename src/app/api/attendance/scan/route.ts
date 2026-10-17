@@ -438,6 +438,7 @@ export async function POST(req: NextRequest) {
       studentName: buildFullName(student),
       attendanceDate,
       timeLogged,
+      attendanceType: nextType,
     });
 
     return NextResponse.json({

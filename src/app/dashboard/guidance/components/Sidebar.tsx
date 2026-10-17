@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Bell, FileText, HeartHandshake, LayoutDashboard, Menu, Megaphone, Monitor, X,
 } from "lucide-react";
@@ -40,6 +40,20 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
     ict: ictUnreadCount,
     notifications: notifUnreadCount,
   });
+  const acknowledgedBadgePathRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const item = navItems.find(({ href, badgeKey }) => badgeKey && (href === "/dashboard/guidance" ? pathname === href : pathname.startsWith(href)));
+    const badgeKey = item?.badgeKey;
+    if (!badgeKey) {
+      acknowledgedBadgePathRef.current = null;
+      return;
+    }
+    const acknowledgement = `${pathname}:${badgeKey}`;
+    if (acknowledgedBadgePathRef.current === acknowledgement) return;
+    acknowledgedBadgePathRef.current = acknowledgement;
+    dismissBadge(badgeKey);
+  }, [pathname, dismissBadge]);
 
   useEffect(() => {
     let isMounted = true;
@@ -80,19 +94,19 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
   const closeMenu = () => setMobileOpen(false);
   return (
     <>
-      <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-sky-500/40 bg-gradient-to-r from-sky-600 to-sky-700 px-4 shadow-sm md:hidden">
-        <Link href="/dashboard/guidance" className="rounded-md focus:outline-none focus:ring-2 focus:ring-white/70"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-sky-100">Santiago Elementary · Guidance</p></Link>
+      <header className="flex h-16 w-full shrink-0 items-center border-b border-sky-500/40 bg-gradient-to-r from-sky-600 to-sky-700 px-4 shadow-sm md:hidden">
         <button type="button" aria-label="Open navigation menu" aria-controls="guidance-dashboard-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Menu className="h-5 w-5" /></button>
+        <Link href="/dashboard/guidance" className="ml-3 min-w-0 rounded-md focus:outline-none focus:ring-2 focus:ring-white/70"><p className="truncate text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 truncate text-[10px] text-sky-100">Santiago Elementary · Guidance</p></Link>
       </header>
 
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/45 md:hidden" onClick={closeMenu} aria-hidden="true" />}
 
-      <aside id="guidance-dashboard-navigation" data-parent-guide="guidance-sidebar" className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[88vw] shrink-0 flex-col overflow-hidden bg-gradient-to-b from-sky-600 to-sky-700 text-white transition-transform duration-200 md:static md:z-auto md:flex md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "guidance-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-sky-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`} style={{ opacity: ready ? 1 : 0, transition: "opacity 120ms ease, transform 200ms ease" }}>
+      <aside id="guidance-dashboard-navigation" data-parent-guide="guidance-sidebar" className={`scrollbar-none fixed inset-y-0 left-0 z-50 flex h-svh max-h-svh min-h-0 w-72 max-w-[88vw] shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain bg-gradient-to-b from-sky-600 to-sky-700 text-white transition-transform duration-200 md:static md:z-auto md:flex md:h-dvh md:max-h-dvh md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "guidance-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-sky-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`} style={{ opacity: ready ? 1 : 0, transition: "opacity 120ms ease, transform 200ms ease" }}>
         <div className="flex items-center justify-between px-4 pt-4 md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
 
         <div className="border-b border-white/10 px-5 py-5"><Link href="/dashboard/guidance" onClick={closeMenu} aria-label="Go to guidance dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15"><HeartHandshake className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-sky-100">Guidance</p></div></Link></div>
 
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4" aria-label="Guidance navigation">
+        <nav className="flex shrink-0 flex-col gap-1 px-3 py-4" aria-label="Guidance navigation">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
@@ -100,9 +114,9 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
           })}
         </nav>
 
-        <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl bg-white/10 p-3"><Bell className="h-4 w-4 shrink-0 text-sky-100" /><p className="text-xs font-bold text-white">{escalatedCount} concern{escalatedCount === 1 ? "" : "s"} need review</p></div>
+        <div className="mx-3 mb-3 flex shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3"><Bell className="h-4 w-4 shrink-0 text-sky-100" /><p className="text-xs font-bold text-white">{escalatedCount} concern{escalatedCount === 1 ? "" : "s"} need review</p></div>
 
-        <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-4 pt-3">
+        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-3 md:pb-4">
           <Link href="/dashboard/guidance/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/guidance/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-white ring-2 ring-white/20">{profileInitials}</span><span className="min-w-0"><span className="block truncate text-xs font-semibold leading-tight text-white">{profileName}</span><span className="block text-[10px] text-sky-100">{profile?.school || "Guidance Office"}</span></span></Link>
           <LogoutButton
             logoutEndpoint="/api/auth/guidance/logout"

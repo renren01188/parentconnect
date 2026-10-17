@@ -312,15 +312,15 @@ export function BulkDeletionModal({
     }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
       <style>{modalFormStyle}</style>
-      <div className="bulk-deletion-modal relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] bg-[#f7faf7] text-slate-800 shadow-2xl">
-        <header className="flex items-center justify-between bg-[#274e13] px-7 py-6 text-white">
-          <div className="flex items-center gap-3">
+      <div className="bulk-deletion-modal relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] bg-[#f7faf7] text-slate-800 shadow-2xl">
+        <header className="flex items-center justify-between gap-3 bg-[#274e13] px-4 py-4 text-white sm:px-7 sm:py-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="rounded-xl bg-red-100 p-2">
               <Trash2 className="h-5 w-5 text-red-600" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="font-extrabold text-white">Bulk Deletion</h2>
               <p className="text-xs text-white/70">
                 30-day retention and recovery controls
@@ -334,14 +334,14 @@ export function BulkDeletionModal({
             <X />
           </button>
         </header>
-        <div className="m-4 flex gap-2 rounded-2xl bg-white p-1.5 shadow-sm">
+        <div className="m-3 flex gap-2 overflow-x-auto rounded-2xl bg-white p-1.5 shadow-sm [scrollbar-width:none] sm:m-4">
           <button
             onClick={() => {
               setTab("create");
               setSearch("");
               setQueueSelected([]);
             }}
-            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "create" ? "bg-[#274e13] text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
+            className={`min-w-max flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "create" ? "bg-[#274e13] text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
             Schedule deletion
           </button>
@@ -351,7 +351,7 @@ export function BulkDeletionModal({
               setSearch("");
               setQueueSelected([]);
             }}
-            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "pending" ? "bg-amber-500 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
+            className={`min-w-max flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "pending" ? "bg-amber-500 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
             Pending Approval (
             {queue.filter((item) => item.status === "PendingICT").length})
@@ -362,13 +362,13 @@ export function BulkDeletionModal({
               setSearch("");
               setQueueSelected([]);
             }}
-            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "waiting" ? "bg-red-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
+            className={`min-w-max flex-1 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === "waiting" ? "bg-red-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50"}`}
           >
             Waiting Period (
             {queue.filter((item) => item.status === "Scheduled").length})
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-7 pb-7">
+        <div className="flex-1 overflow-y-auto px-4 pb-4 sm:px-7 sm:pb-7">
           {tab === "pending" || tab === "waiting" ? (
             <>
               <div className="relative mb-4">
@@ -542,7 +542,7 @@ export function BulkDeletionModal({
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
               <h3 className="font-extrabold">Bulk deletion scheduled</h3>
               <p className="mt-1 text-emerald-800">Scheduled Parent accounts receive an in-app notification. No Parent deletion email is sent.</p>
-              <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion successful</span><strong>{operationResult.successful}</strong></div>
                 <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion failed</span><strong>{operationResult.failed}</strong></div>
               </div>
@@ -581,7 +581,7 @@ export function BulkDeletionModal({
                     </button>
                   </div>
                   {kind === "parent" && (
-                    <div className="mb-4 grid grid-cols-2 gap-3">
+                    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <select
                         value={grade}
                         onChange={(e) => {

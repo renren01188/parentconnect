@@ -73,7 +73,7 @@ export async function GET() {
                 supabase
                     .from("principal_announcements")
                     .select("id, sender_id, title, message, created_at")
-                    .in("audience", ["Everyone", "Advisers"])
+                    .in("audience", ["Everyone", "Class Advisers", "Advisers"])
                     .eq("status", "Published")
                     .order("created_at", { ascending: false })
                     .limit(10),

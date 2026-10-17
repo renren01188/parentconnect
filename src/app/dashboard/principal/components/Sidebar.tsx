@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, FileText, CreditCard, Bell, Shield, Activity, X, Monitor,
 } from "lucide-react";
@@ -55,6 +55,20 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
     ict: ictMessageCount,
     notifications: principalNotifCount,
   });
+  const acknowledgedBadgePathRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const item = NAV_ITEMS.find(({ href, badgeKey }) => badgeKey && (href === "/dashboard/principal" ? pathname === href : pathname.startsWith(href)));
+    const badgeKey = item?.badgeKey;
+    if (!badgeKey) {
+      acknowledgedBadgePathRef.current = null;
+      return;
+    }
+    const acknowledgement = `${pathname}:${badgeKey}`;
+    if (acknowledgedBadgePathRef.current === acknowledgement) return;
+    acknowledgedBadgePathRef.current = acknowledgement;
+    dismissBadge(badgeKey);
+  }, [pathname, dismissBadge]);
 
   useEffect(() => {
     let isMounted = true;
@@ -111,9 +125,9 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
       <aside
         id="principal-dashboard-navigation"
         className={[
-          "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[88vw] flex-shrink-0 flex-col h-screen",
+          "scrollbar-none fixed inset-y-0 left-0 z-50 flex h-svh max-h-svh min-h-0 w-72 max-w-[88vw] flex-shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain",
           "transform transition-transform duration-200",
-          "md:static md:z-auto md:flex md:w-56 md:translate-x-0",
+          "md:static md:z-auto md:flex md:h-dvh md:max-h-dvh md:w-56 md:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
         style={{ background: "linear-gradient(180deg, #3a1660 0%, #522081 60%, #6b2fa0 100%)" }}
@@ -144,7 +158,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-1">
+        <nav className="flex shrink-0 flex-col gap-1 px-3 py-4">
           {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
             const active = href === "/dashboard/principal"
               ? pathname === href
@@ -180,7 +194,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
         </nav>
 
         {/* Profile + Logout */}
-        <div className="px-3 pb-4 pt-3 border-t border-white/10 flex flex-col gap-2">
+        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-3 md:pb-4">
           <Link
             href="/dashboard/principal/profile"
             onClick={onClose}

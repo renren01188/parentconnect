@@ -13,9 +13,10 @@ function asCount(value: number | undefined) {
  * unread/read state. Navigating to a panel can hide the number immediately,
  * but must not mutate any records or turn the remaining rows into read rows.
  *
- * A lower authoritative count means the user handled an item; reset that
- * visual acknowledgement so remaining actionable work is shown again. A
- * higher count renders only the newly arrived portion of the badge.
+ * A lower authoritative count means a row was opened or otherwise handled.
+ * Move the acknowledgement baseline down with it so older unread rows stay
+ * highlighted in their page, without reappearing as a sidebar badge. A
+ * higher count then renders only the newly arrived portion of the badge.
  */
 export function useSidebarBadgeDismissal(counts: SidebarBadgeCounts) {
   const [dismissedThrough, setDismissedThrough] = useState<SidebarBadgeCounts>({});
@@ -27,7 +28,7 @@ export function useSidebarBadgeDismissal(counts: SidebarBadgeCounts) {
 
       for (const [key, dismissedCount] of Object.entries(current)) {
         if (asCount(counts[key]) < dismissedCount) {
-          delete next[key];
+          next[key] = asCount(counts[key]);
           changed = true;
         }
       }

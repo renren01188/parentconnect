@@ -207,7 +207,11 @@ export async function GET(req: NextRequest) {
         .from("parent_adviser_reports")
         .select(REPORT_SELECT)
         .eq("adviser_id", adviser.id)
-        .order("last_message_at", { ascending: false });
+        // A new submission sets last_message_at to its own creation time;
+        // later replies advance it. This keeps both newly filed reports and
+        // active report conversations at the top of the Adviser queue.
+        .order("last_message_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false });
       if (reportId) query = query.eq("id", reportId);
       const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);
 

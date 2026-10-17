@@ -179,11 +179,11 @@ export default function AdviserDashboardPage() {
   }, []);
 
   return (
-    <main className="min-h-full bg-slate-100 px-6 py-6 font-sans">
+    <main className="min-h-full min-w-0 bg-slate-100 px-3 py-5 font-sans sm:px-4 sm:py-6 md:px-6">
 
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Dashboard</h1>
           <p className="text-slate-400 text-sm mt-0.5">{todayLabel}</p>
           <p className="text-slate-400 text-sm mt-1">{currentSectionLabel}</p>
@@ -191,12 +191,12 @@ export default function AdviserDashboardPage() {
       </div>
 
       {adviser && adviser.sections?.length > 1 && (
-        <div className="mb-6 flex flex-wrap items-center gap-2">
+        <div className="mb-6 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
           {adviser.sections.map(sec => (
             <button
               key={sec}
               onClick={() => setActiveSection(sec)}
-              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
+              className={`inline-flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
                 ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
                 : "border border-slate-200 bg-white text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
                 }`}

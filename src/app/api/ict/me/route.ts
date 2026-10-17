@@ -1,22 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
-
-const ictSessionCookie = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
-  maxAge: 60 * 60 * 8,
-  path: "/",
-};
 
 function getFullName(row: {
   first_name: string;
@@ -41,7 +34,7 @@ async function getIctSession() {
 
   try {
     const verified = await jwtVerify(token, SECRET);
-    if (verified.payload.role !== "ict") return null;
+    if (verified.payload.role !== "ict" || !isCurrentDashboardIdleSession(verified.payload)) return null;
 
     return {
       payload: verified.payload,
@@ -220,7 +213,7 @@ export async function PATCH(req: NextRequest) {
       ? true
       : data.password_set === true || data.password_set === 1;
 
-    const newToken = await new SignJWT({
+    const { token: newToken } = await issueDashboardIdleSession({
       ...session.payload,
       employee_id: data.employee_id,
       first_name: data.first_name,
@@ -230,10 +223,7 @@ export async function PATCH(req: NextRequest) {
       email: data.email,
       phone: data.phone,
       passwordSet,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    });
 
     await publishAccountRealtimeInvalidation([{ role: "ict", id: session.ictId }]);
     const response = NextResponse.json({
@@ -253,7 +243,7 @@ export async function PATCH(req: NextRequest) {
     });
     // The refreshed identity token must travel with this response so profile
     // edits do not interrupt an active ICT dashboard session.
-    response.cookies.set("ict_token", newToken, ictSessionCookie);
+    response.cookies.set("ict_token", newToken, dashboardSessionCookieOptions);
     return response;
   } catch (error: unknown) {
     console.error("PATCH /api/ict/me error:", error);

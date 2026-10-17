@@ -10,7 +10,7 @@ export async function GET() {
         const { data, error } = await supabase
             .from("principal_announcements")
             .select("id, title, message, audience, sender_id, created_at")
-            .in("audience", ["Everyone", "Advisers"])
+            .in("audience", ["Everyone", "ICT", "Advisers"])
             .eq("status", "Published")
             .order("created_at", { ascending: false });
 

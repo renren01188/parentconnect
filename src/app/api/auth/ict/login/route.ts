@@ -2,12 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
 import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
-import { getJwtSecret } from "@/lib/authSecret";
-
-const SECRET = getJwtSecret();
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 export async function POST(req: NextRequest) {
   try {
@@ -75,7 +72,7 @@ export async function POST(req: NextRequest) {
     const fullName = [ict.first_name, ict.middle_name, ict.last_name, ict.suffix]
       .filter(Boolean).join(" ");
 
-    const token = await new SignJWT({
+    const { token } = await issueDashboardIdleSession({
       id: ict.id,
       employee_id: ict.employee_id,
       first_name: ict.first_name,
@@ -86,19 +83,10 @@ export async function POST(req: NextRequest) {
       phone: ict.phone,
       role: "ict",
       passwordSet,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    });
 
     const cookieStore = await cookies();
-    cookieStore.set("ict_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
+    cookieStore.set("ict_token", token, dashboardSessionCookieOptions);
 
     // ── Audit log ──
     await logAudit({

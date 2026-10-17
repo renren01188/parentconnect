@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle, Inbox, Loader2, MessageSquare, Paperclip, Plus, Reply, Search, Send, Upload, X } from "lucide-react";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 
@@ -45,7 +46,7 @@ type Conversation = {
   subject: string;
   body: string;
   sentAt: string;
-  updatedAt: string;
+  updatedAt: string | number;
   status: "New" | "Read" | "Replied";
   isUnread: boolean;
   thread: ThreadMessage[];
@@ -117,7 +118,7 @@ function initials(name: string) {
   return name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "A";
 }
 
-function formatDate(value: string) {
+function formatDate(value: string | number) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("en-PH", {
@@ -178,6 +179,7 @@ function recipientMeta(recipient: Recipient) {
 }
 
 function normalizeStaffConversation(message: StaffApiMessage): Conversation {
+  const lastReply = message.replies?.at(-1);
   return {
     id: message.id,
     conversationId: message.conversationId,
@@ -187,7 +189,7 @@ function normalizeStaffConversation(message: StaffApiMessage): Conversation {
     subject: message.subject,
     body: message.message,
     sentAt: message.sent_at,
-    updatedAt: message.sent_at,
+    updatedAt: message.sortAt ?? lastReply?.sent_at ?? message.sent_at,
     status: message.status,
     isUnread: message.status === "New",
     thread: [
@@ -218,7 +220,7 @@ function normalizeStaffConversation(message: StaffApiMessage): Conversation {
 
 function mergeConversations(current: Conversation[], incoming: Conversation[]) {
   const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
-  return incoming.map((conversation) => {
+  return sortByLatestActivity(incoming.map((conversation) => {
     const existing = currentById.get(conversation.conversationId);
     if (!existing) return conversation;
 
@@ -229,7 +231,7 @@ function mergeConversations(current: Conversation[], incoming: Conversation[]) {
       messages.set(String(message.id ?? `${message.senderEmail}-${message.sentAt}-${message.body}`), message);
     });
     return { ...conversation, thread: Array.from(messages.values()) };
-  });
+  }));
 }
 
 function ComposeModal({
@@ -444,6 +446,7 @@ export default function ICTInboxPage() {
   // A Realtime invalidation can arrive while the initial inbox request is
   // still loading. Only the newest authorized snapshot may update the UI.
   const messagesRequestVersionRef = useRef(0);
+  const openedConversationIdRef = useRef<string | null>(null);
 
   const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
   const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "ict");
@@ -510,9 +513,30 @@ export default function ICTInboxPage() {
     }
   }, []);
 
+  const acknowledgeConversation = useCallback(async (conversation: Conversation) => {
+    if (!conversation.isUnread) return;
+    setConversations((prev) =>
+      prev.map((item) => item.conversationId === conversation.conversationId
+        ? { ...item, status: "Read", isUnread: false }
+        : item)
+    );
+    await fetch("/api/reports/staff-messages", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "ict", conversationId: conversation.conversationId, status: "read" }),
+    }).catch(() => null);
+    void loadMessages(true);
+  }, [loadMessages]);
+
   useEffect(() => {
     loadMessages();
   }, [loadMessages]);
+
+  useEffect(() => {
+    if (selected?.isUnread && openedConversationIdRef.current === selected.conversationId) {
+      void acknowledgeConversation(selected);
+    }
+  }, [acknowledgeConversation, selected?.conversationId, selected?.isUnread]);
 
   const liveUpdateNotice = useStaffMessagesRealtime(loadMessages, {
     onConversationUpdate: conversationTyping.onRealtimeEvent,
@@ -525,22 +549,11 @@ export default function ICTInboxPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [selected?.thread.length, selectedId]);
 
-  async function openConversation(conversation: Conversation) {
+  function openConversation(conversation: Conversation) {
+    openedConversationIdRef.current = conversation.conversationId;
     setSelectedId(conversation.conversationId);
     setMobileThreadOpen(true);
-    if (!conversation.isUnread) return;
-
-    setConversations((prev) =>
-      prev.map((item) => item.conversationId === conversation.conversationId ? { ...item, status: "Read", isUnread: false } : item)
-    );
-    await fetch("/api/reports/staff-messages", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "ict", conversationId: conversation.conversationId, status: "read" }),
-    }).then((res) => {
-      if (!res.ok) throw new Error("Unable to mark this conversation as read.");
-    }).catch(() => null);
-    void loadMessages(true);
+    void acknowledgeConversation(conversation);
   }
 
   async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -567,8 +580,8 @@ export default function ICTInboxPage() {
       otherEmail: recipient.email,
       subject: payload.subject,
       body: payload.message,
-      sentAt: formatDate(created.created_at),
-      updatedAt: formatDate(created.created_at),
+      sentAt: created.created_at,
+      updatedAt: created.created_at,
       status: "Read",
       isUnread: false,
       thread: [{
@@ -578,12 +591,15 @@ export default function ICTInboxPage() {
         senderEmail: created.sender_email || "",
         isCurrentUser: true,
         body: payload.message,
-        sentAt: formatDate(created.created_at),
+        sentAt: created.created_at,
         status: "Read",
         attachments: payload.attachments,
       }],
     };
-    setConversations((current) => mergeConversations(current, [conversation, ...current]));
+    setConversations((current) => sortByLatestActivity(mergeConversations(
+      current,
+      [conversation, ...current.filter((item) => item.conversationId !== conversation.conversationId)],
+    )));
     setSelectedId(conversation.conversationId);
     setMobileThreadOpen(true);
     void loadMessages(true);
@@ -615,11 +631,11 @@ export default function ICTInboxPage() {
         senderEmail: created.sender_email || "",
         isCurrentUser: true,
         body: reply.trim(),
-        sentAt: formatDate(created.created_at),
+        sentAt: created.created_at,
         status: "Replied",
         attachments: replyAttachments,
       };
-      setConversations((current) => current.map((conversation) => {
+      setConversations((current) => sortByLatestActivity(current.map((conversation) => {
         if (conversation.conversationId !== selected.conversationId) return conversation;
         if (conversation.thread.some((item) => item.id === message.id)) return conversation;
         return {
@@ -629,7 +645,7 @@ export default function ICTInboxPage() {
           updatedAt: message.sentAt,
           thread: [...conversation.thread, message],
         };
-      }));
+      })));
       setReply("");
       setReplyAttachments([]);
       conversationTyping.stopTyping();

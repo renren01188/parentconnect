@@ -2,12 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
 import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
-import { getJwtSecret } from "@/lib/authSecret";
-
-const SECRET = getJwtSecret();
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 export async function POST(req: NextRequest) {
   try {
@@ -88,20 +85,10 @@ export async function POST(req: NextRequest) {
       sessionIssuedAt: Date.now(),
     };
 
-    const token = await new SignJWT(payload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    const { token } = await issueDashboardIdleSession(payload);
 
     const cookieStore = await cookies();
-    cookieStore.set("guidance_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
+    cookieStore.set("guidance_token", token, dashboardSessionCookieOptions);
 
     const fullName = [guidance.first_name, guidance.middle_name, guidance.last_name, guidance.suffix].filter(Boolean).join(" ") || "Guidance Counselor";
     await logAudit({ action: "Login", performedBy: fullName, performedByRole: "Guidance Counselor", performedByEmail: guidance.email, module: "Auth", details: `Guidance Counselor "${fullName}" logged in.` });

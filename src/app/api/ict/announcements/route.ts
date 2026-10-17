@@ -7,6 +7,7 @@ import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedul
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
 import { ictAnnouncementRecipientRoles, normalizeIctAnnouncementAudience } from "@/lib/ictAnnouncementAudience";
 import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
+import { deliverIctAnnouncement } from "@/lib/deliverIctAnnouncement";
 
 type IctAnnouncementRow = {
     id: number;
@@ -42,6 +43,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+    let announcementWasCreated = false;
     try {
         const ict = await getIctFromToken();
         if (!ict) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
@@ -76,9 +78,10 @@ export async function POST(req: NextRequest) {
             .single();
 
         if (error) throw error;
+        announcementWasCreated = true;
 
         if (status === "Published") {
-            await fanOutIctAnnouncement(ann, senderName);
+            await deliverIctAnnouncement(ann, senderName);
 
             const recipientRoles: RealtimeRecipientRole[] = [...ictAnnouncementRecipientRoles(audience)];
             const recipients = await recipientsForRoles(recipientRoles);
@@ -96,7 +99,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, announcement: { ...ann, id: String(ann.id) } });
     } catch (error) {
         console.error("POST /api/ict/announcements error:", error);
-        return NextResponse.json({ success: false, message: "Failed to create." }, { status: 500 });
+        return NextResponse.json({
+            success: false,
+            message: announcementWasCreated
+                ? "The announcement was saved, but delivery could not be completed. Refresh My Announcements before retrying."
+                : "Unable to create the announcement. Please try again.",
+        }, { status: 500 });
     }
 }
 

@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
         const records = Array.from(dateMap.values());
 
         // Compute overall stats
-        const present = records.filter(r => r.status === "On Time").length;
+        const present = records.filter(r => r.status === "On Time" || r.status === "Present").length;
         const late = records.filter(r => r.status === "Late").length;
         const absent = records.filter(r => r.status === "Absent").length;
         const excused = records.filter(r => r.status === "Excused").length;

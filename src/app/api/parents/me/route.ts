@@ -1,22 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { logAudit } from "@/lib/audit";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
-
-const parentSessionCookie = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
-  maxAge: 60 * 60 * 24,
-  path: "/",
-};
 
 function fullName(row: {
   first_name: string;
@@ -326,10 +319,7 @@ export async function PATCH(req: NextRequest) {
       parentName: updatedParentName,
     };
 
-    const newToken = await new SignJWT(newPayload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("24h")
-      .sign(SECRET);
+    const { token: newToken } = await issueDashboardIdleSession(newPayload);
 
     await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
     const response = NextResponse.json({
@@ -347,7 +337,7 @@ export async function PATCH(req: NextRequest) {
     });
     // Return the refreshed token on the same response as the saved account.
     // This preserves the current dashboard session after an email/name edit.
-    response.cookies.set("parent_token", newToken, parentSessionCookie);
+    response.cookies.set("parent_token", newToken, dashboardSessionCookieOptions);
     return response;
   } catch (error: unknown) {
     console.error("PATCH /api/parents/me error:", error);

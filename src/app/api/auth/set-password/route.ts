@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { sendParentRegistrationConfirmation } from "@/lib/mailer";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import {
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
@@ -162,19 +163,9 @@ export async function POST(req: NextRequest) {
 
     const newPayload: Record<string, unknown> = { ...payload, passwordSet: true, temporaryPasswordVerified: true, sessionIssuedAt: Date.now() };
     delete newPayload.temporaryPasswordExpiresAt;
-    const newToken = await new SignJWT(newPayload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("24h")
-      .sign(SECRET);
+    const { token: newToken } = await issueDashboardIdleSession(newPayload);
 
-    cookieStore.set("parent_token", newToken, {
-      httpOnly: true,
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge:   60 * 60 * 24,
-      path:     "/",
-    });
+    cookieStore.set("parent_token", newToken, dashboardSessionCookieOptions);
 
     return NextResponse.json({
       success: true,

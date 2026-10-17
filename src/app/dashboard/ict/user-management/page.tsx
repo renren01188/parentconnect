@@ -701,24 +701,24 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-4"
       onClick={step === "sending" ? undefined : onClose}
     >
       <div
-        className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Confirm step ── */}
         {step === "confirm" && (
           <>
             {/* Red danger header */}
-            <div className="px-6 pt-6 pb-5 bg-red-50 border-b border-red-100">
+            <div className="shrink-0 border-b border-red-100 bg-red-50 px-4 pb-5 pt-5 sm:px-6 sm:pt-6">
               <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <div className="w-11 h-11 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
                     <Trash2 className="w-5 h-5 text-red-600" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h2 className="text-base font-bold text-gray-900">Schedule Account Deletion</h2>
                     <p className="text-xs text-gray-500 mt-0.5">Password authorization starts a reversible 30-day retention period</p>
                   </div>
@@ -729,7 +729,7 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
               </div>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
               {/* User summary card */}
               <div className="flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 bg-gray-50">
                 <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-extrabold shrink-0 bg-[#274e13]/10 text-[#274e13]">
@@ -850,7 +850,7 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
               </div>
 
               {/* Buttons */}
-              <div className="flex gap-3 pt-1">
+              <div className="flex flex-col gap-3 pt-1 sm:flex-row">
                 <button
                   onClick={onClose}
                   className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
@@ -1194,15 +1194,15 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "95vh" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
           {(step === "confirm" || step === "transfer") && (
             <button onClick={() => setStep("edit")} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h2 className="text-base font-bold text-gray-900">{step === "edit" ? (isICT ? "Edit ICT Account" : isGuidance ? "Edit Guidance Account" : "Edit Adviser") : step === "transfer" ? "Section Already Has an Adviser" : "Confirm Changes"}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
               {step === "edit" ? `Editing: ${user.name}` : step === "transfer" ? "Choose when the adviser handover should take effect" : "Confirm before saving changes directly"}
@@ -1212,10 +1212,10 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
         </div>
 
         {step === "edit" && (
-          <div className="p-6 space-y-5 overflow-y-auto flex-1">
+          <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Personal Information</p>
-              <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <FInput label="First Name" required placeholder="e.g. Ana" value={form.firstName} onChange={v => setForm(p => ({ ...p, firstName: v }))} />
                 <div>
                   <FLabel>Middle Name</FLabel>
@@ -1224,14 +1224,14 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
                   <p className="mt-1 text-[11px] text-gray-400">N/A if none</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <FInput label="Last Name" required placeholder="e.g. Cruz" value={form.lastName} onChange={v => setForm(p => ({ ...p, lastName: v }))} />
                 <FSelect label="Suffix (Optional)" options={SUFFIX_OPTIONS} value={form.suffix} onChange={v => setForm(p => ({ ...p, suffix: v }))} />
               </div>
             </div>
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Contact &amp; Identity</p>
-              <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <FInput label="Email Address" required value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
                 <div>
                   <FLabel required>Contact Number</FLabel>
@@ -1271,7 +1271,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
             </div>
             {!isPendingActivation && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="col-span-2">
                   <FLabel>Current ICT Password</FLabel>
                   <div className="relative">

@@ -4,6 +4,7 @@ import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
 import {
   normalizePrincipalAnnouncementAudience,
+  principalAudienceIncludesParents,
   principalAnnouncementRecipientRoles,
 } from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
@@ -70,7 +71,7 @@ export async function PATCH(
 
     // Parent delivery rows are durable. If this update no longer publishes to
     // Parents, remove the stale rows before clients re-fetch their feed.
-    if (status !== "Published" || audience === "Advisers") {
+    if (status !== "Published" || !principalAudienceIncludesParents(audience)) {
       const { error: notificationError } = await supabase
         .from("parent_announcement_notifications")
         .delete()

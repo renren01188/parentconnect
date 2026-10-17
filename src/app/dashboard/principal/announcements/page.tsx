@@ -175,7 +175,7 @@ function PrincipalAnnouncementsPageContent() {
     setForm({
       title: ann.title,
       body: ann.message ?? "",
-      audience: ann.audience,
+      audience: ann.audience === "Advisers" ? "Class Advisers" : ann.audience,
       scheduleDate: ann.status === "Scheduled" ? toDateInputValue(ann.scheduled_at) : "",
     });
     setScheduleError(null);
@@ -466,8 +466,10 @@ function PrincipalAnnouncementsPageContent() {
                     onBlur={(e) => { e.target.style.borderColor = "#e5e7eb"; }}
                   >
                     <option value="Everyone">Everyone</option>
-                    <option value="Advisers">School Staff Only</option>
                     <option value="Parents">Parents Only</option>
+                    <option value="Class Advisers">Class Advisers Only</option>
+                    <option value="Guidance">Guidance Only</option>
+                    <option value="ICT">ICT Only</option>
                   </select>
                 </div>
 

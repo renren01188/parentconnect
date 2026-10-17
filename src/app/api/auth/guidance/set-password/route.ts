@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -88,19 +89,9 @@ export async function POST(req: NextRequest) {
       throw new Error("The Guidance password update could not be verified.");
     }
 
-    const newToken = await new SignJWT({ ...payload, passwordSet: true, sessionIssuedAt: Date.now() })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    const { token: newToken } = await issueDashboardIdleSession({ ...payload, passwordSet: true, sessionIssuedAt: Date.now() });
 
-    cookieStore.set("guidance_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 8,
-      path: "/",
-    });
+    cookieStore.set("guidance_token", newToken, dashboardSessionCookieOptions);
 
     return NextResponse.json({
       success: true,

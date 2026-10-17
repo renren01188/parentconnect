@@ -1,22 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
 import { getJwtSecret } from "@/lib/authSecret";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = getJwtSecret();
-
-const principalSessionCookie = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
-  maxAge: 60 * 60 * 8,
-  path: "/",
-};
 
 function getFullName(row: {
   first_name: string;
@@ -41,7 +34,7 @@ async function getPrincipalSession() {
 
   try {
     const verified = await jwtVerify(token, SECRET);
-    if (verified.payload.role !== "principal") return null;
+    if (verified.payload.role !== "principal" || !isCurrentDashboardIdleSession(verified.payload)) return null;
 
     return {
       payload: verified.payload,
@@ -276,7 +269,7 @@ export async function PATCH(req: NextRequest) {
       ? true
       : data.password_set === true || data.password_set === 1;
 
-    const newToken = await new SignJWT({
+    const { token: newToken } = await issueDashboardIdleSession({
       ...session.payload,
       employee_id: data.employee_id,
       first_name: data.first_name,
@@ -290,10 +283,7 @@ export async function PATCH(req: NextRequest) {
       // prevents the saved database record from invalidating this request's
       // cookie before the browser receives the refreshed identity claims.
       authVersion: session.payload.authVersion,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    });
 
     await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
     const response = NextResponse.json({
@@ -313,7 +303,7 @@ export async function PATCH(req: NextRequest) {
     });
     // Attach the refreshed token to this response explicitly. This is more
     // reliable than mutating the request cookie store after a database write.
-    response.cookies.set("principal_token", newToken, principalSessionCookie);
+    response.cookies.set("principal_token", newToken, dashboardSessionCookieOptions);
     return response;
   } catch (error: unknown) {
     console.error("PATCH /api/principal/me error:", error);
@@ -399,21 +389,18 @@ export async function PUT(req: NextRequest) {
 
     if (error) throw error;
 
-    const newToken = await new SignJWT({
+    const { token: newToken } = await issueDashboardIdleSession({
       ...session.payload,
       passwordSet: true,
       authVersion,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    });
 
     await publishAccountRealtimeInvalidation([{ role: "principal", id: session.principalId }]);
     const response = NextResponse.json({
       success: true,
       message: "Password updated successfully.",
     });
-    response.cookies.set("principal_token", newToken, principalSessionCookie);
+    response.cookies.set("principal_token", newToken, dashboardSessionCookieOptions);
     return response;
   } catch (error: unknown) {
     console.error("PUT /api/principal/me error:", error);

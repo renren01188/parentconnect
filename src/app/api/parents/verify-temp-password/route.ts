@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { sameParentEnrollmentName } from "@/lib/familyName";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
@@ -297,7 +298,7 @@ export async function POST(req: NextRequest) {
         completed.parent.parent_last_name,
         completed.parent.parent_suffix,
       ].filter(Boolean).join(" ") || "Parent / Guardian";
-      const verifiedToken = await new SignJWT({
+      const { token: verifiedToken } = await issueDashboardIdleSession({
         id: completed.parent.id,
         role: "parent",
         email: completed.parent.email,
@@ -309,18 +310,9 @@ export async function POST(req: NextRequest) {
         passwordSet: false,
         temporaryPasswordVerified: true,
         temporaryPasswordExpiresAt: completed.expiresAt,
-      })
-        .setProtectedHeader({ alg: "HS256" })
-        .setExpirationTime(expirySeconds)
-        .sign(SECRET);
-
-      cookieStore.set("parent_token", verifiedToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: Math.max(1, expirySeconds - Math.floor(Date.now() / 1_000)),
-        path: "/",
       });
+
+      cookieStore.set("parent_token", verifiedToken, dashboardSessionCookieOptions);
       cookieStore.delete("parent_signup_token");
       return NextResponse.json({ success: true, expiresAt: completed.expiresAt, redirectTo: "/login/guardian/set-password" });
     }
@@ -371,17 +363,8 @@ export async function POST(req: NextRequest) {
       || passwordExpirySeconds * 1_000 <= Date.now()
     ) return temporaryPasswordExpired();
 
-    const verifiedToken = await new SignJWT({ ...payload, temporaryPasswordVerified: true })
-      .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime(tokenExpirySeconds)
-      .sign(SECRET);
-    cookieStore.set("parent_token", verifiedToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: Math.max(1, tokenExpirySeconds - Math.floor(Date.now() / 1_000)),
-      path: "/",
-    });
+    const { token: verifiedToken } = await issueDashboardIdleSession({ ...payload, temporaryPasswordVerified: true });
+    cookieStore.set("parent_token", verifiedToken, dashboardSessionCookieOptions);
 
     return NextResponse.json({
       success: true,

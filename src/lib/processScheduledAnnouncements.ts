@@ -102,7 +102,7 @@ async function processGuidanceAnnouncements(now: Date, result: ProcessResult) {
       if (!published) continue;
 
       await deliverGuidanceAnnouncement(item, item.audience);
-      const roles: RealtimeRecipientRole[] = ["principal"];
+      const roles: RealtimeRecipientRole[] = [];
       if (item.audience === "Parents" || item.audience === "Both") roles.push("parent");
       if (item.audience === "Class Advisers" || item.audience === "Both") roles.push("adviser");
       const recipients = await recipientsForRoles(roles);

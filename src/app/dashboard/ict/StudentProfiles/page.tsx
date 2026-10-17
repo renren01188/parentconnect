@@ -1115,11 +1115,11 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
                 <div className="border-t border-gray-100 pt-4 space-y-3">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Details</p>
                   <FInput label="Birth Date" type="date" value={form.birthDate} onChange={set("birthDate")} />
-                  <div className="grid grid-cols-2 gap-3"><FInput label="Mother Tongue" value={form.motherTongue} onChange={set("motherTongue")} /><FInput label="IP (Ethnic Group)" value={form.ipEthnicGroup} onChange={set("ipEthnicGroup")} /></div>
-                  <div className="grid grid-cols-2 gap-3"><FInput label="Religion" value={form.religion} onChange={set("religion")} /><FInput label="Learning Modality" value={form.learningModality} onChange={set("learningModality")} /></div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><FInput label="Mother Tongue" value={form.motherTongue} onChange={set("motherTongue")} /><FInput label="IP (Ethnic Group)" value={form.ipEthnicGroup} onChange={set("ipEthnicGroup")} /></div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><FInput label="Religion" value={form.religion} onChange={set("religion")} /><FInput label="Learning Modality" value={form.learningModality} onChange={set("learningModality")} /></div>
                 </div>
               </div>
-              <div className="p-6 space-y-4">
+              <div className="space-y-4 p-4 sm:p-6">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Class & RFID</p>
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1.5">Grade <span className="text-red-500">*</span></label>
@@ -1147,11 +1147,11 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs text-gray-400"><Info className="w-3.5 h-3.5" />Fields marked <span className="text-red-500 font-bold ml-0.5">*</span> are required.</div>
-              <div className="flex gap-2">
-                <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-                <button onClick={() => setStep("confirm")} disabled={!hasChanges} className="flex items-center gap-2 px-6 py-2.5 text-sm font-bold text-white rounded-xl bg-[#274e13] hover:bg-[#1e3d0f] transition disabled:opacity-40"><Save className="w-4 h-4" />Review Changes</button>
+            <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div className="flex items-center gap-1.5 text-xs text-gray-400"><Info className="w-3.5 h-3.5" />Fields marked <span className="ml-0.5 font-bold text-red-500">*</span> are required.</div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button onClick={onClose} className="w-full rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto">Cancel</button>
+                <button onClick={() => setStep("confirm")} disabled={!hasChanges} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#274e13] px-6 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-40 sm:w-auto"><Save className="w-4 h-4" />Review Changes</button>
               </div>
             </div>
           </div>

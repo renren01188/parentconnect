@@ -327,19 +327,19 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+      <div className="relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-[#274e13] flex items-center justify-center">
               <Settings2 className="w-4 h-4 text-white" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-sm font-bold text-gray-900">Manage Class Sessions</h2>
               <p className="text-[11px] text-gray-400">Add or remove sections per grade level and session</p>
             </div>
@@ -350,7 +350,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-2 px-6 pt-4">
+        <div className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] sm:px-6">
           {(["Morning", "Afternoon"] as ClassSessionTab[]).map(tab => {
             const cfg = tabConfig[tab];
             const Icon = cfg.icon;
@@ -359,7 +359,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all border-2"
+                className="flex min-w-max items-center gap-2 rounded-xl border-2 px-4 py-2 text-xs font-bold transition-all"
                 style={{
                   borderColor: isActive ? cfg.color : "#e5e7eb",
                   background: isActive ? cfg.bg : "white",
@@ -374,7 +374,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Grade accordion list */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+        <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
           {gradeOptions.map(grade => {
             const key = `${grade}__${activeTab}`;
             const isExpanded = expandedGrades.has(key);
@@ -439,7 +439,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                     )}
 
                     {/* Add new section input */}
-                    <div className="flex gap-2 pt-1">
+                    <div className="flex flex-col gap-2 pt-1 sm:flex-row">
                       <input
                         value={newSectionName.get(key) ?? ""}
                         onChange={e => {
@@ -455,7 +455,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                       <button
                         onClick={() => handleAddSection(grade)}
                         disabled={addingSection.has(key)}
-                        className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white rounded-lg transition hover:opacity-90 disabled:opacity-60"
+                        className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-60"
                         style={{ background: cfg.color }}
                       >
                         {addingSection.has(key) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
@@ -476,8 +476,8 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
-          <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">
+        <div className="flex justify-end border-t border-gray-100 px-4 py-4 sm:px-6">
+          <button onClick={onClose} className="w-full rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] sm:w-auto">
             Done
           </button>
         </div>
@@ -652,7 +652,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
   if (step === "review") {
     const classSession = deriveClassSession(f.section, f.additionalSections);
     return (
-      <div className="p-6 space-y-4">
+      <div className="space-y-4 p-4 sm:p-6">
         <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
           <Info className="w-4 h-4 shrink-0 mt-0.5" />
           <p>Review the details below, then confirm to create this adviser account.</p>
@@ -674,8 +674,8 @@ function AdviserForm({ onDone, onSummaryChange }: {
             </div>
           ))}
         </div>
-        <div className="flex gap-3 pt-2">
-          <button onClick={() => setStep("form")} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition">
+        <div className="flex flex-col gap-3 pt-2 sm:flex-row">
+          <button onClick={() => setStep("form")} className="flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
             <ArrowLeft className="w-4 h-4" />Edit
           </button>
           <button
@@ -713,25 +713,25 @@ function AdviserForm({ onDone, onSummaryChange }: {
 
   // ── Main form ──
   return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
         <Info className="w-4 h-4 shrink-0 mt-0.5" />
         <p>A temporary password will be sent to the adviser&apos;s email after the account is created. They will reset their password on first login.</p>
       </div>
 
       {/* Name row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FInput label="First Name" required placeholder="e.g. Maria" value={f.firstName} onChange={set("firstName")} />
         <FInput label="Last Name" required placeholder="e.g. Santos" value={f.lastName} onChange={set("lastName")} />
         <FInput label="Middle Name" placeholder="e.g. Reyes" value={f.middleName} onChange={set("middleName")} />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FSelect label="Suffix (Optional)" options={SUFFIXES} value={f.suffix} onChange={set("suffix")} placeholder="None" />
         <div /><div />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FInput label="Employee ID" required placeholder="e.g. EMP-001" value={f.employeeId} onChange={set("employeeId")} />
         <FInput label="Phone Number" required placeholder="09XXXXXXXXX"
           value={f.phone}
@@ -744,7 +744,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
       <FInput label="Email Address" required placeholder="adviser@school.edu" value={f.email} onChange={set("email")} icon={Mail} />
 
       {/* Grade & Primary Section */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className="block text-xs font-semibold text-gray-600 mb-1.5">Grade Level<span className="text-red-500 ml-0.5">*</span></label>
           <div className="relative">
@@ -860,7 +860,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
         </div>
       )}
 
-      <div className="flex justify-end pt-2 border-t border-gray-100">
+      <div className="flex justify-end border-t border-gray-100 pt-2">
         <button
           onClick={() => {
             if (!f.firstName || !f.lastName || !f.email || !f.employeeId || !f.grade || !f.section) {
@@ -879,7 +879,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
             setTimeout(() => { setLoading(false); setStep("review"); }, 600);
           }}
           disabled={loading || checkingAssignments || assignmentConflicts.length > 0 || !!assignmentCheckError}
-          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] disabled:opacity-60 transition"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60 sm:w-auto"
         >
           {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Checking...</> : "Review & Create →"}
         </button>
@@ -923,7 +923,7 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
     </div>
   );
   if (step === "review") return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
         <Info className="w-4 h-4 shrink-0 mt-0.5" /><p>Review the details below, then confirm to create this Guidance Counselor account.</p>
       </div>
@@ -935,8 +935,8 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
           </div>
         ))}
       </div>
-      <div className="flex gap-3 pt-2">
-        <button onClick={() => setStep("form")} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition"><ArrowLeft className="w-4 h-4" /> Edit</button>
+      <div className="flex flex-col gap-3 pt-2 sm:flex-row">
+        <button onClick={() => setStep("form")} className="flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50"><ArrowLeft className="w-4 h-4" /> Edit</button>
         <button
           onClick={async () => {
             setLoading(true);
@@ -971,27 +971,27 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
     </div>
   );
   return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
         <Info className="w-4 h-4 shrink-0 mt-0.5" /><p>A temporary password will be sent to the counselor&apos;s email after the account is created.</p>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FInput label="First Name" required placeholder="e.g. Juan" value={f.firstName} onChange={set("firstName")} />
         <FInput label="Last Name" required placeholder="e.g. Dela Cruz" value={f.lastName} onChange={set("lastName")} />
         <FInput label="Middle Name" placeholder="Optional" value={f.middleName} onChange={set("middleName")} />
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FSelect label="Suffix (Optional)" options={SUFFIXES} value={f.suffix} onChange={set("suffix")} placeholder="None" />
         <div /><div />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FInput label="Email Address" required placeholder="guidance@school.edu" value={f.email} onChange={set("email")} icon={Mail} />
         <FInput label="Phone Number" required placeholder="09XXXXXXXXX" value={f.phone} onChange={v => set("phone")(v.replace(/\D/g, "").slice(0, 11))} icon={Phone} helper={`${f.phone.length}/11`} />
       </div>
       <FInput label="Employee ID" required placeholder="e.g. EMP-GC-2024-001" value={f.employeeId} onChange={set("employeeId")} />
-      <div className="flex justify-end pt-2 border-t border-gray-100">
+      <div className="flex justify-end border-t border-gray-100 pt-2">
         <button onClick={() => { if (!f.firstName || !f.lastName || !f.email || !f.phone || !f.employeeId) { alert("Please fill all required fields."); return; } setLoading(true); setTimeout(() => { setLoading(false); setStep("review"); }, 600); }} disabled={loading}
-          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] disabled:opacity-60 transition">
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60 sm:w-auto">
           {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Checking...</> : "Review & Create →"}
         </button>
       </div>
@@ -1052,7 +1052,7 @@ function SuccessionForm({ onDone, onSummaryChange }: {
   }
 
   if (step === "sent") return (
-    <div className="p-6 space-y-4 text-center">
+    <div className="space-y-4 p-4 text-center sm:p-6">
       <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto"><CheckCircle className="w-6 h-6 text-emerald-600" /></div>
       <h3 className="text-base font-bold text-gray-800">Transfer Complete!</h3>
       <p className="text-sm text-gray-500">The account for <strong>{displayName}</strong> has been created successfully.</p>
@@ -1067,7 +1067,7 @@ function SuccessionForm({ onDone, onSummaryChange }: {
   );
 
   if (step === "review") return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs text-amber-700">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><p>Please review carefully. Once confirmed, <strong>this action cannot be undone.</strong></p>
       </div>
@@ -1090,8 +1090,8 @@ function SuccessionForm({ onDone, onSummaryChange }: {
           <li>This transfer will be permanently logged in the audit trail</li>
         </ul>
       </div>
-      <div className="flex gap-3 pt-2">
-        <button onClick={() => setStep("form")} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition"><ArrowLeft className="w-4 h-4" /> Edit</button>
+      <div className="flex flex-col gap-3 pt-2 sm:flex-row">
+        <button onClick={() => setStep("form")} className="flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50"><ArrowLeft className="w-4 h-4" /> Edit</button>
         <button
           onClick={async () => {
             setLoading(true);
@@ -1130,22 +1130,22 @@ function SuccessionForm({ onDone, onSummaryChange }: {
   );
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs text-amber-700">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><p>These actions are <strong>irreversible</strong> and will be permanently logged. Proceed only during official transition.</p>
       </div>
       <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 space-y-3">
         <p className="text-xs font-bold text-gray-600 border-b border-gray-100 pb-2">Incoming Principal&apos;s Information</p>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div><FInput label="First Name" required placeholder="e.g. Maria" value={f.firstName} onChange={set("firstName")} icon={User} />{errors.firstName && <p className="text-xs text-red-500 flex items-center gap-1 mt-1"><AlertTriangle className="w-3 h-3" />{errors.firstName}</p>}</div>
           <div><FInput label="Last Name" required placeholder="e.g. Santos" value={f.lastName} onChange={set("lastName")} />{errors.lastName && <p className="text-xs text-red-500 flex items-center gap-1 mt-1"><AlertTriangle className="w-3 h-3" />{errors.lastName}</p>}</div>
           <FInput label="Middle Name" placeholder="Optional" value={f.middleName} onChange={set("middleName")} />
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <FSelect label="Suffix (Optional)" options={SUFFIXES} value={f.suffix} onChange={set("suffix")} placeholder="None" />
           <div /><div />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div><FInput label="Employee ID" required placeholder="e.g. EMP-2025-002" value={f.employeeId} onChange={set("employeeId")} />{errors.employeeId && <p className="text-xs text-red-500 flex items-center gap-1 mt-1"><AlertTriangle className="w-3 h-3" />{errors.employeeId}</p>}</div>
           <div><FInput label="Contact Number" required placeholder="09171234567" value={f.contactNumber} onChange={v => set("contactNumber")(v.replace(/\D/g, "").slice(0, 11))} icon={Phone} helper={`${f.contactNumber.replace(/\D/g, "").length}/11 digits`} />{errors.contactNumber && <p className="text-xs text-red-500 flex items-center gap-1 mt-1"><AlertTriangle className="w-3 h-3" />{errors.contactNumber}</p>}</div>
         </div>
@@ -1154,7 +1154,7 @@ function SuccessionForm({ onDone, onSummaryChange }: {
       </div>
       <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 space-y-3">
         <p className="text-xs font-bold text-gray-600 border-b border-gray-100 pb-2">Transfer Details</p>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1.5">Effective Date <span className="text-red-500">*</span></label>
             <input type="date" value={f.effectiveDate} min={todayIso} onChange={e => set("effectiveDate")(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white" style={{ color: "#111827" }} />
@@ -1179,8 +1179,8 @@ function SuccessionForm({ onDone, onSummaryChange }: {
         <FInput label="" placeholder="Enter current ICT admin password" value={f.currentPassword} onChange={set("currentPassword")} type="password" />
         {errors.currentPassword && <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{errors.currentPassword}</p>}
       </div>
-      <div className="flex justify-end pt-2 border-t border-gray-100">
-        <button onClick={() => { if (validate()) setStep("review"); }} className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] transition">
+      <div className="flex justify-end border-t border-gray-100 pt-2">
+        <button onClick={() => { if (validate()) setStep("review"); }} className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] sm:w-auto">
           Preview Transfer
         </button>
       </div>
@@ -1213,15 +1213,15 @@ function ICTAdminForm({ onDone, onSummaryChange }: { onDone: () => void; onSumma
     </div>
   );
   if (step === "review") return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700"><Info className="w-4 h-4 shrink-0 mt-0.5" /><p>Review the details below, then confirm to create this ICT Admin account.</p></div>
       <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 space-y-2">
         {[["Full Name", displayName], ["Email", f.email], ["Phone", f.phone], ["Employee ID", f.employeeId]].map(([l, v]) => (
           <div key={l} className="flex justify-between py-1.5 border-b border-gray-100 last:border-0"><span className="text-xs text-gray-400 w-28 shrink-0">{l}</span><span className="text-xs font-semibold text-gray-800 text-right">{v || "—"}</span></div>
         ))}
       </div>
-      <div className="flex gap-3 pt-2">
-        <button onClick={() => setStep("form")} className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition"><ArrowLeft className="w-4 h-4" />Edit</button>
+      <div className="flex flex-col gap-3 pt-2 sm:flex-row">
+        <button onClick={() => setStep("form")} className="flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50"><ArrowLeft className="w-4 h-4" />Edit</button>
         <button
           onClick={async () => {
             setLoading(true);
@@ -1256,22 +1256,22 @@ function ICTAdminForm({ onDone, onSummaryChange }: { onDone: () => void; onSumma
     </div>
   );
   return (
-    <div className="p-6 space-y-4">
+    <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700"><Info className="w-4 h-4 shrink-0 mt-0.5" /><p>A temporary password will be sent to the admin&apos;s email after the account is created.</p></div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FInput label="First Name" required placeholder="e.g. Juan" value={f.firstName} onChange={set("firstName")} />
         <FInput label="Last Name" required placeholder="e.g. Dela Cruz" value={f.lastName} onChange={set("lastName")} />
         <FInput label="Middle Name" placeholder="Optional" value={f.middleName} onChange={set("middleName")} />
       </div>
-      <div className="grid grid-cols-3 gap-3"><FSelect label="Suffix (Optional)" options={SUFFIXES} value={f.suffix} onChange={set("suffix")} placeholder="None" /><div /><div /></div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><FSelect label="Suffix (Optional)" options={SUFFIXES} value={f.suffix} onChange={set("suffix")} placeholder="None" /><div className="hidden sm:block" /><div className="hidden sm:block" /></div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FInput label="Email Address" required placeholder="ict@school.edu" value={f.email} onChange={set("email")} icon={Mail} />
         <FInput label="Phone Number" required placeholder="09XXXXXXXXX" value={f.phone} onChange={v => set("phone")(v.replace(/\D/g, "").slice(0, 11))} icon={Phone} helper={`${f.phone.length}/11`} />
       </div>
       <FInput label="Employee ID" required placeholder="e.g. EMP-ICT-2024-001" value={f.employeeId} onChange={set("employeeId")} />
-      <div className="flex justify-end pt-2 border-t border-gray-100">
+      <div className="flex justify-end border-t border-gray-100 pt-2">
         <button onClick={() => { if (!f.firstName || !f.lastName || !f.email || !f.phone || !f.employeeId) { alert("Please fill all required fields."); return; } setLoading(true); setTimeout(() => { setLoading(false); setStep("review"); }, 600); }} disabled={loading}
-          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white rounded-lg bg-[#274e13] hover:bg-[#1e3d0f] disabled:opacity-60 transition">
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60 sm:w-auto">
           {loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Checking...</> : "Review & Create →"}
         </button>
       </div>

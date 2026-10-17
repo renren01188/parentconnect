@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, ScanLine, FileText, Bell, Monitor,
   ArrowUpCircle, GraduationCap, Menu, X,
@@ -47,13 +47,22 @@ export default function Sidebar() {
     ict: ictUnreadCount,
     transfers: transferUnreadCount,
   });
+  const acknowledgedBadgePathRef = useRef<string | null>(null);
 
-  // A direct URL visit does not run the Link click handler below. Treat the
-  // Students page itself as the acknowledgement point, matching the existing
-  // sidebar badge behaviour without changing the pending transfer records.
+  // A direct URL visit does not run a Link click handler. Acknowledge each
+  // page's visual badge once, without changing any record's unread state.
   useEffect(() => {
-    if (pathname.startsWith("/dashboard/adviser/students")) dismissBadge("transfers");
-  }, [pathname, transferUnreadCount, dismissBadge]);
+    const item = NAV_ITEMS.find(({ href, badgeKey }) => badgeKey && (href === "/dashboard/adviser" ? pathname === href : pathname.startsWith(href)));
+    const badgeKey = item?.badgeKey;
+    if (!badgeKey) {
+      acknowledgedBadgePathRef.current = null;
+      return;
+    }
+    const acknowledgement = `${pathname}:${badgeKey}`;
+    if (acknowledgedBadgePathRef.current === acknowledgement) return;
+    acknowledgedBadgePathRef.current = acknowledgement;
+    dismissBadge(badgeKey);
+  }, [pathname, dismissBadge]);
 
   useEffect(() => {
     const loadAdviser = () => fetch("/api/adviser/me", { cache: "no-store" }).then((r) => r.json()).then((json) => { if (json.success) setAdviser(json.adviser); }).catch(() => {});
@@ -79,19 +88,19 @@ export default function Sidebar() {
 
   return (
     <>
-      <header className="flex h-16 w-full shrink-0 items-center justify-between border-b border-emerald-500/40 bg-gradient-to-r from-emerald-600 to-emerald-700 px-4 shadow-sm md:hidden">
-        <Link href="/dashboard/adviser" className="rounded-md focus:outline-none focus:ring-2 focus:ring-white/70"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-emerald-100">Santiago Elementary · Adviser</p></Link>
-        <button type="button" aria-label="Open navigation menu" aria-controls="adviser-dashboard-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white transition-colors hover:bg-white/20"><Menu className="h-5 w-5" /></button>
+      <header className="flex h-16 w-full shrink-0 items-center border-b border-emerald-500/40 bg-gradient-to-r from-emerald-600 to-emerald-700 px-4 shadow-sm md:hidden">
+        <button type="button" aria-label="Open navigation menu" aria-controls="adviser-dashboard-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white transition-colors hover:bg-white/20"><Menu className="h-5 w-5" /></button>
+        <Link href="/dashboard/adviser" className="ml-3 min-w-0 rounded-md focus:outline-none focus:ring-2 focus:ring-white/70"><p className="truncate text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 truncate text-[10px] text-emerald-100">Santiago Elementary · Adviser</p></Link>
       </header>
 
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/45 md:hidden" onClick={closeMenu} aria-hidden="true" />}
 
-      <aside id="adviser-dashboard-navigation" data-parent-guide="adviser-sidebar" className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[88vw] shrink-0 flex-col bg-gradient-to-b from-emerald-600 to-emerald-700 transition-transform duration-200 md:static md:z-auto md:flex md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "adviser-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`}>
+      <aside id="adviser-dashboard-navigation" data-parent-guide="adviser-sidebar" className={`scrollbar-none fixed inset-y-0 left-0 z-50 flex h-svh max-h-svh min-h-0 w-72 max-w-[88vw] shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain bg-gradient-to-b from-emerald-600 to-emerald-700 transition-transform duration-200 md:static md:z-auto md:flex md:h-dvh md:max-h-dvh md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "adviser-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`}>
         <div className="flex items-center justify-between px-4 pt-4 md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
 
         <div className="border-b border-emerald-500/40 px-5 py-5"><Link href="/dashboard/adviser" onClick={closeMenu} aria-label="Go to adviser dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15"><GraduationCap className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-emerald-200">Adviser</p></div></Link></div>
 
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+        <nav className="flex shrink-0 flex-col gap-1 px-3 py-4">
           {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
             const active = href === "/dashboard/adviser" ? pathname === href : pathname.startsWith(href);
             const badgeCount = visibleBadgeCount(badgeKey);
@@ -101,7 +110,7 @@ export default function Sidebar() {
           <Link href="/dashboard/adviser/transfer-level" onClick={closeMenu} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${isTransferActive ? "bg-amber-400 text-amber-900 shadow-sm" : "border border-amber-400/30 text-amber-200 hover:bg-amber-500/20 hover:text-amber-100"}`}><ArrowUpCircle className="h-4 w-4 shrink-0" /><span className="flex-1 leading-tight">Transfer New Level</span></Link>
         </nav>
 
-        <div className="flex flex-col gap-2 border-t border-emerald-500/40 px-3 pb-4 pt-3">
+        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-emerald-500/40 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-3 md:pb-4">
           <Link href="/dashboard/adviser/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/adviser/profile") ? "bg-white/18" : "hover:bg-emerald-500/40"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-400 text-xs font-bold text-white ring-2 ring-white/20">{adviserInitials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{adviserName}</p><p className="text-[10px] text-emerald-300">Class Adviser</p></div></Link>
           <LogoutButton
             logoutEndpoint="/api/auth/adviser/logout"

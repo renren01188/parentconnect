@@ -1,4 +1,12 @@
-export type PrincipalAnnouncementAudience = "Everyone" | "Parents" | "Advisers";
+export type PrincipalAnnouncementAudience =
+  | "Everyone"
+  | "Parents"
+  | "Class Advisers"
+  | "Guidance"
+  | "ICT"
+  // Legacy records used this combined staff audience. Keep supporting them
+  // without offering it for new announcements.
+  | "Advisers";
 
 function normalizedAudience(value: unknown) {
   return String(value ?? "")
@@ -33,6 +41,14 @@ export function normalizePrincipalAnnouncementAudience(
     case "school staff":
     case "school staff only":
       return "Advisers";
+    case "class adviser":
+    case "class advisers":
+      return "Class Advisers";
+    case "guidance":
+      return "Guidance";
+    case "ict":
+    case "ict only":
+      return "ICT";
     default:
       return null;
   }
@@ -67,5 +83,8 @@ export function principalAnnouncementRecipientRoles(
   if (audience === "Advisers") {
     return ["adviser", "ict"] as const;
   }
-  return ["parent"] as const;
+  if (audience === "Parents") return ["parent"] as const;
+  if (audience === "Class Advisers") return ["adviser"] as const;
+  if (audience === "Guidance") return ["guidance"] as const;
+  return ["ict"] as const;
 }

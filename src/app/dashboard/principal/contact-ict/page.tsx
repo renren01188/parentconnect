@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Sea
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { keyForSubmission, type IdempotencyAttempt } from "@/lib/clientIdempotency";
@@ -119,7 +120,7 @@ function responseErrorMessage(data: PrincipalIctMessagesResponse | null, fallbac
 // snapshot resolves. Each saved staff-message ID can appear only once.
 function mergeConversations(current: Conversation[], incoming: Conversation[]) {
     const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
-    return incoming.map((conversation) => {
+    return sortByLatestActivity(incoming.map((conversation) => {
         const existing = currentById.get(conversation.conversationId);
         if (!existing) return conversation;
 
@@ -128,7 +129,7 @@ function mergeConversations(current: Conversation[], incoming: Conversation[]) {
             messages.set(String(message.id), message);
         });
         return { ...conversation, thread: Array.from(messages.values()) };
-    });
+    }));
 }
 
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
@@ -193,10 +194,10 @@ function ComposeModal({
     }, [onClose]);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:items-start sm:justify-end sm:p-5" onClick={onClose}>
-            <div className="flex max-h-[calc(100vh-24px)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-40px)]" onClick={(event) => event.stopPropagation()}>
-                <div className="flex items-start justify-between border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
-                    <div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:justify-end sm:p-5" onClick={onClose}>
+            <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h2 className="text-xl font-extrabold text-slate-900">New Message</h2>
                         <p className="mt-1 text-sm text-slate-400">Send a message to ICT personnel</p>
                     </div>
@@ -206,7 +207,7 @@ function ComposeModal({
                 </div>
 
                 {sent ? (
-                    <div className="flex flex-col items-center gap-3 px-6 py-10">
+                    <div className="flex flex-col items-center gap-3 px-4 py-8 sm:px-6 sm:py-10">
                         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-violet-100">
                             <CheckCircle className="h-7 w-7 text-violet-600" />
                         </div>
@@ -291,13 +292,13 @@ function ComposeModal({
                         </div>
 
                         <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
-                            <button onClick={onClose} className="min-h-11 rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">
+                            <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto">
                                 Cancel
                             </button>
                             <button
                                 onClick={handleSend}
                                 disabled={!canSend}
-                                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
+                                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300 sm:w-auto"
                             >
                                 {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                                 Send Message
@@ -329,6 +330,7 @@ export default function ContactICTPage() {
     const messagesRequestVersionRef = useRef(0);
     const newMessageAttemptRef = useRef<IdempotencyAttempt | null>(null);
     const replyAttemptRef = useRef<IdempotencyAttempt | null>(null);
+    const openedConversationIdRef = useRef<string | null>(null);
 
     const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
     const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "principal");
@@ -375,6 +377,21 @@ export default function ContactICTPage() {
         }
     }, [setIctUnreadCount]);
 
+    const acknowledgeConversation = useCallback(async (conversation: Conversation) => {
+        if (!conversation.isUnread) return;
+        setConversations((prev) =>
+            prev.map((item) => item.conversationId === conversation.conversationId
+                ? { ...item, status: "Read", isUnread: false }
+                : item)
+        );
+        await fetch("/api/principal-ict/messages", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
+        }).catch(() => null);
+        void loadMessages(true);
+    }, [loadMessages]);
+
     useEffect(() => {
         clearIctMessageCount();
     }, [clearIctMessageCount]);
@@ -382,6 +399,12 @@ export default function ContactICTPage() {
     useEffect(() => {
         void loadMessages();
     }, [loadMessages]);
+
+    useEffect(() => {
+        if (selected?.isUnread && openedConversationIdRef.current === selected.conversationId) {
+            void acknowledgeConversation(selected);
+        }
+    }, [acknowledgeConversation, selected?.conversationId, selected?.isUnread]);
 
     const liveUpdateNotice = useStaffMessagesRealtime(loadMessages, {
         onConversationUpdate: conversationTyping.onRealtimeEvent,
@@ -391,20 +414,11 @@ export default function ContactICTPage() {
         threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [selected?.thread.length, selectedId]);
 
-    async function openConversation(conversation: Conversation) {
+    function openConversation(conversation: Conversation) {
+        openedConversationIdRef.current = conversation.conversationId;
         setSelectedId(conversation.conversationId);
         setMobileConversationOpen(true);
-        if (!conversation.isUnread) return;
-
-        setConversations((prev) =>
-            prev.map((item) => item.conversationId === conversation.conversationId ? { ...item, status: "Read", isUnread: false } : item)
-        );
-        await fetch("/api/principal-ict/messages", {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
-        }).catch(() => null);
-        void loadMessages(true);
+        void acknowledgeConversation(conversation);
     }
 
     async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -452,10 +466,10 @@ export default function ContactICTPage() {
                 };
 
                 messagesRequestVersionRef.current += 1;
-                setConversations((current) => [
+                setConversations((current) => sortByLatestActivity([
                     conversation,
                     ...current.filter((item) => item.conversationId !== conversationId),
-                ]);
+                ]));
                 setSelectedId(conversationId);
                 setMobileConversationOpen(true);
             }
@@ -499,7 +513,7 @@ export default function ContactICTPage() {
                     status: "Replied",
                 };
                 messagesRequestVersionRef.current += 1;
-                setConversations((current) => current.map((conversation) => {
+                setConversations((current) => sortByLatestActivity(current.map((conversation) => {
                     if (conversation.conversationId !== selected.conversationId) return conversation;
                     if (conversation.thread.some((message) => message.id === sentMessage.id)) return conversation;
                     return {
@@ -510,7 +524,7 @@ export default function ContactICTPage() {
                         isUnread: false,
                         thread: [...conversation.thread, sentMessage],
                     };
-                }));
+                })));
             }
             void loadMessages(true);
         } catch (err) {
@@ -619,7 +633,7 @@ export default function ContactICTPage() {
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <p className="truncate text-sm font-extrabold text-slate-900">{selected.otherName}</p>
-                                                <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700">
+                                                <span className="shrink-0 rounded-full bg-[#274e13] px-2 py-0.5 text-[10px] font-extrabold text-white shadow-sm">
                                                     {selected.otherRole}
                                                 </span>
                                             </div>
@@ -632,12 +646,23 @@ export default function ContactICTPage() {
                             </div>
 
                             <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
-                                {selected.thread.map((message) => (
+                                {selected.thread.map((message) => {
+                                    const senderName = message.senderName || message.senderRole;
+                                    const senderRoleClass = message.senderRole === "ICT"
+                                        ? "bg-[#274e13] text-white shadow-sm"
+                                        : "bg-violet-600 text-white shadow-sm";
+                                    return (
                                     <div key={message.id} className={`flex items-start gap-2.5 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
-                                        {!message.isCurrentUser && (
-                                            <UserAvatar name={message.senderName} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName="bg-slate-500" />
-                                        )}
+                                        <UserAvatar
+                                            name={senderName}
+                                            className="mt-0.5 h-8 w-8 shrink-0 rounded-full"
+                                            fallbackClassName={message.isCurrentUser ? "bg-violet-600" : "bg-slate-500"}
+                                        />
                                         <div className={`flex flex-1 flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
+                                        <div className={`mb-1 flex max-w-[88%] flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500 sm:max-w-[75%] ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
+                                            <span className="break-words">{senderName}</span>
+                                            <span className={`rounded-full border border-white/20 px-2 py-0.5 text-[10px] font-extrabold ${senderRoleClass}`}>{message.senderRole}</span>
+                                        </div>
                                         {message.body && (
                                             <div className={`max-w-[88%] break-words whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed sm:max-w-[75%] ${message.isCurrentUser
                                                 ? "rounded-br-sm bg-violet-600 text-white"
@@ -647,12 +672,11 @@ export default function ContactICTPage() {
                                             </div>
                                         )}
                                         <AttachmentChips attachments={message.attachments} mine={message.isCurrentUser} />
-                                        <p className="mt-1 text-[10px] text-slate-400">
-                                            {message.isCurrentUser ? "You" : message.senderName} - {formatDate(message.sentAt)}
-                                        </p>
+                                        <p className="mt-1 text-[10px] text-slate-400">{formatDate(message.sentAt)}</p>
                                         </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                                 <div ref={threadEndRef} />
                             </div>
 

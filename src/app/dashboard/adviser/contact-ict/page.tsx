@@ -5,6 +5,7 @@ import { CheckCircle, Loader2, MessageSquare, Monitor, Paperclip, Search, Send, 
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
+import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { keyForSubmission, type IdempotencyAttempt } from "@/lib/clientIdempotency";
@@ -119,7 +120,7 @@ function responseErrorMessage(data: AdviserIctMessagesResponse | null, fallback:
 // The database IDs make this merge idempotent and keep the active thread live.
 function mergeConversations(current: Conversation[], incoming: Conversation[]) {
   const currentById = new Map(current.map((conversation) => [conversation.conversationId, conversation]));
-  return incoming.map((conversation) => {
+  return sortByLatestActivity(incoming.map((conversation) => {
     const existing = currentById.get(conversation.conversationId);
     if (!existing) return conversation;
 
@@ -128,7 +129,7 @@ function mergeConversations(current: Conversation[], incoming: Conversation[]) {
       messages.set(String(message.id), message);
     });
     return { ...conversation, thread: Array.from(messages.values()) };
-  });
+  }));
 }
 
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
@@ -328,6 +329,7 @@ export default function ContactICTPage() {
   const messagesRequestVersionRef = useRef(0);
   const newMessageAttemptRef = useRef<IdempotencyAttempt | null>(null);
   const replyAttemptRef = useRef<IdempotencyAttempt | null>(null);
+  const openedConversationIdRef = useRef<string | null>(null);
 
   const selected = conversations.find((conversation) => conversation.conversationId === selectedId) ?? null;
   const conversationTyping = useStaffConversationTyping(selected?.conversationId ?? null, "adviser");
@@ -374,6 +376,21 @@ export default function ContactICTPage() {
     }
   }, [setIctUnreadCount]);
 
+  const acknowledgeConversation = useCallback(async (conversation: Conversation) => {
+    if (!conversation.isUnread) return;
+    setConversations((prev) =>
+      prev.map((item) => item.conversationId === conversation.conversationId
+        ? { ...item, status: "Read", isUnread: false }
+        : item)
+    );
+    await fetch("/api/adviser-ict/messages", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
+    }).catch(() => null);
+    void loadMessages(true);
+  }, [loadMessages]);
+
   useEffect(() => {
     clearIctUnreadCount();
   }, [clearIctUnreadCount]);
@@ -381,6 +398,12 @@ export default function ContactICTPage() {
   useEffect(() => {
     void loadMessages();
   }, [loadMessages]);
+
+  useEffect(() => {
+    if (selected?.isUnread && openedConversationIdRef.current === selected.conversationId) {
+      void acknowledgeConversation(selected);
+    }
+  }, [acknowledgeConversation, selected?.conversationId, selected?.isUnread]);
 
   const liveUpdateNotice = useStaffMessagesRealtime(loadMessages, {
     onConversationUpdate: conversationTyping.onRealtimeEvent,
@@ -390,19 +413,10 @@ export default function ContactICTPage() {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [selected?.thread.length, selectedId]);
 
-  async function openConversation(conversation: Conversation) {
+  function openConversation(conversation: Conversation) {
+    openedConversationIdRef.current = conversation.conversationId;
     setSelectedId(conversation.conversationId);
-    if (!conversation.isUnread) return;
-
-    setConversations((prev) =>
-      prev.map((item) => item.conversationId === conversation.conversationId ? { ...item, status: "Read", isUnread: false } : item)
-    );
-    await fetch("/api/adviser-ict/messages", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId: conversation.conversationId, status: "read" }),
-    }).catch(() => null);
-    void loadMessages(true);
+    void acknowledgeConversation(conversation);
   }
 
   async function sendNewMessage(payload: { recipientId: string; subject: string; message: string; attachments: MessageAttachment[] }) {
@@ -452,10 +466,10 @@ export default function ContactICTPage() {
         // Invalidate an older in-flight snapshot before placing the new root
         // at the top of Panel 1 and showing it in the message box.
         messagesRequestVersionRef.current += 1;
-        setConversations((current) => [
+        setConversations((current) => sortByLatestActivity([
           conversation,
           ...current.filter((item) => item.conversationId !== conversationId),
-        ]);
+        ]));
         setSelectedId(conversationId);
       }
     }
@@ -501,7 +515,7 @@ export default function ContactICTPage() {
         };
 
         messagesRequestVersionRef.current += 1;
-        setConversations((current) => current.map((conversation) => {
+        setConversations((current) => sortByLatestActivity(current.map((conversation) => {
           if (conversation.conversationId !== selected.conversationId) return conversation;
           if (conversation.thread.some((message) => message.id === sentMessage.id)) return conversation;
           return {
@@ -512,7 +526,7 @@ export default function ContactICTPage() {
             isUnread: false,
             thread: [...conversation.thread, sentMessage],
           };
-        }));
+        })));
       }
       void loadMessages(true);
     } catch (err) {
@@ -548,7 +562,7 @@ export default function ContactICTPage() {
       )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
-        <div className="flex h-[38%] min-h-[11rem] w-full shrink-0 flex-col border-b border-slate-100 bg-white md:h-auto md:max-w-[400px] md:border-b-0 md:border-r">
+        <div className={`${selected ? "hidden md:flex" : "flex"} h-full min-h-0 w-full shrink-0 flex-col border-b border-slate-100 bg-white md:max-w-[400px] md:border-b-0 md:border-r`}>
           <div className="border-b border-slate-100 px-3 py-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -597,7 +611,7 @@ export default function ContactICTPage() {
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className={`${selected ? "flex" : "hidden md:flex"} min-h-0 flex-1 flex-col overflow-hidden`}>
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center text-slate-400">
               <Monitor className="mb-3 h-10 w-10 opacity-30" />
@@ -606,6 +620,13 @@ export default function ContactICTPage() {
           ) : (
             <>
               <div className="shrink-0 border-b border-l-4 border-l-emerald-500 border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(null)}
+                  className="mb-3 inline-flex min-h-10 items-center rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 md:hidden"
+                >
+                  ← All conversations
+                </button>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-500 text-xs font-bold text-white">
@@ -614,7 +635,7 @@ export default function ContactICTPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="truncate text-sm font-extrabold text-slate-900">{selected.otherName}</p>
-                        <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                        <span className="shrink-0 rounded-full bg-[#274e13] px-2 py-0.5 text-[10px] font-extrabold text-white shadow-sm">
                           {selected.otherRole}
                         </span>
                       </div>
@@ -627,12 +648,23 @@ export default function ContactICTPage() {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
-                {selected.thread.map((message) => (
+                {selected.thread.map((message) => {
+                  const senderName = message.senderName || message.senderRole;
+                  const senderRoleClass = message.senderRole === "ICT"
+                    ? "bg-[#274e13] text-white shadow-sm"
+                    : "bg-emerald-500 text-white shadow-sm";
+                  return (
                   <div key={message.id} className={`flex items-start gap-2.5 ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
-                    {!message.isCurrentUser && (
-                      <UserAvatar name={message.senderName} className="mt-0.5 h-8 w-8 rounded-full" fallbackClassName="bg-slate-500" />
-                    )}
+                    <UserAvatar
+                      name={senderName}
+                      className="mt-0.5 h-8 w-8 shrink-0 rounded-full"
+                      fallbackClassName={message.isCurrentUser ? "bg-emerald-500" : "bg-slate-500"}
+                    />
                     <div className={`flex flex-1 flex-col ${message.isCurrentUser ? "items-end" : "items-start"}`}>
+                    <div className={`mb-1 flex max-w-[85%] flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500 sm:max-w-[75%] ${message.isCurrentUser ? "flex-row-reverse" : ""}`}>
+                      <span className="break-words">{senderName}</span>
+                      <span className={`rounded-full border border-white/20 px-2 py-0.5 text-[10px] font-extrabold ${senderRoleClass}`}>{message.senderRole}</span>
+                    </div>
                     {message.body && (
                       <div className={`max-w-[85%] break-words whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed sm:max-w-[75%] ${
                         message.isCurrentUser
@@ -643,12 +675,11 @@ export default function ContactICTPage() {
                       </div>
                     )}
                     <AttachmentChips attachments={message.attachments} mine={message.isCurrentUser} />
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {message.isCurrentUser ? "You" : message.senderName} - {formatDate(message.sentAt)}
-                    </p>
+                    <p className="mt-1 text-[10px] text-slate-400">{formatDate(message.sentAt)}</p>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 <div ref={threadEndRef} />
               </div>
 

@@ -23,6 +23,10 @@ import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import {
+  isAttendanceRateEligibleStatus,
+  isAttendedAttendanceStatus,
+} from "@/lib/attendanceRate.cjs";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
@@ -592,17 +596,21 @@ export async function GET(req: NextRequest) {
     );
 
     const attendanceRateByStudentId = new Map<string, number | null>();
-    const attendanceTotals = new Map<string, { present: number; scheduled: number }>();
+    const attendanceTotals = new Map<string, { attended: number; rateEligible: number }>();
     for (const log of validAttendanceLogs) {
-      const totals = attendanceTotals.get(log.student_id) ?? { present: 0, scheduled: 0 };
-      totals.scheduled += 1;
-      if (ATTENDANCE_STATUS.get(log.status ?? "") === "Present") totals.present += 1;
+      // Excused records are neutral. Present and Late are both attended.
+      if (!isAttendanceRateEligibleStatus(log.status)) continue;
+      const totals = attendanceTotals.get(log.student_id) ?? { attended: 0, rateEligible: 0 };
+      totals.rateEligible += 1;
+      if (isAttendedAttendanceStatus(log.status)) totals.attended += 1;
       attendanceTotals.set(log.student_id, totals);
     }
     for (const [studentId, totals] of attendanceTotals) {
       attendanceRateByStudentId.set(
         studentId,
-        Math.round((totals.present / totals.scheduled) * 1000) / 10
+        totals.rateEligible > 0
+          ? Math.round((totals.attended / totals.rateEligible) * 1000) / 10
+          : null
       );
     }
 

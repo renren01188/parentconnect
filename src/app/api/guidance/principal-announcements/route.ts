@@ -10,12 +10,13 @@ export async function GET() {
         if (!guidance) return NextResponse.json({ success: false }, { status: 401 });
 
         // This is the sole incoming-announcement feed for Guidance. Principal
-        // announcements must target Everyone; ICT announcements must target Guidance.
+        // announcements must target Everyone or Guidance; ICT announcements
+        // must target Guidance.
         const [principalRes, ictRes, principalsRes, readsRes] = await Promise.all([
             supabase
                 .from("principal_announcements")
                 .select("id, title, message, audience, sender_id, created_at")
-                .eq("audience", "Everyone")
+                .in("audience", ["Everyone", "Guidance"])
                 .eq("status", "Published")
                 .order("created_at", { ascending: false }),
             supabase

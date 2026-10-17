@@ -30,8 +30,21 @@ type Announcement = {
 
 
 
-const ICT_AUDIENCES = ["Parents", "Class Advisers", "Guidance", "Principal"] as const;
+const ICT_AUDIENCE_OPTIONS = [
+  { value: "Parents", label: "Parents Only" },
+  { value: "Advisers", label: "Advisers Only" },
+  { value: "Guidance", label: "Guidance Only" },
+  { value: "Principal", label: "Principal Only" },
+  { value: "Everyone", label: "Everyone" },
+] as const;
 const emptyForm = { title: "", body: "", audience: "", scheduleDate: "" };
+
+function formAudience(audience: readonly string[]) {
+  const everyone = ["Parents", "Class Advisers", "Guidance", "Principal"];
+  if (everyone.every((role) => audience.includes(role))) return "Everyone";
+  if (audience.includes("Class Advisers")) return "Advisers";
+  return audience.find((role) => ICT_AUDIENCE_OPTIONS.some((option) => option.value === role)) ?? "";
+}
 
 
 
@@ -170,7 +183,7 @@ export default function ICTAnnouncementsPage() {
     setForm({
       title: announcement.title,
       body: announcement.body,
-      audience: announcement.audience.find((audience) => ICT_AUDIENCES.includes(audience as typeof ICT_AUDIENCES[number])) ?? "",
+      audience: formAudience(announcement.audience),
       scheduleDate: announcement.status === "Scheduled" ? toDateInputValue(announcement.scheduled_at) : "",
     });
     setScheduleError(null);
@@ -210,9 +223,9 @@ export default function ICTAnnouncementsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!data.success) {
-        setScheduleError(data.message ?? "Unable to save this announcement.");
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        setScheduleError(data?.message ?? "Unable to save this announcement. Check your connection and try again.");
         return;
       }
 
@@ -230,6 +243,8 @@ export default function ICTAnnouncementsPage() {
       );
       setActiveTab("mine");
       closeCompose();
+    } catch {
+      setScheduleError("Unable to save this announcement. Check your connection and try again.");
     } finally {
       setSaving(false);
     }
@@ -459,8 +474,8 @@ export default function ICTAnnouncementsPage() {
                     onChange={(event) => setForm({ ...form, audience: event.target.value })}
                   >
                     <option value="">Select audience</option>
-                    {ICT_AUDIENCES.map((audience) => (
-                      <option key={audience} value={audience}>{audience}</option>
+                    {ICT_AUDIENCE_OPTIONS.map((audience) => (
+                      <option key={audience.value} value={audience.value}>{audience.label}</option>
                     ))}
                   </select>
                 </div>

@@ -15,7 +15,7 @@ const DASHBOARD_STEPS: QuickGuideStep[] = [
   {
     target: "parent-sidebar",
     title: "Use the Parent menu",
-    description: "Use the sidebar for Dashboard, Attendance, Reports, and Notification. Your profile and Sign out are at the bottom.",
+    description: "Use the sidebar for Dashboard, Attendance, Reports, and Notification. Your profile and Log out are at the bottom.",
     icon: LayoutDashboard,
   },
   {

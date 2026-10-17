@@ -2,6 +2,7 @@ import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { getJwtSecret } from "@/lib/authSecret";
 import { supabase } from "@/lib/supabase";
+import { isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = getJwtSecret();
 
@@ -24,7 +25,7 @@ export async function getIctFromToken(): Promise<IctPayload | null> {
     if (!token) return null;
 
     const { payload } = await jwtVerify(token, SECRET);
-    if (payload.role !== "ict") return null;
+    if (payload.role !== "ict" || !isCurrentDashboardIdleSession(payload)) return null;
 
     const ict = payload as unknown as IctPayload;
     const { data, error } = await supabase.from("ict_admins").select("status, archive_status").eq("id", ict.id).maybeSingle();

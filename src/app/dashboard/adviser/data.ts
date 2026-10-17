@@ -35,6 +35,8 @@ export interface Report {
   message: string;
   /** Original database timestamp used by Principal monitoring filters/exports. */
   createdAt?: string;
+  /** Latest reply or submission timestamp used to order active conversations. */
+  lastActivityAt?: string;
   submitted_at: string;
   status: ReportStatus;
   attachment?: string;
@@ -176,6 +178,10 @@ export type StudentReportStatus = "New" | "Ongoing" | "Escalated" | "Resolved";
 
 export interface StudentReport {
   id: number;
+  /** Immutable submission timestamp used to order report panels. */
+  createdAt?: string;
+  /** Student reports currently have no reply thread, but retain this for shared ordering. */
+  lastActivityAt?: string;
   student_name: string;
   student_id: string;
   grade_level: string;

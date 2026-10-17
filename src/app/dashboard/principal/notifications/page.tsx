@@ -103,8 +103,17 @@ export default function PrincipalNotificationsPage() {
               key={item.id}
               role={item.reportId ? "button" : undefined}
               tabIndex={item.reportId ? 0 : undefined}
-              onClick={() => { if (item.reportId) router.push(`/dashboard/principal/reports?reportId=${item.reportId}`); }}
-              onKeyDown={(event) => { if (item.reportId && (event.key === "Enter" || event.key === " ")) router.push(`/dashboard/principal/reports?reportId=${item.reportId}`); }}
+              onClick={() => {
+                if (!item.reportId) return;
+                void markRowsRead([item]);
+                router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
+              }}
+              onKeyDown={(event) => {
+                if (!item.reportId || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                void markRowsRead([item]);
+                router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
+              }}
               className={`flex min-w-0 gap-3 border-b border-slate-100 p-4 last:border-0 ${item.read ? "" : "bg-violet-50/60"} ${item.reportId ? "cursor-pointer transition hover:bg-sky-50" : ""}`}
             >
               <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${isEscalation ? "bg-red-500 text-white" : "bg-sky-100 text-sky-700"}`}>

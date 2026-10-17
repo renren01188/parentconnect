@@ -132,13 +132,13 @@ function ConfirmModal({
 }) {
   const sectionChanged = form.grade !== originalGrade || form.section !== originalSection;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="bg-white rounded-2xl shadow-xl border border-slate-100 w-full max-w-md p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4">
+      <div className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-100 bg-white p-4 shadow-xl sm:p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
             <AlertCircle className="w-5 h-5 text-amber-500" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="font-extrabold text-slate-800 text-base">Confirm Changes</h3>
             <p className="text-xs text-slate-400">Please review before saving</p>
           </div>
@@ -175,13 +175,13 @@ function ConfirmModal({
           )}
           {parentAccountLinked && form.relationship !== student.relationship  && <p>• Relationship: <span className="font-semibold text-slate-700">{form.relationship}</span></p>}
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
           <button onClick={onCancel} disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm rounded-xl transition-colors">
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
             <XCircle className="w-4 h-4" /> Cancel
           </button>
           <button onClick={onConfirm} disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white font-bold text-sm rounded-xl transition-colors">
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:bg-emerald-300 sm:flex-1">
             {saving ? (
               <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
@@ -417,7 +417,7 @@ export default function StudentViewPage() {
   };
 
   return (
-    <main className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50 font-sans">
+    <main className="min-w-0 flex-1 overflow-y-auto bg-slate-50 px-3 py-5 font-sans sm:px-4 sm:py-6 md:px-6">
 
       {showConfirm && student && (
         <ConfirmModal
@@ -456,8 +456,8 @@ export default function StudentViewPage() {
       {!loading && !fetchError && student && (
         <div className="max-w-2xl mx-auto">
 
-          <div className="flex items-start justify-between mb-6">
-            <div>
+          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <h1 className="text-2xl font-extrabold text-slate-800">{student.full_name}</h1>
               <p className="text-slate-400 text-sm mt-1">
                 Student ID: <span className="font-semibold text-slate-600">{student.student_id}</span>
@@ -466,11 +466,11 @@ export default function StudentViewPage() {
             </div>
             {!editing ? (
               <button onClick={() => setEditing(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl transition-colors shadow-sm shadow-emerald-200">
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600 sm:w-auto">
                 <Edit2 className="w-4 h-4" /> Edit
               </button>
             ) : (
-              <div className="flex gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 <button onClick={handleCancelEdit}
                   className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm rounded-xl transition-colors">
                   <XCircle className="w-4 h-4" /> Cancel
@@ -502,7 +502,7 @@ export default function StudentViewPage() {
             </div>
           )}
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex flex-col gap-6">
+          <div className="flex flex-col gap-6 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
 
             {/* ── Student Information ── */}
             <div>
@@ -516,7 +516,7 @@ export default function StudentViewPage() {
 
               {editing ? (
                 <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="First Name" required error={E.firstName}>
                       <input className={E.firstName ? inputErr : inputOk} value={form.firstName}
                         onChange={e => set("firstName", e.target.value)}
@@ -528,7 +528,7 @@ export default function StudentViewPage() {
                         onBlur={() => setTouched(p => ({ ...p, lastName: true }))} placeholder="e.g. Santos" />
                     </Field>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Middle Name">
                       <input className={inputOk} value={form.middleName}
                         onChange={e => set("middleName", e.target.value)} placeholder="e.g. Reyes or N/A" />
@@ -540,7 +540,7 @@ export default function StudentViewPage() {
                       </select>
                     </Field>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Gender" required error={E.gender}>
                       <select className={E.gender ? inputErr : inputOk} value={form.gender}
                         onChange={e => set("gender", e.target.value)}
@@ -658,7 +658,7 @@ export default function StudentViewPage() {
                   </Field>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field label="Grade Level"><input className={inputView} value={student.grade} readOnly /></Field>
                   <Field label="Section"><input className={inputView} value={student.section} readOnly /></Field>
                 </div>
@@ -685,7 +685,7 @@ export default function StudentViewPage() {
 
               {editing ? (
                 <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="First Name" required={parentAccountLinked} error={E.parentFirstName}>
                       <input className={parentAccountLinked ? (E.parentFirstName ? inputErr : inputOk) : inputView} value={form.parentFirstName}
                         onChange={e => set("parentFirstName", e.target.value)}
@@ -697,7 +697,7 @@ export default function StudentViewPage() {
                         onBlur={() => setTouched(p => ({ ...p, parentLastName: true }))} placeholder="e.g. Dela Cruz" readOnly={!parentAccountLinked} />
                     </Field>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Middle Name">
                       <input className={parentAccountLinked ? inputOk : inputView} value={form.parentMiddleName}
                         onChange={e => set("parentMiddleName", e.target.value)} placeholder="e.g. Santos or N/A" readOnly={!parentAccountLinked} />

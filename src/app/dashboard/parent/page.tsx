@@ -12,6 +12,7 @@ import ParentDashboardGuide from "./components/ParentDashboardGuide";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import { useParentSession } from "./ParentSessionGate";
+import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.cjs";
 
 interface StudentInfo {
     id: string;
@@ -272,11 +273,10 @@ export default function ParentDashboard() {
                     const present = Number(data.stats?.present ?? 0);
                     const late = Number(data.stats?.late ?? 0);
                     const absent = Number(data.stats?.absent ?? 0);
-                    const excused = Number(data.stats?.excused ?? 0);
-                    const total = present + late + absent + excused;
-                    const rate = total > 0 ? ((present + late) / total * 100).toFixed(1) : "0.0";
+                    const total = present + late + absent;
+                    const rate = calculateAttendanceRate({ present, late, absent }).toFixed(1);
                     s.stats = {
-                        totalPresent: String(present),
+                        totalPresent: String(attendedDayCount({ present, late })),
                         presentDelta: total > 0 ? "" : "No attendance records",
                         presentUp: true,
                         absentDays: String(absent),

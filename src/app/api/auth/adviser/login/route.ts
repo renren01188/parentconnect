@@ -3,12 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { SignJWT } from "jose";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
 import { checkLoginProtection, clearLoginFailures, failedLoginResult, rememberLoginGuard } from "@/lib/loginProtection";
-import { getJwtSecret } from "@/lib/authSecret";
-
-const SECRET = getJwtSecret();
+import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 export async function POST(req: NextRequest) {
   try {
@@ -101,20 +98,10 @@ export async function POST(req: NextRequest) {
       sessionIssuedAt: Date.now(),
     };
 
-    const token = await new SignJWT(payload)
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("8h")
-      .sign(SECRET);
+    const { token } = await issueDashboardIdleSession(payload);
 
     const cookieStore = await cookies();
-    cookieStore.set("adviser_token", token, {
-      httpOnly: true,
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge:   60 * 60 * 8,
-      path:     "/",
-    });
+    cookieStore.set("adviser_token", token, dashboardSessionCookieOptions);
 
     // ── Audit log ──
     await logAudit({

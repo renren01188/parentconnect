@@ -50,6 +50,32 @@ interface StudentGroup {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+type TimestampedReport = { id: number; createdAt?: string; lastActivityAt?: string };
+
+function activityTime(report: TimestampedReport) {
+    // A newly submitted report uses its creation time. Once either side
+    // replies, the API supplies lastActivityAt so that conversation moves up.
+    const timestamp = Date.parse(report.lastActivityAt ?? report.createdAt ?? "");
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function newestReportFirst<T extends TimestampedReport>(a: T, b: T) {
+    return activityTime(b) - activityTime(a) || b.id - a.id;
+}
+
+function newestGroupFirst<T extends TimestampedReport>(a: { reports: T[] }, b: { reports: T[] }) {
+    return newestReportFirst(a.reports[0]!, b.reports[0]!);
+}
+
+function adminMessageActivityTime(message: AdminMessage) {
+    const timestamp = Date.parse(message.latest_created_at ?? message.latest_sent_at ?? message.sent_at);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function newestAdminMessageFirst(a: AdminMessage, b: AdminMessage) {
+    return adminMessageActivityTime(b) - adminMessageActivityTime(a) || b.id - a.id;
+}
+
 function getInitials(name: string) {
     const parts = name.replace(/'s Parent/i, "").trim().split(" ");
     return parts.slice(0, 2).map(p => p[0]?.toUpperCase()).join("");
@@ -172,7 +198,7 @@ function groupByParent(reports: Report[]): ParentGroup[] {
         if (r.concernLevel > map[r.parent_name].maxConcernLevel) map[r.parent_name].maxConcernLevel = r.concernLevel;
     }
     for (const g of Object.values(map)) {
-        g.reports.sort((a, b) => b.concernLevel - a.concernLevel);
+        g.reports.sort(newestReportFirst);
     }
     return Object.values(map);
 }
@@ -184,6 +210,9 @@ function groupByStudent(reports: StudentReport[]): StudentGroup[] {
         }
         map[r.student_name].reports.push(r);
         if (r.status === "New") map[r.student_name].unread++;
+    }
+    for (const g of Object.values(map)) {
+        g.reports.sort(newestReportFirst);
     }
     return Object.values(map);
 }
@@ -726,14 +755,14 @@ function NotifyParentModal({
     }
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-3 sm:p-4" onClick={onClose}>
             <div
-                className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden"
+                className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
-                    <div>
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0">
                         <h2 className="text-lg font-extrabold text-slate-900">Notify Parent</h2>
                         <p className="text-xs text-slate-400 mt-0.5">
                             Send a message to{" "}
@@ -749,7 +778,7 @@ function NotifyParentModal({
 
                 {sent ? (
                     /* ── Success state ── */
-                    <div className="flex flex-col items-center gap-3 py-10 px-6">
+                    <div className="flex flex-col items-center gap-3 px-4 py-8 text-center sm:px-6 sm:py-10">
                         <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
                             <CheckCircle className="w-7 h-7 text-emerald-500" />
                         </div>
@@ -767,7 +796,7 @@ function NotifyParentModal({
                     </div>
                 ) : (
                     /* ── Compose state ── */
-                    <div className="px-6 py-5 flex flex-col gap-4">
+                    <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 sm:py-5">
                         {sendError && (
                             <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700">
                                 {sendError}
@@ -804,17 +833,17 @@ function NotifyParentModal({
                         </div>
 
                         {/* Footer actions */}
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
                             <button
                                 onClick={onClose}
-                                className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition"
+                                className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto"
                             >
                                 Cancel
                             </button>
                             <button
                                 onClick={handleSend}
                                 disabled={!message.trim() || sending}
-                                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition ${message.trim() && !sending
+                                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition sm:w-auto ${message.trim() && !sending
                                     ? "bg-blue-500 hover:bg-blue-600"
                                     : "bg-blue-300 cursor-not-allowed"
                                     }`}
@@ -901,7 +930,7 @@ function ReportsPageContent() {
         const res = await fetch("/api/reports/parent-adviser?role=adviser&summary=1", { cache: "no-store" });
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || "Unable to load reports.");
-        const nextReports = (data.reports ?? []) as Report[];
+        const nextReports = ((data.reports ?? []) as Report[]).sort(newestReportFirst);
         setReports((current) => nextReports.map((report) => {
             const loaded = current.find((item) => item.id === report.id);
             return loaded?.detailsLoaded
@@ -991,11 +1020,7 @@ function ReportsPageContent() {
             ...(staffRes.ok ? ((staffData?.messages ?? []) as AdminMessage[]) : []),
         ]
             .filter((message) => message.sender !== "ICT" && message.message_sender !== "ICT")
-            .sort((a, b) => {
-                const aTime = Date.parse(a.latest_created_at ?? a.sent_at);
-                const bTime = Date.parse(b.latest_created_at ?? b.sent_at);
-                return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-            });
+            .sort(newestAdminMessageFirst);
         setAdminMsgs(nextMessages);
         setSelectedAdminMsg(current => current
             ? nextMessages.find(message => adminMessageKey(message) === adminMessageKey(current)) ?? current
@@ -1046,10 +1071,17 @@ function ReportsPageContent() {
     }, [reports, studentReps, adminMsgs, setUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
-    const parentGroups = groupByParent(reports)
-        .sort((a, b) => b.maxConcernLevel - a.maxConcernLevel);
+    const parentGroups = groupByParent(reports).sort(newestGroupFirst);
 
-    const studentGroups = groupByStudent(studentReps);
+    const studentGroups = groupByStudent(studentReps).sort(newestGroupFirst);
+    // Read Panel 2 from the live report collection rather than the saved
+    // group snapshot. A Realtime reply can therefore reorder an open list
+    // immediately, even while its detail request is still in flight.
+    const selectedParentReports = selectedParent
+        ? reports
+            .filter((report) => report.parent_name === selectedParent.parent_name)
+            .sort(newestReportFirst)
+        : [];
 
     const principalMsgs = adminMsgs;
     const selectedReportId = selectedReport?.id ?? null;
@@ -1276,6 +1308,20 @@ function ReportsPageContent() {
         }
     }
 
+    // A report or staff conversation remains unread until the Adviser opens
+    // it. If a new reply arrives in the conversation already open in Panel 2,
+    // acknowledge only that conversation so it does not create a sidebar
+    // badge or a new-row highlight.
+    useEffect(() => {
+        if (leftTab !== "Parent" || viewStep !== "detail" || !selectedReport?.hasUnreadForAdviser) return;
+        void markReportStatus(selectedReport.id, undefined, true);
+    }, [leftTab, selectedReport?.hasUnreadForAdviser, selectedReport?.id, viewStep]);
+
+    useEffect(() => {
+        if (leftTab !== "Principal" || viewStep !== "detail" || !selectedAdminMsg || selectedAdminMsg.status !== "New") return;
+        void markAdminRead(selectedAdminMsg);
+    }, [leftTab, selectedAdminMsg, viewStep]);
+
     async function sendReply() {
         if (sendingReply || (!replyText.trim() && replyAttachments.length === 0)) return;
         if (selectedReport?.status === "Resolved") {
@@ -1314,10 +1360,21 @@ function ReportsPageContent() {
                     return;
                 }
                 const nextStatus: AdminMsgStatus = isDirectStaffConversation ? "Sent" : "Replied";
+                const latestCreatedAt = new Date().toISOString();
                 setAdminMsgs(prev => prev.map(m => adminMessageKey(m) === selectedKey
-                    ? { ...m, status: nextStatus, replies: [...(m.replies ?? []), newReply] }
+                    ? {
+                        ...m,
+                        status: nextStatus,
+                        replies: [...(m.replies ?? []), newReply],
+                        latest_message: newReply.message,
+                        latest_sender: "Adviser" as const,
+                        latest_sender_name: "You",
+                        latest_sender_is_current: true,
+                        latest_sent_at: latestCreatedAt,
+                        latest_created_at: latestCreatedAt,
+                    }
                     : m
-                ));
+                ).sort(newestAdminMessageFirst));
                 setSelectedAdminMsg(prev => prev ? { ...prev, status: nextStatus, replies: [...(prev.replies ?? []), newReply] } : prev);
                 setReplyText("");
                 setReplyAttachments([]);
@@ -1342,6 +1399,13 @@ function ReportsPageContent() {
                     return;
                 }
                 const reportId = selectedReport.id;
+                const latestActivityAt = new Date().toISOString();
+                setReports((current) => current.map((report) => report.id === reportId
+                    ? { ...report, lastActivityAt: latestActivityAt }
+                    : report).sort(newestReportFirst));
+                setSelectedReport((current) => current?.id === reportId
+                    ? { ...current, lastActivityAt: latestActivityAt }
+                    : current);
                 setReplyText("");
                 setReplyAttachments([]);
                 reportTyping.stopTyping();
@@ -1687,7 +1751,7 @@ function ReportsPageContent() {
                                     </div>
                                     <div className="mt-3">
                                         {(() => {
-                                            const allResolved = selectedParent.reports.every(r => r.status === "Resolved");
+                                            const allResolved = selectedParentReports.every(r => r.status === "Resolved");
                                             return allResolved ? (
                                                 <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-emerald-100 text-emerald-700">✅ All Resolved</span>
                                             ) : null;
@@ -1695,7 +1759,7 @@ function ReportsPageContent() {
                                     </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
-                                    {selectedParent.reports.map(r => {
+                                    {selectedParentReports.map(r => {
                                         const isActive = selectedReport?.id === r.id;
                                         return (
                                             <button key={r.id} onClick={() => { selectReport(r); setViewStep("detail"); }}
@@ -1741,6 +1805,7 @@ function ReportsPageContent() {
                                     {/* Derive live from studentReps so status badges update immediately */}
                                     {studentReps
                                         .filter(r => r.student_name === selectedStudent.student_name)
+                                        .sort(newestReportFirst)
                                         .map(r => (
                                             <button key={r.id} onClick={() => { setSelectedStudRep(r); setViewStep("detail"); }}
                                                 className={`w-full text-left rounded-xl px-3 py-3 border transition ${selectedStudRep?.id === r.id ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
@@ -2438,8 +2503,8 @@ function ReportsPageContent() {
 
             {/* Escalate to Guidance Confirmation Modal */}
             {escalateTarget !== null && (
-                <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden">
+                <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-4">
+                    <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-sm flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl">
                         {escalateSuccess ? (
                             <div className="flex flex-col items-center gap-3 py-10 px-6 text-center">
                                 <div className="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center">
@@ -2464,11 +2529,11 @@ function ReportsPageContent() {
                                         Are you sure you want to escalate this report to the Guidance Counselor?
                                     </p>
                                 </div>
-                                <div className="flex items-center justify-end gap-3 px-6 py-4">
+                                <div className="flex flex-col-reverse gap-2 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:gap-3 sm:px-6">
                                     <button
                                         onClick={() => setEscalateTarget(null)}
                                         disabled={escalating}
-                                        className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition"
+                                        className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto"
                                     >
                                         Cancel
                                     </button>
@@ -2489,7 +2554,7 @@ function ReportsPageContent() {
                                             }
                                         }}
                                         disabled={escalating}
-                                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition"
+                                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-orange-600 sm:w-auto"
                                     >
                                         {escalating ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <TriangleAlert className="w-3.5 h-3.5" />}
                                         {escalating ? "Escalating..." : "Yes, Escalate"}

@@ -6,6 +6,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { hasUnreadForPrincipal as hasUnreadPrincipalReport } from "@/lib/principalReportReadState.cjs";
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
+import { isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -124,7 +125,7 @@ export async function getParentSession() {
   try {
     const verified = await jwtVerify(token, SECRET);
     const payload = verified.payload;
-    if (payload.role !== "parent") return null;
+    if (payload.role !== "parent" || !isCurrentDashboardIdleSession(payload)) return null;
 
     const id = Number(payload.id);
     if (!Number.isSafeInteger(id) || id <= 0) return null;
@@ -436,6 +437,8 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
     subject: row.subject,
     message: openingMessage?.body ?? "",
     attachments: attachmentsFromRow(openingMessage?.attachments),
+    createdAt: row.created_at,
+    lastActivityAt: row.last_message_at || row.created_at,
     submitted_by_name: openingMessage?.sender_role === "subject_teacher" ? openingMessage.sender_name : undefined,
     submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     submitted_at: formatDate(row.created_at),
@@ -544,6 +547,8 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     subject: row.subject,
     message: firstParentMessage?.body ?? firstGuidanceMessage?.body ?? "",
     attachments: attachmentsFromRow(firstParentMessage?.attachments ?? firstGuidanceMessage?.attachments),
+    createdAt: row.created_at,
+    lastActivityAt: row.last_message_at || row.created_at,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : hasUnreadForGuidance ? "New" as const : adviserReportStatus(row.status),
     resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance,
@@ -567,7 +572,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
 }
 
 export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null, principalHasRead = false) {
-  const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
+  const openingMessage = messages.find((msg) => msg.sender_role === "parent" || msg.sender_role === "subject_teacher");
   const threadMessages = principalThreadMessages(row, messages);
   const isResolved = row.status === "resolved" || row.status === "cancelled";
   const hasUnreadForPrincipal = hasUnreadPrincipalReport({
@@ -585,11 +590,14 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     student_name: row.student_name,
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
-    message: firstParentMessage?.body ?? "",
-    attachments: attachmentsFromRow(firstParentMessage?.attachments),
+    message: openingMessage?.body ?? "",
+    attachments: attachmentsFromRow(openingMessage?.attachments),
+    submitted_by_name: openingMessage?.sender_role === "subject_teacher" ? openingMessage.sender_name : undefined,
+    submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     // Keep the stored timestamp alongside the display label so Principal
     // monitoring can apply an exact Manila date range without parsing text.
     createdAt: row.created_at,
+    lastActivityAt: row.last_message_at || row.created_at,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : hasUnreadForPrincipal ? "New" as const : adviserReportStatus(row.status),
     resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance,
@@ -611,7 +619,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     ticketRejectionReason: ticket?.rejection_reason ?? null,
     replies: threadMessages.map((msg) => ({
       id: msg.id,
-      sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : row.parent_name,
+      sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
       senderName: msg.sender_role === "parent" ? row.parent_name : (msg.sender_name || "Staff Member"),
       senderRole: msg.sender_role,
       message: msg.body ?? "",
@@ -731,7 +739,7 @@ export async function getPrincipalSession() {
 
   try {
     const verified = await jwtVerify(token, SECRET);
-    if (verified.payload.role !== "principal") return null;
+    if (verified.payload.role !== "principal" || !isCurrentDashboardIdleSession(verified.payload)) return null;
     const principalId = Number(verified.payload.id);
     const { data: principal } = await supabase.from("principals").select("status, archive_status, is_active, auth_version").eq("id", principalId).maybeSingle();
     if (!principal || principal.archive_status === "archived" || principal.status !== "active" || !principal.is_active
@@ -757,7 +765,7 @@ export async function getGuidanceSession() {
 
   try {
     const verified = await jwtVerify(token, SECRET);
-    if (verified.payload.role !== "guidance") return null;
+    if (verified.payload.role !== "guidance" || !isCurrentDashboardIdleSession(verified.payload)) return null;
     const id = Number(verified.payload.id);
     const { data } = await supabase
       .from("guidance_counselors")

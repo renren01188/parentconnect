@@ -7,6 +7,9 @@ import { findAssignedAdviser, fullName, normalize } from "@/app/api/student-repo
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SUBJECT_TEACHER_REPORT_CATEGORIES = ["Academic Concern", "Health/Medical", "Behavioral Issue", "Attendance", "Other", "Permission Request", "General Inquiry"] as const;
+
 function trimmed(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -43,6 +46,11 @@ export async function POST(req: NextRequest) {
     const studentSuffix = uppercasedName(body.studentSuffix);
     const gradeLevel = trimmed(body.gradeLevel);
     const section = trimmed(body.section);
+    const submissionKey = trimmed(body.submissionKey);
+    const submittedCategories: string[] = Array.isArray(body.categories)
+      ? body.categories.map(trimmed).filter(Boolean)
+      : [];
+    const categories = SUBJECT_TEACHER_REPORT_CATEGORIES.filter((category) => submittedCategories.includes(category));
     // Preserve the Subject Teacher's original wording and line breaks exactly.
     const concern = String(body.concern ?? "");
 
@@ -57,6 +65,12 @@ export async function POST(req: NextRequest) {
       [studentFirstName, 100], [studentMiddleName, 100], [studentLastName, 100], [studentSuffix, 20],
       [gradeLevel, 50], [section, 100], [concern, 5_000],
     )) return NextResponse.json({ success: false, message: "Some fields are too long. Please shorten them and try again." }, { status: 400 });
+    if (!UUID_PATTERN.test(submissionKey)) {
+      return NextResponse.json({ success: false, message: "Invalid report submission. Please try again." }, { status: 400 });
+    }
+    if (categories.length === 0 || submittedCategories.some((category) => !SUBJECT_TEACHER_REPORT_CATEGORIES.includes(category as typeof SUBJECT_TEACHER_REPORT_CATEGORIES[number]))) {
+      return NextResponse.json({ success: false, message: "Select at least one valid concern category." }, { status: 400 });
+    }
 
     const { data: students, error: studentError } = await supabase
       .from("students")
@@ -105,6 +119,21 @@ export async function POST(req: NextRequest) {
     const reportDay = manilaDate();
     const subject = `[Subject Teacher Report] ${teacherName}`;
 
+    // A network retry uses the same browser-generated key. Check it before
+    // applying the daily limit so an already-saved report remains retrievable
+    // even after the teacher has reached that limit.
+    const { data: existingSubmission, error: existingSubmissionError } = await supabase
+      .from("parent_adviser_reports")
+      .select("id")
+      .eq("subject_teacher_submission_key", submissionKey)
+      .maybeSingle();
+    if (existingSubmissionError) throw existingSubmissionError;
+    if (existingSubmission) {
+      const response = NextResponse.json({ success: true, duplicate: true, message: "Report submitted successfully." });
+      response.cookies.delete(SUBJECT_TEACHER_REPORT_COOKIE);
+      return response;
+    }
+
     const { count: reportsToday, error: reportsTodayError } = await supabase
       .from("parent_adviser_reports")
       .select("id", { count: "exact", head: true })
@@ -117,18 +146,6 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
-
-    const { data: duplicateReports, error: duplicateError } = await supabase
-      .from("parent_adviser_reports")
-      .select("id")
-      .eq("parent_id", parent.id)
-      .eq("adviser_id", adviser.id)
-      .eq("student_id", student.student_id)
-      .eq("subject", subject)
-      .gte("created_at", new Date(Date.now() - 60_000).toISOString())
-      .limit(1);
-    if (duplicateError) throw duplicateError;
-    if (duplicateReports?.length) return NextResponse.json({ success: true, duplicate: true, message: "Report submitted successfully." });
 
     const { data: report, error: reportError } = await supabase.rpc("submit_subject_teacher_report", {
       p_parent_id: parent.id,
@@ -144,6 +161,8 @@ export async function POST(req: NextRequest) {
       p_subject_teacher_email: subjectTeacher.email,
       p_teacher_name: teacherName,
       p_concern: concern,
+      p_submission_key: submissionKey,
+      p_categories: categories,
       p_created_at: now,
     }).single();
     if (reportError) {

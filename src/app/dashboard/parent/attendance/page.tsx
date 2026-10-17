@@ -26,6 +26,7 @@ import {
 } from "@/lib/excuseLetterAttachment";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.cjs";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -329,7 +330,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5">
                     <div className="min-w-0">
                         <h2 className="text-lg font-extrabold text-slate-800">{submitted ? "Request Submitted" : "Excuse Letter Request"}</h2>
-                        <p className="text-sm text-slate-400 mt-1">{submitted ? `Sent to ${selectedStudent.name}'s adviser for review.` : "Send an absence excuse to the adviser for approval."}</p>
+                        <p className="mt-1 break-words text-sm text-slate-400">{submitted ? `Sent to ${selectedStudent.name}'s adviser for review.` : "Send an absence excuse to the adviser for approval."}</p>
                     </div>
                     <button type="button" onClick={onClose} className="shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
                         <X className="w-4 h-4" />
@@ -581,8 +582,11 @@ export default function ParentAttendancePage() {
                     const months: MonthData[] = Array.from(monthMap.entries()).map(([label, records]) => ({ label, records }));
 
                     const stats = attData.stats || {};
-                    const total = (stats.present ?? 0) + (stats.late ?? 0) + (stats.absent ?? 0);
-                    const rate = total > 0 ? Math.round(((stats.present ?? 0) / total) * 100 * 10) / 10 : 0;
+                    const rate = calculateAttendanceRate({
+                        present: stats.present,
+                        late: stats.late,
+                        absent: stats.absent,
+                    });
 
                     return {
                         id: String(s.id),
@@ -593,7 +597,7 @@ export default function ParentAttendancePage() {
                         adviser: "",
                         initials: getInitials(s.name),
                         avatarBg: "#2563eb",
-                        totalPresent: stats.present ?? 0,
+                        totalPresent: attendedDayCount({ present: stats.present, late: stats.late }),
                         presentDelta: 0,
                         absentDays: stats.absent ?? 0,
                         absentDelta: 0,

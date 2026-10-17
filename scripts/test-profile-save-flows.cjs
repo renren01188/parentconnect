@@ -19,7 +19,8 @@ assert.ok(parentPatch, "Parent profile PATCH route should exist.");
 // discard a healthy parent dashboard session. Successful saves return the
 // renewed cookie explicitly with the stored profile data.
 assert.match(parentPatch, /message: "Current password is incorrect\."[\s\S]*?\{ status: 400 \}/);
-assert.match(parentPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("parent_token", newToken, parentSessionCookie\);/);
+assert.match(parentRoute, /issueDashboardIdleSession/);
+assert.match(parentPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("parent_token", newToken, dashboardSessionCookieOptions\);/);
 assert.match(parentPatch, /await publishAccountRealtimeInvalidation\(\[\{ role: "parent", id: parentId \}\]\);/);
 assert.match(parentProfile, /import \{ useParentSession \} from "\.\.\/ParentSessionGate";/);
 assert.match(parentProfile, /const \{ refreshSession \} = useParentSession\(\);/);
@@ -43,7 +44,7 @@ assert.match(adviserProfile, /if \(!res\.ok \|\| !json\?\.success\)/);
 // ICT follows the same explicit-cookie pattern so direct profile edits keep
 // that staff dashboard authenticated as well.
 const ictPatch = ictRoute.match(/export async function PATCH[\s\S]*?(?=\n}\n?$)/)?.[0] || ictRoute;
-assert.match(ictRoute, /const ictSessionCookie = \{/);
-assert.match(ictPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("ict_token", newToken, ictSessionCookie\);/);
+assert.match(ictRoute, /issueDashboardIdleSession/);
+assert.match(ictPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("ict_token", newToken, dashboardSessionCookieOptions\);/);
 
 console.log("profile save flow checks passed");

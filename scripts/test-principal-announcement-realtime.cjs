@@ -20,7 +20,10 @@ const adviserNotificationsRoute = read("src/app/api/adviser/notifications/route.
 // Parent-only announcement never invalidates Adviser clients and vice versa.
 assert.match(audience, /function principalAnnouncementRecipientRoles/);
 assert.match(audience, /return \["parent", "adviser", "guidance", "ict"\] as const/);
-assert.match(audience, /return \["adviser", "ict"\] as const/);
+assert.match(audience, /if \(audience === "Advisers"\)[\s\S]*?return \["adviser", "ict"\] as const/);
+assert.match(audience, /if \(audience === "Class Advisers"\) return \["adviser"\] as const/);
+assert.match(audience, /if \(audience === "Guidance"\) return \["guidance"\] as const/);
+assert.match(audience, /return \["ict"\] as const/);
 assert.match(audience, /return \["parent"\] as const/);
 assert.match(creationRoute, /principalAnnouncementRecipientRoles\(audience\)/);
 assert.match(creationRoute, /await publishRealtimeInvalidation\(recipients, "announcements"\)/);
@@ -44,6 +47,6 @@ assert.match(parentNotificationsRoute, /PRINCIPAL_PARENT_AUDIENCE_VALUES/);
 assert.match(adviserContext, /scope === "notifications" \|\| scope === "announcements"/);
 assert.match(adviserContext, /adviser-notifications-changed/);
 assert.match(adviserNotifications, /adviser-notifications-changed/);
-assert.match(adviserNotificationsRoute, /\.in\("audience", \["Everyone", "Advisers"\]\)/);
+assert.match(adviserNotificationsRoute, /\.in\("audience", \["Everyone", "Class Advisers", "Advisers"\]\)/);
 
 console.log("principal announcement realtime checks passed");

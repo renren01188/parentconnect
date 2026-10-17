@@ -254,10 +254,10 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-4"
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-2 backdrop-blur-sm sm:p-4"
             onClick={handleClose}>
             <div className="my-auto flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
-                style={{ maxHeight: "calc(100dvh - 24px)" }} onClick={e => e.stopPropagation()}>
+                style={{ maxHeight: "calc(100dvh - 16px)" }} onClick={e => e.stopPropagation()}>
 
                 {/* Header */}
                 <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
@@ -484,7 +484,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                                     ] as [string, string][]).map(([l, v]) => (
                                         <div key={l} className="flex justify-between text-xs">
                                             <span className="text-slate-400 w-24 shrink-0">{l}</span>
-                                            <span className="font-semibold text-slate-800 text-right">{v}</span>
+                                            <span className="min-w-0 break-words text-right font-semibold text-slate-800">{v}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -507,15 +507,15 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
 
                 {/* Footer */}
                 {step !== "success" && (
-                    <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/60 flex gap-3 shrink-0">
+                    <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-4 sm:flex-row sm:gap-3 sm:px-6">
                         {step === "edit" && (
                             <>
                                 <button onClick={handleClose}
-                                    className="px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
+                                    className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto">
                                     Cancel
                                 </button>
                                 <button onClick={handleReview}
-                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 transition">
+                                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700 sm:flex-1 sm:w-auto">
                                     <ChevronRight className="w-4 h-4" /> Review Changes
                                 </button>
                             </>
@@ -523,11 +523,11 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                         {step === "review" && (
                             <>
                                 <button onClick={() => setStep("edit")}
-                                    className="flex-1 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
+                                    className="min-h-11 w-full rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:flex-1">
                                     ← Go Back
                                 </button>
                                 <button onClick={handleConfirm} disabled={saving}
-                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition">
+                                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-60 sm:flex-1">
                                     {saving
                                         ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
