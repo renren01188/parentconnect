@@ -181,7 +181,10 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
         async function fetchLetters() {
             try {
                 setLoadingLetters(true);
-                const res = await fetch("/api/excuse-letters", { cache: "no-store" });
+                const res = await fetch("/api/excuse-letters", {
+                    cache: "no-store",
+                    credentials: "same-origin",
+                });
                 const data = await res.json();
                 if (data.success) {
                     const mapped: ExcuseTrackerItem[] = (data.letters || []).map((l: {
@@ -268,6 +271,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
             const res = await fetch("/api/excuse-letters", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
                 body: JSON.stringify({
                     student_id: selectedStudent.studentId,
                     date_from: fromDate,

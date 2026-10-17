@@ -1263,7 +1263,10 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             const params = new URLSearchParams();
             if (adviserGrade) params.set("grade", adviserGrade);
 
-            const res = await fetch(`/api/excuse-letters/adviser?${params.toString()}`, { cache: "no-store" });
+            const res = await fetch(`/api/excuse-letters/adviser?${params.toString()}`, {
+                cache: "no-store",
+                credentials: "same-origin",
+            });
             const data = await res.json();
 
             if (!data.success) {
@@ -1334,6 +1337,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             const res = await fetch(`/api/excuse-letters/${id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
                 body: JSON.stringify({ status: "Approved" }),
             });
             const data = await res.json();
@@ -1364,6 +1368,7 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
             const res = await fetch(`/api/excuse-letters/${id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
                 body: JSON.stringify({ status: "Declined", decline_reason: reason }),
             });
             const data = await res.json();

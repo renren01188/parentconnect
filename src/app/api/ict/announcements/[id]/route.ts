@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
-import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
 import {
   ictAnnouncementRecipientRoles,
@@ -9,6 +9,7 @@ import {
   normalizeIctAnnouncementAudience,
 } from "@/lib/ictAnnouncementAudience";
 import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
+import { deliverIctAnnouncement } from "@/lib/deliverIctAnnouncement";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
 function ictName(ict: { first_name?: string | null; last_name?: string | null }) {
@@ -27,16 +28,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const { title, message, audience: rawAudience, scheduled_at } = await req.json();
     const audience = normalizeIctAnnouncementAudience(rawAudience);
+    const schedule = normalizeOptionalAnnouncementSchedule(scheduled_at);
     if (!title?.trim() || !message?.trim() || !audience) {
       return NextResponse.json({ success: false, message: "Title, message, and audience are required." }, { status: 400 });
     }
-    if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
-      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
-    }
-    if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
-      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
-    }
-    const status = scheduled_at ? "Scheduled" : "Published";
+    if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
+    const status = schedule.scheduledAt ? "Scheduled" : "Published";
 
     const { data: existing, error: existingError } = await supabase
       .from("ict_announcements")
@@ -50,7 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const { data: ann, error } = await supabase
       .from("ict_announcements")
-      .update({ title: title.trim(), message: message.trim(), audience, status, scheduled_at: scheduled_at ?? null })
+      .update({ title: title.trim(), message: message.trim(), audience, status, scheduled_at: schedule.scheduledAt })
       .eq("id", announcementId)
       .eq("sender_id", ict.id)
       .select()
@@ -64,7 +61,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       ...(status === "Published" ? ictAnnouncementRecipientRoles(audience) : []),
     ]);
 
-    if (status === "Published" && ictAudienceIncludesParents(audience)) {
+    if (status === "Published" && existing.status !== "Published") {
+      await deliverIctAnnouncement(ann, ictName(ict));
+    } else if (status === "Published" && ictAudienceIncludesParents(audience)) {
       await syncIctParentAnnouncementRecipients(ann, ictName(ict));
     } else {
       const { error: notificationError } = await supabase

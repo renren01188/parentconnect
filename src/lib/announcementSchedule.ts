@@ -47,3 +47,38 @@ export function isFutureSchoolCalendarDay(value: unknown, now = new Date()) {
   const today = schoolCalendarDay(now);
   return Boolean(scheduledDay && today && scheduledDay > today);
 }
+
+export type OptionalAnnouncementSchedule =
+  | { ok: true; scheduledAt: string | null }
+  | { ok: false; message: string };
+
+/**
+ * Announcement scheduling is optional. A selected date is a school-calendar
+ * date, not a browser-local timestamp, so store it as midnight in Manila.
+ */
+export function normalizeOptionalAnnouncementSchedule(
+  value: unknown,
+  now = new Date(),
+): OptionalAnnouncementSchedule {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) {
+    return { ok: true, scheduledAt: null };
+  }
+
+  const day = scheduledCalendarDay(value);
+  if (!day) return { ok: false, message: "Schedule date is invalid." };
+  if (!isFutureSchoolCalendarDay(day, now)) {
+    return { ok: false, message: "Schedule date must be a future calendar day in Asia/Manila." };
+  }
+
+  return { ok: true, scheduledAt: `${day}T00:00:00+08:00` };
+}
+
+/** Returns true once a scheduled Manila calendar date has begun. */
+export function isDueAnnouncementSchedule(value: unknown, now = new Date()) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  const scheduled = new Date(value);
+  if (Number.isNaN(scheduled.getTime())) return false;
+  const scheduledDay = schoolCalendarDay(scheduled);
+  const today = schoolCalendarDay(now);
+  return Boolean(scheduledDay && today && scheduledDay <= today);
+}

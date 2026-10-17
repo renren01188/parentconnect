@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceFromToken } from "@/lib/getGuidanceFromToken";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
-import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
+import { deliverGuidanceAnnouncement } from "@/lib/deliverGuidanceAnnouncement";
 
 // ── PATCH — edit an announcement ─────────────────────────────────────────────
 export async function PATCH(
@@ -22,27 +23,29 @@ export async function PATCH(
     const message    = typeof body.message  === "string" ? body.message.trim() : undefined;
     const audience   = typeof body.audience === "string" ? body.audience       : undefined;
     const scheduledInput = body.scheduled_at;
-    if (scheduledInput && (typeof scheduledInput !== "string" || Number.isNaN(Date.parse(scheduledInput)))) {
-      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
-    }
-    if (scheduledInput && !isFutureSchoolCalendarDay(scheduledInput)) {
-      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
-    }
-    const scheduledAt = scheduledInput
-      ? new Date(scheduledInput).toISOString()
-      : scheduledInput === null ? null : undefined;
+    const schedule = scheduledInput === undefined ? null : normalizeOptionalAnnouncementSchedule(scheduledInput);
+    if (schedule && !schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
 
     if (audience && !["Class Advisers", "Parents", "Both"].includes(audience)) {
       return NextResponse.json({ success: false, message: "Invalid audience." }, { status: 400 });
     }
 
+    const { data: existing, error: existingError } = await supabase
+      .from("guidance_announcements")
+      .select("id, title, audience, status")
+      .eq("id", id)
+      .eq("guidance_id", guidance.id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) return NextResponse.json({ success: false, message: "Announcement not found." }, { status: 404 });
+
     const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (title)      updatePayload.title    = title;
     if (message)    updatePayload.message  = message;
     if (audience)   updatePayload.audience = audience;
-    if (scheduledAt !== undefined) {
-      updatePayload.scheduled_at = scheduledAt;
-      updatePayload.status       = scheduledAt ? "Scheduled" : "Published";
+    if (schedule) {
+      updatePayload.scheduled_at = schedule.scheduledAt;
+      updatePayload.status = schedule.scheduledAt ? "Scheduled" : "Published";
     }
 
     const { data, error } = await supabase
@@ -54,6 +57,37 @@ export async function PATCH(
       .single();
 
     if (error) throw error;
+
+    const nextAudience = String(data.audience ?? "");
+    const becamePublished = data.status === "Published" && existing.status !== "Published";
+    if (becamePublished && (nextAudience === "Class Advisers" || nextAudience === "Parents" || nextAudience === "Both")) {
+      await deliverGuidanceAnnouncement(data, nextAudience);
+    }
+
+    if (data.status !== "Published" || (nextAudience !== "Parents" && nextAudience !== "Both")) {
+      const { error: notificationError } = await supabase
+        .from("parent_announcement_notifications")
+        .delete()
+        .eq("source", "guidance")
+        .eq("announcement_id", data.id);
+      if (notificationError) throw notificationError;
+    }
+
+    const previousAudience = String(existing.audience ?? "");
+    const roles = new Set<RealtimeRecipientRole>(["guidance"]);
+    if (existing.status === "Published") {
+      roles.add("principal");
+      if (previousAudience === "Parents" || previousAudience === "Both") roles.add("parent");
+      if (previousAudience === "Class Advisers" || previousAudience === "Both") roles.add("adviser");
+    }
+    if (data.status === "Published") {
+      roles.add("principal");
+      if (nextAudience === "Parents" || nextAudience === "Both") roles.add("parent");
+      if (nextAudience === "Class Advisers" || nextAudience === "Both") roles.add("adviser");
+    }
+    const recipients = await recipientsForRoles([...roles]);
+    recipients.push({ role: "guidance", id: Number(guidance.id) });
+    await publishRealtimeInvalidation(recipients, "announcements");
 
     await logAnnouncementAudit({
       action: "Updated",

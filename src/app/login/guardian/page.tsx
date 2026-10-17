@@ -283,6 +283,19 @@ function GuardianLoginPageContent() {
         return;
       }
 
+      if (data.accountExists === true) {
+        try {
+          window.sessionStorage.removeItem("guardian-signup");
+        } catch {
+          // The form has already completed its account-linking step.
+        }
+        switchMode("login");
+        setEmail(signup.email);
+        setPassword("");
+        setSuccess(data.message || "This student is linked to your existing Parent account. Please log in or recover access.");
+        return;
+      }
+
       try {
         window.sessionStorage.setItem("guardian-signup", JSON.stringify({ ...signup, termsAccepted: terms.termsAccepted }));
       } catch {

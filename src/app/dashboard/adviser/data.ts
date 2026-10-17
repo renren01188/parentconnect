@@ -237,7 +237,7 @@ export interface AdminMessage {
 
 // ─── Notification types ───────────────────────────────────────────────────────
 export type NotificationType =
-  | "rfid" | "report" | "absence" | "excused" | "escalated" | "resolved" | "announcement";
+  | "report" | "absence" | "excused" | "escalated" | "resolved" | "announcement";
 
 export interface Notification {
   id: number;
@@ -251,7 +251,6 @@ export interface Notification {
 }
 
 export const INITIAL_NOTIFICATIONS: Notification[] = [
-  { id: 1, type: "rfid", title: "RFID Scan Alert", message: "Pedro Reyes scanned in at 08:15 AM — marked as Late. Consider notifying parents.", time: "9:45 AM", date: "today", read: false },
   { id: 2, type: "report", title: "New Parent Report", message: "Maria Santos Doe's parent submitted a new academic concern. Tap to review and respond.", time: "9:30 AM", date: "today", read: false, parentName: "Maria Santos Doe's Parent" },
   { id: 3, type: "report", title: "New Parent Report", message: "Juan dela Cruz's parent submitted a request for school records. Tap to review and respond.", time: "8:15 AM", date: "today", read: false, parentName: "Juan dela Cruz's Parent" },
   { id: 4, type: "absence", title: "Absence Alert", message: "3 students (Luis Castro, Sofia Torres, Rico Mendoza) have not scanned in yet. Class started 30 minutes ago.", time: "7:30 AM", date: "today", read: false },

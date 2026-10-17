@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processDueScheduledDeletions } from "@/lib/processScheduledDeletions";
 import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
+import { processDueScheduledAnnouncements } from "@/lib/processScheduledAnnouncements";
 
 async function processScheduledDeletions(req: NextRequest) {
   // CRON_SECRET is the standard Vercel cron secret. Keep the previous name
@@ -10,14 +11,15 @@ async function processScheduledDeletions(req: NextRequest) {
     return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
   }
   try {
-    const [{ archived, failed }, transfers] = await Promise.all([
+    const [{ archived, failed }, transfers, announcements] = await Promise.all([
       processDueScheduledDeletions(),
       processDueAdviserTransfers(),
+      processDueScheduledAnnouncements(),
     ]);
-    return NextResponse.json({ success: true, archived, failed, transfers });
+    return NextResponse.json({ success: true, archived, failed, transfers, announcements });
   } catch (error) {
     return NextResponse.json(
-      { success: false, message: error instanceof Error ? error.message : "Unable to process scheduled deletions." },
+      { success: false, message: error instanceof Error ? error.message : "Unable to process scheduled work." },
       { status: 500 },
     );
   }

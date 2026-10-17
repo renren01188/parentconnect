@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendIctAnnouncementEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
-import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
 import { ictAnnouncementRecipientRoles, normalizeIctAnnouncementAudience } from "@/lib/ictAnnouncementAudience";
 import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
@@ -41,13 +41,14 @@ export async function GET() {
     }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
     try {
         const ict = await getIctFromToken();
         if (!ict) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
 
         const { title, message, audience: rawAudience, scheduled_at } = await req.json();
         const audience = normalizeIctAnnouncementAudience(rawAudience);
+        const schedule = normalizeOptionalAnnouncementSchedule(scheduled_at);
 
         if (!title?.trim() || !message?.trim()) {
             return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
@@ -55,15 +56,10 @@ export async function POST(req: Request) {
         if (!audience) {
             return NextResponse.json({ success: false, message: "Select at least one audience." }, { status: 400 });
         }
-        if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
-            return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
-        }
-        if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
-            return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
-        }
+        if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
 
         const senderName = [ict.first_name, ict.last_name].filter(Boolean).join(" ").trim() || "ICT Office";
-        const status = scheduled_at ? "Scheduled" : "Published";
+        const status = schedule.scheduledAt ? "Scheduled" : "Published";
 
         const { data: ann, error } = await supabase
             .from("ict_announcements")
@@ -74,7 +70,7 @@ export async function POST(req: Request) {
                 message: message.trim(),
                 audience,
                 status,
-                scheduled_at: scheduled_at ?? null,
+                scheduled_at: schedule.scheduledAt,
             })
             .select()
             .single();

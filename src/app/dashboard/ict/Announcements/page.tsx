@@ -474,6 +474,7 @@ export default function ICTAnnouncementsPage() {
                     min={nextSchoolCalendarDay()}
                     onChange={(e) => { setForm({ ...form, scheduleDate: e.target.value }); setScheduleError(null); }}
                   />
+                  <p className="text-xs leading-relaxed text-gray-500">Optional — leave this blank to publish an urgent announcement now, or choose a future date to schedule it.</p>
                   {scheduleError && <p className="text-xs font-medium text-red-600">{scheduleError}</p>}
                 </div>
               </div>

@@ -26,6 +26,7 @@ export async function getAdviserFromToken(): Promise<AdviserPayload | null> {
     if (!token) return null;
     const { payload } = await jwtVerify(token, SECRET);
     const tokenAdviser = payload as unknown as AdviserPayload;
+    if (tokenAdviser.role !== "adviser") return null;
 
     // Grade and section are authorisation data, not just display data.  A JWT can
     // outlive an ICT-approved assignment change, so always resolve these fields

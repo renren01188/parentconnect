@@ -10,12 +10,19 @@ type ReconcileOptions = {
   studentDbId?: number;
 };
 
+type VerifiedParentStudentLink = {
+  parentId: number;
+  studentId: string;
+  relationship: FamilyRole;
+};
+
 type ParentRow = {
   id: number;
   parent_first_name: string | null;
   parent_middle_name: string | null;
   parent_last_name: string | null;
   relationship: string | null;
+  contact_number: string | null;
 };
 
 type StudentRow = {
@@ -29,6 +36,7 @@ type FamilyMember = {
   first_name: string | null;
   middle_name: string | null;
   last_name: string | null;
+  contact_number: string | null;
 };
 
 const FAMILY_ROLES = new Set<FamilyRole>(["Father", "Mother", "Guardian"]);
@@ -37,14 +45,47 @@ function isFamilyRole(value: unknown): value is FamilyRole {
   return FAMILY_ROLES.has(value as FamilyRole);
 }
 
+function normalizePhone(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (/^09\d{9}$/.test(digits)) return digits;
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
+  if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+  return "";
+}
+
+function hasSameVerifiedPhone(left: unknown, right: unknown) {
+  const leftPhone = normalizePhone(left);
+  const rightPhone = normalizePhone(right);
+  return !!leftPhone && leftPhone === rightPhone;
+}
+
+/**
+ * Adds the one student link that was just verified by the guardian's LRN
+ * enrollment flow. This deliberately does not infer siblings from a name.
+ */
+export async function ensureParentStudentLink({ parentId, studentId, relationship }: VerifiedParentStudentLink) {
+  if (!Number.isSafeInteger(parentId) || parentId <= 0 || !studentId || !isFamilyRole(relationship)) {
+    throw new Error("A verified parent, student, and family relationship are required for linking.");
+  }
+
+  const { error } = await supabase
+    .from("parent_student_links")
+    .upsert({ parent_id: parentId, student_id: studentId, relationship }, {
+      onConflict: "parent_id,student_id",
+      ignoreDuplicates: true,
+    });
+  if (error) throw error;
+}
+
 /**
  * Adds missing links between existing parent accounts and SF1 family records.
  *
- * Matching requires the same Father/Mother/Guardian role and exact normalized
- * first and last names. Middle names and suffixes are optional in Parent
- * enrollment, so they cannot prevent a legitimate sibling link. This never
- * removes links: a historical link remains valid until staff explicitly remove
- * it through the existing management workflow.
+ * Automatic matching requires the same Father/Mother/Guardian role, exact
+ * normalized first/last names, and the same valid phone number in the SF1
+ * verification record and parent account. Middle names and suffixes are
+ * optional in Parent enrollment, so they cannot prevent a legitimate sibling
+ * link. This never removes links: a historical link remains valid until staff
+ * explicitly remove it through the existing management workflow.
  */
 export async function reconcileParentStudentLinks({ parentId, studentDbId }: ReconcileOptions) {
   if (!parentId && !studentDbId) {
@@ -55,7 +96,7 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   if (parentId) {
     const { data, error } = await supabase
       .from("parents")
-      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
       .eq("id", parentId);
     if (error) throw error;
     parents = (data ?? []) as ParentRow[];
@@ -71,11 +112,11 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   const familyResult = studentDbId
     ? await supabase
       .from("student_family_members")
-      .select("student_db_id, role, first_name, middle_name, last_name")
+      .select("student_db_id, role, first_name, middle_name, last_name, contact_number")
       .eq("student_db_id", studentDbId)
     : await supabase
       .from("student_family_members")
-      .select("student_db_id, role, first_name, middle_name, last_name")
+      .select("student_db_id, role, first_name, middle_name, last_name, contact_number")
       .in("role", parentRoles);
   if (familyResult.error) throw familyResult.error;
 
@@ -90,7 +131,7 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   if (!parentId) {
     const { data, error } = await supabase
       .from("parents")
-      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
       .in("relationship", familyRoles);
     if (error) throw error;
     parents = (data ?? []) as ParentRow[];
@@ -124,6 +165,7 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
           lastName: member.last_name,
         }
       ))
+      .filter((parent) => hasSameVerifiedPhone(parent.contact_number, member.contact_number))
       .map((parent) => ({
         parent_id: parent.id,
         student_id: student.student_id,

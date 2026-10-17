@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
 import { sameParentEnrollmentName } from "@/lib/familyName";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
+import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { sameGuardianRelationship } from "@/lib/guardianRelationship";
 import {
   legacyTemporaryPasswordExpiryEpochSeconds,
@@ -27,6 +27,7 @@ type FamilyMember = {
   last_name: string | null;
   suffix: string | null;
   relationship: string | null;
+  contact_number: string | null;
 };
 
 type ParentRow = {
@@ -63,6 +64,18 @@ type PendingSignup = {
 };
 
 const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
+
+function normalizePhone(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
+  if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+  return digits;
+}
+
+function matchesRecordedPhone(recorded: unknown, claimed: string) {
+  const normalizedRecorded = normalizePhone(recorded);
+  return !normalizedRecorded || normalizedRecorded === normalizePhone(claimed);
+}
 
 function isPasswordSet(value: ParentRow["password_set"]) {
   return value === true || value === 1;
@@ -121,7 +134,7 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
 
   const { data: familyMembers, error: familyError } = await supabase
     .from("student_family_members")
-    .select("role, first_name, middle_name, last_name, suffix, relationship")
+    .select("role, first_name, middle_name, last_name, suffix, relationship, contact_number")
     .eq("student_db_id", student.id)
     .eq("role", signup.relationship);
   if (familyError) throw familyError;
@@ -133,6 +146,7 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
       { firstName: familyMember.first_name, middleName: familyMember.middle_name, lastName: familyMember.last_name },
     )
     || (signup.relationship === "Guardian" && !sameGuardianRelationship(signup.guardianRelationship, familyMember.relationship || "Guardian"))
+    || !matchesRecordedPhone(familyMember.contact_number, signup.contactNumber)
   ) throw new Error(SIGNUP_RETRY_MESSAGE);
 
   let existingParent: ParentRow | null = null;
@@ -145,26 +159,16 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     }
   }
 
-  const [{ data: emailRows, error: emailError }, { data: roleRows, error: roleError }] = await Promise.all([
-    supabase.from("parents").select(parentColumns).ilike("email", signup.email),
-    supabase.from("parents").select(parentColumns).eq("relationship", signup.relationship),
-  ]);
+  const { data: emailRows, error: emailError } = await supabase
+    .from("parents")
+    .select(parentColumns)
+    .eq("email", signup.email);
   if (emailError) throw emailError;
-  if (roleError) throw roleError;
   const conflictingEmail = ((emailRows ?? []) as ParentRow[]).some((parent) => parent.id !== existingParent?.id);
-  const conflictingIdentity = ((roleRows ?? []) as ParentRow[]).some((parent) => parent.id !== existingParent?.id && sameParentEnrollmentName(
-    {
-      firstName: parent.parent_first_name,
-      middleName: parent.parent_middle_name,
-      lastName: parent.parent_last_name,
-    },
-    {
-      firstName: familyMember.first_name,
-      middleName: familyMember.middle_name,
-      lastName: familyMember.last_name,
-    },
-  ));
-  if (conflictingEmail || conflictingIdentity) throw new Error(SIGNUP_RETRY_MESSAGE);
+  // A matching name is not an account identifier. The verified LRN and the
+  // email account are the only records considered here, so same-name parents
+  // can complete separate signups without being blocked or cross-linked.
+  if (conflictingEmail) throw new Error(SIGNUP_RETRY_MESSAGE);
 
   const expirySeconds = temporaryPasswordExpiryEpochSeconds(signup.temporaryPasswordExpiresAt);
   if (!expirySeconds || expirySeconds * 1_000 <= Date.now()) throw new Error(SIGNUP_RETRY_MESSAGE);
@@ -210,6 +214,11 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
   }
 
   try {
+    await ensureParentStudentLink({
+      parentId: parent.id,
+      studentId: student.student_id,
+      relationship: signup.relationship,
+    });
     await reconcileParentStudentLinks({ parentId: parent.id });
   } catch (error) {
     if (createdParentId) {

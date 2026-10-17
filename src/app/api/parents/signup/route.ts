@@ -13,7 +13,7 @@ import {
   PARENT_SIGNUP_GUARD_SCOPE,
 } from "@/lib/loginProtection";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
+import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
@@ -56,10 +56,20 @@ type FamilyMember = {
   last_name: string | null;
   suffix: string | null;
   relationship: string | null;
+  contact_number: string | null;
 };
 
 function normalizePhone(value: unknown) {
-  return typeof value === "string" ? value.replace(/\D/g, "") : "";
+  const digits = typeof value === "string" ? value.replace(/\D/g, "") : "";
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
+  if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+  return digits;
+}
+
+/** A staff-recorded phone, when present, must agree with the signup claim. */
+function matchesRecordedPhone(recorded: unknown, claimed: string) {
+  const normalizedRecorded = normalizePhone(recorded);
+  return !normalizedRecorded || normalizedRecorded === claimed;
 }
 
 function genericEnrollmentError(status = 400) {
@@ -147,7 +157,7 @@ export async function POST(req: NextRequest) {
     // on a stale name copied into a legacy parent-account record.
     const { data: familyMembers, error: familyError } = await supabase
       .from("student_family_members")
-      .select("role, first_name, middle_name, last_name, suffix, relationship")
+      .select("role, first_name, middle_name, last_name, suffix, relationship, contact_number")
       .eq("student_db_id", student.id)
       .in("role", ["Father", "Mother", "Guardian"]);
     if (familyError) throw familyError;
@@ -168,6 +178,9 @@ export async function POST(req: NextRequest) {
       guardianRelationship,
       currentFamilyMember.relationship || "Guardian",
     )) return enrollmentFailure(req, 403);
+    if (!matchesRecordedPhone(currentFamilyMember.contact_number, contactNumber)) {
+      return enrollmentFailure(req, 403);
+    }
 
     // Ownership is established exclusively from the current SF1 family name,
     // role, and one child LRN. Email and phone are contact details supplied by
@@ -193,33 +206,34 @@ export async function POST(req: NextRequest) {
     });
 
     const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
-    const [{ data: emailRows, error: emailError }, { data: roleRows, error: roleError }] = await Promise.all([
-      supabase.from("parents").select(parentColumns).ilike("email", email),
-      supabase.from("parents").select(parentColumns).eq("relationship", relationship),
-    ]);
+    const { data: emailRows, error: emailError } = await supabase
+      .from("parents")
+      .select(parentColumns)
+      .eq("email", email);
     if (emailError) throw emailError;
-    if (roleError) throw roleError;
 
     const parentsByEmail = (emailRows ?? []) as MatchedParent[];
-    const parentsByIdentity = ((roleRows ?? []) as MatchedParent[]).filter((parent) => sameParentEnrollmentName(
-      {
-        firstName: parent.parent_first_name,
-        middleName: parent.parent_middle_name,
-        lastName: parent.parent_last_name,
-      },
-      {
-        firstName: currentFamilyMember.first_name,
-        middleName: currentFamilyMember.middle_name,
-        lastName: currentFamilyMember.last_name,
-      },
-    ));
-
-    // Multiple rows for an email or identity are a legacy data conflict. Do
-    // not guess which account belongs to this person.
-    if (parentsByEmail.length > 1 || parentsByIdentity.length > 1) return enrollmentFailure(req, 409);
+    // An email identifies an account. Never locate an account by a shared
+    // family name alone: two different Fathers/Mothers/Guardians can share a
+    // name, but must be able to use their own account and child LRN.
+    if (parentsByEmail.length > 1) return enrollmentFailure(req, 409);
 
     const emailParent = parentsByEmail[0];
-    const identityParent = parentsByIdentity[0];
+    const accountMatchesVerifiedFamily = (parent: MatchedParent) =>
+      parent.relationship === relationship
+      && sameParentEnrollmentName(
+        {
+          firstName: parent.parent_first_name,
+          middleName: parent.parent_middle_name,
+          lastName: parent.parent_last_name,
+        },
+        {
+          firstName: currentFamilyMember.first_name,
+          middleName: currentFamilyMember.middle_name,
+          lastName: currentFamilyMember.last_name,
+        },
+      )
+      && matchesRecordedPhone(parent.contact_number, contactNumber);
     const linkedClaimableParents = linkedParents.filter((parent) =>
       parentAccountCanAccess(parent)
       && !isPasswordSet(parent.password_set)
@@ -235,28 +249,25 @@ export async function POST(req: NextRequest) {
       parentAccountCanAccess(parent)
       && !isPasswordSet(parent.password_set),
     );
-    const hasCurrentStudentLink = (parent: MatchedParent) => linkedParents.some((linked) => linked.id === parent.id);
+    const linkedRegisteredParents = linkedParents.filter((parent) =>
+      parentAccountCanAccess(parent)
+      && isPasswordSet(parent.password_set)
+      && accountMatchesVerifiedFamily(parent),
+    );
 
     let matchedParent: MatchedParent | null = null;
     if (emailParent) {
-      // An email can be reused only by its matching account identity, or by
-      // the one pending legacy account already attached to this exact LRN.
-      if (!parentAccountCanAccess(emailParent)) return enrollmentFailure(req, 403);
-      if (identityParent && identityParent.id !== emailParent.id) return enrollmentFailure(req, 409);
-      const emailIdentityMatches = identityParent?.id === emailParent.id;
-      if (!emailIdentityMatches && !hasCurrentStudentLink(emailParent)) return enrollmentFailure(req, 403);
-      matchedParent = emailParent;
-    } else if (identityParent) {
-      if (!parentAccountCanAccess(identityParent)) return enrollmentFailure(req, 403);
-      const existingEmail = identityParent.email?.trim().toLowerCase() ?? "";
-      // A fully registered account must never have its contact address
-      // replaced through sign-up. An incomplete account, however, may be a
-      // previous typo: keep it untouched for now and allow the parent to
-      // prove the corrected address before the verification step updates it.
-      if (isPasswordSet(identityParent.password_set) && existingEmail && existingEmail !== email) {
-        return enrollmentFailure(req, 409);
+      if (!parentAccountCanAccess(emailParent) || !accountMatchesVerifiedFamily(emailParent)) {
+        return enrollmentFailure(req, 403);
       }
-      matchedParent = identityParent;
+      matchedParent = emailParent;
+    } else if (linkedRegisteredParents.length === 1) {
+      // The account is already linked to this exact verified child, so no
+      // global name search is needed. Guide the parent back to login/recovery
+      // instead of ever creating a duplicate account.
+      matchedParent = linkedRegisteredParents[0];
+    } else if (linkedRegisteredParents.length > 1) {
+      return enrollmentFailure(req, 409);
     } else if (linkedClaimableParents.length === 1) {
       // ICT may have corrected an old manual-registration family name while
       // the legacy pending account still contains the old name. Its one link
@@ -271,29 +282,23 @@ export async function POST(req: NextRequest) {
     }
 
     // A parent who already completed registration can submit another child's
-    // LRN without creating a second account. The same role/name rule is
-    // rechecked before reconciliation; no password or contact detail changes
-    // are made in this path.
+    // LRN without creating a second account. The email, exact child LRN,
+    // selected family role, and SF1 name/phone have all been verified above.
+    // The selected child is linked directly; optional reconciliation may add
+    // only siblings with the same staff-recorded phone number.
     if (matchedParent && isPasswordSet(matchedParent.password_set)) {
-      const accountStillMatchesFamily = matchedParent.relationship === relationship && sameParentEnrollmentName(
-        {
-          firstName: matchedParent.parent_first_name,
-          middleName: matchedParent.parent_middle_name,
-          lastName: matchedParent.parent_last_name,
-        },
-        {
-          firstName: currentFamilyMember.first_name,
-          middleName: currentFamilyMember.middle_name,
-          lastName: currentFamilyMember.last_name,
-        },
-      );
-      if (!accountStillMatchesFamily) return enrollmentFailure(req, 403);
+      if (!accountMatchesVerifiedFamily(matchedParent)) return enrollmentFailure(req, 403);
+      await ensureParentStudentLink({
+        parentId: matchedParent.id,
+        studentId: student.student_id,
+        relationship,
+      });
       await reconcileParentStudentLinks({ parentId: matchedParent.id });
       await clearEnrollmentFailures(req);
       return NextResponse.json({
         success: true,
-        redirectTo: "/login/guardian",
-        message: "This student is linked to your existing parent account. Please log in.",
+        accountExists: true,
+        message: "This student is linked to your existing Parent account. Please log in, or use Forgot password if you need to recover access.",
       });
     }
 

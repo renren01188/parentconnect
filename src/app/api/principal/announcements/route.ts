@@ -7,7 +7,7 @@ import {
   principalAnnouncementRecipientRoles,
 } from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
-import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 export async function GET() {
@@ -99,7 +99,7 @@ export async function POST(req: Request) {
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const audience = normalizePrincipalAnnouncementAudience(body.audience);
-    const scheduledAt = body.scheduled_at;
+    const schedule = normalizeOptionalAnnouncementSchedule(body.scheduled_at);
 
     if (!title || !message) {
       return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
@@ -107,14 +107,9 @@ export async function POST(req: Request) {
     if (!audience) {
       return NextResponse.json({ success: false, message: "Invalid audience." }, { status: 400 });
     }
-    if (scheduledAt && (typeof scheduledAt !== "string" || Number.isNaN(Date.parse(scheduledAt)))) {
-      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
-    }
-    if (scheduledAt && !isFutureSchoolCalendarDay(scheduledAt)) {
-      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
-    }
+    if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
 
-    const status = scheduledAt ? "Scheduled" : "Published";
+    const status = schedule.scheduledAt ? "Scheduled" : "Published";
     const { data: announcement, error } = await supabase
       .from("principal_announcements")
       .insert({
@@ -123,7 +118,7 @@ export async function POST(req: Request) {
         message,
         audience,
         status,
-        scheduled_at: scheduledAt ?? null,
+        scheduled_at: schedule.scheduledAt,
       })
       .select()
       .single();

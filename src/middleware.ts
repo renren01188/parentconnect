@@ -148,8 +148,13 @@ export async function middleware(req: NextRequest) {
     // A pending signup has no parent session yet. This endpoint validates its
     // signed, short-lived cookie before it reveals or sends a replacement.
     || pathname === "/api/parents/resend-temp-password";
+  // Only the parent-facing collection endpoint belongs to the parent session.
+  // Adviser approval endpoints share the `/api/excuse-letters` namespace but
+  // authenticate with `getAdviserFromToken` in their route handlers. Guarding
+  // the whole namespace here caused those requests to be rejected as parents
+  // before the adviser authorization and class-scope checks could run.
   const isParentFeatureApi = (pathname.startsWith("/api/parents/") && !isPublicParentApi)
-    || pathname.startsWith("/api/excuse-letters")
+    || pathname === "/api/excuse-letters"
     || pathname === "/api/attendance/parent-history";
   if (isParentFeatureApi) {
     const token = req.cookies.get("parent_token")?.value;

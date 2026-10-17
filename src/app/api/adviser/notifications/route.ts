@@ -25,15 +25,7 @@ export async function GET() {
         const yesterdayStr = localYesterday.toISOString().split("T")[0];
 
         // ── Fetch all data in parallel ────────────────────────────────────────────
-        const [rfidRes, absentLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes] = await Promise.all([
-            // 1. Late RFID scans today
-            supabase
-                .from("attendance_logs")
-                .select("id, student_id, time_logged, attendance_date, status")
-                .eq("status", "Late")
-                .eq("attendance_date", todayStr)
-                .order("time_logged", { ascending: false }),
-
+        const [absentLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes] = await Promise.all([
             supabase
                 .from("attendance_logs")
                 .select("id, student_id, attendance_date, time_logged")
@@ -110,7 +102,6 @@ export async function GET() {
         ]);
 
         const queryError = [
-            rfidRes,
             absentLogsRes,
             absenceRes,
             reportRes,
@@ -192,30 +183,7 @@ export async function GET() {
             ])
         );
 
-        // ── 1. RFID Late notifications ────────────────────────────────────────────
-        for (const log of rfidRes.data ?? []) {
-            const student = studentsById.get(log.student_id.trim().toLowerCase());
-            if (!student) continue;
-
-            const key = `rfid-${log.id}`;
-            const timeStr = log.time_logged
-                ? new Date(`${log.attendance_date}T${log.time_logged}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-                : "Unknown time";
-
-            notifications.push({
-                id: key,
-                type: "rfid",
-                title: "RFID Scan Alert",
-                message: `${studentName(student)} scanned in at ${timeStr} — marked as Late. Consider notifying parents.`,
-                time: formatTime(`${log.attendance_date}T${log.time_logged ?? "00:00:00"}`),
-                date: getDateLabel(log.attendance_date),
-                rawTime: `${log.attendance_date}T${log.time_logged ?? "00:00:00"}`,
-                read: readKeys.has(key),
-                section: student.section ?? undefined,
-            });
-        }
-
-        // ── 2. Absence notifications ──────────────────────────────────────────────
+        // ── 1. Absence notifications ──────────────────────────────────────────────
         const absentStudents = new Map<string, AdviserStudent>();
         let latestAbsenceAt: string | null = null;
 

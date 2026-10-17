@@ -7,7 +7,7 @@ import {
   principalAnnouncementRecipientRoles,
 } from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
-import { isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
 
 export async function PATCH(
@@ -23,20 +23,15 @@ export async function PATCH(
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const audience = normalizePrincipalAnnouncementAudience(body.audience);
-    const scheduled_at = body.scheduled_at;
+    const schedule = normalizeOptionalAnnouncementSchedule(body.scheduled_at);
     if (!title || !message) {
       return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
     }
     if (!audience) {
       return NextResponse.json({ success: false, message: "Invalid audience." }, { status: 400 });
     }
-    if (scheduled_at && (typeof scheduled_at !== "string" || Number.isNaN(Date.parse(scheduled_at)))) {
-      return NextResponse.json({ success: false, message: "Schedule date is invalid." }, { status: 400 });
-    }
-    if (scheduled_at && !isFutureSchoolCalendarDay(scheduled_at)) {
-      return NextResponse.json({ success: false, message: "Schedule date must be a future calendar day in Asia/Manila." }, { status: 400 });
-    }
-    const status = scheduled_at ? "Scheduled" : "Published";
+    if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
+    const status = schedule.scheduledAt ? "Scheduled" : "Published";
 
     const { data: existing, error: existingError } = await supabase
       .from("principal_announcements")
@@ -54,7 +49,7 @@ export async function PATCH(
         message,
         audience,
         status,
-        scheduled_at: scheduled_at ?? null,
+        scheduled_at: schedule.scheduledAt,
       })
       .eq("id", Number(id))
       .eq("sender_id", principal.id)

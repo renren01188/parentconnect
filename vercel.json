@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/scheduled-deletions/process",
-      "schedule": "10 16 * * *"
+      "schedule": "0 16 * * *"
     }
   ]
 }

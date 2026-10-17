@@ -607,12 +607,17 @@ export default function ContactICTPage() {
             <>
               <div className="shrink-0 border-b border-l-4 border-l-emerald-500 border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-500 text-xs font-bold text-white">
                       {initials(selected.otherName)}
                     </div>
-                    <div>
-                      <p className="text-sm font-extrabold text-slate-900">{selected.otherName}</p>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-extrabold text-slate-900">{selected.otherName}</p>
+                        <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                          {selected.otherRole}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(selected.status)}`}>{selected.status}</span>

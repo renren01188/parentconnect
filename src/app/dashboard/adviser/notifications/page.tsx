@@ -4,14 +4,14 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
     Send, UserCheck, ChevronRight,
-    Filter, CheckCheck, Wifi, AlertTriangle, CheckCircle,
+    Filter, CheckCheck, AlertTriangle, CheckCircle,
     UserX, X, TriangleAlert, Megaphone, Eye, FileText, Bell, LoaderCircle, RefreshCw,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { type NotificationType } from "../data";
 
 interface Notification {
-    id: string;        // now a string like "rfid-1", "report-2-new"
+    id: string;        // now a string like "report-2-new"
     type: NotificationType;
     title: string;
     message: string;
@@ -31,7 +31,6 @@ interface Notification {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getNotifStyle(type: NotificationType) {
     switch (type) {
-        case "rfid": return { icon: Wifi, iconClass: "bg-emerald-500 text-white" };
         case "report": return { icon: FileText, iconClass: "bg-emerald-500 text-white" };
         case "absence": return { icon: UserX, iconClass: "bg-emerald-500 text-white" };
         case "excused": return { icon: CheckCircle, iconClass: "bg-sky-500 text-white" };
@@ -219,7 +218,6 @@ function AnnouncementViewModal({ notif, onClose }: { notif: Notification; onClos
 
 // ── Notification Row ──────────────────────────────────────────────────────────
 const NOTIF_HINT: Record<NotificationType, string> = {
-    rfid: "View late students →",
     report: "View parent report →",
     absence: "View absent students →",
     excused: "View excused students →",
@@ -420,7 +418,6 @@ export default function NotificationsPage() {
     const older = readNotifs.filter(n => n.date === "older");
 
     const summary = [
-        { label: "RFID Alerts", icon: Wifi, count: notifications.filter(n => n.type === "rfid").length },
         { label: "New Reports", icon: FileText, count: notifications.filter(n => ["report", "resolved"].includes(n.type)).length },
         { label: "Absence Alerts", icon: UserX, count: notifications.filter(n => n.type === "absence").length },
         { label: "Excused Alerts", icon: CheckCircle, count: notifications.filter(n => n.type === "excused").length },
@@ -438,7 +435,6 @@ export default function NotificationsPage() {
 
         void markOne(n.id);
         switch (n.type) {
-            case "rfid": router.push("/dashboard/adviser/students?status=Late&from=notification"); break;
             case "absence": router.push(`/dashboard/adviser/students?status=Absent&section=${encodeURIComponent(n.section ?? "")}&from=notification`); break;
             case "excused": router.push(`/dashboard/adviser/students?status=Excused&section=${encodeURIComponent(n.section ?? "")}&from=notification`); break;
             case "report": router.push(n.parentName ? `/dashboard/adviser/reports?parent=${encodeURIComponent(n.parentName)}` : "/dashboard/adviser/reports"); break;
@@ -494,7 +490,7 @@ export default function NotificationsPage() {
                                     <div>
                                         <p className="text-[10.5px] font-bold text-slate-400 uppercase tracking-widest mb-2">Type</p>
                                         <div className="flex flex-wrap gap-1.5">
-                                            {["all", "rfid", "report", "absence", "excused", "announcement", "resolved"].map(t => (
+                                            {["all", "report", "absence", "excused", "announcement", "resolved"].map(t => (
                                                 <button key={t} onClick={() => setFilterType(t)}
                                                     className={`px-2.5 py-1 rounded-full text-[11px] font-semibold capitalize transition-colors ${filterType === t ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
                                                     {t === "all" ? "All" : t}
