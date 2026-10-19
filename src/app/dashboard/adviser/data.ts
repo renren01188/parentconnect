@@ -191,6 +191,8 @@ export interface StudentReport {
   description: string;
   submitted_at: string;
   status: StudentReportStatus;
+  /** True only when an active, registered Parent account is linked to this student. */
+  parentLinked?: boolean;
   // ✅ Add these:
   parent_name: string;
   replies?: { sender: string; message: string; sent_at: string }[];

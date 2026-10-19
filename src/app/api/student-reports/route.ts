@@ -27,6 +27,22 @@ function isUpstreamUnavailable(error: unknown) {
   return error instanceof TypeError && /fetch failed/i.test(error.message);
 }
 
+function isRegisteredParentAccount(parent: {
+  email?: string | null;
+  password_set?: unknown;
+  status?: string | null;
+  archive_status?: string | null;
+}) {
+  const passwordSet = parent.password_set === true
+    || parent.password_set === 1
+    || parent.password_set === "true"
+    || parent.password_set === "1";
+
+  return passwordSet
+    && parentAccountCanAccess(parent)
+    && Boolean(parent.email?.trim());
+}
+
 function manilaDayBounds() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
@@ -112,9 +128,45 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error;
 
+    // The adviser UI must not offer a forwarding action just because a
+    // student report contains an old parent name or email. A Parent can
+    // receive the message only after an active account has completed
+    // registration and is explicitly linked to this student.
+    const studentIds = [...new Set((data ?? [])
+      .map((report) => String(report.student_id ?? "").trim())
+      .filter(Boolean))];
+    const { data: parentLinks, error: parentLinksError } = studentIds.length > 0
+      ? await supabase
+        .from("parent_student_links")
+        .select("student_id, parents!inner(id, email, password_set, status, archive_status)")
+        .in("student_id", studentIds)
+      : { data: [], error: null };
+
+    if (parentLinksError) throw parentLinksError;
+
+    const studentsWithRegisteredParents = new Set<string>();
+    for (const link of parentLinks ?? []) {
+      const parentRelation = link.parents as unknown;
+      const parents = Array.isArray(parentRelation)
+        ? parentRelation
+        : parentRelation ? [parentRelation] : [];
+      if (parents.some((parent) => isRegisteredParentAccount(parent as {
+        email?: string | null;
+        password_set?: unknown;
+        status?: string | null;
+        archive_status?: string | null;
+      }))) {
+        const studentId = String(link.student_id ?? "").trim();
+        if (studentId) studentsWithRegisteredParents.add(studentId);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      reports: ((data ?? []) as StudentReportRow[]).map(toAdviserStudentReport),
+      reports: ((data ?? []) as StudentReportRow[]).map((report) => ({
+        ...toAdviserStudentReport(report),
+        parentLinked: studentsWithRegisteredParents.has(String(report.student_id ?? "").trim()),
+      })),
     });
   } catch (error: unknown) {
     console.error("GET /api/student-reports error:", error);

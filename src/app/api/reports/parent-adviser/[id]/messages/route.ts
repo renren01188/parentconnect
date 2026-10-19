@@ -1,6 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { sendGuidanceMessageEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { acceptedGuidanceRecipientForReport, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
@@ -186,29 +185,9 @@ export async function POST(
         );
       }
 
-      const isFirstGuidanceReply = !report.guidance_seen_at;
       const result = await insertMessage(reportId, "guidance", guidance.name, trimmedBody, String(report.status ?? ""), cleanedAttachments, "guidance", idempotencyKey);
       if (!result.duplicate) {
         await deliverReportInvalidation(report, reportId, result.id);
-        // Email is supplemental. It remains deferred so SMTP availability can
-        // never delay a saved reply or its live in-app delivery.
-        if (isFirstGuidanceReply && report.parent_email) {
-          after(async () => {
-            try {
-              await sendGuidanceMessageEmail({
-                recipientEmail: String(report.parent_email),
-                recipientName: String(report.parent_name ?? "Parent"),
-                recipientRole: "Parent",
-                guidanceName: guidance.name,
-                subject: String(report.subject ?? "Guidance Message"),
-                message: trimmedBody,
-                hasAttachments: cleanedAttachments.length > 0,
-              });
-            } catch (error) {
-              console.error("Guidance message email delivery failed:", error);
-            }
-          });
-        }
       }
       return NextResponse.json({ success: true, messageId: result.id });
     }

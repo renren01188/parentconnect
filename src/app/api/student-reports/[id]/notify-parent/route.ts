@@ -5,9 +5,26 @@ import { sendStudentConcernParentNotificationEmail } from "@/lib/mailer";
 import { publishReportRealtimeInvalidation, publishStudentReportsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { listMessages, toAdviserReport } from "@/app/api/reports/parent-adviser/_lib";
 import type { StudentReportRow } from "../../_lib";
+import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
+}
+
+function isRegisteredParentAccount(parent: {
+  email?: string | null;
+  password_set?: unknown;
+  status?: string | null;
+  archive_status?: string | null;
+}) {
+  const passwordSet = parent.password_set === true
+    || parent.password_set === 1
+    || parent.password_set === "true"
+    || parent.password_set === "1";
+
+  return passwordSet
+    && parentAccountCanAccess(parent)
+    && Boolean(parent.email?.trim());
 }
 
 export async function POST(
@@ -42,15 +59,7 @@ export async function POST(
     }
 
     const studentReport = report as StudentReportRow;
-    if (!studentReport.parent_email) {
-      return NextResponse.json(
-        { success: false, message: "This student does not have an active parent email." },
-        { status: 400 }
-      );
-    }
-
     const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ");
-    const parentName = studentReport.parent_name || `${studentReport.student_name}'s Parent`;
     const subject = `[Student Concern] ${studentReport.title}`;
     const trimmedMessage = String(message).trim();
 
@@ -63,28 +72,52 @@ export async function POST(
       .eq("student_id", studentReport.student_id);
 
     if (parentLookupError) throw parentLookupError;
-    const parentRow = (linkedParentRows ?? [])
+    const linkedParentIds = [...new Set((linkedParentRows ?? [])
       .flatMap((link) => {
         const relation = link.parents as unknown;
         return Array.isArray(relation) ? relation : relation ? [relation] : [];
       })
       .map((parent) => parent as { id: number; email: string | null })
-      .find((parent) => parent.email?.toLowerCase() === studentReport.parent_email?.toLowerCase());
+      .map((parent) => Number(parent.id))
+      .filter((parentId) => Number.isSafeInteger(parentId) && parentId > 0))];
+
+    if (linkedParentIds.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "This student is not linked to a registered Parent account yet. The message cannot be sent." },
+        { status: 409 }
+      );
+    }
+
+    // Re-read the linked accounts rather than trusting the email saved when
+    // the Student Report was created. A parent may finish sign-up or update
+    // their email after the report already exists.
+    const { data: parentAccounts, error: registeredParentLookupError } = await supabase
+      .from("parents")
+      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, status, archive_status")
+      .in("id", linkedParentIds);
+
+    if (registeredParentLookupError) throw registeredParentLookupError;
+
+    const registeredParents = (parentAccounts ?? []).filter((parent) => isRegisteredParentAccount(parent));
+    const reportParentEmail = studentReport.parent_email?.trim().toLowerCase();
+    const parentRow = registeredParents.find((parent) => parent.email?.trim().toLowerCase() === reportParentEmail)
+      ?? registeredParents[0];
 
     if (!parentRow) {
       return NextResponse.json(
-        { success: false, message: "No parent or guardian linked to this student could be found." },
-        { status: 400 }
+        { success: false, message: "This student is not linked to a registered Parent account yet. The message cannot be sent." },
+        { status: 409 }
       );
     }
 
     const parentId = Number(parentRow.id);
-    if (!Number.isSafeInteger(parentId) || parentId <= 0) {
-      return NextResponse.json(
-        { success: false, message: "The linked parent or guardian is invalid." },
-        { status: 400 }
-      );
-    }
+    const parentEmail = String(parentRow.email ?? "").trim();
+    const parentName = [
+      parentRow.parent_first_name,
+      parentRow.parent_middle_name,
+      parentRow.parent_last_name,
+      parentRow.parent_suffix,
+    ].filter(Boolean).join(" ").trim() || studentReport.parent_name || `${studentReport.student_name}'s Parent`;
 
     // A forwarded student concern is unique to this exact parent/student/
     // adviser relationship. Checking the parent as well prevents a matching
@@ -123,7 +156,7 @@ export async function POST(
     const now = new Date().toISOString();
     const insertPayload = {
       parent_id: parentId,
-      parent_email: studentReport.parent_email,
+      parent_email: parentEmail,
       parent_name: parentName,
       adviser_id: adviser.id,
       adviser_name: adviserName,
@@ -219,7 +252,7 @@ export async function POST(
 
     try {
       await sendStudentConcernParentNotificationEmail({
-        parentEmail: studentReport.parent_email,
+        parentEmail,
         parentName,
         studentName: studentReport.student_name,
         adviserName,

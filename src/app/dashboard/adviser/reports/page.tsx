@@ -702,6 +702,7 @@ function NotifyParentModal({
     const [sent, setSent] = useState(false);
     const [sending, setSending] = useState(false);
     const [sendError, setSendError] = useState("");
+    const hasRegisteredParent = studRep.parentLinked === true;
 
     useEffect(() => {
         function h(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
@@ -710,7 +711,7 @@ function NotifyParentModal({
     }, [onClose]);
 
     async function handleSend() {
-        if (!message.trim() || sending) return;
+        if (!hasRegisteredParent || !message.trim() || sending) return;
         setSending(true);
         setSendError("");
         try {
@@ -734,10 +735,12 @@ function NotifyParentModal({
                     <div className="min-w-0">
                         <h2 className="text-lg font-extrabold text-slate-900">Notify Parent</h2>
                         <p className="text-xs text-slate-400 mt-0.5">
-                            Send a message to{" "}
-                            <span className="font-semibold text-slate-600">{studRep.parent_name}</span>{" "}
-                            about{" "}
-                            <span className="font-semibold text-slate-600">{studRep.student_name}</span>
+                            {hasRegisteredParent ? <>
+                                Send a message to <span className="font-semibold text-slate-600">{studRep.parent_name}</span> about{" "}
+                                <span className="font-semibold text-slate-600">{studRep.student_name}</span>
+                            </> : <>
+                                Parent account required for <span className="font-semibold text-slate-600">{studRep.student_name}</span>
+                            </>}
                         </p>
                     </div>
                     <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400">
@@ -772,6 +775,16 @@ function NotifyParentModal({
                             </div>
                         )}
 
+                        {!hasRegisteredParent && (
+                            <div role="status" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-900">
+                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                                <p>
+                                    <span className="font-bold">No registered Parent account is linked yet.</span>{" "}
+                                    {studRep.student_name}&apos;s message cannot be sent until a Parent completes registration and is linked to this student.
+                                </p>
+                            </div>
+                        )}
+
                         {/* Context banner */}
                         <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 flex items-start gap-3">
                             <span className="text-blue-500 mt-0.5 shrink-0"><MessageSquare className="w-4 h-4" /></span>
@@ -792,12 +805,15 @@ function NotifyParentModal({
                                 value={message}
                                 onChange={e => setMessage(e.target.value)}
                                 rows={8}
-                                autoFocus
-                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 resize-none outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
+                                autoFocus={hasRegisteredParent}
+                                disabled={!hasRegisteredParent}
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 resize-none outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                                 placeholder="Type your message to the parent..."
                             />
                             <p className="text-[11px] text-slate-400 mt-1">
-                                This message will appear in <span className="font-semibold">Parent Reports</span> and the parent will be able to reply.
+                                {hasRegisteredParent
+                                    ? <>This message will appear in <span className="font-semibold">Parent Reports</span> and the parent will be able to reply.</>
+                                    : "The message field will be available after a Parent account is registered and linked."}
                             </p>
                         </div>
 
@@ -811,8 +827,8 @@ function NotifyParentModal({
                             </button>
                             <button
                                 onClick={handleSend}
-                                disabled={!message.trim() || sending}
-                                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition sm:w-auto ${message.trim() && !sending
+                                disabled={!hasRegisteredParent || !message.trim() || sending}
+                                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition sm:w-auto ${hasRegisteredParent && message.trim() && !sending
                                     ? "bg-blue-500 hover:bg-blue-600"
                                     : "bg-blue-300 cursor-not-allowed"
                                     }`}

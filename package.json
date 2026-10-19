@@ -39,6 +39,7 @@
     "test:subject-teacher-report-security": "node scripts/test-subject-teacher-report-security.cjs",
     "test:subject-teacher-report-categories": "node scripts/test-subject-teacher-report-categories.cjs",
     "test:student-concern-parent-reports": "node scripts/test-student-concern-parent-reports.cjs",
+    "test:student-report-parent-link": "node scripts/test-student-report-parent-link.cjs",
     "test:student-concern-agreement": "node scripts/test-student-concern-agreement.cjs",
     "test:notification-realtime": "node scripts/test-notification-realtime.cjs",
     "test:adviser-notification-badge": "node scripts/test-adviser-notification-badge.cjs",
@@ -80,6 +81,7 @@
     "test:student-transfer-flow": "node scripts/test-student-transfer-flow.cjs",
     "test:principal-attendance-summary-students": "node scripts/test-principal-attendance-summary-students.cjs",
     "test:principal-attendance-summary-data-flow": "node scripts/test-principal-attendance-summary-data-flow.cjs",
+    "test:parent-report-reply-email-suppression": "node scripts/test-parent-report-reply-email-suppression.cjs",
     "test:message-image-attachments": "node scripts/test-message-image-attachments.cjs"
   },
   "dependencies": {

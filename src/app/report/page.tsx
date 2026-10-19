@@ -1,6 +1,6 @@
 "use client";
 
-import { SchoolBackground } from "@/components/SchoolBackground";
+import { PublicReportPageShell } from "@/components/PublicReportPageShell";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
 import Link from "next/link";
@@ -316,7 +316,11 @@ export default function ReportPage() {
   const sections = form.gradeLevel ? gradeSections[form.gradeLevel] ?? [] : [];
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-slate-100 flex flex-col font-sans">
+    <PublicReportPageShell
+      eyebrow="Student support"
+      title="Share a report or concern."
+      description="Help the school support a learner by sharing a concern clearly and confidentially."
+    >
       {RECAPTCHA_SITE_KEY && (
         <Script
           src="https://www.google.com/recaptcha/api.js?render=explicit"
@@ -326,44 +330,7 @@ export default function ReportPage() {
         />
       )}
 
-      {/* Hero Header */}
-      <header className="relative w-full min-h-[250px] overflow-hidden sm:h-48 sm:min-h-0">
-        <SchoolBackground />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900/80 via-slate-800/70 to-slate-900/60" />
-        <div className="relative z-10 flex flex-col items-center justify-center gap-3 px-4 py-5 pb-10 text-center sm:h-full sm:flex-row sm:justify-between sm:px-8 sm:py-0 sm:pb-0 sm:text-left">
-          <div className="max-w-xl">
-            <p className="text-white/70 text-xs font-semibold tracking-widest uppercase mb-1">
-              Santiago Elementary School
-            </p>
-            <h1 className="text-lg font-bold text-white sm:text-xl md:text-2xl">
-              ParentConnect:{" "}
-              <span className="text-sky-300">Parent Communication and RFID Monitoring</span>
-            </h1>
-          </div>
-          <div className="flex shrink-0 items-center gap-3 sm:gap-4">
-            <div className="flex flex-col items-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/30 bg-white/10 sm:h-14 sm:w-14">
-                <span className="text-yellow-300 font-black text-sm">DepED</span>
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">DEPARTMENT OF<br />EDUCATION</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-amber-400/50 bg-amber-700/40 sm:h-14 sm:w-14">
-                <AlertCircle className="w-6 h-6 text-amber-300" />
-              </div>
-              <span className="text-white/60 text-[9px] mt-1 text-center">SANTIAGO<br />ELEM. SCHOOL</span>
-            </div>
-          </div>
-        </div>
-        <nav className="absolute bottom-0 left-0 right-0 z-10 flex justify-center gap-5 bg-black/60 py-2 backdrop-blur-sm sm:gap-8">
-          <Link href="/contact-us" className="text-white/80 hover:text-white text-sm font-medium transition-colors">Contact us</Link>
-          <Link href="/about" className="text-white/80 hover:text-white text-sm font-medium transition-colors">About</Link>
-        </nav>
-      </header>
-
-      {/* Main */}
-      <main className="flex flex-1 items-start justify-center px-3 py-6 sm:px-4 sm:py-12">
-        <div className="w-full max-w-lg rounded-2xl border border-slate-100 bg-white p-4 shadow-lg sm:p-8">
+        <div className="mx-auto w-full max-w-xl rounded-3xl border border-slate-200/90 bg-white/95 p-4 shadow-[0_22px_60px_rgba(15,43,76,0.13)] backdrop-blur-sm sm:p-8">
 
           <Link href="/"
             className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium mb-6 transition-colors w-fit">
@@ -570,11 +537,6 @@ export default function ReportPage() {
             </>
           )}
         </div>
-      </main>
-
-      <footer className="bg-slate-800 text-slate-400 text-center py-4 text-sm">
-        © 2026 Santiago Elementary School. All rights reserved.
-      </footer>
-    </div>
+    </PublicReportPageShell>
   );
 }
