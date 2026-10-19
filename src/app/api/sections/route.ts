@@ -43,6 +43,89 @@ async function authorizeIctSectionChange(authorizationPassword: unknown) {
   return { ict };
 }
 
+type SectionChange = {
+  type: "add" | "delete";
+  name: string;
+  grade: string;
+  class_session?: "Morning" | "Afternoon";
+};
+
+async function ensureSectionCanBeDeleted(name: string, grade: string) {
+  // A section must be reassigned before it can be removed. Keep this guard
+  // server-side so it cannot be bypassed from the browser or a staged batch.
+  const [{ count: studentCount, error: studentError }, { data: adviserRows, error: adviserError }] = await Promise.all([
+    supabase
+      .from("students")
+      .select("id", { count: "exact", head: true })
+      .eq("section", name)
+      .eq("grade", grade),
+    supabase
+      .from("advisers")
+      .select("id, section, sections")
+      .eq("grade", grade),
+  ]);
+  if (studentError) throw studentError;
+  if (adviserError) throw adviserError;
+
+  const adviserCount = (adviserRows ?? []).filter((adviser) =>
+    adviser.section === name
+    || (Array.isArray(adviser.sections) && adviser.sections.includes(name))
+  ).length;
+  if ((studentCount ?? 0) > 0 || adviserCount > 0) {
+    const users = [
+      studentCount ? `${studentCount} student${studentCount === 1 ? "" : "s"}` : "",
+      adviserCount ? `${adviserCount} adviser${adviserCount === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" and ");
+    return NextResponse.json(
+      {
+        success: false,
+        code: "SECTION_IN_USE",
+        message: `Cannot delete \"${name}\" because it is still assigned to ${users}. Reassign them first.`,
+      },
+      { status: 409 }
+    );
+  }
+
+  return null;
+}
+
+function normalizeSectionChanges(actions: unknown): SectionChange[] | null {
+  if (!Array.isArray(actions) || actions.length === 0) return null;
+
+  const changes: SectionChange[] = [];
+  const targets = new Set<string>();
+  for (const action of actions) {
+    if (!action || typeof action !== "object") return null;
+    const candidate = action as Record<string, unknown>;
+    if ((candidate.type !== "add" && candidate.type !== "delete")
+      || typeof candidate.name !== "string"
+      || typeof candidate.grade !== "string"
+      || !candidate.name.trim()
+      || !candidate.grade.trim()) {
+      return null;
+    }
+
+    const name = candidate.name.trim();
+    const grade = candidate.grade.trim();
+    const target = `${grade.toLowerCase()}__${name.toLowerCase()}`;
+    // The client collapses a staged add/delete reversal. Reject any malformed
+    // request that attempts to mutate the same section twice in one batch.
+    if (targets.has(target)) return null;
+    targets.add(target);
+
+    changes.push({
+      type: candidate.type,
+      name,
+      grade,
+      ...(candidate.type === "add"
+        ? { class_session: candidate.class_session === "Afternoon" ? "Afternoon" : "Morning" }
+        : {}),
+    });
+  }
+
+  return changes;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const [adviser, ict] = await Promise.all([getActiveAdviser(), getActiveIct()]);
@@ -180,41 +263,8 @@ export async function DELETE(req: NextRequest) {
 
     const sectionName = name.trim();
     const sectionGrade = grade.trim();
-
-    // A section must be reassigned before it can be removed. Keep this guard
-    // server-side so it cannot be bypassed from the browser.
-    const [{ count: studentCount, error: studentError }, { data: adviserRows, error: adviserError }] = await Promise.all([
-      supabase
-        .from("students")
-        .select("id", { count: "exact", head: true })
-        .eq("section", sectionName)
-        .eq("grade", sectionGrade),
-      supabase
-        .from("advisers")
-        .select("id, section, sections")
-        .eq("grade", sectionGrade),
-    ]);
-    if (studentError) throw studentError;
-    if (adviserError) throw adviserError;
-
-    const adviserCount = (adviserRows ?? []).filter((adviser) =>
-      adviser.section === sectionName
-      || (Array.isArray(adviser.sections) && adviser.sections.includes(sectionName))
-    ).length;
-    if ((studentCount ?? 0) > 0 || adviserCount > 0) {
-      const users = [
-        studentCount ? `${studentCount} student${studentCount === 1 ? "" : "s"}` : "",
-        adviserCount ? `${adviserCount} adviser${adviserCount === 1 ? "" : "s"}` : "",
-      ].filter(Boolean).join(" and ");
-      return NextResponse.json(
-        {
-          success: false,
-          code: "SECTION_IN_USE",
-          message: `Cannot delete \"${sectionName}\" because it is still assigned to ${users}. Reassign them first.`,
-        },
-        { status: 409 }
-      );
-    }
+    const inUseResponse = await ensureSectionCanBeDeleted(sectionName, sectionGrade);
+    if (inUseResponse) return inUseResponse;
 
     // Delete from sections table
     const { error } = await supabase
@@ -223,6 +273,68 @@ export async function DELETE(req: NextRequest) {
       .eq("name", sectionName)
       .eq("grade", sectionGrade);
     if (error) throw error;
+
+    await Promise.all([
+      publishPublicSectionsInvalidation(),
+      recipientsForRoles(["ict", "adviser"]).then((recipients) => publishRealtimeInvalidation(recipients, "accounts")),
+    ]);
+
+    return NextResponse.json({ success: true });
+  } catch (error: unknown) {
+    return NextResponse.json(
+      { success: false, message: error instanceof Error ? error.message : "Server error." },
+      { status: 500 }
+    );
+  }
+}
+
+// Changes made in Manage Class Sessions are staged in the browser and reach
+// the server only after one final ICT password authorization at Done. Validate
+// every deletion before any database write so an in-use section cannot leave a
+// partially applied batch behind.
+export async function PUT(req: NextRequest) {
+  try {
+    const { actions, authorizationPassword } = await req.json();
+    const authorization = await authorizeIctSectionChange(authorizationPassword);
+    if ("response" in authorization) return authorization.response;
+
+    const changes = normalizeSectionChanges(actions);
+    if (!changes) {
+      return NextResponse.json(
+        { success: false, message: "At least one valid section change is required." },
+        { status: 400 }
+      );
+    }
+
+    const deletions = changes.filter((change) => change.type === "delete");
+    for (const change of deletions) {
+      const inUseResponse = await ensureSectionCanBeDeleted(change.name, change.grade);
+      if (inUseResponse) return inUseResponse;
+    }
+
+    const additions = changes.filter((change) => change.type === "add");
+    if (additions.length > 0) {
+      const { error } = await supabase
+        .from("sections")
+        .upsert(
+          additions.map((change) => ({
+            name: change.name,
+            grade: change.grade,
+            class_session: change.class_session,
+          })),
+          { onConflict: "grade,name" }
+        );
+      if (error) throw error;
+    }
+
+    for (const change of deletions) {
+      const { error } = await supabase
+        .from("sections")
+        .delete()
+        .eq("name", change.name)
+        .eq("grade", change.grade);
+      if (error) throw error;
+    }
 
     await Promise.all([
       publishPublicSectionsInvalidation(),

@@ -946,9 +946,9 @@ export function StudentParentRegistration({
                       <input
                         className={`${(studentIdTaken || E.studentId) ? inputErr : inputOk} pl-9`}
                         placeholder="e.g. 123456789012"
-                        inputMode="numeric" value={form.studentId}
+                        inputMode="numeric" maxLength={12} value={form.studentId}
                         onChange={e => {
-                          const v = e.target.value.replace(/\D/g, "");
+                          const v = e.target.value.replace(/\D/g, "").slice(0, 12);
                           setForm(p => ({ ...p, studentId: v }));
                           setTouched(p => ({ ...p, studentId: true }));
                           setStudentIdTaken(false); setStudentIdOwner("");

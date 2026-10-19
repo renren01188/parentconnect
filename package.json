@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:sf1-names": "node scripts/test-sf1-names.cjs",
+    "test:lrn-input-limit": "node scripts/test-lrn-input-limit.cjs",
     "test:attendance-sms": "node scripts/test-attendance-sms.cjs",
     "test:attendance-rate": "node scripts/test-attendance-rate.cjs",
     "test:attendance-notifications": "node scripts/test-attendance-notification-settings.cjs",

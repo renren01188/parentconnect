@@ -219,19 +219,23 @@ type PendingSectionAction = {
 };
 
 function SectionAuthorizationModal({
-  action,
+  actions,
   onCancel,
+  onSuccess,
   onAuthorize,
 }: {
-  action: PendingSectionAction;
+  actions: PendingSectionAction[];
   onCancel: () => void;
+  onSuccess: () => void;
   onAuthorize: (password: string) => Promise<string | null>;
 }) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [authorizing, setAuthorizing] = useState(false);
-  const isAdding = action.type === "add";
+  const additions = actions.filter((action) => action.type === "add");
+  const deletions = actions.filter((action) => action.type === "delete");
+  const changesLabel = actions.length === 1 ? "change" : "changes";
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -251,7 +255,7 @@ function SectionAuthorizationModal({
         setError(result);
         return;
       }
-      onCancel();
+      onSuccess();
     } catch {
       setPassword("");
       setError("Could not authorize this section change. Please try again.");
@@ -270,12 +274,21 @@ function SectionAuthorizationModal({
           </div>
           <div>
             <h3 id="section-authorization-title" className="text-base font-bold text-gray-900">
-              Authorize section {isAdding ? "addition" : "deletion"}
+              Authorize session changes
             </h3>
             <p className="mt-1 text-xs leading-5 text-gray-500">
-              Re-enter your ICT password to {isAdding ? "add" : "delete"} <strong className="text-gray-700">{action.sectionName}</strong> for {action.grade} ({action.classSession} Class).
+              Re-enter your ICT password once to save all {actions.length} staged section {changesLabel}.
             </p>
           </div>
+        </div>
+
+        <div className="mb-4 max-h-32 space-y-1 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+          {additions.map((action) => (
+            <p key={`add-${action.grade}-${action.sectionName}`}><span className="font-bold text-[#274e13]">Add</span> {action.sectionName} to {action.grade} ({action.classSession})</p>
+          ))}
+          {deletions.map((action) => (
+            <p key={`delete-${action.grade}-${action.sectionName}`}><span className="font-bold text-red-600">Delete</span> {action.sectionName} from {action.grade} ({action.classSession})</p>
+          ))}
         </div>
 
         <label htmlFor="section-authorization-password" className="mb-1.5 block text-xs font-semibold text-gray-700">
@@ -297,15 +310,15 @@ function SectionAuthorizationModal({
           </button>
         </div>
         {error && <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-red-600"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</p>}
-        <p className="mt-2 text-[11px] leading-4 text-gray-400">Your password is verified only for this action and is not saved.</p>
+        <p className="mt-2 text-[11px] leading-4 text-gray-400">Your password is verified only for this save and is not saved.</p>
 
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button type="button" onClick={onCancel} disabled={authorizing} className="rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-bold text-gray-600 transition hover:bg-gray-50 disabled:opacity-50">
             Cancel
           </button>
-          <button type="submit" disabled={authorizing} className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold text-white transition disabled:opacity-60 ${isAdding ? "bg-[#274e13] hover:bg-[#1e3d0f]" : "bg-red-600 hover:bg-red-700"}`}>
+          <button type="submit" disabled={authorizing} className="flex items-center justify-center gap-2 rounded-lg bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60">
             {authorizing && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isAdding ? "Authorize & Add" : "Authorize & Delete"}
+            Authorize & Save
           </button>
         </div>
       </form>
@@ -321,10 +334,10 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
   const [sectionsMap, setSectionsMap] = useState<Map<string, SectionEntry[]>>(new Map());
   const [loadingGrades, setLoadingGrades] = useState<Set<string>>(new Set());
   const [newSectionName, setNewSectionName] = useState<Map<string, string>>(new Map());
-  const [addingSection, setAddingSection] = useState<Set<string>>(new Set());
-  const [deletingSection, setDeletingSection] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
-  const [pendingSectionAction, setPendingSectionAction] = useState<PendingSectionAction | null>(null);
+  const [pendingSectionActions, setPendingSectionActions] = useState<PendingSectionAction[]>([]);
+  const [showSectionAuthorization, setShowSectionAuthorization] = useState(false);
+  const [savingSectionChanges, setSavingSectionChanges] = useState(false);
 
   // Load grade options on mount
   useEffect(() => {
@@ -379,56 +392,98 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    setPendingSectionAction({ type: "add", grade, sectionName: formatted, classSession: activeTab });
+    // Stage additions locally. If this restores a section scheduled for
+    // deletion, collapse the two opposing changes into no server mutation.
+    setSectionsMap(prev => {
+      const next = new Map(prev);
+      // A grade/name pair is unique. Remove a locally staged copy from its
+      // previous session before placing it in the newly selected session.
+      for (const [mapKey, sections] of next) {
+        if (mapKey.startsWith(`${grade}__`)) {
+          next.set(mapKey, sections.filter((section) => section.name.toLowerCase() !== formatted.toLowerCase()));
+        }
+      }
+      const list = [...(next.get(key) ?? []), { name: formatted, count: 0, class_session: activeTab }]
+        .sort((a, b) => a.name.localeCompare(b.name));
+      next.set(key, list);
+      return next;
+    });
+    setPendingSectionActions(prev => {
+      const matchingAction = prev.find((action) => action.grade === grade
+        && action.sectionName.toLowerCase() === formatted.toLowerCase());
+      if (matchingAction?.type === "delete") {
+        // Restoring to its former session cancels the deletion. Restoring to a
+        // different session becomes a single staged session update.
+        return matchingAction.classSession === activeTab
+          ? prev.filter((action) => action !== matchingAction)
+          : prev.map((action) => action === matchingAction
+            ? { type: "add", grade, sectionName: formatted, classSession: activeTab }
+            : action);
+      }
+      if (matchingAction?.type === "add") {
+        return prev.map((action) => action === matchingAction
+          ? { ...action, classSession: activeTab }
+          : action);
+      }
+      return [...prev, { type: "add", grade, sectionName: formatted, classSession: activeTab }];
+    });
+    setNewSectionName(p => { const n = new Map(p); n.set(key, ""); return n; });
+    setErrors(p => { const n = new Map(p); n.delete(key); return n; });
   };
 
   const requestDeleteSection = (grade: string, sectionName: string) => {
-    setPendingSectionAction({ type: "delete", grade, sectionName, classSession: activeTab });
+    const key = `${grade}__${activeTab}`;
+    // Stage the deletion only. The server repeats its student/adviser guard
+    // when the final, password-authorized batch is submitted.
+    setSectionsMap(prev => {
+      const next = new Map(prev);
+      next.set(key, (next.get(key) ?? []).filter((section) => section.name !== sectionName));
+      return next;
+    });
+    setPendingSectionActions(prev => {
+      const wasAddedInThisModal = prev.some((action) => action.type === "add"
+        && action.grade === grade && action.sectionName.toLowerCase() === sectionName.toLowerCase());
+      if (wasAddedInThisModal) {
+        return prev.filter((action) => !(action.type === "add"
+          && action.grade === grade && action.sectionName.toLowerCase() === sectionName.toLowerCase()));
+      }
+      return [...prev, { type: "delete", grade, sectionName, classSession: activeTab }];
+    });
   };
 
-  const authorizeSectionAction = async (authorizationPassword: string): Promise<string | null> => {
-    const action = pendingSectionAction;
-    if (!action) return "This section action is no longer available. Please try again.";
+  const authorizeSectionChanges = async (authorizationPassword: string): Promise<string | null> => {
+    if (pendingSectionActions.length === 0) return "There are no section changes to save.";
 
-    const key = `${action.grade}__${action.classSession}`;
-    const progressKey = action.type === "delete" ? `${key}__${action.sectionName}` : key;
-    const setProgress = action.type === "delete" ? setDeletingSection : setAddingSection;
-    setProgress((previous) => new Set(previous).add(progressKey));
+    setSavingSectionChanges(true);
     try {
       const res = await fetch("/api/sections", {
-        method: action.type === "add" ? "POST" : "DELETE",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: action.sectionName,
-          grade: action.grade,
-          ...(action.type === "add" ? { class_session: action.classSession } : {}),
+          actions: pendingSectionActions.map((action) => ({
+            type: action.type,
+            name: action.sectionName,
+            grade: action.grade,
+            ...(action.type === "add" ? { class_session: action.classSession } : {}),
+          })),
           authorizationPassword,
         }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || !j.success) return j.message || "The section was not changed.";
+      if (!res.ok || !j.success) return j.message || "The staged section changes were not saved.";
 
-      if (action.type === "add") {
-        setSectionsMap(prev => {
-          const next = new Map(prev);
-          const list = [...(next.get(key) ?? []), { name: action.sectionName, count: 0, class_session: action.classSession }]
-            .sort((a, b) => a.name.localeCompare(b.name));
-          next.set(key, list);
-          return next;
-        });
-        setNewSectionName(p => { const n = new Map(p); n.set(key, ""); return n; });
-        setErrors(p => { const n = new Map(p); n.delete(key); return n; });
-      } else {
-        setSectionsMap(prev => {
-          const next = new Map(prev);
-          next.set(key, (next.get(key) ?? []).filter(s => s.name !== action.sectionName));
-          return next;
-        });
-      }
       return null;
     } finally {
-      setProgress((previous) => { const next = new Set(previous); next.delete(progressKey); return next; });
+      setSavingSectionChanges(false);
     }
+  };
+
+  const requestDone = () => {
+    if (pendingSectionActions.length === 0) {
+      onClose();
+      return;
+    }
+    setShowSectionAuthorization(true);
   };
 
   const tabConfig: Record<ClassSessionTab, { icon: React.ElementType; color: string; bg: string; border: string; label: string }> = {
@@ -525,8 +580,6 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                     ) : (
                       <div className="space-y-1.5">
                         {sections.map(sec => {
-                          const delKey = `${key}__${sec.name}`;
-                          const isDeleting = deletingSection.has(delKey);
                           return (
                             <div key={sec.name} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 group">
                               <div className="flex items-center gap-2">
@@ -536,10 +589,9 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                               </div>
                               <button
                                 onClick={() => requestDeleteSection(grade, sec.name)}
-                                disabled={isDeleting}
-                                className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] font-bold text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50 transition disabled:opacity-40"
+                                className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] font-bold text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50 transition"
                               >
-                                {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                                <Trash2 className="w-3 h-3" />
                                 Delete
                               </button>
                             </div>
@@ -564,11 +616,10 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                       />
                       <button
                         onClick={() => requestAddSection(grade)}
-                        disabled={addingSection.has(key)}
-                        className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-60"
+                        className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white transition hover:opacity-90"
                         style={{ background: cfg.color }}
                       >
-                        {addingSection.has(key) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                        <Plus className="w-3 h-3" />
                         Add
                       </button>
                     </div>
@@ -586,17 +637,27 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end border-t border-gray-100 px-4 py-4 sm:px-6">
-          <button onClick={onClose} className="w-full rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] sm:w-auto">
+        <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <p className="text-xs text-gray-500" aria-live="polite">
+            {pendingSectionActions.length > 0
+              ? `${pendingSectionActions.length} change${pendingSectionActions.length === 1 ? "" : "s"} staged. Authorize once when you are done.`
+              : "Changes are staged until you click Done."}
+          </p>
+          <button onClick={requestDone} disabled={savingSectionChanges} className="w-full rounded-lg bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60 sm:w-auto">
             Done
           </button>
         </div>
       </div>
-      {pendingSectionAction && (
+      {showSectionAuthorization && pendingSectionActions.length > 0 && (
         <SectionAuthorizationModal
-          action={pendingSectionAction}
-          onCancel={() => setPendingSectionAction(null)}
-          onAuthorize={authorizeSectionAction}
+          actions={pendingSectionActions}
+          onCancel={() => setShowSectionAuthorization(false)}
+          onSuccess={() => {
+            setPendingSectionActions([]);
+            setShowSectionAuthorization(false);
+            onClose();
+          }}
+          onAuthorize={authorizeSectionChanges}
         />
       )}
     </div>
