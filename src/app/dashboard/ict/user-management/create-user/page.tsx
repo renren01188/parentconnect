@@ -89,7 +89,7 @@ function FSelect({ label, options, value, onChange, required, placeholder }: {
 
 function RoleCard({ selected, onSelect, icon: Icon, iconBg, iconColor, title, desc, tags, badge }: {
   selected: boolean; onSelect: () => void; icon: React.ElementType; iconBg: string; iconColor: string;
-  title: string; desc: string; tags: string[]; badge?: string;
+  title: string; desc: string; tags: readonly [string, string, string]; badge?: string;
 }) {
   return (
     <div onClick={onSelect} className={`relative cursor-pointer rounded-xl border-2 p-4 transition-all ${selected ? "border-[#274e13] bg-[#274e13]" : "border-gray-200 bg-white hover:border-gray-300"}`}>
@@ -1607,11 +1607,11 @@ export default function CreateUserPage() {
               <div><h2 className="text-sm font-bold text-gray-800">Select Account Type</h2><p className="text-xs text-gray-400">Choose the role this user will have in the system.</p></div>
             </div>
             <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-              <RoleCard selected={accountType === "adviser"} onSelect={() => selectType("adviser")} icon={BookOpen} iconBg="bg-violet-50" iconColor="text-violet-600" title="Class Adviser" desc="Assigned teacher managing a class section. Can message parents and submit reports." tags={["Class management", "Reports", "Parent messaging"]} />
-              <RoleCard selected={accountType === "ict"} onSelect={() => selectType("ict")} icon={Monitor} iconBg="bg-green-50" iconColor="text-[#274e13]" title="ICT Admin" desc="System administrator managing users, accounts, integrations, and audit logs." tags={["User management", "Audit trail", "Full access"]} />
-              <RoleCard selected={accountType === "student"} onSelect={() => selectType("student")} icon={GraduationCap} iconBg="bg-sky-50" iconColor="text-sky-600" title="Register Student" desc="Enroll a student with RFID, class, and family verification records. Parents link their own account through Guardian Sign Up." tags={["Student records", "RFID", "Parent verification"]} />
-              <RoleCard selected={accountType === "guidance"} onSelect={() => selectType("guidance")} icon={User} iconBg="bg-rose-50" iconColor="text-rose-600" title="Guidance Counselor" desc="School counselor managing student welfare, behavioral reports, and parent communication." tags={["Student welfare", "Reports", "Counseling"]} />
-              <RoleCard selected={accountType === "succession"} onSelect={() => selectType("succession")} icon={Repeat2} iconBg="bg-amber-50" iconColor="text-amber-600" title="Principal Succession" desc="Transfer Super Admin rights to an incoming principal. This action is irreversible and permanently logged." tags={["Account transfer", "Audit logged", "Irreversible"]} badge="Sensitive" />
+              <RoleCard selected={accountType === "adviser"} onSelect={() => selectType("adviser")} icon={BookOpen} iconBg="bg-violet-50" iconColor="text-violet-600" title="Class Adviser" desc="Assigned teacher managing a class section. Can message parents and submit reports." tags={["Student roster", "RFID attendance", "Reports & messages"]} />
+              <RoleCard selected={accountType === "ict"} onSelect={() => selectType("ict")} icon={Monitor} iconBg="bg-green-50" iconColor="text-[#274e13]" title="ICT Admin" desc="System administrator managing users, accounts, integrations, and audit logs." tags={["User management", "Student profiles & RFID", "Audit & announcements"]} />
+              <RoleCard selected={accountType === "student"} onSelect={() => selectType("student")} icon={GraduationCap} iconBg="bg-sky-50" iconColor="text-sky-600" title="Register Student" desc="Enroll a student with RFID, class, and family verification records. Parents link their own account through Guardian Sign Up." tags={["Student details", "Class section & RFID", "Family verification"]} />
+              <RoleCard selected={accountType === "guidance"} onSelect={() => selectType("guidance")} icon={User} iconBg="bg-rose-50" iconColor="text-rose-600" title="Guidance Counselor" desc="School counselor managing student welfare, behavioral reports, and parent communication." tags={["Reports & concerns", "Announcements", "Parent communication"]} />
+              <RoleCard selected={accountType === "succession"} onSelect={() => selectType("succession")} icon={Repeat2} iconBg="bg-amber-50" iconColor="text-amber-600" title="Principal Succession" desc="Transfer Super Admin rights to an incoming principal. This action is irreversible and permanently logged." tags={["Reports oversight", "Attendance summary", "Audit & announcements"]} badge="Sensitive" />
             </div>
           </div>
 
