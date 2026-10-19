@@ -48,6 +48,12 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+function isWeekend(date: string) {
+  const [year, month, dayOfMonth] = date.split("-").map(Number);
+  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
+  return day === 0 || day === 6;
+}
+
 function getCurrentMinutes() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",
@@ -492,9 +498,7 @@ export async function GET(req: NextRequest) {
     const today = getToday();
 
     // Weekend guard — don't show attendance status on weekends
-    const todayDate = new Date(today + "T00:00:00+08:00");
-    const dow = todayDate.getDay();
-    const isWeekend = dow === 0 || dow === 6;
+    const isTodayWeekend = isWeekend(today);
 
     const matchingSearchRows = rows.filter((row) => matchesAdviserStudentSearch({
       full_name: studentFullName(row),
@@ -649,7 +653,7 @@ export async function GET(req: NextRequest) {
       // Do not infer an absence until this student's ICT-assigned session has
       // reached its configured cutoff. Before a session starts and while it is
       // active, only a real attendance log may supply a Today status.
-      const todayStatus = isWeekend || !session
+      const todayStatus = isTodayWeekend || !session
         ? "No Classes"
         : row.student_id && registeredTodayIds.has(row.student_id)
           ? "—"
@@ -679,7 +683,7 @@ export async function GET(req: NextRequest) {
         || String(first.student_id ?? "").localeCompare(String(second.student_id ?? ""));
     });
 
-    const noClassesToday = isWeekend || (data.length > 0 && data.every((row: { today_status?: string }) => row.today_status === "No Classes"));
+    const noClassesToday = isTodayWeekend || (data.length > 0 && data.every((row: { today_status?: string }) => row.today_status === "No Classes"));
     const total = filter === "All" ? sortedVisibleRows.length : data.length;
     const pageData = filter === "All" ? data : data.slice(offset, offset + limit);
 

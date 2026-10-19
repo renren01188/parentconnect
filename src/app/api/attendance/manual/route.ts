@@ -45,7 +45,8 @@ function getToday() {
 }
 
 function isWeekend(date: string) {
-  const day = new Date(`${date}T00:00:00+08:00`).getDay();
+  const [year, month, dayOfMonth] = date.split("-").map(Number);
+  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
   return day === 0 || day === 6;
 }
 
