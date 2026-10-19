@@ -7,6 +7,7 @@ import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { useStaffMessagesRealtime } from "@/hooks/useStaffMessagesRealtime";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
+import { MessageAttachments } from "@/components/MessageAttachments";
 
 type Recipient = {
   id: string;
@@ -142,27 +143,7 @@ function formatAttachmentSize(size: number) {
 }
 
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
-  if (!attachments?.length) return null;
-  return (
-    <div className={`mt-2 flex max-w-full flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
-      {attachments.map((attachment, index) => (
-        <a
-          key={`${attachment.name}-${index}`}
-          href={attachment.dataUrl}
-          download={attachment.name}
-          className={`inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-            mine
-              ? "border-[#274e13]/20 bg-white text-gray-700 hover:bg-gray-50"
-              : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-          }`}
-        >
-          <Paperclip className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-          <span className="max-w-[140px] truncate sm:max-w-[180px]">{attachment.name}</span>
-          <span className="shrink-0 text-gray-400">{formatAttachmentSize(attachment.size)}</span>
-        </a>
-      ))}
-    </div>
-  );
+  return <MessageAttachments attachments={attachments} mine={mine} />;
 }
 
 function roleClass(role: Recipient["role"] | Conversation["otherRole"]) {
@@ -339,7 +320,7 @@ function ComposeModal({
                       <p className="truncate text-sm font-semibold text-gray-900">{recipient.name}</p>
                       <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${roleClass(recipient.role)}`}>
-                          {recipient.role === "Guidance" ? "School Staff" : recipient.role}
+                          {recipient.role}
                         </span>
                         <p className="truncate text-xs text-gray-600">{recipientMeta(recipient)}</p>
                       </div>
@@ -391,20 +372,11 @@ function ComposeModal({
                   }}
                 />
               </label>
-              {attachments.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {attachments.map((attachment, index) => (
-                    <span key={`${attachment.name}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-semibold text-gray-600">
-                      <Paperclip className="h-3 w-3 shrink-0 text-gray-400" />
-                      <span className="max-w-[160px] truncate">{attachment.name}</span>
-                      <span className="shrink-0 text-gray-400">{formatAttachmentSize(attachment.size)}</span>
-                      <button type="button" onClick={() => setAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))} className="text-gray-400 hover:text-red-500">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <MessageAttachments
+                attachments={attachments}
+                onRemove={(index) => setAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                className="mt-2 flex max-w-full flex-wrap gap-2"
+              />
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-gray-100 pt-2">

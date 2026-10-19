@@ -68,6 +68,32 @@ function registrationDate(createdAt?: string | null) {
     return year && month && day ? `${year}-${month}-${day}` : null;
 }
 
+function monthDate(year: number, month: number, day: number) {
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function monthEndDate(year: number, month: number) {
+    return monthDate(year, month, new Date(year, month, 0).getDate());
+}
+
+function assignmentPart(value: string | null | undefined) {
+    return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function assignmentKey(grade: string | null | undefined, section: string | null | undefined) {
+    const normalizedGrade = assignmentPart(grade);
+    const normalizedSection = assignmentPart(section);
+    return normalizedGrade && normalizedSection ? `${normalizedGrade}__${normalizedSection}` : null;
+}
+
+function isVisibleStudent(student: { archive_status?: string | null }) {
+    const status = String(student.archive_status ?? "").trim().toLocaleLowerCase();
+    // Older imports and the current roster creation workflow may not write an
+    // archive value. Only explicit archival/deletion removes a student from a
+    // principal's school-wide attendance summary.
+    return status !== "archived" && status !== "deleted";
+}
+
 function buildFullName(row: {
     first_name?: string | null;
     middle_name?: string | null;
@@ -127,10 +153,14 @@ export async function GET(req: NextRequest) {
 
 
 
-        // Exclude weekends, future dates, and holidays
+        // Exclude weekends, future dates, and holidays. A school year is an
+        // administrative configuration, not a prerequisite for an existing
+        // student to appear in the Principal summary. Until it is configured,
+        // use the elapsed weekdays in the requested month so attendance that
+        // has already been recorded remains visible.
         const validDays = allSchoolDays.filter((date) =>
-            !!activeSY && date <= today &&
-            date >= activeSY.start_date && date <= activeSY.end_date &&
+            date <= today &&
+            (!activeSY || (date >= activeSY.start_date && date <= activeSY.end_date)) &&
             !holidayDates.has(date)
         );
 
@@ -148,14 +178,13 @@ export async function GET(req: NextRequest) {
         const studentRows: {
             id: number; student_id: string; first_name: string | null; middle_name: string | null;
             last_name: string | null; suffix: string | null; gender: string | null; grade: string;
-            section: string | null; created_at: string | null;
+            section: string | null; created_at: string | null; archive_status: string | null;
         }[] = [];
         const pageSize = 1000;
         for (let from = 0; ; from += pageSize) {
             const { data, error: studentError } = await supabase
                 .from("students")
-                .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at")
-                .eq("archive_status", "active")
+                .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at, archive_status")
                 .order("last_name", { ascending: true })
                 .order("first_name", { ascending: true })
                 .range(from, from + pageSize - 1);
@@ -164,12 +193,18 @@ export async function GET(req: NextRequest) {
             studentRows.push(...page);
             if (page.length < pageSize) break;
         }
-        const students = (studentRows ?? []).flatMap((student) => {
+        const summaryPeriodStart = activeSY?.start_date ?? monthDate(year, month, 1);
+        const summaryPeriodEnd = monthEndDate(year, month);
+        const students = studentRows.flatMap((student) => {
+            if (!isVisibleStudent(student) || !assignmentKey(student.grade, student.section)) return [];
             const registeredOn = registrationDate(student.created_at);
-            const activeFrom = registeredOn && activeSY
-                ? (registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
-                : null;
-            return activeFrom && validDays.some((date) => date >= activeFrom)
+            const activeFrom = registeredOn && registeredOn > summaryPeriodStart
+                ? registeredOn
+                : summaryPeriodStart;
+            // A student enrolled after the requested month did not belong in
+            // that historical report. A student enrolled this month remains
+            // visible even if no class weekday has elapsed yet.
+            return activeFrom <= summaryPeriodEnd
                 ? [{ ...student, active_from: activeFrom }]
                 : [];
         });
@@ -276,43 +311,61 @@ export async function GET(req: NextRequest) {
         });
 
 
-        // Rebuild correctly — students already carry grade + section text fields
+        // Build roster groups using the student assignment. This avoids losing a
+        // student when a section was imported before its catalog row was added.
         const studentsBySectionClean: Record<string, StudentSummary[]> = {};
+        const studentByDbId = new Map(students.map((student) => [student.id, student]));
         for (const st of studentSummaries) {
-            const raw = students.find((r) => r.id === st.id);
-            if (!raw) continue;
-            const key = `${raw.grade}__${raw.section ?? ""}`;
+            const raw = studentByDbId.get(st.id);
+            const key = raw ? assignmentKey(raw.grade, raw.section) : null;
+            if (!key) continue;
             if (!studentsBySectionClean[key]) studentsBySectionClean[key] = [];
             studentsBySectionClean[key].push(st);
         }
 
         // ── 8. Shape final response: grades → sections → students ─────────────────
         //
-        // Grade is a text field (e.g. "Grade 1", "1", etc.) — we group by unique grade
-        // values found in the sections table, preserving order.
+        // Grade is a text field (e.g. "Grade 1", "1", etc.). Start with the
+        // section catalog, then add any valid student assignment that is not
+        // represented there yet.
         //
+        type SummarySection = { key: string; grade: string; name: string };
+        const summarySections = new Map<string, SummarySection>();
+        for (const section of sections) {
+            const key = assignmentKey(section.grade, section.name);
+            if (key) summarySections.set(key, { key, grade: section.grade.trim(), name: section.name.trim() });
+        }
+        for (const student of students) {
+            const key = assignmentKey(student.grade, student.section);
+            if (key && !summarySections.has(key)) {
+                summarySections.set(key, { key, grade: student.grade.trim(), name: student.section!.trim() });
+            }
+        }
+
         const gradeOrder: string[] = [];
         const seenGrades = new Set<string>();
-        for (const sec of sections) {
-            if (!seenGrades.has(sec.grade)) {
-                gradeOrder.push(sec.grade);
-                seenGrades.add(sec.grade);
+        for (const section of summarySections.values()) {
+            const gradeKey = assignmentPart(section.grade);
+            if (!seenGrades.has(gradeKey)) {
+                gradeOrder.push(section.grade);
+                seenGrades.add(gradeKey);
             }
         }
 
         const gradeData = gradeOrder.map((grade) => {
-            const gradeSections = sections
-                .filter((sec) => sec.grade === grade)
-                .map((sec) => {
-                    const key = `${grade}__${sec.name}`;
+            const gradeSections = [...summarySections.values()]
+                .filter((section) => assignmentPart(section.grade) === assignmentPart(grade))
+                .sort((first, second) => first.name.localeCompare(second.name, undefined, { sensitivity: "base" }))
+                .map((section) => {
+                    const key = section.key;
                     const sectionStudents = studentsBySectionClean[key] ?? [];
 
                     // Find adviser name — your sections table doesn't store adviser,
                     // but we include a placeholder so the frontend type still works.
                     // You can JOIN a teachers/advisers table here later if needed.
                     return {
-                        id: `${grade}-${sec.name}`,
-                        name: sec.name,
+                        id: `${section.grade}-${section.name}`,
+                        name: section.name,
                         adviser: "",      // ← add adviser join here when ready
                         students: sectionStudents,
                     };
@@ -323,7 +376,10 @@ export async function GET(req: NextRequest) {
                 label: grade.startsWith("Grade") ? grade : `Grade ${grade}`,
                 sections: gradeSections,
             };
-        });
+        }).sort((first, second) => first.grade.localeCompare(second.grade, undefined, {
+            numeric: true,
+            sensitivity: "base",
+        }));
 
         return NextResponse.json({ success: true, gradeData, schoolDays: validDays, month, year });
 

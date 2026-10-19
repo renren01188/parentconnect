@@ -1,7 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 import { supabase } from "@/lib/supabase";
 import { getActiveAdviser, getActiveIct } from "@/lib/apiAuthorization";
 import { publishPublicSectionsInvalidation, publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
+
+async function authorizeIctSectionChange(authorizationPassword: unknown) {
+  const ict = await getActiveIct();
+  if (!ict) {
+    return {
+      response: NextResponse.json(
+        { success: false, message: "ICT administrator access is required." },
+        { status: 403 }
+      ),
+    };
+  }
+
+  if (typeof authorizationPassword !== "string" || !authorizationPassword.trim()) {
+    return {
+      response: NextResponse.json(
+        { success: false, message: "Enter your ICT password to authorize this section change." },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("ict_admins")
+    .select("password_hash")
+    .eq("id", ict.id)
+    .maybeSingle();
+  if (error) throw error;
+
+  if (!data?.password_hash || !(await bcrypt.compare(authorizationPassword, data.password_hash))) {
+    return {
+      response: NextResponse.json(
+        { success: false, message: "Incorrect ICT password. The section was not changed." },
+        { status: 401 }
+      ),
+    };
+  }
+
+  return { ict };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -91,12 +131,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    if (!(await getActiveIct())) {
-      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
-    }
+    const { name, grade, class_session, authorizationPassword } = await req.json();
+    const authorization = await authorizeIctSectionChange(authorizationPassword);
+    if ("response" in authorization) return authorization.response;
 
-    const { name, grade, class_session } = await req.json();
-    if (!name || !grade) {
+    if (typeof name !== "string" || typeof grade !== "string" || !name.trim() || !grade.trim()) {
       return NextResponse.json(
         { success: false, message: "Name and grade are required." },
         { status: 400 }
@@ -128,15 +167,52 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    if (!(await getActiveIct())) {
-      return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
-    }
+    const { name, grade, authorizationPassword } = await req.json();
+    const authorization = await authorizeIctSectionChange(authorizationPassword);
+    if ("response" in authorization) return authorization.response;
 
-    const { name, grade } = await req.json();
-    if (!name || !grade) {
+    if (typeof name !== "string" || typeof grade !== "string" || !name.trim() || !grade.trim()) {
       return NextResponse.json(
         { success: false, message: "Name and grade are required." },
         { status: 400 }
+      );
+    }
+
+    const sectionName = name.trim();
+    const sectionGrade = grade.trim();
+
+    // A section must be reassigned before it can be removed. Keep this guard
+    // server-side so it cannot be bypassed from the browser.
+    const [{ count: studentCount, error: studentError }, { data: adviserRows, error: adviserError }] = await Promise.all([
+      supabase
+        .from("students")
+        .select("id", { count: "exact", head: true })
+        .eq("section", sectionName)
+        .eq("grade", sectionGrade),
+      supabase
+        .from("advisers")
+        .select("id, section, sections")
+        .eq("grade", sectionGrade),
+    ]);
+    if (studentError) throw studentError;
+    if (adviserError) throw adviserError;
+
+    const adviserCount = (adviserRows ?? []).filter((adviser) =>
+      adviser.section === sectionName
+      || (Array.isArray(adviser.sections) && adviser.sections.includes(sectionName))
+    ).length;
+    if ((studentCount ?? 0) > 0 || adviserCount > 0) {
+      const users = [
+        studentCount ? `${studentCount} student${studentCount === 1 ? "" : "s"}` : "",
+        adviserCount ? `${adviserCount} adviser${adviserCount === 1 ? "" : "s"}` : "",
+      ].filter(Boolean).join(" and ");
+      return NextResponse.json(
+        {
+          success: false,
+          code: "SECTION_IN_USE",
+          message: `Cannot delete \"${sectionName}\" because it is still assigned to ${users}. Reassign them first.`,
+        },
+        { status: 409 }
       );
     }
 
@@ -144,36 +220,9 @@ export async function DELETE(req: NextRequest) {
     const { error } = await supabase
       .from("sections")
       .delete()
-      .eq("name", name.trim())
-      .eq("grade", grade.trim());
+      .eq("name", sectionName)
+      .eq("grade", sectionGrade);
     if (error) throw error;
-
-    // Remove from adviser primary section
-    await supabase
-      .from("advisers")
-      .update({ section: null })
-      .eq("section", name.trim())
-      .eq("grade", grade.trim());
-
-    // Remove from adviser sections array
-    const { data: affectedAdvisers } = await supabase
-      .from("advisers")
-      .select("id, sections")
-      .eq("grade", grade.trim())
-      .contains("sections", [name.trim()]);
-
-    if (affectedAdvisers && affectedAdvisers.length > 0) {
-      await Promise.allSettled(
-        affectedAdvisers.map(adviser =>
-          supabase
-            .from("advisers")
-            .update({
-              sections: adviser.sections.filter((s: string) => s !== name.trim()),
-            })
-            .eq("id", adviser.id)
-        )
-      );
-    }
 
     await Promise.all([
       publishPublicSectionsInvalidation(),

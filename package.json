@@ -29,6 +29,8 @@
     "test:logout-confirmation": "node scripts/test-logout-confirmation.cjs",
     "test:adviser-report-statuses": "node scripts/test-adviser-report-statuses.cjs",
     "test:adviser-report-inbox-state": "node scripts/test-adviser-report-inbox-state.cjs",
+    "test:adviser-section-management-boundary": "node scripts/test-adviser-section-management-boundary.cjs",
+    "test:ict-section-authorization": "node scripts/test-ict-section-authorization.cjs",
     "test:report-realtime": "node scripts/test-report-realtime.cjs",
     "test:adviser-parent-message-presentation": "node scripts/test-adviser-parent-message-presentation.cjs",
     "test:parent-report-cancellation": "node scripts/test-parent-report-cancellation.cjs",
@@ -45,6 +47,7 @@
     "test:excuse-letter-attachments": "node scripts/test-excuse-letter-attachments.cjs",
     "test:excuse-letter-approval": "node scripts/test-excuse-letter-approval.cjs",
     "test:ict-user-management-account-update": "node scripts/test-ict-user-management-account-update.cjs",
+    "test:staff-employee-id-uniqueness": "node scripts/test-staff-employee-id-uniqueness.cjs",
     "test:guidance-reports-export": "node scripts/test-guidance-reports-export.cjs",
     "test:staff-direct-messages": "node scripts/test-staff-direct-messages.cjs",
     "test:parent-report-list-filters": "node scripts/test-parent-report-list-filters.cjs",
@@ -69,11 +72,15 @@
     "test:principal-panel3-display": "node scripts/test-principal-panel3-display.cjs",
     "test:ict-password-session-revocation": "node scripts/test-ict-password-session-revocation.cjs",
     "test:guardian-temp-password-delivery": "node scripts/test-guardian-temp-password-delivery.cjs",
+    "test:guardian-signup-recaptcha": "node scripts/test-guardian-signup-recaptcha.cjs",
     "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs",
     "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs",
     "test:dashboard-idle-timeout": "node scripts/test-dashboard-idle-timeout.cjs",
     "test:parent-report-adviser-link": "node scripts/test-parent-report-adviser-link.cjs",
-    "test:student-transfer-flow": "node scripts/test-student-transfer-flow.cjs"
+    "test:student-transfer-flow": "node scripts/test-student-transfer-flow.cjs",
+    "test:principal-attendance-summary-students": "node scripts/test-principal-attendance-summary-students.cjs",
+    "test:principal-attendance-summary-data-flow": "node scripts/test-principal-attendance-summary-data-flow.cjs",
+    "test:message-image-attachments": "node scripts/test-message-image-attachments.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

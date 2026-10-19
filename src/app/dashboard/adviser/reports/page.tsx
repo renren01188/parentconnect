@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
+import { MessageAttachments } from "@/components/MessageAttachments";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
@@ -310,29 +311,8 @@ function RecipientAvatar({ r }: { r: Recipient }) {
     );
 }
 
-function formatAttachmentSize(size: number) {
-    if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function AttachmentChips({ attachments }: { attachments?: MessageAttachment[] }) {
-    if (!attachments?.length) return null;
-    return (
-        <div className="mt-2 flex flex-wrap gap-2">
-            {attachments.map((attachment, index) => (
-                <a
-                    key={`${attachment.name}-${index}`}
-                    href={attachment.dataUrl}
-                    download={attachment.name}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-                >
-                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                    <span className="max-w-[180px] truncate">{attachment.name}</span>
-                    <span className="shrink-0 text-slate-400">{formatAttachmentSize(attachment.size)}</span>
-                </a>
-            ))}
-        </div>
-    );
+    return <MessageAttachments attachments={attachments} />;
 }
 
 // ── New Message Modal ─────────────────────────────────────────────────────────
@@ -686,21 +666,10 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                                     }}
                                 />
                             </label>
-                            <AttachmentChips attachments={attachments} />
-                            {attachments.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {attachments.map((attachment, index) => (
-                                        <button
-                                            key={`${attachment.name}-${index}-remove`}
-                                            type="button"
-                                            onClick={() => setAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
-                                            className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-50"
-                                        >
-                                            Remove {attachment.name}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
+                            <MessageAttachments
+                                attachments={attachments}
+                                onRemove={(index) => setAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
+                            />
                         </div>
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                             <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>

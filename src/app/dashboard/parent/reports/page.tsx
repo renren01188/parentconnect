@@ -7,6 +7,7 @@ import ParentReportsGuide from "../components/ParentReportsGuide";
 import { useNotifContext } from "../context/NotificationContext";
 import { DEFAULT_CATEGORIES, CONCERN_PERCENTAGES, computeConcernLevel, type ChatMessage, type Report, type MessageAttachment, type MessageStatus, type ReportStatus } from "../data";
 import { UserAvatar } from "@/components/UserAvatar";
+import { MessageAttachments } from "@/components/MessageAttachments";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
 import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
@@ -130,11 +131,6 @@ async function filesToAttachments(fileList: FileList | File[]) {
   return Promise.all(files.map(fileToAttachment));
 }
 
-function formatAttachmentSize(size: number) {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function reportCooldownMessage(cooldownUntil: string | null, now: number) {
   if (!cooldownUntil) return null;
   const remainingMs = new Date(cooldownUntil).getTime() - now;
@@ -149,44 +145,7 @@ function reportCooldownMessage(cooldownUntil: string | null, now: number) {
 }
 
 function AttachmentChips({ attachments, onRemove }: { attachments?: MessageAttachment[]; onRemove?: (index: number) => void }) {
-  if (!attachments?.length) return null;
-  return (
-    <div className="mt-2 flex flex-wrap gap-2">
-      {attachments.map((attachment, index) => {
-        const content = (
-          <>
-            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <span className="max-w-[180px] truncate">{attachment.name}</span>
-            <span className="shrink-0 text-slate-400">{formatAttachmentSize(attachment.size)}</span>
-          </>
-        );
-        return onRemove ? (
-          <span
-            key={`${attachment.name}-${index}`}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600"
-          >
-            {content}
-            <button
-              type="button"
-              onClick={() => onRemove(index)}
-              className="ml-1 rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ) : (
-          <a
-            key={`${attachment.name}-${index}`}
-            href={attachment.dataUrl}
-            download={attachment.name}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
-          >
-            {content}
-          </a>
-        );
-      })}
-    </div>
-  );
+  return <MessageAttachments attachments={attachments} onRemove={onRemove} />;
 }
 
 // ── Concern level progress bar ────────────────────────────────────────────────

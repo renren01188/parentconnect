@@ -4,6 +4,11 @@ import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 function fullName(row: Record<string, unknown>) {
   return [row.first_name, row.middle_name, row.last_name, row.suffix]
@@ -64,6 +69,7 @@ export async function PATCH(req: NextRequest) {
     if (pending?.length) return NextResponse.json({ success: false, message: "You already have a pending approval request." }, { status: 409 });
 
     const next = { firstName: firstName.trim(), middleName: middleName?.trim() || "", lastName: lastName.trim(), suffix: suffix?.trim() || "", email: email.trim().toLowerCase(), contactNumber: contactNumber?.trim() || "", employeeId: employeeId.trim() };
+    await assertStaffEmployeeIdAvailable(next.employeeId, { role: "Guidance", id: Number(session.id) });
     const changes = [
       ["First Name", current.first_name ?? "", next.firstName], ["Middle Name", current.middle_name ?? "", next.middleName],
       ["Last Name", current.last_name ?? "", next.lastName], ["Suffix", current.suffix ?? "", next.suffix],
@@ -91,6 +97,12 @@ export async function PATCH(req: NextRequest) {
     await publishAccountRealtimeInvalidation([{ role: "guidance", id: Number(session.id) }]);
     return NextResponse.json({ success: true, message: "Approval request submitted to ICT." });
   } catch (error: unknown) {
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Server error." }, { status: 500 });
   }
 }

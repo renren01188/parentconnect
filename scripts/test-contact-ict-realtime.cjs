@@ -175,7 +175,7 @@ assert.match(adviserContact, /type CreatedStaffMessage/);
 assert.match(adviserContact, /function responseErrorMessage/);
 assert.match(adviserContact, /The write route returns the saved row\. Render it now/);
 assert.match(adviserContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
-assert.match(adviserContact, /setConversations\(\(current\) => \[\s*conversation,/);
+assert.match(adviserContact, /setConversations\(\(current\) => sortByLatestActivity\(\[\s*conversation,/);
 assert.match(adviserContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
 assert.match(adviserContact, /messagesRequestVersionRef\.current \+= 1/);
 // Principal uses the same durable-response rendering as Adviser and Guidance.
@@ -185,7 +185,7 @@ const principalContact = read("src/app/dashboard/principal/contact-ict/page.tsx"
 assert.match(principalContact, /type CreatedStaffMessage/);
 assert.match(principalContact, /The API has already committed the row/);
 assert.match(principalContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
-assert.match(principalContact, /setConversations\(\(current\) => \[/);
+assert.match(principalContact, /setConversations\(\(current\) => sortByLatestActivity\(\[\s*conversation,/);
 assert.match(principalContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
 assert.match(principalContact, /messagesRequestVersionRef\.current \+= 1/);
 // Both panes publish local typing state and consume the other participant's
@@ -215,7 +215,7 @@ assert.match(guidanceContact, /Render the durable result before the asynchronous
 assert.match(guidanceContact, /function mergeConversations\(current: Conversation\[\], incoming: Conversation\[\]\)/);
 assert.match(guidanceContact, /setConversations\(\(current\) => mergeConversations\(current, nextConversations\)\)/);
 assert.match(guidanceContact, /const conversationId = `staff-message:\$\{created\.id\}`/);
-assert.match(guidanceContact, /setConversations\(\(current\) => \[\s*conversation,/);
+assert.match(guidanceContact, /setConversations\(\(current\) => sortByLatestActivity\(\[\s*conversation,/);
 assert.match(guidanceContact, /thread: \[\.\.\.conversation\.thread, sentMessage\]/);
 assert.match(
   guidanceNotifications,

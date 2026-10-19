@@ -4,6 +4,11 @@ import bcrypt from "bcryptjs";
 import { sendAdviserTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { publishAccountRealtimeInvalidation, publishPublicSectionsInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 type AdviserAssignmentRecord = {
   id: number;
@@ -182,23 +187,9 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Duplicate employee ID check ──────────────────────────────────────────
-    console.log("[adviser/register] Checking employee ID duplicate...");
-    const { data: empExists, error: empCheckErr } = await supabase
-      .from("advisers")
-      .select("id")
-      .eq("employee_id", employeeId.trim())
-      .limit(1);
-
-    if (empCheckErr) {
-      console.error("[adviser/register] Employee ID check error:", JSON.stringify(empCheckErr));
-      throw new Error(`Employee ID check failed: ${empCheckErr.message}`);
-    }
-    if (empExists && empExists.length > 0) {
-      return NextResponse.json(
-        { success: false, message: "An adviser account with this Employee ID already exists." },
-        { status: 409 }
-      );
-    }
+    // This preflight gives an immediate response. The registry trigger is the
+    // final protection if two requests submit the same ID simultaneously.
+    const normalizedEmployeeId = await assertStaffEmployeeIdAvailable(employeeId);
 
     // ── Derive classSession ──────────────────────────────────────────────────
     const allSections = [...new Set([
@@ -244,7 +235,7 @@ export async function POST(req: NextRequest) {
       sections: allSections,
       phone: contactNumber,
       email: email.toLowerCase().trim(),
-      employee_id: employeeId.trim(),
+      employee_id: normalizedEmployeeId,
       password_hash: hashedTemp,
       password_set: false,
       // The account is not usable as an adviser until its owner has set a
@@ -312,6 +303,12 @@ export async function POST(req: NextRequest) {
     if (error instanceof Error) {
       console.error("[adviser/register] Error message:", error.message);
       console.error("[adviser/register] Error stack:", error.stack);
+    }
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
     }
     return NextResponse.json(
       {

@@ -6,6 +6,11 @@ import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { logAudit } from "@/lib/audit";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -149,20 +154,7 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const { data: existingEmployee, error: employeeError } = await supabase
-      .from("ict_admins")
-      .select("id")
-      .eq("employee_id", normalizedEmployeeId)
-      .neq("id", session.ictId)
-      .limit(1);
-
-    if (employeeError) throw employeeError;
-    if (existingEmployee && existingEmployee.length > 0) {
-      return NextResponse.json(
-        { success: false, message: "This employee ID is already in use." },
-        { status: 409 }
-      );
-    }
+    await assertStaffEmployeeIdAvailable(normalizedEmployeeId, { role: "ICT", id: session.ictId });
 
     const updatePayload = {
       employee_id: normalizedEmployeeId,
@@ -247,6 +239,12 @@ export async function PATCH(req: NextRequest) {
     return response;
   } catch (error: unknown) {
     console.error("PATCH /api/ict/me error:", error);
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { success: false, message: errorMessage(error) },
       { status: 500 }

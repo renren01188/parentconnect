@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { type Report, type ReportStatus } from "../../adviser/data";
 import { UserAvatar } from "@/components/UserAvatar";
+import { MessageAttachments } from "@/components/MessageAttachments";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
@@ -208,29 +209,8 @@ async function filesToAttachments(fileList: FileList | File[]) {
   return Promise.all(files.map(fileToAttachment));
 }
 
-function formatAttachmentSize(size: number) {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function AttachmentChips({ attachments, mine = false }: { attachments?: MessageAttachment[]; mine?: boolean }) {
-  if (!attachments?.length) return null;
-  return (
-    <div className={`mt-2 flex max-w-[78%] flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
-      {attachments.map((attachment, index) => (
-        <a
-          key={`${attachment.name}-${index}`}
-          href={attachment.dataUrl}
-          download={attachment.name}
-          className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-        >
-          <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-          <span className="max-w-[180px] truncate">{attachment.name}</span>
-          <span className="shrink-0 text-slate-400">{formatAttachmentSize(attachment.size)}</span>
-        </a>
-      ))}
-    </div>
-  );
+  return <MessageAttachments attachments={attachments} mine={mine} className="mt-2 flex max-w-[78%] flex-wrap gap-2" />;
 }
 
 
@@ -1198,19 +1178,10 @@ function NewMessageModal({
                   }}
                 />
               </label>
-              {attachments.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {attachments.map((attachment, index) => (
-                    <span key={`${attachment.name}-${index}`} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                      <Paperclip className="h-3 w-3 text-slate-400" />
-                      {attachment.name}
-                      <button onClick={() => setAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))} className="text-slate-400 hover:text-red-500">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <MessageAttachments
+                attachments={attachments}
+                onRemove={(index) => setAttachments((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+              />
             </div>
 
             <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2871,21 +2842,7 @@ function PrincipalReportsPageContent() {
                                 {(reply.message || reply.attachments.length > 0) && (
                                   <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${mine ? "rounded-tr-none bg-violet-600 text-white" : "rounded-tl-none border border-slate-200 bg-white text-slate-700"}`}>
                                     {reply.message && <p className="whitespace-pre-wrap">{reply.message}</p>}
-                                    {reply.attachments.length > 0 && (
-                                      <div className="mt-2 flex flex-wrap gap-2">
-                                        {reply.attachments.map((attachment, attachmentIndex) => (
-                                          <a
-                                            key={`${attachment.name}-${attachmentIndex}`}
-                                            href={attachment.dataUrl}
-                                            download={attachment.name}
-                                            className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
-                                          >
-                                            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                            <span className="max-w-[180px] truncate">{attachment.name}</span>
-                                          </a>
-                                        ))}
-                                      </div>
-                                    )}
+                                    <MessageAttachments attachments={reply.attachments} mine={mine} />
                                   </div>
                                 )}
                               </div>

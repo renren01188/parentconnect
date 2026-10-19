@@ -5,6 +5,11 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit";
 import { syncStaffProfile } from "@/lib/syncStaffProfile";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+    assertStaffEmployeeIdAvailable,
+    isStaffEmployeeIdConflict,
+    staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 const SECRET = new TextEncoder().encode(
     process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -170,8 +175,14 @@ export async function PATCH(req: NextRequest) {
                 const update: Record<string, string | null> = {};
                 for (const change of changes) if (fields[change.field]) update[fields[change.field]] = change.to || null;
                 const { data: current, error: currentError } = await supabase.from("guidance_counselors")
-                    .select("first_name, middle_name, last_name, suffix, email").eq("id", requestData.guidance_id).single();
+                    .select("id, employee_id, first_name, middle_name, last_name, suffix, email").eq("id", requestData.guidance_id).single();
                 if (currentError) throw currentError;
+                if (update.employee_id !== undefined) {
+                    await assertStaffEmployeeIdAvailable(update.employee_id, {
+                        role: "Guidance",
+                        id: Number(requestData.guidance_id),
+                    });
+                }
                 const { error: profileError } = await supabase.from("guidance_counselors").update(update).eq("id", requestData.guidance_id);
                 if (profileError) throw profileError;
                 const previousName = [current.first_name, current.middle_name, current.last_name, current.suffix].filter(Boolean).join(" ") || "Guidance Counselor";
@@ -376,6 +387,12 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ success: true });
     } catch (error: unknown) {
         console.error("PATCH /api/ict/approvals error:", error);
+        if (isStaffEmployeeIdConflict(error)) {
+            return NextResponse.json(
+                { success: false, message: staffEmployeeIdConflictMessage(error) },
+                { status: 409 },
+            );
+        }
         return NextResponse.json(
             { success: false, message: error instanceof Error ? error.message : "Server error." },
             { status: 500 }

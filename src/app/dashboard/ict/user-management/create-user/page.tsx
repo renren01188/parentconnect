@@ -22,6 +22,11 @@ type AdviserAssignmentConflict = {
   adviserEmail: string;
   status: string;
 };
+type StaffEmployeeIdConflict = {
+  employee_id: string;
+  account_count: number;
+  accounts: Array<{ role: string; accountId: number }>;
+};
 
 const GRADES = ["Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6"];
 const SUFFIXES = ["None", "Jr.", "Sr.", "II", "III", "IV"];
@@ -206,6 +211,107 @@ function SummaryPanel({
 // ─── Manage Class Sessions Modal ──────────────────────────────────────────────
 
 type SectionEntry = { name: string; count: number; class_session: "Morning" | "Afternoon" | null };
+type PendingSectionAction = {
+  type: "add" | "delete";
+  grade: string;
+  sectionName: string;
+  classSession: ClassSessionTab;
+};
+
+function SectionAuthorizationModal({
+  action,
+  onCancel,
+  onAuthorize,
+}: {
+  action: PendingSectionAction;
+  onCancel: () => void;
+  onAuthorize: (password: string) => Promise<string | null>;
+}) {
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [authorizing, setAuthorizing] = useState(false);
+  const isAdding = action.type === "add";
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!password.trim()) {
+      setError("Enter your ICT password to continue.");
+      return;
+    }
+
+    setAuthorizing(true);
+    setError("");
+    try {
+      const result = await onAuthorize(password);
+      // Clear the password after every attempt. It is never placed in browser
+      // storage or written to logs.
+      setPassword("");
+      if (result) {
+        setError(result);
+        return;
+      }
+      onCancel();
+    } catch {
+      setPassword("");
+      setError("Could not authorize this section change. Please try again.");
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="section-authorization-title">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={authorizing ? undefined : onCancel} />
+      <form onSubmit={submit} className="relative w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
+        <div className="mb-4 flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#274e13] text-white">
+            <Settings2 className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 id="section-authorization-title" className="text-base font-bold text-gray-900">
+              Authorize section {isAdding ? "addition" : "deletion"}
+            </h3>
+            <p className="mt-1 text-xs leading-5 text-gray-500">
+              Re-enter your ICT password to {isAdding ? "add" : "delete"} <strong className="text-gray-700">{action.sectionName}</strong> for {action.grade} ({action.classSession} Class).
+            </p>
+          </div>
+        </div>
+
+        <label htmlFor="section-authorization-password" className="mb-1.5 block text-xs font-semibold text-gray-700">
+          ICT password
+        </label>
+        <div className="relative">
+          <input
+            id="section-authorization-password"
+            autoFocus
+            autoComplete="current-password"
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={(event) => { setPassword(event.target.value); if (error) setError(""); }}
+            disabled={authorizing}
+            className={`w-full rounded-lg border py-2.5 pl-3 pr-10 text-sm text-gray-800 outline-none transition focus:ring-2 focus:ring-[#274e13]/20 ${error ? "border-red-300 bg-red-50 focus:border-red-400" : "border-gray-200 focus:border-[#274e13]"}`}
+          />
+          <button type="button" onClick={() => setShowPassword((value) => !value)} disabled={authorizing} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-600 disabled:opacity-50" aria-label={showPassword ? "Hide password" : "Show password"}>
+            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
+        {error && <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-red-600"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</p>}
+        <p className="mt-2 text-[11px] leading-4 text-gray-400">Your password is verified only for this action and is not saved.</p>
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onCancel} disabled={authorizing} className="rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-bold text-gray-600 transition hover:bg-gray-50 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="submit" disabled={authorizing} className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold text-white transition disabled:opacity-60 ${isAdding ? "bg-[#274e13] hover:bg-[#1e3d0f]" : "bg-red-600 hover:bg-red-700"}`}>
+            {authorizing && <Loader2 className="h-4 w-4 animate-spin" />}
+            {isAdding ? "Authorize & Add" : "Authorize & Delete"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function ManageSessionsModal({ onClose }: { onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<ClassSessionTab>("Morning");
@@ -218,6 +324,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
   const [addingSection, setAddingSection] = useState<Set<string>>(new Set());
   const [deletingSection, setDeletingSection] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const [pendingSectionAction, setPendingSectionAction] = useState<PendingSectionAction | null>(null);
 
   // Load grade options on mount
   useEffect(() => {
@@ -259,7 +366,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
     });
   };
 
-  const handleAddSection = async (grade: string) => {
+  const requestAddSection = (grade: string) => {
     const key = `${grade}__${activeTab}`;
     const raw = (newSectionName.get(key) ?? "").trim();
     if (!raw) return;
@@ -272,18 +379,39 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    setAddingSection(p => new Set(p).add(key));
+    setPendingSectionAction({ type: "add", grade, sectionName: formatted, classSession: activeTab });
+  };
+
+  const requestDeleteSection = (grade: string, sectionName: string) => {
+    setPendingSectionAction({ type: "delete", grade, sectionName, classSession: activeTab });
+  };
+
+  const authorizeSectionAction = async (authorizationPassword: string): Promise<string | null> => {
+    const action = pendingSectionAction;
+    if (!action) return "This section action is no longer available. Please try again.";
+
+    const key = `${action.grade}__${action.classSession}`;
+    const progressKey = action.type === "delete" ? `${key}__${action.sectionName}` : key;
+    const setProgress = action.type === "delete" ? setDeletingSection : setAddingSection;
+    setProgress((previous) => new Set(previous).add(progressKey));
     try {
       const res = await fetch("/api/sections", {
-        method: "POST",
+        method: action.type === "add" ? "POST" : "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: formatted, grade, class_session: activeTab }),
+        body: JSON.stringify({
+          name: action.sectionName,
+          grade: action.grade,
+          ...(action.type === "add" ? { class_session: action.classSession } : {}),
+          authorizationPassword,
+        }),
       });
-      const j = await res.json();
-      if (j.success) {
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.success) return j.message || "The section was not changed.";
+
+      if (action.type === "add") {
         setSectionsMap(prev => {
           const next = new Map(prev);
-          const list = [...(next.get(key) ?? []), { name: formatted, count: 0, class_session: activeTab }]
+          const list = [...(next.get(key) ?? []), { name: action.sectionName, count: 0, class_session: action.classSession }]
             .sort((a, b) => a.name.localeCompare(b.name));
           next.set(key, list);
           return next;
@@ -291,33 +419,15 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
         setNewSectionName(p => { const n = new Map(p); n.set(key, ""); return n; });
         setErrors(p => { const n = new Map(p); n.delete(key); return n; });
       } else {
-        setErrors(p => { const n = new Map(p); n.set(key, j.message || "Failed to add."); return n; });
-      }
-    } finally {
-      setAddingSection(p => { const s = new Set(p); s.delete(key); return s; });
-    }
-  };
-
-  const handleDeleteSection = async (grade: string, sectionName: string) => {
-    const key = `${grade}__${activeTab}`;
-    const delKey = `${key}__${sectionName}`;
-    setDeletingSection(p => new Set(p).add(delKey));
-    try {
-      const res = await fetch("/api/sections", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: sectionName, grade }),
-      });
-      const j = await res.json();
-      if (j.success) {
         setSectionsMap(prev => {
           const next = new Map(prev);
-          next.set(key, (next.get(key) ?? []).filter(s => s.name !== sectionName));
+          next.set(key, (next.get(key) ?? []).filter(s => s.name !== action.sectionName));
           return next;
         });
       }
+      return null;
     } finally {
-      setDeletingSection(p => { const s = new Set(p); s.delete(delKey); return s; });
+      setProgress((previous) => { const next = new Set(previous); next.delete(progressKey); return next; });
     }
   };
 
@@ -425,7 +535,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                                 <span className="text-[10px] text-gray-400">{sec.count} student{sec.count !== 1 ? "s" : ""}</span>
                               </div>
                               <button
-                                onClick={() => handleDeleteSection(grade, sec.name)}
+                                onClick={() => requestDeleteSection(grade, sec.name)}
                                 disabled={isDeleting}
                                 className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] font-bold text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50 transition disabled:opacity-40"
                               >
@@ -447,13 +557,13 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                           setNewSectionName(p => { const n = new Map(p); n.set(key, v); return n; });
                           setErrors(p => { const n = new Map(p); n.delete(key); return n; });
                         }}
-                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAddSection(grade); } }}
+                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); requestAddSection(grade); } }}
                         placeholder="New section name…"
                         className={`flex-1 px-3 py-2 text-xs border rounded-lg outline-none transition ${errors.get(key) ? "border-red-300 bg-red-50 focus:border-red-400" : "border-gray-200 focus:border-[#274e13]"}`}
                         style={{ color: "#111827" }}
                       />
                       <button
-                        onClick={() => handleAddSection(grade)}
+                        onClick={() => requestAddSection(grade)}
                         disabled={addingSection.has(key)}
                         className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-60"
                         style={{ background: cfg.color }}
@@ -482,6 +592,13 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+      {pendingSectionAction && (
+        <SectionAuthorizationModal
+          action={pendingSectionAction}
+          onCancel={() => setPendingSectionAction(null)}
+          onAuthorize={authorizeSectionAction}
+        />
+      )}
     </div>
   );
 }
@@ -1290,6 +1407,7 @@ export default function CreateUserPage() {
   const [recentlyCreated, setRecentlyCreated] = useState<RecentlyCreatedUser[]>([]);
   const [recentlyCreatedLoading, setRecentlyCreatedLoading] = useState(true);
   const [recentlyCreatedError, setRecentlyCreatedError] = useState<string | null>(null);
+  const [employeeIdConflicts, setEmployeeIdConflicts] = useState<StaffEmployeeIdConflict[]>([]);
 
   const loadRecentlyCreated = useCallback(async () => {
     setRecentlyCreatedLoading(true);
@@ -1314,9 +1432,25 @@ export default function CreateUserPage() {
     }
   }, []);
 
+  const loadEmployeeIdConflicts = useCallback(async () => {
+    try {
+      const response = await fetch("/api/ict/staff-employee-id-conflicts", { cache: "no-store" });
+      const payload = await response.json() as {
+        success?: boolean;
+        conflicts?: StaffEmployeeIdConflict[];
+      };
+      setEmployeeIdConflicts(response.ok && payload.success ? payload.conflicts ?? [] : []);
+    } catch {
+      // The create form remains usable if a read-only review panel is briefly
+      // unavailable. Creation/editing still have server and database guards.
+      setEmployeeIdConflicts([]);
+    }
+  }, []);
+
   useEffect(() => {
     void loadRecentlyCreated();
-  }, [loadRecentlyCreated]);
+    void loadEmployeeIdConflicts();
+  }, [loadRecentlyCreated, loadEmployeeIdConflicts]);
 
   // The creation form itself must preserve in-progress input. Only the
   // read-only "recently created" panel is reconciled after a shared-channel
@@ -1324,6 +1458,7 @@ export default function CreateUserPage() {
   useSessionInvalidation(({ scope }) => {
     if (!scope || scope === "accounts" || scope === "students" || scope === "audit") {
       void loadRecentlyCreated();
+      void loadEmployeeIdConflicts();
     }
   });
 
@@ -1343,6 +1478,7 @@ export default function CreateUserPage() {
     setSummaryRows([]);
     setFormKey(k => k + 1);
     void loadRecentlyCreated();
+    void loadEmployeeIdConflicts();
   }
 
   const typeLabel: Record<NonNullable<AccountType>, string> = {
@@ -1378,6 +1514,28 @@ export default function CreateUserPage() {
           Manage Class Sessions
         </button>
       </div>
+
+      {employeeIdConflicts.length > 0 && (
+        <section className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold">Existing Employee ID conflicts require review</h2>
+              <p className="mt-1 text-xs leading-relaxed">
+                No accounts were changed. Each listed ID is already assigned to more than one staff account and cannot be reused.
+              </p>
+              <ul className="mt-2 space-y-1 text-xs">
+                {employeeIdConflicts.map((conflict) => (
+                  <li key={conflict.employee_id}>
+                    <span className="font-bold">{conflict.employee_id}:</span>{" "}
+                    {conflict.accounts.map((account) => `${account.role} #${account.accountId}`).join(", ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="flex flex-col items-stretch gap-4 lg:flex-row lg:items-start">
         <div className="flex-1 min-w-0 space-y-4">

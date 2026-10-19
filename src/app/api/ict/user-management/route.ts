@@ -29,6 +29,11 @@ import {
   passwordSessionAuditRole,
   type PasswordSessionRole,
 } from "@/lib/passwordSessionRevocation";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -899,6 +904,7 @@ export async function PATCH(req: NextRequest) {
 
     if (user.role === "ICT") {
       const id = Number(user.id.replace("ict-", ""));
+      const employeeId = await assertStaffEmployeeIdAvailable(user.employeeId, { role: "ICT", id });
       const { data, error } = await supabase
         .from("ict_admins")
         .update({
@@ -908,7 +914,7 @@ export async function PATCH(req: NextRequest) {
           suffix: user.suffix && user.suffix !== "None" ? user.suffix : null,
           email: user.email.trim().toLowerCase(),
           phone: user.phone?.trim() || "",
-          employee_id: user.employeeId?.trim() || "",
+          employee_id: employeeId,
           status: toDbStatus(user.status),
           updated_at: new Date().toISOString(),
           ...passwordPatch,
@@ -931,6 +937,7 @@ export async function PATCH(req: NextRequest) {
       if (!Number.isSafeInteger(id) || id <= 0) {
         return NextResponse.json({ success: false, message: "Invalid Guidance account." }, { status: 400 });
       }
+      const employeeId = await assertStaffEmployeeIdAvailable(user.employeeId, { role: "Guidance", id });
       const { data, error } = await supabase
         .from("guidance_counselors")
         .update({
@@ -940,7 +947,7 @@ export async function PATCH(req: NextRequest) {
           suffix: user.suffix && user.suffix !== "None" ? user.suffix : null,
           email: user.email.trim().toLowerCase(),
           phone: user.phone?.trim() || "",
-          employee_id: user.employeeId?.trim() || "",
+          employee_id: employeeId,
           status: toDbStatus(user.status),
           updated_at: new Date().toISOString(),
           ...passwordPatch,
@@ -1171,6 +1178,7 @@ export async function PATCH(req: NextRequest) {
 
     if (user.role === "Adviser") {
       const id = Number(user.id.replace("adviser-", ""));
+      const employeeId = await assertStaffEmployeeIdAvailable(user.employeeId, { role: "Adviser", id });
       const { grade, section } = splitClassGrade(user.classGrade);
       const sections = section ? section.split(",").map((value) => value.trim()).filter(Boolean) : [];
 
@@ -1215,7 +1223,7 @@ export async function PATCH(req: NextRequest) {
           suffix: user.suffix && user.suffix !== "None" ? user.suffix : null,
           email: user.email.trim().toLowerCase(),
           phone: user.phone?.trim() || "",
-          employee_id: user.employeeId?.trim() || "",
+          employee_id: employeeId,
           grade,
           section: sections[0] ?? section,
           sections: sections.length ? sections : null,
@@ -1249,6 +1257,12 @@ export async function PATCH(req: NextRequest) {
       // A later profile/student write can fail after the password itself was
       // verified.  Do not leave that successfully changed credential active.
       await publishAccountRealtimeInvalidation(passwordSessionTargets, { sessionRevoked: true });
+    }
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
     }
     const completed = [...new Set(completedUpdateSteps)];
     if (completed.length > 0) {

@@ -15,6 +15,7 @@ import {
 } from "../../adviser/data";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
+import { MessageAttachments } from "@/components/MessageAttachments";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
@@ -707,22 +708,10 @@ function NewMessageModal({
                                     }}
                                 />
                             </label>
-                            {attachments.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {attachments.map((attachment, index) => (
-                                        <button
-                                            key={`${attachment.name}-${index}`}
-                                            type="button"
-                                            onClick={() => setAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
-                                            className="flex max-w-[180px] items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600"
-                                        >
-                                            <Paperclip className="w-3 h-3 text-slate-400" />
-                                            <span className="truncate">{attachment.name}</span>
-                                            <X className="w-3 h-3 text-slate-400" />
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
+                            <MessageAttachments
+                                attachments={attachments}
+                                onRemove={(index) => setAttachments(prev => prev.filter((_, itemIndex) => itemIndex !== index))}
+                            />
                         </div>
                         <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
                             <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto">Cancel</button>
@@ -1984,16 +1973,7 @@ function ReportsPageContent() {
                                                         <div className={`${mine ? "bg-sky-500 text-white rounded-tr-none" : "bg-white text-slate-700 rounded-tl-none border border-slate-100"} rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed max-w-[85%]`}>
                                                             {reply.message}
                                                         </div>
-                                                        {reply.attachments && reply.attachments.length > 0 && (
-                                                            <div className={`mt-2 flex flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
-                                                                {reply.attachments.map((attachment, attachmentIndex) => (
-                                                                    <a key={`${attachment.name}-${attachmentIndex}`} href={attachment.dataUrl} download={attachment.name} className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                                                        <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                                                        <span className="max-w-[180px] truncate">{attachment.name}</span>
-                                                                    </a>
-                                                                ))}
-                                                            </div>
-                                                        )}
+                                                        <MessageAttachments attachments={reply.attachments} mine={mine} />
                                                     </div>
                                                 </div>
                                             );
@@ -2153,16 +2133,7 @@ function ReportsPageContent() {
                                                     <div className={`${rootMine ? "rounded-tr-none bg-sky-500 text-white shadow-sky-100" : "rounded-tl-none border border-slate-100 bg-white text-slate-700"} max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap`}>
                                                         {selectedAdminMsg.message}
                                                     </div>
-                                                    {selectedAdminMsg.attachments && selectedAdminMsg.attachments.length > 0 && (
-                                                        <div className={`mt-2 flex flex-wrap gap-2 ${rootMine ? "justify-end" : ""}`}>
-                                                            {selectedAdminMsg.attachments.map((attachment, attachmentIndex) => (
-                                                                <a key={`${attachment.name}-${attachmentIndex}`} href={attachment.dataUrl} download={attachment.name} className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                                                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                                                    <span className="max-w-[180px] truncate">{attachment.name}</span>
-                                                                </a>
-                                                            ))}
-                                                        </div>
-                                                    )}
+                                                    <MessageAttachments attachments={selectedAdminMsg.attachments} mine={rootMine} />
                                                 </div>
                                             </div>
 
@@ -2184,16 +2155,7 @@ function ReportsPageContent() {
                                                             <div className={`${mine ? "rounded-tr-none bg-sky-500 text-white shadow-sky-100" : "rounded-tl-none border border-slate-100 bg-white text-slate-700"} max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed whitespace-pre-wrap`}>
                                                                 {reply.message}
                                                             </div>
-                                                            {reply.attachments && reply.attachments.length > 0 && (
-                                                                <div className={`mt-2 flex flex-wrap gap-2 ${mine ? "justify-end" : ""}`}>
-                                                                    {reply.attachments.map((attachment, attachmentIndex) => (
-                                                                        <a key={`${attachment.name}-${attachmentIndex}`} href={attachment.dataUrl} download={attachment.name} className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                                                            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                                                            <span className="max-w-[180px] truncate">{attachment.name}</span>
-                                                                        </a>
-                                                                    ))}
-                                                                </div>
-                                                            )}
+                                                            <MessageAttachments attachments={reply.attachments} mine={mine} />
                                                         </div>
                                                     </div>
                                                 );
@@ -2330,7 +2292,7 @@ function ReportsPageContent() {
                                             const isRejecting = ticketActionStatus === "rejected";
                                             return <div key={ticket.id} className="rounded-xl border border-slate-200 p-4">
                                                 <div className="flex flex-wrap items-start justify-between gap-3">
-                                                    <div><p className="font-extrabold text-slate-900">{ticket.concern}</p><p className="mt-1 text-xs text-slate-500">{ticket.report?.parent_name ?? "Parent"} · {ticket.report?.student_name ?? "Student"} · Report #{ticket.report_id}</p><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{ticket.message}</p>{ticket.attachments?.length ? <div className="mt-2 flex flex-wrap gap-2">{ticket.attachments.map((attachment, index) => <a key={`${attachment.name}-${index}`} href={attachment.dataUrl} download={attachment.name} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-600">{attachment.name}</a>)}</div> : null}{ticket.status === "rejected" && <p className="mt-2 text-xs font-bold text-red-700">Reason: {ticket.rejection_reason}</p>}</div>
+                                                    <div><p className="font-extrabold text-slate-900">{ticket.concern}</p><p className="mt-1 text-xs text-slate-500">{ticket.report?.parent_name ?? "Parent"} · {ticket.report?.student_name ?? "Student"} · Report #{ticket.report_id}</p><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{ticket.message}</p><MessageAttachments attachments={ticket.attachments} />{ticket.status === "rejected" && <p className="mt-2 text-xs font-bold text-red-700">Reason: {ticket.rejection_reason}</p>}</div>
                                                     {ticket.status === "pending" && <div className="flex shrink-0 gap-2"><button type="button" onClick={() => void decideTicket(ticket.id, "accepted")} disabled={isActioningTicket} aria-busy={isAccepting} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">{isAccepting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isAccepting ? "Accepting…" : "Accept"}</button><button type="button" onClick={() => { setTicketError(""); setRejectingTicket(ticket.id); setRejectionReason(""); }} disabled={isActioningTicket} aria-busy={isRejecting} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">{isRejecting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isRejecting ? "Rejecting…" : "Reject"}</button></div>}
                                                 </div>
                                                 {rejectingTicket === ticket.id && <div className="guidance-ticket-rejection mt-3 flex gap-2"><input autoFocus value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} disabled={isRejecting} placeholder="Rejection reason (required)" className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm disabled:bg-slate-50" /><button type="button" onClick={() => void decideTicket(ticket.id, "rejected")} disabled={isRejecting} aria-busy={isRejecting} className="flex items-center justify-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60">{isRejecting && <LoaderCircle className="h-3 w-3 animate-spin" />}{isRejecting ? "Rejecting…" : "Confirm rejection"}</button></div>}

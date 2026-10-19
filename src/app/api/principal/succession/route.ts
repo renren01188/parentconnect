@@ -6,6 +6,11 @@ import { sendPrincipalTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { logAudit } from "@/lib/audit";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -58,6 +63,10 @@ export async function POST(req: NextRequest) {
     }
 
     const previousPrincipal = principals?.[0] ?? null;
+    const normalizedEmployeeId = await assertStaffEmployeeIdAvailable(
+      employeeId,
+      previousPrincipal ? { role: "Principal", id: Number(previousPrincipal.id) } : undefined,
+    );
     const tempPassword = generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
     const authVersion = crypto.randomUUID();
@@ -69,7 +78,7 @@ export async function POST(req: NextRequest) {
       suffix: suffix && suffix !== "None" ? suffix : null,
       email: email.trim().toLowerCase(),
       phone: contactNumber.trim(),
-      employee_id: employeeId.trim(),
+      employee_id: normalizedEmployeeId,
       password_hash: passwordHash,
       password_set: false,
       status: "active",
@@ -178,6 +187,12 @@ export async function POST(req: NextRequest) {
     return response;
   } catch (error: unknown) {
     console.error("POST /api/principal/succession error:", error);
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Server error." }, { status: 500 });
   }
 }

@@ -4,6 +4,11 @@ import bcrypt from "bcryptjs";
 import { sendGuidanceTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!";
@@ -63,19 +68,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data: employeeExists, error: employeeCheckError } = await supabase
-      .from("guidance_counselors")
-      .select("id")
-      .eq("employee_id", normalizedEmployeeId)
-      .limit(1);
-
-    if (employeeCheckError) throw employeeCheckError;
-    if (employeeExists && employeeExists.length > 0) {
-      return NextResponse.json(
-        { success: false, message: "A guidance counselor account with this Employee ID already exists." },
-        { status: 409 }
-      );
-    }
+    await assertStaffEmployeeIdAvailable(normalizedEmployeeId);
 
     const tempPassword = generateTempPassword();
     const hashedTemp = await bcrypt.hash(tempPassword, 10);
@@ -122,6 +115,12 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: unknown) {
     console.error("POST /api/guidance/register error:", error);
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { success: false, message: error instanceof Error ? error.message : "Server error." },
       { status: 500 }
