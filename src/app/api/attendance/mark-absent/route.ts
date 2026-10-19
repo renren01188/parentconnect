@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 type StudentRow = {
   id: number;
@@ -55,12 +56,6 @@ function timeToMinutes(value: string) {
   return hour * 60 + minute;
 }
 
-function isWeekend(date: string) {
-  const [year, month, dayOfMonth] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
-  return day === 0 || day === 6;
-}
-
 function registrationDate(createdAt?: string | null) {
   if (!createdAt) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -104,7 +99,7 @@ export async function POST(req: NextRequest) {
     // ── School year + holiday guard ──────────────────────────────────────────
     const { data: activeSY } = await supabase
       .from("school_year_config")
-      .select("id, start_date, end_date")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .single();
@@ -120,8 +115,13 @@ export async function POST(req: NextRequest) {
         { success: false, message: "Date is outside the active school year. Absent marking skipped." }
       );
     }
-    if (isWeekend(sessionDate)) {
-      return NextResponse.json({ success: false, message: "Absent marking is unavailable on weekends." });
+    if (!isScheduledAttendanceDate(
+      sessionDate,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
+      return NextResponse.json({ success: false, message: "Absent marking is unavailable because this is not a selected class day." });
     }
     const { data: holidayRows, error: holidayError } = await supabase
       .from("school_holidays")

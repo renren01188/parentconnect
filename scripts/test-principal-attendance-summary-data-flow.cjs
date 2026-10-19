@@ -27,7 +27,8 @@ assert.match(principalSummary, /\.from\("attendance_logs"\)/, "The Principal sum
 assert.match(principalSummary, /\.select\("id, student_db_id, attendance_date, time_logged, type, status"\)/, "The Principal summary must read the matching attendance fields.");
 assert.match(principalSummary, /if \(log\.type && log\.type !== "Time In"\) continue/, "The Principal daily summary must use the Time In status once per student/day.");
 assert.match(principalSummary, /\.gte\("attendance_date", validDays\[0\]\)/, "The Principal summary must constrain records to the selected month and valid school days.");
-assert.match(principalSummary, /\(!activeSY \|\| \(date >= activeSY\.start_date && date <= activeSY\.end_date\)\)/, "The Summary must use the active school-year bounds when configured and fallback weekdays otherwise.");
+assert.match(principalSummary, /getScheduledDaysInMonth\(/, "The Summary must derive each selected class day from the active school-year range.");
+assert.match(principalSummary, /activeSY\?\.attendance_weekdays/, "The Summary must honor the ICT-selected class weekdays, with the weekday-only default as fallback.");
 assert.doesNotMatch(principalSummary, /parent_student_links/, "The Principal summary must not require a Parent link.");
 
 assert.match(invalidation, /supabase\.from\("principals"\)\.select\("id"\)/, "Attendance changes must include active Principals as recipients.");

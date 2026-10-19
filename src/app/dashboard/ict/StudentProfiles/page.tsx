@@ -4,6 +4,14 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { createPortal } from "react-dom";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
+  DEFAULT_ATTENDANCE_WEEKDAYS,
+  formatSchoolDate,
+  normalizeAttendanceWeekdays,
+  SCHOOL_WEEKDAY_OPTIONS,
+  scheduledAttendanceDates,
+  type SchoolWeekday,
+} from "@/lib/schoolCalendar";
+import {
   Search, ChevronDown, Eye, Pencil, UserPlus,
   X, CheckCircle, AlertTriangle, CreditCard,
   Users, GraduationCap,
@@ -58,6 +66,14 @@ type StudentProfileUpdate = Pick<
 >;
 
 type AuditAction = "registered" | "revoked" | "replaced" | "assigned";
+
+type SchoolYearRecord = {
+  id: number;
+  school_year_label: string;
+  start_date: string;
+  end_date: string;
+  attendance_weekdays?: string[] | null;
+};
 
 interface AuditEntry {
   id: string;
@@ -1926,17 +1942,36 @@ function mapStudent(row: Record<string, any>): Student {
 }
 
 function SchoolYearModal({ current, onClose, onSaved }: {
-  current: { id: number; school_year_label: string; start_date: string; end_date: string } | null;
+  current: SchoolYearRecord | null;
   onClose: () => void;
-  onSaved: (sy: { id: number; school_year_label: string; start_date: string; end_date: string }) => void;
+  onSaved: (sy: SchoolYearRecord) => void;
 }) {
   const isEdit = !!current;
   const [label, setLabel] = useState(current?.school_year_label ?? "");
   const [startDate, setStartDate] = useState(current?.start_date ?? "");
   const [endDate, setEndDate] = useState(current?.end_date ?? "");
+  const [attendanceWeekdays, setAttendanceWeekdays] = useState<SchoolWeekday[]>(
+    normalizeAttendanceWeekdays(current?.attendance_weekdays ?? DEFAULT_ATTENDANCE_WEEKDAYS)
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  const scheduledClassDates = useMemo(() => {
+    if (!startDate || !endDate || startDate >= endDate) return [];
+    try {
+      return scheduledAttendanceDates(startDate, endDate, attendanceWeekdays);
+    } catch {
+      return [];
+    }
+  }, [startDate, endDate, attendanceWeekdays]);
+
+  function toggleAttendanceWeekday(day: SchoolWeekday) {
+    setAttendanceWeekdays((currentDays) =>
+      currentDays.includes(day)
+        ? currentDays.filter((currentDay) => currentDay !== day)
+        : normalizeAttendanceWeekdays([...currentDays, day])
+    );
+  }
 
   async function handleSave() {
     setError("");
@@ -1944,8 +1979,16 @@ function SchoolYearModal({ current, onClose, onSaved }: {
       setError("All fields are required.");
       return;
     }
-    if (new Date(endDate) <= new Date(startDate)) {
+    if (startDate >= endDate) {
       setError("End date must be after start date.");
+      return;
+    }
+    if (attendanceWeekdays.length === 0) {
+      setError("Choose at least one class day.");
+      return;
+    }
+    if (scheduledClassDates.length === 0) {
+      setError("The selected date range has no enabled class days.");
       return;
     }
     setSaving(true);
@@ -1954,7 +1997,12 @@ function SchoolYearModal({ current, onClose, onSaved }: {
       const res = await fetch("/api/school-year", {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ school_year_label: label.trim(), start_date: startDate, end_date: endDate }),
+        body: JSON.stringify({
+          school_year_label: label.trim(),
+          start_date: startDate,
+          end_date: endDate,
+          attendance_weekdays: attendanceWeekdays,
+        }),
       });
       const data = await res.json();
       if (!data.success) { setError(data.message || "Failed to save."); return; }
@@ -2059,13 +2107,43 @@ function SchoolYearModal({ current, onClose, onSaved }: {
             </div>
           </div>
 
-          {startDate && endDate && new Date(endDate) > new Date(startDate) && (
+          <fieldset>
+            <legend className="mb-1.5 block text-xs font-semibold text-gray-600">
+              Class Days <span className="text-red-500">*</span>
+            </legend>
+            <p className="mb-2 text-[11px] text-gray-400">
+              Monday through Friday are selected by default. Select Saturday or Sunday only when your school has classes on those days.
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {SCHOOL_WEEKDAY_OPTIONS.map(({ key, label }) => {
+                const selected = attendanceWeekdays.includes(key);
+                return (
+                  <button
+                    type="button"
+                    key={key}
+                    aria-pressed={selected}
+                    onClick={() => toggleAttendanceWeekday(key)}
+                    className={selected
+                      ? "min-h-10 rounded-xl border border-[#274e13] bg-[#274e13] px-2 py-2 text-xs font-bold text-white transition"
+                      : "min-h-10 rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs font-bold text-gray-600 transition hover:bg-gray-50"}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+
+          {startDate && endDate && startDate < endDate && (
             <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-center">
               <p className="text-xs text-emerald-600 font-medium">School Year Duration</p>
               <p className="text-sm font-bold text-emerald-800 mt-0.5">
-                {new Date(startDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                {formatSchoolDate(startDate)}
                 {" → "}
-                {new Date(endDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                {formatSchoolDate(endDate)}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-emerald-700">
+                {scheduledClassDates.length} scheduled class day{scheduledClassDates.length === 1 ? "" : "s"} in this range
               </p>
             </div>
           )}
@@ -2126,12 +2204,7 @@ export default function StudentManagementPage() {
   // Class control
   const [showClassControl, setShowClassControl] = useState(false);
   const [showAttendanceNotificationSettings, setShowAttendanceNotificationSettings] = useState(false);
-  const [schoolYear, setSchoolYear] = useState<{
-    id: number;
-    school_year_label: string;
-    start_date: string;
-    end_date: string;
-  } | null>(null);
+  const [schoolYear, setSchoolYear] = useState<SchoolYearRecord | null>(null);
   const [syLoading, setSyLoading] = useState(true);
   const [showSchoolYearModal, setShowSchoolYearModal] = useState(false);
   // Re-read reference data when another ICT session changes the school year

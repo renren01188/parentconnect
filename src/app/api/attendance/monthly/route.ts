@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 type StudentRow = {
   id: number;
@@ -51,18 +52,18 @@ function buildFullName(row: Pick<StudentRow, "first_name" | "middle_name" | "las
     .join(" ");
 }
 
-function isWeekend(dateStr: string) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const day = new Date(y, m - 1, d).getDay();
-  return day === 0 || day === 6; // Sunday or Saturday
-}
-
-function getDaysInMonth(year: number, month: number): string[] {
+function getScheduledDaysInMonth(
+  year: number,
+  month: number,
+  startDate: string,
+  endDate: string,
+  attendanceWeekdays: unknown,
+): string[] {
   const days: string[] = [];
   const daysInMonth = new Date(year, month, 0).getDate(); // month is 1-based
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    if (!isWeekend(dateStr)) {
+    if (isScheduledAttendanceDate(dateStr, startDate, endDate, attendanceWeekdays)) {
       days.push(dateStr);
     }
   }
@@ -121,28 +122,33 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Invalid year or month" }, { status: 400 });
     }
 
-    // All school days (Mon–Fri) in the requested month
+    // Actual class days in the requested month, based on the active school
+    // year's date range and explicitly enabled weekdays.
     const { data: activeSY, error: schoolYearError } = await supabase
       .from("school_year_config")
-      .select("start_date, end_date")
+      .select("start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .maybeSingle();
     if (schoolYearError) throw schoolYearError;
 
-    // Attendance days are weekdays inside the active School Year only.
-    const schoolDays = getDaysInMonth(year, month);
+    // Attendance days must be inside the active School Year and on an enabled
+    // weekday (Monday–Friday by default; weekends only when selected by ICT).
+    const schoolDays = activeSY
+      ? getScheduledDaysInMonth(
+        year,
+        month,
+        activeSY.start_date,
+        activeSY.end_date,
+        activeSY.attendance_weekdays,
+      )
+      : [];
 
 
 
     // Only consider days up to today (can't have records for the future)
     const today = getToday();
-    const validDays = schoolDays.filter((date) =>
-      !!activeSY &&
-      date <= today &&
-      date >= activeSY.start_date &&
-      date <= activeSY.end_date
-    );
+    const validDays = schoolDays.filter((date) => date <= today);
 
     const startDate = validDays[0];
     const endDate = validDays[validDays.length - 1];

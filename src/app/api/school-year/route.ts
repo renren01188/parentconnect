@@ -3,9 +3,57 @@ import { supabase } from "@/lib/supabase";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { logAudit } from "@/lib/audit";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
+import {
+  hasOnlyValidAttendanceWeekdays,
+  normalizeAttendanceWeekdays,
+  scheduledAttendanceDates,
+} from "@/lib/schoolCalendar";
 
 function isMissingSchemaError(error: { code?: string; message?: string } | null) {
   return Boolean(error && (error.code === "PGRST205" || error.code === "42P01" || error.message?.toLowerCase().includes("does not exist") || error.message?.toLowerCase().includes("schema cache")));
+}
+
+type SchoolYearInput = {
+  schoolYearLabel: string;
+  startDate: string;
+  endDate: string;
+  attendanceWeekdays: string[];
+};
+
+function parseSchoolYearInput(body: unknown): { input?: SchoolYearInput; message?: string } {
+  if (!body || typeof body !== "object") return { message: "All fields are required." };
+  const record = body as Record<string, unknown>;
+  const schoolYearLabel = typeof record.school_year_label === "string" ? record.school_year_label.trim() : "";
+  const startDate = typeof record.start_date === "string" ? record.start_date : "";
+  const endDate = typeof record.end_date === "string" ? record.end_date : "";
+  const suppliedWeekdays = record.attendance_weekdays;
+
+  if (!schoolYearLabel || !startDate || !endDate) return { message: "All fields are required." };
+  if (suppliedWeekdays !== undefined && !hasOnlyValidAttendanceWeekdays(suppliedWeekdays)) {
+    return { message: "Choose at least one valid class day." };
+  }
+
+  try {
+    // This validates actual calendar dates and works for ranges spanning years.
+    if (startDate >= endDate) {
+      return { message: "End date must be after start date." };
+    }
+
+    if (scheduledAttendanceDates(startDate, endDate, suppliedWeekdays).length < 1) {
+      return { message: "The selected date range has no enabled class days." };
+    }
+  } catch {
+    return { message: "Choose valid calendar dates." };
+  }
+
+  return {
+    input: {
+      schoolYearLabel,
+      startDate,
+      endDate,
+      attendanceWeekdays: normalizeAttendanceWeekdays(suppliedWeekdays),
+    },
+  };
 }
 
 async function publishSchoolYearRealtimeInvalidation() {
@@ -57,22 +105,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
     }
 
-    const body = await req.json();
-    const { school_year_label, start_date, end_date } = body;
-
-    if (!school_year_label || !start_date || !end_date) {
-      return NextResponse.json(
-        { success: false, message: "All fields are required." },
-        { status: 400 }
-      );
-    }
-
-    if (new Date(end_date) <= new Date(start_date)) {
-      return NextResponse.json(
-        { success: false, message: "End date must be after start date." },
-        { status: 400 }
-      );
-    }
+    const parsed = parseSchoolYearInput(await req.json());
+    if (!parsed.input) return NextResponse.json({ success: false, message: parsed.message }, { status: 400 });
+    const {
+      schoolYearLabel: school_year_label,
+      startDate: start_date,
+      endDate: end_date,
+      attendanceWeekdays: attendance_weekdays,
+    } = parsed.input;
 
     // Deactivate existing active school year
     await supabase
@@ -82,7 +122,7 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await supabase
       .from("school_year_config")
-      .insert({ school_year_label, start_date, end_date, is_active: true })
+      .insert({ school_year_label, start_date, end_date, attendance_weekdays, is_active: true })
       .select()
       .single();
 
@@ -109,28 +149,20 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
     }
 
-    const body = await req.json();
-    const { school_year_label, start_date, end_date } = body;
-
-    if (!school_year_label || !start_date || !end_date) {
-      return NextResponse.json(
-        { success: false, message: "All fields are required." },
-        { status: 400 }
-      );
-    }
-
-    if (new Date(end_date) <= new Date(start_date)) {
-      return NextResponse.json(
-        { success: false, message: "End date must be after start date." },
-        { status: 400 }
-      );
-    }
+    const parsed = parseSchoolYearInput(await req.json());
+    if (!parsed.input) return NextResponse.json({ success: false, message: parsed.message }, { status: 400 });
+    const {
+      schoolYearLabel: school_year_label,
+      startDate: start_date,
+      endDate: end_date,
+      attendanceWeekdays: attendance_weekdays,
+    } = parsed.input;
 
     const { data: existing, error: existingError } = await supabase.from("school_year_config").select("id, school_year_label").eq("is_active", true).maybeSingle();
     if (existingError) throw existingError;
     const { data, error } = await supabase
       .from("school_year_config")
-      .update({ school_year_label, start_date, end_date, updated_at: new Date().toISOString() })
+      .update({ school_year_label, start_date, end_date, attendance_weekdays, updated_at: new Date().toISOString() })
       .eq("is_active", true)
       .select()
       .single();

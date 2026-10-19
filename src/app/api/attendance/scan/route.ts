@@ -10,6 +10,7 @@ import { processAttendanceEmailJobs } from "@/lib/attendanceEmailWorker";
 import { settleAttendanceNotificationTasks } from "@/lib/attendanceNotificationDispatch";
 import { normalizeRfidCard } from "@/lib/rfid";
 import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 type ScanBody = {
   rfid_card: string;
@@ -48,12 +49,6 @@ function getToday() {
   const month = parts.find((p) => p.type === "month")?.value;
   const day = parts.find((p) => p.type === "day")?.value;
   return `${year}-${month}-${day}`;
-}
-
-function isWeekend(date: string) {
-  const [year, month, dayOfMonth] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
-  return day === 0 || day === 6;
 }
 
 function getNowTime() {
@@ -190,7 +185,7 @@ export async function POST(req: NextRequest) {
     const today = getToday();
     const { data: activeSY } = await supabase
       .from("school_year_config")
-      .select("id, start_date, end_date")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .single();
@@ -267,9 +262,14 @@ export async function POST(req: NextRequest) {
         { status: 403 }
       );
     }
-    if (isWeekend(today)) {
+    if (!isScheduledAttendanceDate(
+      today,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
       return NextResponse.json(
-        { success: false, message: "Attendance scanning is unavailable on weekends." },
+        { success: false, message: "Attendance scanning is unavailable because today is not a selected class day." },
         { status: 403 }
       );
     }

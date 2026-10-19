@@ -4,6 +4,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { logAudit } from "@/lib/audit";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 function getToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -126,16 +127,6 @@ function getScheduleStatus(session: { scheduled_start: string; scheduled_end: st
   return "Active" as const;
 }
 
-function isWeekend(date: string) {
-  // `date` is a Manila calendar date from getToday(). Do not create a
-  // midnight +08:00 instant and call getDay(): on UTC-hosted servers that
-  // instant is still the preceding day (for example, Monday in Manila is
-  // Sunday UTC). Evaluate the calendar date directly instead.
-  const [year, month, dayOfMonth] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
-  return day === 0 || day === 6;
-}
-
 async function isSchoolHoliday(schoolYearId: number, date: string) {
   const { data, error } = await supabase
     .from("school_holidays")
@@ -164,18 +155,23 @@ export async function GET() {
     }
 
     const today = getToday();
-    if (isWeekend(today)) {
-      return NextResponse.json({ success: true, sessions: [] });
-    }
 
     const { data: activeSY, error: schoolYearError } = await supabase
       .from("school_year_config")
-      .select("id, start_date, end_date")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .maybeSingle();
     if (schoolYearError) throw schoolYearError;
-    if (!activeSY || today < activeSY.start_date || today > activeSY.end_date) {
+    if (
+      !activeSY
+      || !isScheduledAttendanceDate(
+        today,
+        activeSY.start_date,
+        activeSY.end_date,
+        activeSY.attendance_weekdays,
+      )
+    ) {
       return NextResponse.json({ success: true, sessions: [] });
     }
     if (await isSchoolHoliday(activeSY.id, today)) {
@@ -279,7 +275,7 @@ export async function POST(req: NextRequest) {
     // ── School year guard ────────────────────────────────────────────────────
     const { data: activeSY } = await supabase
       .from("school_year_config")
-      .select("id, start_date, end_date")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .single();
@@ -298,9 +294,20 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (isWeekend(todayForGuard) || await isSchoolHoliday(activeSY.id, todayForGuard)) {
+    if (!isScheduledAttendanceDate(
+      todayForGuard,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
       return NextResponse.json(
-        { success: false, message: "Class session management is unavailable on weekends and school holidays." },
+        { success: false, message: "Class session management is unavailable because today is not a selected class day." },
+        { status: 400 }
+      );
+    }
+    if (await isSchoolHoliday(activeSY.id, todayForGuard)) {
+      return NextResponse.json(
+        { success: false, message: "Class session management is unavailable on a school holiday." },
         { status: 400 }
       );
     }

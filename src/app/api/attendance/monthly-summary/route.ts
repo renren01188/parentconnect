@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
+import { DEFAULT_ATTENDANCE_WEEKDAYS, isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 type LogRow = {
     id: number;
@@ -19,18 +20,22 @@ function toAttendanceStatus(status: string | null): AttendanceStatus | null {
         : null;
 }
 
-function isWeekend(dateStr: string) {
-    const [y, m, d] = dateStr.split("-").map(Number);
-    const day = new Date(y, m - 1, d).getDay();
-    return day === 0 || day === 6;
-}
-
-function getWeekdaysInMonth(year: number, month: number): string[] {
+function getScheduledDaysInMonth(
+    year: number,
+    month: number,
+    startDate?: string,
+    endDate?: string,
+    attendanceWeekdays: unknown = DEFAULT_ATTENDANCE_WEEKDAYS,
+): string[] {
+    const rangeStart = startDate ?? `${year}-01-01`;
+    const rangeEnd = endDate ?? `${year}-12-31`;
     const days: string[] = [];
     const daysInMonth = new Date(year, month, 0).getDate(); // month is 1-based
     for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-        if (!isWeekend(dateStr)) days.push(dateStr);
+        if (isScheduledAttendanceDate(dateStr, rangeStart, rangeEnd, attendanceWeekdays)) {
+            days.push(dateStr);
+        }
     }
     return days;
 }
@@ -129,13 +134,19 @@ export async function GET(req: NextRequest) {
 
         const { data: activeSY, error: schoolYearError } = await supabase
             .from("school_year_config")
-            .select("id, start_date, end_date")
+            .select("id, start_date, end_date, attendance_weekdays")
             .eq("is_active", true)
             .limit(1)
             .maybeSingle();
         if (schoolYearError) throw schoolYearError;
 
-        const allSchoolDays = getWeekdaysInMonth(year, month);
+        const allSchoolDays = getScheduledDaysInMonth(
+            year,
+            month,
+            activeSY?.start_date,
+            activeSY?.end_date,
+            activeSY?.attendance_weekdays,
+        );
         const today = getToday();
 
         let holidayDates = new Set<string>();
@@ -153,14 +164,11 @@ export async function GET(req: NextRequest) {
 
 
 
-        // Exclude weekends, future dates, and holidays. A school year is an
-        // administrative configuration, not a prerequisite for an existing
-        // student to appear in the Principal summary. Until it is configured,
-        // use the elapsed weekdays in the requested month so attendance that
-        // has already been recorded remains visible.
+        // Exclude dates outside the configured class-day schedule, future
+        // dates, and holidays. Without an active school year, retain the
+        // weekday-only default so already-recorded attendance remains visible.
         const validDays = allSchoolDays.filter((date) =>
             date <= today &&
-            (!activeSY || (date >= activeSY.start_date && date <= activeSY.end_date)) &&
             !holidayDates.has(date)
         );
 

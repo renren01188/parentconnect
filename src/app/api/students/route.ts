@@ -27,6 +27,7 @@ import {
   isAttendanceRateEligibleStatus,
   isAttendedAttendanceStatus,
 } from "@/lib/attendanceRate.cjs";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
@@ -46,12 +47,6 @@ function getToday() {
   const month = parts.find((p) => p.type === "month")?.value;
   const day = parts.find((p) => p.type === "day")?.value;
   return `${year}-${month}-${day}`;
-}
-
-function isWeekend(date: string) {
-  const [year, month, dayOfMonth] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
-  return day === 0 || day === 6;
 }
 
 function getCurrentMinutes() {
@@ -223,7 +218,7 @@ async function listScheduledStudentDeletionIds() {
 async function getCurrentSchoolYear() {
   const { data, error } = await supabase
     .from("school_year_config")
-    .select("start_date, end_date")
+    .select("start_date, end_date, attendance_weekdays")
     .eq("is_active", true)
     .maybeSingle();
   if (error) throw error;
@@ -497,8 +492,13 @@ export async function GET(req: NextRequest) {
 
     const today = getToday();
 
-    // Weekend guard — don't show attendance status on weekends
-    const isTodayWeekend = isWeekend(today);
+    const isTodayScheduledClassDay = !!currentSchoolYear
+      && isScheduledAttendanceDate(
+        today,
+        currentSchoolYear.start_date,
+        currentSchoolYear.end_date,
+        currentSchoolYear.attendance_weekdays,
+      );
 
     const matchingSearchRows = rows.filter((row) => matchesAdviserStudentSearch({
       full_name: studentFullName(row),
@@ -653,7 +653,7 @@ export async function GET(req: NextRequest) {
       // Do not infer an absence until this student's ICT-assigned session has
       // reached its configured cutoff. Before a session starts and while it is
       // active, only a real attendance log may supply a Today status.
-      const todayStatus = isTodayWeekend || !session
+      const todayStatus = !isTodayScheduledClassDay || !session
         ? "No Classes"
         : row.student_id && registeredTodayIds.has(row.student_id)
           ? "—"
@@ -683,7 +683,7 @@ export async function GET(req: NextRequest) {
         || String(first.student_id ?? "").localeCompare(String(second.student_id ?? ""));
     });
 
-    const noClassesToday = isTodayWeekend || (data.length > 0 && data.every((row: { today_status?: string }) => row.today_status === "No Classes"));
+    const noClassesToday = !isTodayScheduledClassDay || (data.length > 0 && data.every((row: { today_status?: string }) => row.today_status === "No Classes"));
     const total = filter === "All" ? sortedVisibleRows.length : data.length;
     const pageData = filter === "All" ? data : data.slice(offset, offset + limit);
 

@@ -13,6 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
 import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 
 type ManualBody = {
   student_id: string;
@@ -42,12 +43,6 @@ function getToday() {
   const month = parts.find((p) => p.type === "month")?.value;
   const day = parts.find((p) => p.type === "day")?.value;
   return `${year}-${month}-${day}`;
-}
-
-function isWeekend(date: string) {
-  const [year, month, dayOfMonth] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
-  return day === 0 || day === 6;
 }
 
 function getNowTime() {
@@ -145,15 +140,9 @@ export async function POST(req: NextRequest) {
     const student        = students[0];
     const attendanceDate = getToday();
     const timeLogged     = getNowTime();
-    if (isWeekend(attendanceDate)) {
-      return NextResponse.json(
-        { success: false, message: "Manual attendance is unavailable on weekends." },
-        { status: 403 }
-      );
-    }
     const { data: activeSY, error: schoolYearError } = await supabase
       .from("school_year_config")
-      .select("id, start_date, end_date")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .maybeSingle();
@@ -161,6 +150,17 @@ export async function POST(req: NextRequest) {
     if (!activeSY || attendanceDate < activeSY.start_date || attendanceDate > activeSY.end_date) {
       return NextResponse.json(
         { success: false, message: "Manual attendance is only available during the active school year." },
+        { status: 403 }
+      );
+    }
+    if (!isScheduledAttendanceDate(
+      attendanceDate,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
+      return NextResponse.json(
+        { success: false, message: "Manual attendance is unavailable because today is not a selected class day." },
         { status: 403 }
       );
     }
