@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const creationRoute = read("src/app/api/guidance/announcements/route.ts");
 const deletionRoute = read("src/app/api/guidance/announcements/[id]/route.ts");
+const guidanceDelivery = read("src/lib/deliverGuidanceAnnouncement.ts");
 const guidancePage = read("src/app/dashboard/guidance/announcements/page.tsx");
 const parentContext = read("src/app/dashboard/parent/context/NotificationContext.tsx");
 const parentNotifications = read("src/app/dashboard/parent/notifications/page.tsx");
@@ -20,7 +21,9 @@ const adviserNotificationsRoute = read("src/app/api/adviser/notifications/route.
 // A Guidance publication stores durable Parent notification rows only for a
 // Parent audience, then sends an opaque Supabase Realtime invalidation to the
 // corresponding account roles before the response is returned.
-assert.match(creationRoute, /if \(audience === "Parents" \|\| audience === "Both"\)[\s\S]*?parent_announcement_notifications/);
+assert.match(creationRoute, /await deliverGuidanceAnnouncement\(ann, audience\)/);
+assert.match(guidanceDelivery, /if \(audience !== "Parents" && audience !== "Both"\) return/);
+assert.match(guidanceDelivery, /parent_announcement_notifications/);
 assert.match(creationRoute, /if \(audience === "Parents" \|\| audience === "Both"\) recipientRoles\.push\("parent"\)/);
 assert.match(creationRoute, /if \(audience === "Class Advisers" \|\| audience === "Both"\) recipientRoles\.push\("adviser"\)/);
 assert.match(creationRoute, /await publishRealtimeInvalidation\(recipients, "announcements"\)/);

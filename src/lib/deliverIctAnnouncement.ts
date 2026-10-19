@@ -1,5 +1,3 @@
-import { supabase } from "@/lib/supabase";
-import { sendIctAnnouncementEmail } from "@/lib/mailer";
 import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
 
 export type IctAnnouncementForDelivery = {
@@ -10,97 +8,15 @@ export type IctAnnouncementForDelivery = {
 };
 
 /**
- * Delivers a newly-published ICT announcement once. Database notifications are
- * written before non-blocking email requests so dashboard delivery does not
- * depend on SMTP availability.
+ * Delivers a newly-published ICT announcement to its durable recipient feed.
+ * ICT announcements are intentionally in-app only; the caller publishes the
+ * corresponding Realtime invalidation after this write completes.
  */
 export async function deliverIctAnnouncement(
   announcement: IctAnnouncementForDelivery,
   senderName: string,
 ) {
-  const audience = announcement.audience;
-
-  if (audience.includes("Parents")) {
+  if (announcement.audience.includes("Parents")) {
     await syncIctParentAnnouncementRecipients(announcement, senderName);
-    const { data: parentRows, error } = await supabase
-      .from("parents")
-      .select("email, parent_first_name, parent_last_name")
-      .not("email", "is", null);
-    if (error) throw error;
-
-    for (const parent of parentRows ?? []) {
-      const recipientName = [parent.parent_first_name, parent.parent_last_name]
-        .filter(Boolean)
-        .join(" ") || "Parent";
-      sendIctAnnouncementEmail({
-        recipientEmail: parent.email,
-        recipientName,
-        senderName,
-        title: announcement.title,
-        message: announcement.message,
-        audience,
-      }).catch((error) => console.error("ICT email to parent failed:", error));
-    }
-  }
-
-  if (audience.includes("Class Advisers")) {
-    // Advisers read ICT announcements from the ICT source table using their
-    // own per-user read receipts. `adviser_notifications.announcement_id`
-    // references the legacy `announcements` table, so writing an ICT ID there
-    // would fail after the source announcement was already created.
-    const { data: adviserRows, error } = await supabase
-      .from("advisers")
-      .select("email, first_name, last_name")
-      .not("email", "is", null);
-    if (error) throw error;
-    for (const adviser of adviserRows ?? []) {
-      const recipientName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser";
-      sendIctAnnouncementEmail({
-        recipientEmail: adviser.email,
-        recipientName,
-        senderName,
-        title: announcement.title,
-        message: announcement.message,
-        audience,
-      }).catch((error) => console.error("ICT email to adviser failed:", error));
-    }
-  }
-
-  if (audience.includes("Guidance")) {
-    const { data: guidanceRows, error } = await supabase
-      .from("guidance_counselors")
-      .select("email, first_name, last_name")
-      .not("email", "is", null);
-    if (error) throw error;
-    for (const guidance of guidanceRows ?? []) {
-      const recipientName = [guidance.first_name, guidance.last_name].filter(Boolean).join(" ") || "Guidance";
-      sendIctAnnouncementEmail({
-        recipientEmail: guidance.email,
-        recipientName,
-        senderName,
-        title: announcement.title,
-        message: announcement.message,
-        audience,
-      }).catch((error) => console.error("ICT email to guidance failed:", error));
-    }
-  }
-
-  if (audience.includes("Principal")) {
-    const { data: principalRows, error } = await supabase
-      .from("principals")
-      .select("email, first_name, last_name")
-      .not("email", "is", null);
-    if (error) throw error;
-    for (const principal of principalRows ?? []) {
-      const recipientName = [principal.first_name, principal.last_name].filter(Boolean).join(" ") || "Principal";
-      sendIctAnnouncementEmail({
-        recipientEmail: principal.email,
-        recipientName,
-        senderName,
-        title: announcement.title,
-        message: announcement.message,
-        audience,
-      }).catch((error) => console.error("ICT email to principal failed:", error));
-    }
   }
 }

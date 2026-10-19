@@ -58,6 +58,7 @@
     "test:audit-trail": "node scripts/test-audit-trail.cjs",
     "test:student-religion": "node scripts/test-student-religion.cjs",
     "test:guidance-announcement-realtime": "node scripts/test-guidance-announcement-realtime.cjs",
+    "test:guidance-ict-announcement-email-suppression": "node scripts/test-guidance-ict-announcement-email-suppression.cjs",
     "test:principal-announcement-realtime": "node scripts/test-principal-announcement-realtime.cjs",
     "test:announcement-audit-ict-realtime": "node scripts/test-announcement-audit-ict-realtime.cjs",
     "test:principal-report-monitoring": "node scripts/test-principal-report-monitoring.cjs",

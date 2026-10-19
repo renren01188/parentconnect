@@ -1,237 +1,114 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getIctFromToken } from "@/lib/getIctFromToken";
-import { sendIctAnnouncementEmail } from "@/lib/mailer";
-import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
+import {
+  publishRealtimeInvalidation,
+  recipientsForRoles,
+  type RealtimeRecipientRole,
+} from "@/lib/realtimeInvalidation";
 import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
-import { ictAnnouncementRecipientRoles, normalizeIctAnnouncementAudience } from "@/lib/ictAnnouncementAudience";
-import { syncIctParentAnnouncementRecipients } from "@/lib/ictAnnouncementDelivery";
+import {
+  ictAnnouncementRecipientRoles,
+  normalizeIctAnnouncementAudience,
+} from "@/lib/ictAnnouncementAudience";
 import { deliverIctAnnouncement } from "@/lib/deliverIctAnnouncement";
 
-type IctAnnouncementRow = {
-    id: number;
-    title: string;
-    message: string;
-    audience: string[];
-};
-
 export async function GET() {
-    try {
-        const ict = await getIctFromToken();
-        if (!ict) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
-
-        const { data, error } = await supabase
-            .from("ict_announcements")
-            .select("*")
-            .eq("sender_id", ict.id)
-            .order("created_at", { ascending: false });
-
-        if (error) throw error;
-
-        const announcements = (data ?? []).map((a) => ({
-            ...a,
-            id: String(a.id),
-            audience: Array.isArray(a.audience) ? a.audience : [],
-        }));
-
-        return NextResponse.json({ success: true, announcements });
-    } catch (error) {
-        console.error("GET /api/ict/announcements error:", error);
-        return NextResponse.json({ success: false, message: "Failed to fetch." }, { status: 500 });
+  try {
+    const ict = await getIctFromToken();
+    if (!ict) {
+      return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
+
+    const { data, error } = await supabase
+      .from("ict_announcements")
+      .select("*")
+      .eq("sender_id", ict.id)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const announcements = (data ?? []).map((announcement) => ({
+      ...announcement,
+      id: String(announcement.id),
+      audience: Array.isArray(announcement.audience) ? announcement.audience : [],
+    }));
+
+    return NextResponse.json({ success: true, announcements });
+  } catch (error) {
+    console.error("GET /api/ict/announcements error:", error);
+    return NextResponse.json({ success: false, message: "Failed to fetch." }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
-    let announcementWasCreated = false;
-    try {
-        const ict = await getIctFromToken();
-        if (!ict) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
+  let announcementWasCreated = false;
 
-        const { title, message, audience: rawAudience, scheduled_at } = await req.json();
-        const audience = normalizeIctAnnouncementAudience(rawAudience);
-        const schedule = normalizeOptionalAnnouncementSchedule(scheduled_at);
-
-        if (!title?.trim() || !message?.trim()) {
-            return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
-        }
-        if (!audience) {
-            return NextResponse.json({ success: false, message: "Select at least one audience." }, { status: 400 });
-        }
-        if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
-
-        const senderName = [ict.first_name, ict.last_name].filter(Boolean).join(" ").trim() || "ICT Office";
-        const status = schedule.scheduledAt ? "Scheduled" : "Published";
-
-        const { data: ann, error } = await supabase
-            .from("ict_announcements")
-            .insert({
-                sender_id: ict.id,
-                sender_name: senderName,
-                title: title.trim(),
-                message: message.trim(),
-                audience,
-                status,
-                scheduled_at: schedule.scheduledAt,
-            })
-            .select()
-            .single();
-
-        if (error) throw error;
-        announcementWasCreated = true;
-
-        if (status === "Published") {
-            await deliverIctAnnouncement(ann, senderName);
-
-            const recipientRoles: RealtimeRecipientRole[] = [...ictAnnouncementRecipientRoles(audience)];
-            const recipients = await recipientsForRoles(recipientRoles);
-            recipients.push({ role: "ict", id: Number(ict.id) });
-            await publishRealtimeInvalidation(recipients, "announcements");
-        }
-
-        await logAnnouncementAudit({
-            action: status === "Published" ? "Published" : "Scheduled",
-            actor: { id: ict.id, name: senderName, role: "ICT", email: ict.email },
-            announcement: { id: ann.id, title: ann.title, audience, status },
-            headers: req.headers,
-        });
-
-        return NextResponse.json({ success: true, announcement: { ...ann, id: String(ann.id) } });
-    } catch (error) {
-        console.error("POST /api/ict/announcements error:", error);
-        return NextResponse.json({
-            success: false,
-            message: announcementWasCreated
-                ? "The announcement was saved, but delivery could not be completed. Refresh My Announcements before retrying."
-                : "Unable to create the announcement. Please try again.",
-        }, { status: 500 });
-    }
-}
-
-async function fanOutIctAnnouncement(ann: IctAnnouncementRow, senderName: string) {
-    const audience = ann.audience;
-
-    // ── Parents ────────────────────────────────────────────────────────────────
-    if (audience.includes("Parents")) {
-        await syncIctParentAnnouncementRecipients(ann, senderName);
-        const { data: parentRows } = await supabase
-            .from("parents")
-            .select("id, email, parent_first_name, parent_last_name")
-            .not("email", "is", null);
-
-        for (const parent of parentRows ?? []) {
-            const parentName = [parent.parent_first_name, parent.parent_last_name].filter(Boolean).join(" ") || "Parent";
-            sendIctAnnouncementEmail({
-                recipientEmail: parent.email,
-                recipientName: parentName,
-                senderName,
-                title: ann.title,
-                message: ann.message,
-                audience: ann.audience,
-            }).catch(err => console.error("ICT email to parent failed:", err));
-        }
+  try {
+    const ict = await getIctFromToken();
+    if (!ict) {
+      return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
     }
 
-    // ── Class Advisers ─────────────────────────────────────────────────────────
-    if (audience.includes("Class Advisers")) {
-        const { data: advisers } = await supabase
-            .from("advisers")
-            .select("id");
+    const { title, message, audience: rawAudience, scheduled_at } = await req.json();
+    const audience = normalizeIctAnnouncementAudience(rawAudience);
+    const schedule = normalizeOptionalAnnouncementSchedule(scheduled_at);
 
-        if (advisers?.length) {
-            const rows = advisers.map((a: { id: number }) => ({
-                adviser_id: a.id,
-                announcement_id: ann.id,
-                notif_key: `ict-announcement-${ann.id}`,
-                title: `[ICT] ${ann.title}`,
-                message: ann.message,
-                type: "announcement",
-                date: "today",
-                read: false,
-            }));
-
-            const { error } = await supabase
-                .from("adviser_notifications")
-                .insert(rows);
-
-            if (error) console.error("ICT fan-out to advisers error:", error.message);
-        }
-        const { data: adviserRows } = await supabase
-            .from("advisers")
-            .select("email, first_name, last_name")
-            .not("email", "is", null);
-
-        for (const adviser of adviserRows ?? []) {
-            const adviserName = [adviser.first_name, adviser.last_name].filter(Boolean).join(" ") || "Adviser";
-            sendIctAnnouncementEmail({
-                recipientEmail: adviser.email,
-                recipientName: adviserName,
-                senderName,
-                title: ann.title,
-                message: ann.message,
-                audience: ann.audience,
-            }).catch(err => console.error("ICT email to adviser failed:", err));
-        }
+    if (!title?.trim() || !message?.trim()) {
+      return NextResponse.json({ success: false, message: "Title and message are required." }, { status: 400 });
+    }
+    if (!audience) {
+      return NextResponse.json({ success: false, message: "Select at least one audience." }, { status: 400 });
+    }
+    if (!schedule.ok) {
+      return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
     }
 
-    // ── Guidance ───────────────────────────────────────────────────────────────
-    if (audience.includes("Guidance")) {
-        const { data: guidanceStaff } = await supabase
-            .from("guidance_counselors")
-            .select("id");
+    const senderName = [ict.first_name, ict.last_name].filter(Boolean).join(" ").trim() || "ICT Office";
+    const status = schedule.scheduledAt ? "Scheduled" : "Published";
 
-        if (guidanceStaff?.length) {
-            // We insert into guidance_notification_reads with read=false pattern
-            // by inserting a row into adviser_notifications for guidance
-            const notifRows = guidanceStaff.map((g: { id: number }) => ({
-                announcement_id: ann.id,
-                notif_key: `ict-announcement-${ann.id}`,
-                title: `[ICT] ${ann.title}`,
-                message: ann.message,
-                type: "announcement",
-                guidance_id: g.id,
-            }));
+    const { data: ann, error } = await supabase
+      .from("ict_announcements")
+      .insert({
+        sender_id: ict.id,
+        sender_name: senderName,
+        title: title.trim(),
+        message: message.trim(),
+        audience,
+        status,
+        scheduled_at: schedule.scheduledAt,
+      })
+      .select()
+      .single();
 
-            // Store in a guidance-readable way — reuse guidance_announcements pattern
-            // We'll insert into ict_announcements and let guidance fetch via audience array
-            // No extra table needed — guidance GET API will query ict_announcements directly
-            console.log("Guidance will see via ict_announcements query", notifRows.length);
-        }
-        const { data: guidanceRows } = await supabase
-            .from("guidance_counselors")
-            .select("email, first_name, last_name")
-            .not("email", "is", null);
+    if (error) throw error;
+    announcementWasCreated = true;
 
-        for (const g of guidanceRows ?? []) {
-            const guidanceName = [g.first_name, g.last_name].filter(Boolean).join(" ") || "Guidance";
-            sendIctAnnouncementEmail({
-                recipientEmail: g.email,
-                recipientName: guidanceName,
-                senderName,
-                title: ann.title,
-                message: ann.message,
-                audience: ann.audience,
-            }).catch(err => console.error("ICT email to guidance failed:", err));
-        }
+    if (status === "Published") {
+      await deliverIctAnnouncement(ann, senderName);
+
+      const recipientRoles: RealtimeRecipientRole[] = [...ictAnnouncementRecipientRoles(audience)];
+      const recipients = await recipientsForRoles(recipientRoles);
+      recipients.push({ role: "ict", id: Number(ict.id) });
+      await publishRealtimeInvalidation(recipients, "announcements");
     }
 
-    // ── Principal ──────────────────────────────────────────────────────────────
-    if (audience.includes("Principal")) {
-        const { data: principalRows } = await supabase
-            .from("principals")
-            .select("email, first_name, last_name")
-            .not("email", "is", null);
+    await logAnnouncementAudit({
+      action: status === "Published" ? "Published" : "Scheduled",
+      actor: { id: ict.id, name: senderName, role: "ICT", email: ict.email },
+      announcement: { id: ann.id, title: ann.title, audience, status },
+      headers: req.headers,
+    });
 
-        for (const p of principalRows ?? []) {
-            const principalName = [p.first_name, p.last_name].filter(Boolean).join(" ") || "Principal";
-            sendIctAnnouncementEmail({
-                recipientEmail: p.email,
-                recipientName: principalName,
-                senderName,
-                title: ann.title,
-                message: ann.message,
-                audience: ann.audience,
-            }).catch(err => console.error("ICT email to principal failed:", err));
-        }
-    }
+    return NextResponse.json({ success: true, announcement: { ...ann, id: String(ann.id) } });
+  } catch (error) {
+    console.error("POST /api/ict/announcements error:", error);
+    return NextResponse.json({
+      success: false,
+      message: announcementWasCreated
+        ? "The announcement was saved, but delivery could not be completed. Refresh My Announcements before retrying."
+        : "Unable to create the announcement. Please try again.",
+    }, { status: 500 });
+  }
 }
