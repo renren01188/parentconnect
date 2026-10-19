@@ -115,8 +115,8 @@ export default function Sidebar() {
 
       {mobileOpen && <div className="fixed inset-0 z-40 bg-black/45 md:hidden" onClick={closeMenu} aria-hidden="true" />}
 
-      <aside id="ict-dashboard-navigation" data-parent-guide="ict-sidebar" className={`scrollbar-none fixed inset-y-0 left-0 z-50 flex h-svh max-h-svh min-h-0 w-72 max-w-[88vw] shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain bg-gradient-to-b from-[#1a3a0a] to-[#274e13] transition-transform duration-200 md:static md:z-auto md:flex md:h-dvh md:max-h-dvh md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "ict-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`}>
-        <div className="flex items-center justify-between px-4 pt-4 md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
+      <aside id="ict-dashboard-navigation" data-parent-guide="ict-sidebar" className={`scrollbar-none fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-72 max-w-[88vw] shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain bg-gradient-to-b from-[#1a3a0a] to-[#274e13] transition-transform duration-200 md:static md:z-auto md:flex md:w-56 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${guideTarget === "ict-sidebar" ? "z-[85] pointer-events-none rounded-r-2xl ring-4 ring-emerald-400 ring-offset-4 ring-offset-slate-100 md:z-[85]" : ""}`}>
+        <div className="flex items-center justify-between px-4 pt-[max(1rem,env(safe-area-inset-top))] md:hidden"><span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span><button type="button" onClick={closeMenu} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white" aria-label="Close navigation menu"><X className="h-4 w-4" /></button></div>
 
         <div className="border-b border-white/10 px-5 py-5"><Link href="/dashboard/ict" onClick={closeMenu} aria-label="Go to ICT dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/20 bg-[#274e13]"><Monitor className="h-4 w-4 text-white" /></div><div className="min-w-0"><p className="text-sm font-extrabold leading-tight text-white">ParentConnect</p><p className="mt-0.5 text-[10px] text-green-100">ICT</p></div></Link></div>
 
@@ -128,7 +128,7 @@ export default function Sidebar() {
           })}
         </nav>
 
-        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-3 md:pb-4">
+        <div className="mt-3 flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 xl:mt-auto xl:pb-4">
           <Link href="/dashboard/ict/profile" onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith("/dashboard/ict/profile") ? "bg-white/18" : "hover:bg-white/10"}`}><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white/30 bg-[#274e13] text-xs font-bold text-white">{initials}</div><div className="min-w-0"><p className="truncate text-xs font-semibold leading-tight text-white">{displayName}</p><p className="text-[10px] text-white/50">ICT Personnel</p></div></Link>
           <LogoutButton
             logoutEndpoint="/api/auth/ict/logout"

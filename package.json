@@ -79,6 +79,7 @@
     "test:guardian-temp-password-delivery": "node scripts/test-guardian-temp-password-delivery.cjs",
     "test:guardian-signup-recaptcha": "node scripts/test-guardian-signup-recaptcha.cjs",
     "test:parent-dashboard-announcements": "node scripts/test-parent-dashboard-announcements.cjs",
+    "test:parent-sidebar-layout": "node scripts/test-parent-sidebar-layout.cjs",
     "test:sidebar-badge-dismissal": "node scripts/test-sidebar-badge-dismissal.cjs",
     "test:dashboard-idle-timeout": "node scripts/test-dashboard-idle-timeout.cjs",
     "test:parent-report-adviser-link": "node scripts/test-parent-report-adviser-link.cjs",

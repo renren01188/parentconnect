@@ -52,15 +52,18 @@ export function formatAttendanceSmsTime(time: string) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
 
-function attendanceGreeting(time: string) {
-  const [rawHour = "0"] = time.split(":");
-  const hour24 = Number(rawHour);
-  return Number.isFinite(hour24) && hour24 < 12 ? "Good morning" : "Good afternoon";
-}
-
 export function buildAttendanceSmsMessage(input: Pick<AttendanceSmsInput, "studentName" | "attendanceDate" | "timeLogged" | "attendanceType">) {
-  const action = input.attendanceType === "Time Out" ? "leaving" : "entering";
-  return `PConnect: ${attendanceGreeting(input.timeLogged)}! ${input.studentName} scanned their RFID tag upon ${action} the classroom on ${formatAttendanceSmsDate(input.attendanceDate)} at ${formatAttendanceSmsTime(input.timeLogged)}.`;
+  const date = formatAttendanceSmsDate(input.attendanceDate);
+  const time = formatAttendanceSmsTime(input.timeLogged);
+
+  // The greeting describes the attendance event, rather than the device's
+  // clock. This keeps a late Time In and an early Time Out consistent with
+  // the parent-facing templates approved for RFID attendance.
+  if (input.attendanceType === "Time Out") {
+    return `PConnect: Good Afternoon! ${input.studentName} scanned their RFID tag upon leaving the classroom on ${date}, at ${time}.`;
+  }
+
+  return `PConnect: Good Morning! ${input.studentName} scanned their RFID tag upon entering the classroom on ${date}, at ${time}.`;
 }
 
 function registeredParents(rows: ParentContact[]) {
@@ -111,7 +114,7 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
   const message = buildAttendanceSmsMessage(input);
   if (parents.length > 0) {
     const { error } = await supabase
-      .from("attendance_sms_jobs")
+      .from("attendance_sms_job")
       .upsert(parents.map((parent) => ({
         attendance_log_id: input.attendanceLogId,
         parent_id: parent.parentId,
@@ -123,6 +126,19 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
         last_error: null,
       })), { onConflict: "attendance_log_id,parent_id", ignoreDuplicates: true });
     if (error) throw error;
+
+    // Some older deployments create the pending job from a database trigger
+    // before this server-side fallback runs. Refresh only pending jobs so an
+    // old trigger template cannot reach Semaphore, while sent/processing jobs
+    // remain immutable and cannot be sent a second time.
+    const { error: templateError } = await supabase
+      .from("attendance_sms_job")
+      .update({ message })
+      .eq("attendance_log_id", input.attendanceLogId)
+      .in("parent_id", parents.map((parent) => parent.parentId))
+      .eq("status", "pending");
+    if (templateError) throw templateError;
+
     return { queued: parents.length, skipped: false, disabled: false };
   }
 

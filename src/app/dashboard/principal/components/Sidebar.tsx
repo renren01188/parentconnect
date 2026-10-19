@@ -125,15 +125,15 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
       <aside
         id="principal-dashboard-navigation"
         className={[
-          "scrollbar-none fixed inset-y-0 left-0 z-50 flex h-svh max-h-svh min-h-0 w-72 max-w-[88vw] flex-shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain",
+          "scrollbar-none fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-72 max-w-[88vw] flex-shrink-0 touch-pan-y flex-col overflow-y-auto overscroll-contain",
           "transform transition-transform duration-200",
-          "md:static md:z-auto md:flex md:h-dvh md:max-h-dvh md:w-56 md:translate-x-0",
+          "md:static md:z-auto md:flex md:w-56 md:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
         style={{ background: "linear-gradient(180deg, #3a1660 0%, #522081 60%, #6b2fa0 100%)" }}
       >
         {/* Mobile close row */}
-        <div className="flex items-center justify-between px-4 pt-4 md:hidden">
+        <div className="flex items-center justify-between px-4 pt-[max(1rem,env(safe-area-inset-top))] md:hidden">
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Menu</span>
           <button
             onClick={onClose}
@@ -194,7 +194,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
         </nav>
 
         {/* Profile + Logout */}
-        <div className="mt-auto flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-3 md:pb-4">
+        <div className="mt-3 flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 xl:mt-auto xl:pb-4">
           <Link
             href="/dashboard/principal/profile"
             onClick={onClose}
