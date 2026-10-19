@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import {
-  ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+  PASSWORD_SESSION_REVOCATION_ACTIONS,
   isTokenRevokedByPasswordChange,
   passwordSessionAuditRole,
   type PasswordSessionRole,
@@ -23,7 +23,7 @@ export async function isPasswordSessionRevoked({
   const { data, error } = await supabase
     .from("audit_log")
     .select("created_at")
-    .eq("action", ICT_PASSWORD_SESSION_REVOCATION_ACTION)
+    .in("action", [...PASSWORD_SESSION_REVOCATION_ACTIONS])
     .eq("target_type", "user")
     .eq("target_id", String(accountId))
     .eq("target_role", passwordSessionAuditRole(role))

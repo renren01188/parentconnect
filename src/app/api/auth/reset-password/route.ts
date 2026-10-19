@@ -4,19 +4,13 @@ import crypto from "crypto";
 import { supabase } from "@/lib/supabase";
 import { logAudit, logSecurityAlert } from "@/lib/audit";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-
-const MAX_OTP_ATTEMPTS = 5;
+import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function otpHash(parentId: number, otp: string) {
   const secret = process.env.PASSWORD_RESET_OTP_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) throw new Error("PASSWORD_RESET_OTP_SECRET or NEXTAUTH_SECRET must be configured.");
   return crypto.createHmac("sha256", secret).update(`${parentId}:${otp}`).digest("hex");
-}
-
-function hashesMatch(left: string, right: string) {
-  const leftBuffer = Buffer.from(left, "hex");
-  const rightBuffer = Buffer.from(right, "hex");
-  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export async function POST(req: NextRequest) {
@@ -28,8 +22,8 @@ export async function POST(req: NextRequest) {
     if (newPassword !== confirmPassword) {
       return NextResponse.json({ success: false, message: "Passwords do not match." }, { status: 400 });
     }
-    if (newPassword.length < 8) {
-      return NextResponse.json({ success: false, message: "Password must be at least 8 characters." }, { status: 400 });
+    if (!parentPasswordMeetsRequirements(newPassword)) {
+      return NextResponse.json({ success: false, message: PARENT_PASSWORD_REQUIREMENTS_MESSAGE }, { status: 400 });
     }
 
     const normalizedEmail = String(email).toLowerCase().trim();
@@ -55,64 +49,44 @@ export async function POST(req: NextRequest) {
     const parent = parents?.find((row) => parentAccountCanAccess(row) && (row.password_set === true || row.password_set === 1));
     if (!parent) return invalidOtp();
 
-    const { data: resetOtp, error: resetOtpError } = await supabase
-      .from("parent_password_reset_otps")
-      .select("otp_hash, expires_at, attempts")
-      .eq("parent_id", parent.id)
-      .maybeSingle();
-    if (resetOtpError) throw resetOtpError;
-    if (!resetOtp || new Date(resetOtp.expires_at).getTime() <= Date.now() || resetOtp.attempts >= MAX_OTP_ATTEMPTS) {
-      return invalidOtp();
-    }
-
     const submittedHash = otpHash(parent.id, String(otp));
-    if (!hashesMatch(resetOtp.otp_hash, submittedHash)) {
-      await supabase.from("parent_password_reset_otps")
-        .update({ attempts: Math.min(resetOtp.attempts + 1, MAX_OTP_ATTEMPTS) })
-        .eq("parent_id", parent.id)
-        .eq("otp_hash", resetOtp.otp_hash);
-      return invalidOtp();
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const parentName = `${parent.parent_first_name} ${parent.parent_last_name}`;
+    const { data: didReset, error: resetError } = await supabase.rpc("reset_parent_password_with_otp", {
+      p_parent_id: parent.id,
+      p_otp_hash: submittedHash,
+      p_password_hash: hashedPassword,
+      p_parent_name: parentName,
+      p_parent_email: parent.email,
+    });
+    if (resetError) throw resetError;
+    if (didReset !== true) return invalidOtp();
+
+    // The database function has already written the session-revocation marker
+    // atomically with the password change. This supplementary audit entry
+    // cannot turn a completed reset into a reported failure.
+    try {
+      await logAudit({
+        action: "Password Reset",
+        performedBy: parentName,
+        performedByRole: "Parent",
+        performedByEmail: parent.email,
+        targetUser: parentName,
+        targetRole: "Parent",
+        targetEmail: parent.email,
+        module: "Auth",
+        details: "Password reset completed after email OTP verification.",
+        ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+        browser: req.headers.get("user-agent") ?? undefined,
+      });
+    } catch (auditError) {
+      console.error("Password-reset activity audit could not be published:", auditError);
     }
 
-    // Consume the exact unexpired OTP before changing the password, preventing reuse.
-    const { data: consumedOtp, error: consumeError } = await supabase
-      .from("parent_password_reset_otps")
-      .delete()
-      .eq("parent_id", parent.id)
-      .eq("otp_hash", resetOtp.otp_hash)
-      .gt("expires_at", new Date().toISOString())
-      .lt("attempts", MAX_OTP_ATTEMPTS)
-      .select("parent_id");
-    if (consumeError) throw consumeError;
-    if (!consumedOtp?.length) return invalidOtp();
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    const { data: resetParent, error: updateError } = await supabase.from("parents").update({
-      password: hashedPassword,
-      password_set: 1,
-      temp_password: null,
-      temporary_password_expires_at: null,
-      reset_token: null,
-      reset_token_expiry: null,
-    }).eq("id", parent.id).eq("password_set", 1).select("id").maybeSingle();
-    if (updateError) throw updateError;
-    if (!resetParent) return invalidOtp();
-
-    await logAudit({
-      action: "Password Reset",
-      performedBy: `${parent.parent_first_name} ${parent.parent_last_name}`,
-      performedByRole: "Parent",
-      performedByEmail: parent.email,
-      targetUser: `${parent.parent_first_name} ${parent.parent_last_name}`,
-      targetRole: "Parent",
-      targetEmail: parent.email,
-      module: "Auth",
-      details: "Password reset completed after email OTP verification.",
-      ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
-      browser: req.headers.get("user-agent") ?? undefined,
-    });
-
-    return NextResponse.json({ success: true, message: "Password reset successfully. You can now log in with your new password." });
+    await publishAccountRealtimeInvalidation([{ role: "parent", id: Number(parent.id) }], { sessionRevoked: true });
+    const response = NextResponse.json({ success: true, message: "Password reset successfully. You can now log in with your new password." });
+    response.cookies.delete("parent_token");
+    return response;
   } catch (error: unknown) {
     console.error("POST /api/auth/reset-password error:", error);
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Server error." }, { status: 500 });

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Eye, EyeOff, Lock, CheckCircle, AlertCircle, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
 
 function ResetPasswordForm() {
   const router = useRouter();
@@ -27,12 +28,13 @@ function ResetPasswordForm() {
   const strength = Object.values(checks).filter(Boolean).length;
   const strengthLabel = ["", "Weak", "Fair", "Good", "Strong"][strength];
   const strengthColor = ["", "bg-red-400", "bg-amber-400", "bg-sky-400", "bg-emerald-500"][strength];
+  const passwordIsValid = parentPasswordMeetsRequirements(newPassword);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError("");
     if (newPassword !== confirmPassword) return setError("Passwords do not match.");
-    if (newPassword.length < 8) return setError("Password must be at least 8 characters.");
+    if (!passwordIsValid) return setError(PARENT_PASSWORD_REQUIREMENTS_MESSAGE);
     if (otp.length !== 6) return setError("Enter the six-digit verification code.");
 
     setLoading(true);
@@ -85,7 +87,7 @@ function ResetPasswordForm() {
           <input type={showNew ? "text" : "password"} autoComplete="new-password" placeholder="Create a strong password" required value={newPassword} onChange={event => setNewPassword(event.target.value)} className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition placeholder-slate-400" />
           <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">{showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
         </div>
-        {newPassword && <div className="mt-2"><div className="flex gap-1 mb-1">{[1, 2, 3, 4].map(item => <div key={item} className={`flex-1 h-1.5 rounded-full transition-all ${item <= strength ? strengthColor : "bg-slate-200"}`} />)}</div><p className="text-xs text-slate-400">Strength: <span className="font-semibold text-slate-600">{strengthLabel}</span></p></div>}
+        {newPassword && <div className="mt-2"><div className="flex gap-1 mb-1">{[1, 2, 3, 4].map(item => <div key={item} className={`flex-1 h-1.5 rounded-full transition-all ${item <= strength ? strengthColor : "bg-slate-200"}`} />)}</div><p className="text-xs text-slate-400">Strength: <span className="font-semibold text-slate-600">{strengthLabel}</span></p>{!passwordIsValid && <p className="mt-1 text-xs text-amber-700">Use at least 8 characters with uppercase, lowercase, and a number.</p>}</div>}
       </div>
       <div>
         <label className="block text-sm font-semibold text-slate-700 mb-1.5">Confirm Password</label>
@@ -95,7 +97,7 @@ function ResetPasswordForm() {
           <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">{showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
         </div>
       </div>
-      <button type="submit" disabled={loading || otp.length !== 6} className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md text-sm disabled:opacity-60" style={{ background: loading ? "#3a4a6b" : "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" }}>
+      <button type="submit" disabled={loading || otp.length !== 6 || !passwordIsValid} className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md text-sm disabled:opacity-60" style={{ background: loading ? "#3a4a6b" : "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" }}>
         {loading ? "Saving..." : <><CheckCircle className="w-4 h-4" /> Verify Code & Reset Password</>}
       </button>
     </form>

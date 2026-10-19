@@ -1,6 +1,6 @@
 "use client";
 
-import { SchoolBackground } from "@/components/SchoolBackground";
+import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 import { useState } from "react";
 import { Mail, ArrowLeft, CheckCircle, AlertCircle, KeyRound } from "lucide-react";
 import Link from "next/link";
@@ -35,24 +35,20 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
-      <header className="relative w-full h-48 overflow-hidden">
-        <SchoolBackground />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0d1526]/90 via-[#1a2035]/80 to-[#0d1526]/70" />
-        <div className="relative z-10 flex items-center h-full px-8">
-          <h1 className="text-white font-bold text-xl md:text-2xl">ParentConnect: <span className="text-indigo-300">Parent Communication and RFID Monitoring</span></h1>
-        </div>
-      </header>
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800">
+      <LoginLandingHeader />
 
-      <main className="flex-1 flex items-center justify-center py-12 px-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-100 w-full max-w-md p-8">
+      <main className="relative flex flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,#f8fbff_0%,#f1f7f8_100%)] px-4 py-10 sm:px-6 sm:py-14">
+        <div aria-hidden="true" className="absolute -left-24 top-12 h-64 w-64 rounded-full bg-sky-200/35 blur-3xl" />
+        <div aria-hidden="true" className="absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-emerald-200/35 blur-3xl" />
+        <div className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200/90 bg-white/95 p-5 shadow-[0_22px_60px_rgba(15,43,76,0.13)] backdrop-blur-sm sm:p-8">
           <Link href="/login/guardian" className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium mb-6 transition-colors w-fit">
             <ArrowLeft className="w-4 h-4" /> Back to Login
           </Link>
 
           {!sent ? <>
             <div className="flex flex-col items-center mb-7">
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" }}>
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 8px 24px rgba(26,32,53,0.25)" }}>
                 <KeyRound className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-2xl font-extrabold text-slate-800">Forgot Password</h2>
@@ -66,10 +62,10 @@ export default function ForgotPasswordPage() {
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email Address</label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input type="email" autoComplete="email" placeholder="Enter your registered email" required value={email} onChange={event => setEmail(event.target.value)} className="w-full pl-10 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition placeholder-slate-400" />
+                  <input type="email" autoComplete="email" placeholder="Enter your registered email" required value={email} onChange={event => setEmail(event.target.value)} className="w-full pl-10 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition placeholder-slate-400" />
                 </div>
               </div>
-              <button type="submit" disabled={loading} className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 shadow-md text-sm disabled:opacity-60" style={{ background: loading ? "#3a4a6b" : "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)" }}>
+              <button type="submit" disabled={loading} className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 mt-1 text-sm disabled:opacity-60" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
                 {loading ? "Sending..." : <>Send Verification Code <Mail className="w-4 h-4" /></>}
               </button>
             </form>

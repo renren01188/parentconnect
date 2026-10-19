@@ -41,6 +41,9 @@ type AttendanceLog = {
   student_id: string;
   attendance_date: string;
   time_logged: string | null;
+  type: string | null;
+  status: string | null;
+  via: string | null;
 };
 
 type AttendanceRead = {
@@ -230,6 +233,34 @@ function timeLabel(value: string) {
   });
 }
 
+function attendanceTimeLabel(value: string | null) {
+  if (!value) return "the recorded time";
+  const [rawHour = "0", rawMinute = "0"] = value.split(":");
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function attendanceNotificationCopy(log: AttendanceLog, studentName: string) {
+  const status = String(log.status ?? "").trim();
+  if (status.toLowerCase() === "absent") {
+    return {
+      title: "Attendance Alert",
+      message: `${studentName} was marked absent on ${log.attendance_date}.`,
+    };
+  }
+
+  const isTimeOut = log.type === "Time Out";
+  const action = isTimeOut ? "checked out" : "checked in";
+  const lateSuffix = status.toLowerCase() === "late" ? " (Late)" : "";
+  return {
+    title: isTimeOut ? "Attendance Time Out" : "Attendance Time In",
+    message: `${studentName} ${action} on ${log.attendance_date} at ${attendanceTimeLabel(log.time_logged)}${lateSuffix}.`,
+  };
+}
+
 function scheduledDeletionMessage(deleteAfter: string | null) {
   const deletionDate = deleteAfter ? new Date(deleteAfter) : null;
   const dateLabel = deletionDate && !Number.isNaN(deletionDate.getTime())
@@ -315,26 +346,46 @@ export async function GET() {
     if (parentDeletionNotificationResult.error) throw parentDeletionNotificationResult.error;
     const parentDeletionNotification = parentDeletionNotificationResult.data as ParentDeletionNotification | null;
 
-    const { data: linkedStudents, error: linkedStudentsError } = await supabase
-      .from("parent_student_links")
-      .select("student_id, students!inner(first_name, middle_name, last_name, suffix)")
-      .in("parent_id", parentIds);
+    // A Parent can be linked through the multi-student link table or through
+    // the original parents.student_id column. Include both authoritative
+    // relationships: older accounts keep their attendance feed, while one
+    // account with several children sees only those children.
+    const [linkedStudentsResult, directStudentResult] = await Promise.all([
+      supabase
+        .from("parent_student_links")
+        .select("student_id")
+        .eq("parent_id", session.id),
+      supabase
+        .from("parents")
+        .select("student_id")
+        .eq("id", session.id)
+        .maybeSingle(),
+    ]);
+    if (linkedStudentsResult.error) throw linkedStudentsResult.error;
+    if (directStudentResult.error) throw directStudentResult.error;
 
-    if (linkedStudentsError) throw linkedStudentsError;
+    const linkedStudentIds = [...new Set([
+      ...(linkedStudentsResult.data ?? []).map((link) => String(link.student_id ?? "").trim()),
+      String(directStudentResult.data?.student_id ?? "").trim(),
+    ].filter(Boolean))];
+
+    const { data: linkedStudentRows, error: linkedStudentRowsError } = linkedStudentIds.length > 0
+      ? await supabase
+        .from("students")
+        .select("student_id, first_name, middle_name, last_name, suffix")
+        .in("student_id", linkedStudentIds)
+      : { data: [], error: null };
+    if (linkedStudentRowsError) throw linkedStudentRowsError;
 
     const studentNames = new Map<string, string>();
-    for (const link of linkedStudents ?? []) {
-      const student = link.students as unknown as {
-        first_name?: string | null;
-        middle_name?: string | null;
-        last_name?: string | null;
-        suffix?: string | null;
-      } | null;
-      const name = [student?.first_name, student?.middle_name, student?.last_name, student?.suffix]
+    for (const student of linkedStudentRows ?? []) {
+      const studentId = String(student.student_id ?? "").trim();
+      if (!studentId) continue;
+      const name = [student.first_name, student.middle_name, student.last_name, student.suffix]
         .filter(Boolean)
         .join(" ")
         .trim();
-      studentNames.set(link.student_id as string, name || (link.student_id as string));
+      studentNames.set(studentId, name || studentId);
     }
 
     const { data: notificationRows, error: notificationError } = await supabase
@@ -604,21 +655,23 @@ export async function GET() {
       })
       .filter(Boolean);
 
-    const linkedStudentIds = [...studentNames.keys()];
     let attendanceRows: Array<Record<string, unknown>> = [];
     if (linkedStudentIds.length > 0) {
-      const { data: absentLogs, error: absentLogsError } = await supabase
+      // In-app attendance notifications are independent of the optional SMS
+      // and email preferences. Those preferences decide only external
+      // delivery; a successful Time In, Time Out, or absence must remain in
+      // this account-scoped dashboard history.
+      const { data: attendanceLogs, error: attendanceLogsError } = await supabase
         .from("attendance_logs")
-        .select("id, student_id, attendance_date, time_logged")
+        .select("id, student_id, attendance_date, time_logged, type, status, via")
         .in("student_id", linkedStudentIds)
-        .eq("status", "Absent")
         .gte("attendance_date", retentionDate)
         .order("attendance_date", { ascending: false })
         .order("time_logged", { ascending: false })
         .limit(100);
-      if (absentLogsError) throw absentLogsError;
+      if (attendanceLogsError) throw attendanceLogsError;
 
-      const logs = (absentLogs ?? []) as AttendanceLog[];
+      const logs = (attendanceLogs ?? []) as AttendanceLog[];
       const logIds = logs.map((log) => log.id);
       const readLogIds = new Set<number>();
       if (logIds.length > 0) {
@@ -636,13 +689,14 @@ export async function GET() {
       attendanceRows = logs.map((log) => {
         const studentName = studentNames.get(log.student_id) ?? log.student_id;
         const occurredAt = `${log.attendance_date}T${log.time_logged ?? "00:00:00"}`;
+        const notification = attendanceNotificationCopy(log, studentName);
         return {
           // Negative IDs keep attendance records distinct from announcement IDs
           // while preserving the existing numeric notification UI contract.
           id: -log.id,
           type: "alert",
-          title: "Attendance Alert",
-          msg: `${studentName} was marked absent on ${log.attendance_date}.`,
+          title: notification.title,
+          msg: notification.message,
           time: timeLabel(occurredAt),
           category: "Attendance",
           unread: !readLogIds.has(log.id),

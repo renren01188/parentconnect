@@ -17,6 +17,7 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: "Logout", label: "Logout", databaseValues: ["Logout"] },
   { value: "Failed Login", label: "Failed Login", databaseValues: ["Failed Login"] },
   { value: "Password Reset", label: "Password Reset", databaseValues: ["Password Reset"] },
+  { value: "Password Session Revoked", label: "Password Session Revoked", databaseValues: ["Password Session Revoked", "ICT Password Session Revoked"] },
   { value: "Security Alert", label: "Security Alert", databaseValues: ["Security Alert"] },
   { value: "Update", label: "Update", databaseValues: ["Update", "edited"] },
   { value: "Approve", label: "Approve", databaseValues: ["Approve", "approved"] },

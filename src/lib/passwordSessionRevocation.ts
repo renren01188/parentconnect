@@ -5,7 +5,19 @@
  */
 export type PasswordSessionRole = "parent" | "adviser" | "guidance";
 
+/** New self-service and ICT resets share this durable audit action. */
+export const PASSWORD_SESSION_REVOCATION_ACTION = "Password Session Revoked";
+
+/**
+ * Retained while existing ICT-generated audit records age out. New ICT
+ * account-management writes still use this action until that flow is migrated.
+ */
 export const ICT_PASSWORD_SESSION_REVOCATION_ACTION = "ICT Password Session Revoked";
+
+export const PASSWORD_SESSION_REVOCATION_ACTIONS = [
+  PASSWORD_SESSION_REVOCATION_ACTION,
+  ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+] as const;
 
 const roleLabels: Record<PasswordSessionRole, "Parent" | "Adviser" | "Guidance"> = {
   parent: "Parent",

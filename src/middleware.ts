@@ -4,7 +4,7 @@ import { getJwtSecret } from "@/lib/authSecret";
 import { dashboardSessionCookies, DashboardRole, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import {
-  ICT_PASSWORD_SESSION_REVOCATION_ACTION,
+  PASSWORD_SESSION_REVOCATION_ACTIONS,
   isTokenRevokedByPasswordChange,
   passwordSessionAuditRole,
   type PasswordSessionRole,
@@ -145,7 +145,7 @@ async function passwordSessionCanAccess(
   try {
     const endpoint = new URL("/rest/v1/audit_log", supabaseUrl);
     endpoint.searchParams.set("select", "created_at");
-    endpoint.searchParams.set("action", `eq.${ICT_PASSWORD_SESSION_REVOCATION_ACTION}`);
+    endpoint.searchParams.set("action", `in.(${PASSWORD_SESSION_REVOCATION_ACTIONS.join(",")})`);
     endpoint.searchParams.set("target_type", "eq.user");
     endpoint.searchParams.set("target_id", `eq.${accountId}`);
     endpoint.searchParams.set("target_role", `eq.${passwordSessionAuditRole(role)}`);
@@ -170,6 +170,8 @@ export async function middleware(req: NextRequest) {
   // Login and signup routes must remain reachable even if a browser still
   // carries an expired cookie that will be replaced by a successful sign-in.
   const isPublicSessionBootstrapApi = pathname === "/api/auth/login"
+    || pathname === "/api/auth/forgot-password"
+    || pathname === "/api/auth/reset-password"
     || pathname === "/api/auth/adviser/login"
     || pathname === "/api/auth/guidance/login"
     || pathname === "/api/auth/principal/login"

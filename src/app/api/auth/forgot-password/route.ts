@@ -4,6 +4,10 @@ import { supabase } from "@/lib/supabase";
 import { logAudit } from "@/lib/audit";
 import { sendWithEmail } from "@/lib/mailer";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import {
+  consumeParentPasswordResetRateLimit,
+  isParentPasswordResetRateLimitUnavailableError,
+} from "@/lib/parentPasswordResetRateLimit";
 
 const OTP_EXPIRY_MINUTES = 10;
 const RESEND_COOLDOWN_MS = 60_000;
@@ -47,6 +51,9 @@ export async function POST(req: NextRequest) {
     if (existingOtp && Date.now() - new Date(existingOtp.requested_at).getTime() < RESEND_COOLDOWN_MS) {
       return NextResponse.json(genericResponse);
     }
+
+    const rateLimit = await consumeParentPasswordResetRateLimit(Number(parent.id));
+    if (!rateLimit.allowed) return NextResponse.json(genericResponse);
 
     const otp = crypto.randomInt(100_000, 1_000_000).toString();
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
@@ -97,7 +104,9 @@ export async function POST(req: NextRequest) {
     console.error("POST /api/auth/forgot-password error:", error);
     return NextResponse.json({
       success: false,
-      message: error instanceof Error ? error.message : "Server error.",
-    }, { status: 500 });
+      message: isParentPasswordResetRateLimitUnavailableError(error)
+        ? "Password reset is temporarily unavailable. Please try again later."
+        : "Unable to send a password-reset code right now. Please try again later.",
+    }, { status: isParentPasswordResetRateLimitUnavailableError(error) ? 503 : 500 });
   }
 }

@@ -10,6 +10,7 @@ const settingsRoute = read("src/app/api/ict/attendance-notification-settings/rou
 const creditsRoute = read("src/app/api/ict/attendance-notification-settings/credits/route.ts");
 const scanRoute = read("src/app/api/attendance/scan/route.ts");
 const parentPreferencesRoute = read("src/app/api/parents/attendance-notification-preferences/route.ts");
+const parentNotificationsRoute = read("src/app/api/parents/notifications/route.ts");
 const parentProfile = read("src/app/dashboard/parent/profile/page.tsx");
 const smsQueue = read("src/lib/attendanceSmsQueue.ts");
 const emailQueue = read("src/lib/attendanceEmailQueue.ts");
@@ -43,5 +44,18 @@ assert.match(scanRoute, /await enqueueAttendanceSms\(input\);[\s\S]*?await proce
 assert.match(scanRoute, /await enqueueAttendanceEmail\(input\);[\s\S]*?await processAttendanceEmailJobs\(\{ attendanceLogId: input\.attendanceLogId/);
 assert.doesNotMatch(scanRoute, /SCHEDULED_ATTENDANCE_SMS_WORKER/);
 assert.doesNotMatch(scanRoute, /SCHEDULED_ATTENDANCE_EMAIL_WORKER/);
+
+// The in-app feed must show every attendance event independently from the
+// optional external SMS/email channels. A parent can be linked through the
+// multi-student table or an older parents.student_id record, but never by an
+// unrelated student's attendance log.
+assert.match(parentNotificationsRoute, /from\("parent_student_links"\)[\s\S]*?\.eq\("parent_id", session\.id\)/);
+assert.match(parentNotificationsRoute, /from\("parents"\)[\s\S]*?\.select\("student_id"\)[\s\S]*?\.eq\("id", session\.id\)/);
+assert.match(parentNotificationsRoute, /\.in\("student_id", linkedStudentIds\)/);
+assert.match(parentNotificationsRoute, /select\("id, student_id, attendance_date, time_logged, type, status, via"\)/);
+assert.match(parentNotificationsRoute, /function attendanceNotificationCopy/);
+assert.match(parentNotificationsRoute, /Attendance Time In/);
+assert.match(parentNotificationsRoute, /Attendance Time Out/);
+assert.doesNotMatch(parentNotificationsRoute, /\.eq\("status", "Absent"\)/);
 
 console.log("Attendance notification initialization and RFID SMS dispatch checks passed.");

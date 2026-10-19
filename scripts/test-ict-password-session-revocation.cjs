@@ -54,7 +54,7 @@ assert.doesNotMatch(
 assert.match(helper, /sessionIssuedAt/);
 assert.match(helper, /isTokenRevokedByPasswordChange/);
 assert.match(store, /audit_log/);
-assert.match(store, /ICT_PASSWORD_SESSION_REVOCATION_ACTION/);
+assert.match(store, /PASSWORD_SESSION_REVOCATION_ACTIONS/);
 assert.match(middleware, /passwordSessionCanAccess\("parent"/);
 assert.match(middleware, /passwordSessionCanAccess\("adviser"/);
 assert.match(middleware, /passwordSessionCanAccess\("guidance"/);

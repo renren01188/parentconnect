@@ -22,6 +22,7 @@
     "test:principal-reports-layout": "node scripts/test-principal-reports-layout.cjs",
     "test:principal-report-read-state": "node scripts/test-principal-report-read-state.cjs",
     "test:login-lockout": "node scripts/test-login-lockout.cjs",
+    "test:guardian-password-reset": "node scripts/test-guardian-password-reset.cjs",
     "test:parent-deletion-notifications": "node scripts/test-parent-deletion-notifications.cjs",
     "test:guardian-terms": "node scripts/test-guardian-signup-terms.cjs",
     "test:report-submission-terms": "node scripts/test-report-submission-terms.cjs",
