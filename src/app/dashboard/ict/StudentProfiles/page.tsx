@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   Search, ChevronDown, Eye, Pencil, UserPlus,
@@ -149,6 +150,219 @@ function FInput({ label, placeholder, value, onChange, required, helper, icon: I
           className={`w-full border border-gray-200 rounded-lg py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition bg-white ${Icon ? "pl-8" : "px-3"} pr-3`} />
       </div>
       {helper && <p className="mt-1 text-[10px] text-gray-400">{helper}</p>}
+    </div>
+  );
+}
+
+type TimePickerParts = {
+  hour: string;
+  minute: string;
+  period: "AM" | "PM";
+};
+
+const TIME_PICKER_HOURS = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0"));
+const TIME_PICKER_MINUTES = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
+
+function parseScheduleTime(value: string): TimePickerParts {
+  const matched = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec(value);
+  if (!matched) return { hour: "", minute: "", period: "AM" };
+
+  const hour24 = Number(matched[1]);
+  return {
+    hour: String(hour24 % 12 || 12).padStart(2, "0"),
+    minute: matched[2],
+    period: hour24 >= 12 ? "PM" : "AM",
+  };
+}
+
+function formatScheduleTime(value: string) {
+  const parts = parseScheduleTime(value);
+  return parts.hour ? parts.hour + ":" + parts.minute + " " + parts.period : "--:-- --";
+}
+
+function serializeScheduleTime({ hour, minute, period }: TimePickerParts) {
+  const hour12 = Number(hour);
+  const hour24 = (hour12 % 12) + (period === "PM" ? 12 : 0);
+  return String(hour24).padStart(2, "0") + ":" + minute;
+}
+
+function ScheduleTimePicker({
+  value,
+  onChange,
+  disabled,
+  className,
+  label,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+  className: string;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<TimePickerParts>(() => parseScheduleTime(value));
+  const [position, setPosition] = useState({ top: 0, left: 0, ready: false });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const popoverWidth = 232;
+    const estimatedPopoverHeight = 328;
+    const viewportPadding = 8;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - popoverWidth - viewportPadding),
+    );
+    const showAbove = rect.bottom + estimatedPopoverHeight > window.innerHeight
+      && rect.top - estimatedPopoverHeight > viewportPadding;
+    setPosition({
+      top: showAbove ? rect.top - estimatedPopoverHeight : rect.bottom + 8,
+      left,
+      ready: true,
+    });
+  }, []);
+
+  const dismiss = useCallback(() => {
+    setOpen(false);
+  }, []);
+
+  const openPicker = () => {
+    if (disabled) return;
+    setDraft(parseScheduleTime(value));
+    setPosition((current) => ({ ...current, ready: false }));
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    const onOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !popoverRef.current?.contains(target)) dismiss();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+
+    document.addEventListener("click", onOutsideClick);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("click", onOutsideClick);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [dismiss, open, updatePosition]);
+
+  const completeSelection = () => {
+    if (!draft.hour || !draft.minute) return;
+    onChange(serializeScheduleTime(draft));
+    setOpen(false);
+  };
+
+  const picker = open && typeof document !== "undefined"
+    ? createPortal(
+      <div
+        ref={popoverRef}
+        role="dialog"
+        aria-label={label + " time picker"}
+        className="fixed z-[80] w-[232px] rounded-xl border border-gray-200 bg-white p-2 shadow-2xl"
+        style={{
+          top: position.top,
+          left: position.left,
+          visibility: position.ready ? "visible" : "hidden",
+        }}
+        onClick={(event) => event.stopPropagation()}
+        onWheel={(event) => event.stopPropagation()}
+      >
+        <div className="grid grid-cols-3 gap-1">
+          <div className="max-h-44 overscroll-contain overflow-y-auto pr-1" role="listbox" aria-label="Hour">
+            {TIME_PICKER_HOURS.map((hour) => (
+              <button
+                key={hour}
+                type="button"
+                role="option"
+                aria-selected={draft.hour === hour}
+                onClick={() => setDraft((current) => ({ ...current, hour }))}
+                className={[
+                  "block w-full rounded-md px-2 py-1.5 text-sm font-medium transition",
+                  draft.hour === hour ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-blue-50",
+                ].join(" ")}
+              >
+                {hour}
+              </button>
+            ))}
+          </div>
+          <div className="max-h-44 overscroll-contain overflow-y-auto pr-1" role="listbox" aria-label="Minute">
+            {TIME_PICKER_MINUTES.map((minute) => (
+              <button
+                key={minute}
+                type="button"
+                role="option"
+                aria-selected={draft.minute === minute}
+                onClick={() => setDraft((current) => ({ ...current, minute }))}
+                className={[
+                  "block w-full rounded-md px-2 py-1.5 text-sm font-medium transition",
+                  draft.minute === minute ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-blue-50",
+                ].join(" ")}
+              >
+                {minute}
+              </button>
+            ))}
+          </div>
+          <div className="max-h-44 overscroll-contain overflow-y-auto" role="listbox" aria-label="AM or PM">
+            {(["AM", "PM"] as const).map((period) => (
+              <button
+                key={period}
+                type="button"
+                role="option"
+                aria-selected={draft.period === period}
+                onClick={() => setDraft((current) => ({ ...current, period }))}
+                className={[
+                  "block w-full rounded-md px-2 py-1.5 text-sm font-medium transition",
+                  draft.period === period ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-blue-50",
+                ].join(" ")}
+              >
+                {period}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-2 flex items-center justify-end gap-2 border-t border-gray-100 pt-2">
+          <button type="button" onClick={dismiss} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100">Cancel</button>
+          <button type="button" onClick={completeSelection} disabled={!draft.hour || !draft.minute} className="rounded-lg bg-[#274e13] px-2.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#1e3d0f] disabled:cursor-not-allowed disabled:opacity-50">Done</button>
+        </div>
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return (
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={"Choose " + label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => (open ? dismiss() : openPicker())}
+        className={"flex w-full items-center justify-between " + className}
+      >
+        <span>{formatScheduleTime(value)}</span>
+        <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
+      </button>
+      {picker}
     </div>
   );
 }
@@ -562,7 +776,13 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
   function SessionCard({ ctrl, icon: Icon, gradient }: { ctrl: ClassControl; icon: React.ElementType; gradient: string }) {
     const isActive = ctrl.status === "Active";
     const isEnded = ctrl.status === "Ended";
-    const isNotStarted = ctrl.status === "Not Started";
+    const updateScheduleTime = (
+      field: "scheduledStart" | "scheduledEnd" | "lateAfter" | "absentAfter",
+      value: string,
+    ) => {
+      if (ctrl.session === "Morning") setMorning((current) => ({ ...current, [field]: value }));
+      else setAfternoon((current) => ({ ...current, [field]: value }));
+    };
 
     return (
       <div className={`rounded-2xl border-2 p-4 transition-all sm:p-5 ${isActive ? "border-[#274e13] bg-[#274e13]/5" : isEnded ? "border-gray-200 bg-gray-50" : "border-gray-200 bg-white"}`}>
@@ -591,35 +811,35 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
         <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Scheduled Start</label>
-            <input
-              type="time"
+            <ScheduleTimePicker
               value={ctrl.scheduledStart}
               disabled={loading}
-              onChange={e => {
-                if (ctrl.session === "Morning") setMorning(p => ({ ...p, scheduledStart: e.target.value }));
-                else setAfternoon(p => ({ ...p, scheduledStart: e.target.value }));
-              }}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
+              onChange={(value) => updateScheduleTime("scheduledStart", value)}
+              label="Scheduled Start"
+              className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
             />
           </div>
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Scheduled End</label>
-            <input
-              type="time"
+            <ScheduleTimePicker
               value={ctrl.scheduledEnd}
               disabled={loading}
-              onChange={e => {
-                if (ctrl.session === "Morning") setMorning(p => ({ ...p, scheduledEnd: e.target.value }));
-                else setAfternoon(p => ({ ...p, scheduledEnd: e.target.value }));
-              }}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
+              onChange={(value) => updateScheduleTime("scheduledEnd", value)}
+              label="Scheduled End"
+              className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
             />
           </div>
         </div>
 
         <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Late After</label><input type="time" value={ctrl.lateAfter} disabled={loading} onChange={e => ctrl.session === "Morning" ? setMorning(p => ({ ...p, lateAfter: e.target.value })) : setAfternoon(p => ({ ...p, lateAfter: e.target.value }))} className="w-full px-3 py-2 text-sm border border-amber-200 rounded-xl bg-amber-50 text-gray-800" /></div>
-          <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Absent After</label><input type="time" value={ctrl.absentAfter} disabled={loading} onChange={e => ctrl.session === "Morning" ? setMorning(p => ({ ...p, absentAfter: e.target.value })) : setAfternoon(p => ({ ...p, absentAfter: e.target.value }))} className="w-full px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800" /></div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Late After</label>
+            <ScheduleTimePicker value={ctrl.lateAfter} disabled={loading} onChange={(value) => updateScheduleTime("lateAfter", value)} label="Late After" className="px-3 py-2 text-sm border border-amber-200 rounded-xl bg-amber-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Absent After</label>
+            <ScheduleTimePicker value={ctrl.absentAfter} disabled={loading} onChange={(value) => updateScheduleTime("absentAfter", value)} label="Absent After" className="px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-50" />
+          </div>
         </div>
         <p className="-mt-1 mb-3 text-[10px] text-gray-400">Scans after the Late After time are Late. When ICT ends the session, students without a Time In are automatically marked Absent.</p>
 

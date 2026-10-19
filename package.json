@@ -11,6 +11,8 @@
     "test:attendance-sms": "node scripts/test-attendance-sms.cjs",
     "test:attendance-rate": "node scripts/test-attendance-rate.cjs",
     "test:attendance-notifications": "node scripts/test-attendance-notification-settings.cjs",
+    "test:class-session-time-picker": "node scripts/test-class-session-time-picker.cjs",
+    "test:class-session-manila-calendar": "node scripts/test-class-session-manila-calendar.cjs",
     "test:rfid-attendance": "node scripts/test-rfid-attendance.cjs",
     "test:rfid-student-profiles-realtime": "node scripts/test-rfid-student-profiles-realtime.cjs",
     "test:parent-enrollment": "node scripts/test-parent-enrollment.cjs",

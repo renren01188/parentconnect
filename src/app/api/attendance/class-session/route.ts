@@ -127,7 +127,12 @@ function getScheduleStatus(session: { scheduled_start: string; scheduled_end: st
 }
 
 function isWeekend(date: string) {
-  const day = new Date(`${date}T00:00:00+08:00`).getDay();
+  // `date` is a Manila calendar date from getToday(). Do not create a
+  // midnight +08:00 instant and call getDay(): on UTC-hosted servers that
+  // instant is still the preceding day (for example, Monday in Manila is
+  // Sunday UTC). Evaluate the calendar date directly instead.
+  const [year, month, dayOfMonth] = date.split("-").map(Number);
+  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
   return day === 0 || day === 6;
 }
 
