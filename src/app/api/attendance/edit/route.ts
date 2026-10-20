@@ -87,6 +87,28 @@ async function getSectionSession(grade: string, section: string) {
 }
 
 /**
+ * Attendance corrections are administrative changes, not a new student
+ * arrival/departure. Some older databases still create an SMS queue row from
+ * an attendance-log UPDATE trigger, so prevent a pending job for the edited
+ * event from reaching the worker. Jobs already claimed or sent are immutable:
+ * this function can only stop a message that has not left the system.
+ */
+async function suppressPendingSmsForAttendanceEdits(attendanceLogIds: number[]) {
+  if (attendanceLogIds.length === 0) return;
+
+  const { error } = await supabase
+    .from("attendance_sms_jobs")
+    .update({
+      status: "skipped",
+      locked_at: null,
+      last_error: "SMS skipped: attendance was corrected by an adviser.",
+    })
+    .in("attendance_log_id", attendanceLogIds)
+    .eq("status", "pending");
+  if (error) throw error;
+}
+
+/**
  * Lists one date's Time In record for every active student in the exact
  * class the authenticated adviser is assigned to. A missing record is shown
  * but deliberately has no editable ID: this editor only changes records and
@@ -250,6 +272,11 @@ export async function PATCH(req: NextRequest) {
     if ((updated?.length ?? 0) !== verifiedRows.length) {
       throw new Error("Not every selected attendance record was updated.");
     }
+
+    // Never notify a parent because an Adviser corrected an existing row.
+    // This also neutralizes any pending job created by a legacy database
+    // trigger on attendance_logs updates before a worker can dispatch it.
+    await suppressPendingSmsForAttendanceEdits(verifiedRows.map((row) => row.id));
 
     await Promise.all(verifiedRows.map((row) => {
       const student = studentById.get(row.student_db_id)!;

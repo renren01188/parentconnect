@@ -1,0 +1,74 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+
+const sectionsApi = read("src/app/api/sections/route.ts");
+const sessionsUi = read("src/app/dashboard/ict/user-management/create-user/page.tsx");
+const deletionApi = read("src/app/api/scheduled-deletions/route.ts");
+const deletionWorker = read("src/lib/processScheduledDeletions.ts");
+const archival = read("src/lib/permanentDeletion.ts");
+const userManagementApi = read("src/app/api/ict/user-management/route.ts");
+const bulkUi = read("src/app/dashboard/ict/user-management/BulkDeletionModal.tsx");
+const migration = read("supabase/migrations/20261020190000_prevent_occupied_section_deletion.sql");
+
+// The displayed count and server preflight ignore only explicitly archived or
+// deleted students. An occupied section returns a clear conflict before delete.
+assert.match(sectionsApi, /select\("id, archive_status"\)/);
+assert.match(sectionsApi, /function isActiveStudent/);
+assert.match(sectionsApi, /filter\(isActiveStudent\)\.length/);
+assert.match(sectionsApi, /select\("section, archive_status"\)/);
+assert.match(sectionsApi, /row\.section && isActiveStudent\(row\)/);
+assert.match(sectionsApi, /code: "SECTION_IN_USE"/);
+assert.match(sectionsApi, /Remove or reassign the students first/);
+assert.match(sectionsApi, /isOccupiedSectionDatabaseError/);
+assert.match(sectionsApi, /occupiedSectionRaceResponse/);
+
+// The modal exposes counts and never stages an occupied section for deletion.
+assert.match(sessionsUi, /\{sec\.count\} student/);
+assert.match(sessionsUi, /const hasStudents = sec\.count > 0/);
+assert.match(sessionsUi, /disabled=\{hasStudents\}/);
+assert.match(sessionsUi, /Remove or reassign them first/);
+assert.match(sessionsUi, /Remove or reassign students first/);
+assert.match(sessionsUi, /requestDeleteSection\(grade, sec\.name, sec\.count\)/);
+
+// PostgreSQL is the final protection against a student assignment racing the
+// request after the API preflight.
+assert.match(migration, /CREATE OR REPLACE FUNCTION public\.prevent_occupied_section_deletion/);
+assert.match(migration, /lower\(coalesce\(student\.archive_status, 'active'\)\) NOT IN \('archived', 'deleted'\)/);
+assert.match(migration, /BEFORE DELETE ON public\.sections/);
+assert.match(migration, /ERRCODE = '23503'/);
+
+// Immediate and due deletion archive the root only; history remains in place.
+assert.match(archival, /ARCHIVABLE_TABLES/);
+assert.match(archival, /archive_status: "archived"/);
+assert.match(archival, /archive_status\.eq\.active,archive_status\.is\.null/);
+assert.doesNotMatch(archival, /from\("attendance"\)\.delete/);
+assert.match(deletionApi, /if \(action === "delete-now"\)[\s\S]*?await archiveTarget\(item/);
+assert.match(deletionApi, /status: "Archived"/);
+assert.match(deletionWorker, /await archiveTarget\(item/);
+assert.match(deletionWorker, /status: "Archived"/);
+assert.match(deletionWorker, /item\.target_type === "student"[\s\S]*?publishStudentRealtimeInvalidation/);
+assert.match(userManagementApi, /await Promise\.all\(\[processDueScheduledDeletions\(\), processDueAdviserTransfers\(\)\]\)/);
+assert.match(userManagementApi, /function isVisibleUserRecord/);
+
+// ICT bulk selection is unpaginated, supports students and parents, and the
+// server independently validates active root rows and existing requests.
+assert.match(userManagementApi, /const bulkDeletionCandidates =/);
+assert.match(userManagementApi, /parents: parentRows\.map/);
+assert.match(userManagementApi, /students: visibleStudents\.map/);
+assert.match(bulkUi, /candidates: \{ parents: ParentCandidate\[\]; students: StudentCandidate\[\] \}/);
+assert.match(bulkUi, /setKind\("student"\)/);
+assert.match(bulkUi, /const candidateStudents = useMemo/);
+assert.match(bulkUi, /type: "student"/);
+assert.match(deletionApi, /requestedStudentIds/);
+assert.match(deletionApi, /from\("students"\)[\s\S]*?archive_status/);
+assert.match(deletionApi, /isActiveArchivableRecord/);
+assert.match(deletionApi, /activeStudentRequests/);
+assert.match(deletionApi, /Each record can be selected only once for deletion/);
+assert.match(deletionApi, /student \? studentName\(student\)/);
+assert.match(bulkUi, /onChanged\(\)/);
+
+console.log("ICT section and bulk-deletion regression checks passed.");

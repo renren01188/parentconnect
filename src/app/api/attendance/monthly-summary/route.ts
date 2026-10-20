@@ -405,7 +405,11 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({
             success: true,
             gradeData,
-            schoolDays: validDays,
+            // The export needs the entire configured month for its student
+            // eligibility and total calculations. The page still derives its
+            // live attendance totals from validDays above.
+            schoolDays: allSchoolDays,
+            holidayDates: Array.from(holidayDates).sort(),
             schoolYearLabel: activeSY
                 ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`
                 : null,

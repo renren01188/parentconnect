@@ -18,6 +18,19 @@ type Student = {
   grade: string;
   section: string;
 };
+type ParentCandidate = {
+  id: number;
+  name: string;
+  email: string;
+  students: Array<{ name: string; lrn: string; grade: string; section: string }>;
+};
+type StudentCandidate = {
+  id: number;
+  name: string;
+  lrn: string;
+  grade: string;
+  section: string;
+};
 export type BulkUser = {
   id: string;
   accountIds?: number[];
@@ -48,9 +61,9 @@ export type QueueItem = {
 type Target = {
   id: number;
   name: string;
-  type: "parent" | "adviser" | "guidance";
+  type: "student" | "parent" | "adviser" | "guidance";
   email?: string;
-  students?: { name: string; lrn: string }[];
+  students?: { name: string; lrn: string; grade?: string; section?: string }[];
   employeeId?: string;
   advisory?: string;
 };
@@ -62,19 +75,21 @@ type BulkDeletionResult = {
 
 export function BulkDeletionModal({
   users,
+  candidates,
   queue,
   sections: sectionCatalog,
   onClose,
   onChanged,
 }: {
   users: BulkUser[];
+  candidates: { parents: ParentCandidate[]; students: StudentCandidate[] };
   queue: QueueItem[];
   sections: { grade: string; name: string }[];
   onClose: () => void;
   onChanged: () => void;
 }) {
   const [tab, setTab] = useState<"create" | "pending" | "waiting">("create");
-  const [kind, setKind] = useState<"" | "adviser" | "guidance" | "parent">("");
+  const [kind, setKind] = useState<"" | "adviser" | "guidance" | "parent" | "student">("");
   const [grade, setGrade] = useState("");
   const [section, setSection] = useState("");
   const [search, setSearch] = useState("");
@@ -121,13 +136,28 @@ export function BulkDeletionModal({
       ),
     [queue],
   );
-  const activeParentEmails = useMemo(
-    () => new Set(queue.filter(item => item.status === "PendingICT" || item.status === "Scheduled").map(item => item.target_email?.toLowerCase()).filter(Boolean)),
-    [queue],
+  const parentUsers = useMemo<BulkUser[]>(
+    () => candidates.parents.map((parent) => ({
+      id: `parent-${parent.id}`,
+      accountIds: [parent.id],
+      name: parent.name,
+      email: parent.email,
+      role: "Parent",
+      classGrade: parent.students[0]
+        ? `${parent.students[0].grade}${parent.students[0].section ? ` – ${parent.students[0].section}` : ""}`
+        : "",
+      studentDetails: parent.students.map((student) => ({
+        displayName: student.name,
+        studentId: student.lrn,
+        grade: student.grade,
+        section: student.section,
+      })),
+    })),
+    [candidates.parents],
   );
   const candidateUsers = useMemo(
     () =>
-      users
+      (kind === "parent" ? parentUsers : users)
         .filter((user) => {
           if (kind === "adviser") return user.role === "Adviser";
           if (kind === "guidance") return user.role === "Guidance";
@@ -148,7 +178,7 @@ export function BulkDeletionModal({
           );
           return (
             sectionStudents.length > 0 &&
-            !activeParentEmails.has(user.email.toLowerCase()) &&
+            !activeDeletionKeys.has(`parent:${accountId}`) &&
             sectionStudents.every(
               (student) =>
                 !activeStudentLrns.has(student.studentId),
@@ -162,14 +192,23 @@ export function BulkDeletionModal({
         ),
     [
       users,
+      parentUsers,
       kind,
       grade,
       section,
       search,
       activeDeletionKeys,
-      activeParentEmails,
       activeStudentLrns,
     ],
+  );
+  const candidateStudents = useMemo(
+    () => kind === "student"
+      ? candidates.students
+        .filter((student) => (!grade || student.grade === grade) && (!section || student.section === section))
+        .filter((student) => !activeDeletionKeys.has(`student:${student.id}`))
+        .filter((student) => `${student.name} ${student.lrn} ${student.grade} ${student.section}`.toLowerCase().includes(search.toLowerCase()))
+      : [],
+    [candidates.students, kind, grade, section, search, activeDeletionKeys],
   );
   const grades = useMemo(
     () =>
@@ -222,14 +261,26 @@ export function BulkDeletionModal({
         : [...prev, target],
     );
   };
-  const all =
-    candidateUsers.length > 0 &&
-    candidateUsers.every((user) =>
-      picked.some(
-        (item) =>
-          item.id === selected(user).id && item.type === selected(user).type,
-      ),
-    );
+  const selectedStudent = (student: StudentCandidate): Target => ({
+    id: student.id,
+    name: student.name,
+    type: "student",
+    students: [{ name: student.name, lrn: student.lrn, grade: student.grade, section: student.section }],
+  });
+  const toggleStudent = (student: StudentCandidate) => {
+    const target = selectedStudent(student);
+    setPicked((prev) => prev.some((item) => item.type === target.type && item.id === target.id)
+      ? prev.filter((item) => !(item.type === target.type && item.id === target.id))
+      : [...prev, target]);
+  };
+  const all = kind === "student"
+    ? candidateStudents.length > 0 && candidateStudents.every((student) => picked.some((item) => item.id === student.id && item.type === "student"))
+    : candidateUsers.length > 0 && candidateUsers.every((user) => picked.some((item) => item.id === selected(user).id && item.type === selected(user).type));
+  const toggleAll = () => setPicked(all
+    ? []
+    : kind === "student"
+      ? candidateStudents.map(selectedStudent)
+      : candidateUsers.map(selected));
   const schedule = async () => {
     setBusy(true);
     setError("");
@@ -551,7 +602,7 @@ export function BulkDeletionModal({
             <>
               {step === 1 && (
                 <>
-                  <div className="mb-6 grid grid-cols-1 gap-3 rounded-2xl bg-white p-2 shadow-sm sm:grid-cols-3 sm:gap-4">
+                  <div className="mb-6 grid grid-cols-1 gap-3 rounded-2xl bg-white p-2 shadow-sm sm:grid-cols-4 sm:gap-4">
                     <button
                       onClick={() => {
                         setKind("adviser");
@@ -577,10 +628,19 @@ export function BulkDeletionModal({
                       }}
                       className={`rounded-xl px-5 py-4 text-left font-bold transition-all ${kind === "parent" ? "bg-[#274e13] text-white shadow-md" : "bg-slate-50 text-slate-700 hover:bg-emerald-50"}`}
                     >
-                      Parents & Students
+                      Parent Accounts
+                    </button>
+                    <button
+                      onClick={() => {
+                        setKind("student");
+                        setPicked([]);
+                      }}
+                      className={`rounded-xl px-5 py-4 text-left font-bold transition-all ${kind === "student" ? "bg-[#274e13] text-white shadow-md" : "bg-slate-50 text-slate-700 hover:bg-emerald-50"}`}
+                    >
+                      Students
                     </button>
                   </div>
-                  {kind === "parent" && (
+                  {(kind === "parent" || kind === "student") && (
                     <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <select
                         value={grade}
@@ -621,9 +681,7 @@ export function BulkDeletionModal({
                           />
                         </div>
                         <button
-                          onClick={() =>
-                            setPicked(all ? [] : candidateUsers.map(selected))
-                          }
+                          onClick={toggleAll}
                           className="flex items-center gap-1 text-sm font-bold text-emerald-700"
                         >
                           <CheckSquare className="h-4 w-4" />
@@ -631,7 +689,18 @@ export function BulkDeletionModal({
                         </button>
                       </div>
                       <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl bg-white p-2 shadow-sm">
-                        {candidateUsers.map((user) => (
+                        {kind === "student" ? candidateStudents.map((student) => (
+                          <label
+                            key={student.id}
+                            className={`flex cursor-pointer items-center gap-3 rounded-xl px-4 py-3.5 transition-all ${picked.some((item) => item.id === student.id && item.type === "student") ? "bg-emerald-50 ring-1 ring-emerald-200" : "bg-slate-50 hover:bg-slate-100"}`}
+                          >
+                            <input type="checkbox" checked={picked.some((item) => item.id === student.id && item.type === "student")} onChange={() => toggleStudent(student)} />
+                            <div>
+                              <p className="text-sm font-bold text-slate-800">{student.name}</p>
+                              <p className="mt-0.5 text-xs text-slate-500">LRN: {student.lrn || "Not available"} · {student.grade}{student.section ? ` – ${student.section}` : ""}</p>
+                            </div>
+                          </label>
+                        )) : candidateUsers.map((user) => (
                           <label
                             key={user.id}
                             className={`flex cursor-pointer items-center gap-3 rounded-xl px-4 py-3.5 transition-all ${picked.some((item) => item.id === selected(user).id && item.type === selected(user).type) ? "bg-emerald-50 ring-1 ring-emerald-200" : "bg-slate-50 hover:bg-slate-100"}`}
@@ -669,10 +738,10 @@ export function BulkDeletionModal({
                           </label>
                         ))}
                         {candidateUsers.length === 0 &&
-                          kind === "parent" &&
+                          (kind === "parent" || kind === "student") &&
                           section && (
                             <p className="px-4 py-8 text-center text-sm font-medium text-slate-500">
-                              There are no students in this section.
+                              There are no eligible {kind === "student" ? "students" : "parent accounts"} in this section.
                             </p>
                           )}
                       </div>
@@ -693,7 +762,9 @@ export function BulkDeletionModal({
                           {item.name}
                         </p>
                         <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          {item.type === "parent"
+                          {item.type === "student"
+                            ? "Student record"
+                            : item.type === "parent"
                             ? "Parent / Guardian account"
                             : item.type === "guidance"
                               ? "Guidance Counselor account"
@@ -705,7 +776,7 @@ export function BulkDeletionModal({
                             <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">{item.type === "guidance" ? "Department" : "Advisory"}</span><span className="font-bold text-slate-700">{item.advisory || (item.type === "guidance" ? "Student Support Services" : "Not assigned")}</span></div>
                           </div>
                         )}
-                        {item.type === "parent" &&
+                        {(item.type === "parent" || item.type === "student") &&
                           item.students?.map((student) => (
                             <div
                               key={`${item.id}-${student.lrn}`}
@@ -715,7 +786,7 @@ export function BulkDeletionModal({
                                 Student: {student.name}
                               </span>
                               <span className="text-xs font-semibold text-slate-500">
-                                LRN: {student.lrn}
+                                LRN: {student.lrn}{student.grade ? ` · ${student.grade}${student.section ? ` – ${student.section}` : ""}` : ""}
                               </span>
                             </div>
                           ))}

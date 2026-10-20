@@ -20,6 +20,8 @@ import {
 const SECRET = getJwtSecret();
 const INCORRECT_PASSWORD_MESSAGE = "Please check the correct temporary password or check your email address if it is correct.";
 const SIGNUP_RETRY_MESSAGE = "This signup could not be completed. Return to sign up and try again.";
+const MOBILE_NUMBER_IN_USE_MESSAGE = "This mobile number is already linked to a ParentConnect account. Sign in to that account, or return to sign up and use another verified mobile number.";
+const ACCOUNT_IDENTIFIER_CONFLICT_MESSAGE = "This email address or mobile number is already linked to a ParentConnect account. Return to sign up and use a different account identifier.";
 
 type FamilyMember = {
   role: string;
@@ -80,6 +82,19 @@ function matchesRecordedPhone(recorded: unknown, claimed: string) {
 
 function isPasswordSet(value: ParentRow["password_set"]) {
   return value === true || value === 1;
+}
+
+function safeFinalizationMessage(error: unknown) {
+  if (!(error instanceof Error)) return SIGNUP_RETRY_MESSAGE;
+  return [MOBILE_NUMBER_IN_USE_MESSAGE, ACCOUNT_IDENTIFIER_CONFLICT_MESSAGE].includes(error.message)
+    ? error.message
+    : SIGNUP_RETRY_MESSAGE;
+}
+
+function safeErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") return "Unknown error";
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code ? code : error instanceof Error ? error.name : "Unknown error";
 }
 
 function readString(payload: Record<string, unknown>, key: string) {
@@ -171,6 +186,18 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
   // can complete separate signups without being blocked or cross-linked.
   if (conflictingEmail) throw new Error(SIGNUP_RETRY_MESSAGE);
 
+  // Keep this check at finalization as well as signup. A different browser
+  // can register the same mobile number after signup has issued its cookie
+  // but before this request inserts the Parent account.
+  const { data: phoneRows, error: phoneError } = await supabase
+    .from("parents")
+    .select("id")
+    .eq("login_contact_number", signup.contactNumber);
+  if (phoneError) throw phoneError;
+  if ((phoneRows ?? []).some((parent) => Number(parent.id) !== existingParent?.id)) {
+    throw new Error(MOBILE_NUMBER_IN_USE_MESSAGE);
+  }
+
   const expirySeconds = temporaryPasswordExpiryEpochSeconds(signup.temporaryPasswordExpiresAt);
   if (!expirySeconds || expirySeconds * 1_000 <= Date.now()) throw new Error(SIGNUP_RETRY_MESSAGE);
   const temporaryPasswordHash = await bcrypt.hash(password, 12);
@@ -186,6 +213,12 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     temp_password: null,
     temporary_password_expires_at: signup.temporaryPasswordExpiresAt,
     password_set: 0,
+    // The row is still a pending registration at this point, so it has no
+    // Parent-selected preference to preserve. Newly registered Parents begin
+    // with SMS and can later select Email or Neither from their profile.
+    attendance_email_notifications: false,
+    attendance_sms_notifications: true,
+    attendance_notification_preference: "SMS",
   };
 
   let parent: ParentRow;
@@ -208,7 +241,7 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
       .insert({ ...patch, student_id: student.student_id, status: "active" })
       .select(parentColumns)
       .single();
-    if (error?.code === "23505") throw new Error(SIGNUP_RETRY_MESSAGE);
+    if (error?.code === "23505") throw new Error(ACCOUNT_IDENTIFIER_CONFLICT_MESSAGE);
     if (error) throw error;
     parent = data as ParentRow;
     createdParentId = parent.id;
@@ -220,12 +253,20 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
       studentId: student.student_id,
       relationship: signup.relationship,
     });
-    await reconcileParentStudentLinks({ parentId: parent.id });
   } catch (error) {
     if (createdParentId) {
       await supabase.from("parents").delete().eq("id", createdParentId).eq("password", temporaryPasswordHash);
     }
     throw error;
+  }
+
+  // The directly verified child link above is required. Sibling reconciliation
+  // is a convenience operation over historical records and must not block a
+  // completed signup if one unrelated legacy row is malformed.
+  try {
+    await reconcileParentStudentLinks({ parentId: parent.id });
+  } catch (error) {
+    console.error("Parent sibling-link reconciliation failed after verified signup:", safeErrorCode(error));
   }
 
   return { parent, student, expiresAt: signup.temporaryPasswordExpiresAt };
@@ -288,8 +329,8 @@ export async function POST(req: NextRequest) {
           temporaryPasswordExpiresAt: matchingProof.expiresAt,
         }, password);
       } catch (error) {
-        console.error("Pending parent signup finalization failed:", error instanceof Error ? error.name : "Unknown error");
-        return NextResponse.json({ success: false, message: SIGNUP_RETRY_MESSAGE }, { status: 409 });
+        console.error("Pending parent signup finalization failed:", safeErrorCode(error));
+        return NextResponse.json({ success: false, message: safeFinalizationMessage(error) }, { status: 409 });
       }
 
       const parentName = [

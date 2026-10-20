@@ -61,6 +61,9 @@ interface ScheduledAdviserTransfer {
 interface UserRow {
   id: string; accountIds?: number[]; initials: string; name: string; email: string;
   parentAccountPasswordSet?: boolean;
+  parentStudentLinkState?: "Already Linked" | "Unlinked";
+  parentStudentLrn?: string;
+  linkedParentLabel?: string;
   role: Role; classGrade: string; status: Status; students?: string[];
   studentDetails?: EditableStudent[];
   firstName?: string; middleName?: string; lastName?: string; suffix?: string;
@@ -85,6 +88,12 @@ interface ApprovalRequest {
   status: ApprovalStatus;
   changes: { field: string; from: string; to: string }[];
   note?: string; reviewedAt?: string; reviewNote?: string;
+}
+
+interface ParentStudentFilters {
+  grades: string[];
+  sections: { grade: string; name: string }[];
+  counts: { total: number; alreadyLinked: number; unlinked: number };
 }
 
 // ─── Constants ────────────────────────────────────────────
@@ -426,6 +435,7 @@ function GradeSectionPicker({ value, onChange }: { value: string; onChange: (v: 
 
 // ─── Student Card (inside Edit Parent modal) ──────────────
 interface EditableStudent {
+  studentDbId?: number;
   originalStudentId?: string;
   displayName: string; firstName: string; middleName: string; lastName: string;
   studentId: string; gender: string; grade: string; section: string; rfid: string;
@@ -2089,6 +2099,14 @@ export default function UserManagementPage() {
   const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
   const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent" | "approval">("all");
+  const [parentStudentGrade, setParentStudentGrade] = useState("");
+  const [parentStudentSection, setParentStudentSection] = useState("");
+  const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "unlinked">("all");
+  const [parentStudentFilters, setParentStudentFilters] = useState<ParentStudentFilters>({
+    grades: [],
+    sections: [],
+    counts: { total: 0, alreadyLinked: 0, unlinked: 0 },
+  });
   const [showApprovals, setShowApprovals] = useState(false);
   const [dismissedApprovalBadgeCount, setDismissedApprovalBadgeCount] = useState(0);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
@@ -2097,6 +2115,10 @@ export default function UserManagementPage() {
   const [scheduledAdviserTransfers, setScheduledAdviserTransfers] = useState<ScheduledAdviserTransfer[]>([]);
   const [adviserTransfersConfigured, setAdviserTransfersConfigured] = useState(true);
   const [sectionCatalog, setSectionCatalog] = useState<{ grade: string; name: string }[]>([]);
+  const [bulkDeletionCandidates, setBulkDeletionCandidates] = useState<{
+    parents: Array<{ id: number; name: string; email: string; students: Array<{ name: string; lrn: string; grade: string; section: string }> }>;
+    students: Array<{ id: number; name: string; lrn: string; grade: string; section: string }>;
+  }>({ parents: [], students: [] });
   const [showBulkDeletion, setShowBulkDeletion] = useState(false);
   const [showAdviserTransfers, setShowAdviserTransfers] = useState(false);
   const [deletionActionError, setDeletionActionError] = useState("");
@@ -2107,7 +2129,7 @@ export default function UserManagementPage() {
     if (!background) setLoading(true);
     setLoadError("");
     try {
-       const apiRole = filterMode === "approval" ? "adviser" : filterMode;
+       const apiRole = filterMode === "approval" ? "adviser" : filterMode === "parent" ? "parent_students" : filterMode;
        const approvalsPromise = fetch("/api/ict/approvals");
        const auditPromise = fetch("/api/ict/audit-log");
        const deletionsPromise = fetch("/api/scheduled-deletions");
@@ -2115,6 +2137,11 @@ export default function UserManagementPage() {
        const approvalsRes = await approvalsPromise;
        const approvalsData = await approvalsRes.json();
        const userParams = new URLSearchParams({ page: String(page), pageSize: String(PER_PAGE), role: apiRole, query: deferredQuery });
+       if (filterMode === "parent") {
+         if (parentStudentGrade) userParams.set("parentGrade", parentStudentGrade);
+         if (parentStudentSection) userParams.set("parentSection", parentStudentSection);
+         userParams.set("parentLinkState", parentStudentLinkState);
+       }
        if (filterMode === "approval") {
          const pendingEmails = (approvalsData.approvals ?? []).filter((approval: ApprovalRequest) => approval.status === "Pending").map((approval: ApprovalRequest) => approval.adviserEmail).filter(Boolean);
          userParams.set("emails", pendingEmails.length ? pendingEmails.join(",") : "__no_pending_approval__");
@@ -2133,6 +2160,7 @@ export default function UserManagementPage() {
 
       if (usersData.success) {
         setSectionCatalog(usersData.sections ?? []);
+        setBulkDeletionCandidates(usersData.bulkDeletionCandidates ?? { parents: [], students: [] });
         const deletionMap = new Map<string, any>();
         (deletionsData.deletions ?? []).forEach((d: any) => {
           if (d.status === "Scheduled") deletionMap.set(`${d.target_type}:${d.target_id}`, d);
@@ -2148,6 +2176,11 @@ export default function UserManagementPage() {
         setUsers(enriched);
         setPagination(usersData.pagination ?? { page, total: enriched.length, totalPages: 1 });
         setServerCounts(usersData.counts ?? { total: enriched.length, advisers: 0, ict: 0, guidance: 0, parents: 0 });
+        if (filterMode === "parent") {
+          setParentStudentFilters(usersData.parentStudentFilters ?? {
+            grades: [], sections: [], counts: { total: 0, alreadyLinked: 0, unlinked: 0 },
+          });
+        }
       } else throw new Error(usersData.message || "Unable to load users.");
 
       if (approvalsData.success) setApprovals(approvalsData.approvals);
@@ -2163,7 +2196,7 @@ export default function UserManagementPage() {
     } finally {
       if (!background) setLoading(false);
     }
-  }, [deferredQuery, filterMode, page]);
+  }, [deferredQuery, filterMode, page, parentStudentGrade, parentStudentSection, parentStudentLinkState]);
 
   useEffect(() => { loadData(); }, [loadData]);
   useSessionInvalidation((event) => {
@@ -2263,6 +2296,13 @@ export default function UserManagementPage() {
     : users, [approvals, filterMode, users]);
   const totalPages = pagination.totalPages;
   const counts = serverCounts;
+  const parentStudentSections = useMemo(
+    () => parentStudentFilters.sections
+      .filter((section) => section.grade === parentStudentGrade)
+      .map((section) => section.name),
+    [parentStudentFilters.sections, parentStudentGrade],
+  );
+  const isParentStudentDirectory = filterMode === "parent";
   const scheduledDeletionCount = users.filter((u) => u.deleteSchedule).length;
   const pendingDeletionRequestCount = scheduledDeletions.filter((item) => item.status === "PendingICT").length;
   const scheduledTransferCount = scheduledAdviserTransfers.filter((item) => item.status === "Scheduled").length;
@@ -2358,6 +2398,64 @@ export default function UserManagementPage() {
                   ))}
                 </div>
               </div>
+              {isParentStudentDirectory && (
+                <section className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3" aria-label="Parents and students filters">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-[11px] font-bold text-gray-500">Grade level</span>
+                      <select
+                        value={parentStudentGrade}
+                        onChange={(event) => {
+                          setParentStudentGrade(event.target.value);
+                          setParentStudentSection("");
+                          setPage(1);
+                        }}
+                        className="min-h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
+                      >
+                        <option value="">All grade levels</option>
+                        {parentStudentFilters.grades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+                      </select>
+                    </label>
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-[11px] font-bold text-gray-500">Section</span>
+                      <select
+                        value={parentStudentSection}
+                        disabled={!parentStudentGrade}
+                        onChange={(event) => { setParentStudentSection(event.target.value); setPage(1); }}
+                        className="min-h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        <option value="">{parentStudentGrade ? "All sections" : "Select a grade first"}</option>
+                        {parentStudentSections.map((section) => <option key={section} value={section}>{section}</option>)}
+                      </select>
+                    </label>
+                    <div className="sm:col-span-2">
+                      <span className="mb-1 block text-[11px] font-bold text-gray-500">Student link status</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {([
+                          { value: "all", label: "All students", count: parentStudentFilters.counts.total },
+                          { value: "linked", label: "Already Linked", count: parentStudentFilters.counts.alreadyLinked },
+                          { value: "unlinked", label: "Unlinked", count: parentStudentFilters.counts.unlinked },
+                        ] as const).map(({ value, label, count }) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => { setParentStudentLinkState(value); setPage(1); }}
+                            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition"
+                            style={{
+                              background: parentStudentLinkState === value ? PRIMARY : "white",
+                              borderColor: parentStudentLinkState === value ? PRIMARY : "#d1d5db",
+                              color: parentStudentLinkState === value ? "white" : "#4b5563",
+                            }}
+                          >
+                            {label}<span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[10px]">{count}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[11px] text-gray-500">Counts are students in the selected grade and section. A student is linked only after a parent account has signed up.</p>
+                </section>
+              )}
               {filterMode === "approval" && (
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                   <Bell className="w-3.5 h-3.5 text-amber-500 shrink-0" />
@@ -2372,7 +2470,10 @@ export default function UserManagementPage() {
           <table className="hidden w-full md:table">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
-                {["User", "Role", "Class / Grade", "Student(s)", ""].map(h => (
+                {(isParentStudentDirectory
+                  ? ["Student", "Link status", "Class / Grade", "Signed-up parent account", ""]
+                  : ["User", "Role", "Class / Grade", "Student(s)", ""]
+                ).map(h => (
                   <th key={h} className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3">{h}</th>
                 ))}
               </tr>
@@ -2389,19 +2490,25 @@ export default function UserManagementPage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-semibold text-gray-800 truncate">{u.name}</p>
-                            {hasPendingApproval && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200"><Bell className="w-2.5 h-2.5" /> Pending</span>}
-                            {u.status === "Pending Activation" && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200"><Clock className="w-2.5 h-2.5" /> Pending activation</span>}
-                            {deleteCountdown && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200"><Clock className="w-2.5 h-2.5" /> Delete in {deleteCountdown.remainingDays}d</span>}
+                            {!isParentStudentDirectory && hasPendingApproval && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200"><Bell className="w-2.5 h-2.5" /> Pending</span>}
+                            {!isParentStudentDirectory && u.status === "Pending Activation" && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200"><Clock className="w-2.5 h-2.5" /> Pending activation</span>}
+                            {!isParentStudentDirectory && deleteCountdown && <span className="shrink-0 flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200"><Clock className="w-2.5 h-2.5" /> Delete in {deleteCountdown.remainingDays}d</span>}
                           </div>
-                          <p className="text-xs text-gray-400 truncate">{u.email}</p>
-                          {deleteCountdown && <p className="text-[11px] text-red-500 mt-1">Scheduled to be deleted on {deleteCountdown.deleteLabel}</p>}
+                          <p className="text-xs text-gray-400 truncate">{isParentStudentDirectory ? `LRN: ${u.parentStudentLrn || "—"}` : u.email}</p>
+                          {!isParentStudentDirectory && deleteCountdown && <p className="text-[11px] text-red-500 mt-1">Scheduled to be deleted on {deleteCountdown.deleteLabel}</p>}
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3.5"><span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ROLE_BADGE[u.role]}`}>{u.role}</span></td>
+                    <td className="px-4 py-3.5">
+                      {isParentStudentDirectory
+                        ? <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${u.parentStudentLinkState === "Already Linked" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{u.parentStudentLinkState}</span>
+                        : <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ROLE_BADGE[u.role]}`}>{u.role}</span>}
+                    </td>
                     <td className="px-4 py-3.5 text-sm text-gray-600 whitespace-nowrap">{u.classGrade}</td>
                     <td className="px-4 py-3.5">
-                      {u.role === "Parent" && u.students?.length
+                      {isParentStudentDirectory
+                        ? <span className={`text-xs ${u.parentStudentLinkState === "Already Linked" ? "text-gray-700" : "italic text-gray-400"}`}>{u.linkedParentLabel}</span>
+                        : u.role === "Parent" && u.students?.length
                         ? <div className="flex flex-col gap-1">{u.students.map((s, i) => <span key={i} className="text-xs text-gray-700 truncate">{s}</span>)}</div>
                         : u.role === "Adviser" ? <span className="text-xs text-gray-400 italic">Class adviser</span>
                         : u.role === "ICT" ? <span className="text-xs text-gray-400 italic">System administration</span>
@@ -2410,10 +2517,10 @@ export default function UserManagementPage() {
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition">
-                        {hasPendingApproval && <button onClick={() => setShowApprovals(true)} className="w-7 h-7 rounded-lg flex items-center justify-center text-amber-500 hover:bg-amber-100 transition"><Bell className="w-3.5 h-3.5" /></button>}
+                        {!isParentStudentDirectory && hasPendingApproval && <button onClick={() => setShowApprovals(true)} className="w-7 h-7 rounded-lg flex items-center justify-center text-amber-500 hover:bg-amber-100 transition"><Bell className="w-3.5 h-3.5" /></button>}
                         <button
                           onClick={() => setPreviewUser(u)}
-                          title="View details"
+                          title={isParentStudentDirectory ? "View parent and student details" : "View details"}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition"
                         >
                           <MoreHorizontal className="w-3.5 h-3.5" />
@@ -2441,18 +2548,20 @@ export default function UserManagementPage() {
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#274e13]/10 text-xs font-extrabold text-[#274e13]">{user.initials}</div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0"><p className="break-words text-sm font-semibold text-gray-800">{user.name}</p><p className="break-all text-xs text-gray-400">{user.email}</p></div>
-                        <button onClick={() => setPreviewUser(user)} title="View details" aria-label={`View details for ${user.name}`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100"><MoreHorizontal className="h-4 w-4" /></button>
+                        <div className="min-w-0"><p className="break-words text-sm font-semibold text-gray-800">{user.name}</p><p className="break-all text-xs text-gray-400">{isParentStudentDirectory ? `LRN: ${user.parentStudentLrn || "—"}` : user.email}</p></div>
+                        <button onClick={() => setPreviewUser(user)} title={isParentStudentDirectory ? "View parent and student details" : "View details"} aria-label={`View details for ${user.name}`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100"><MoreHorizontal className="h-4 w-4" /></button>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1.5">
-                        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>
-                        {hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
-                        {user.status === "Pending Activation" && <span className="rounded-full border border-sky-200 bg-sky-100 px-2 py-1 text-[10px] font-bold text-sky-700">Pending activation</span>}
-                        {deleteCountdown && <span className="rounded-full border border-red-200 bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">Delete in {deleteCountdown.remainingDays}d</span>}
+                        {isParentStudentDirectory
+                          ? <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${user.parentStudentLinkState === "Already Linked" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{user.parentStudentLinkState}</span>
+                          : <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>}
+                        {!isParentStudentDirectory && hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
+                        {!isParentStudentDirectory && user.status === "Pending Activation" && <span className="rounded-full border border-sky-200 bg-sky-100 px-2 py-1 text-[10px] font-bold text-sky-700">Pending activation</span>}
+                        {!isParentStudentDirectory && deleteCountdown && <span className="rounded-full border border-red-200 bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">Delete in {deleteCountdown.remainingDays}d</span>}
                       </div>
                       <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                         <div><dt className="text-gray-400">{user.role === "ICT" ? "Department" : "Class / Grade"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{user.classGrade || "—"}</dd></div>
-                        <div><dt className="text-gray-400">Student(s)</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{user.students?.length ? user.students.join(", ") : user.role === "Adviser" ? "Class adviser" : user.role === "ICT" ? "System administration" : "—"}</dd></div>
+                        <div><dt className="text-gray-400">{isParentStudentDirectory ? "Signed-up parent account" : "Student(s)"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{isParentStudentDirectory ? user.linkedParentLabel : user.students?.length ? user.students.join(", ") : user.role === "Adviser" ? "Class adviser" : user.role === "ICT" ? "System administration" : "—"}</dd></div>
                       </dl>
                     </div>
                   </div>
@@ -2464,7 +2573,7 @@ export default function UserManagementPage() {
           </>}
 
           <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <p className="text-xs text-gray-400">{rows.length === 0 ? "No results" : `Showing ${(pagination.page - 1) * PER_PAGE + 1}–${Math.min(pagination.page * PER_PAGE, pagination.total)} of ${filterMode === "approval" ? rows.length : pagination.total} users`}</p>
+            <p className="text-xs text-gray-400">{rows.length === 0 ? "No results" : `Showing ${(pagination.page - 1) * PER_PAGE + 1}–${Math.min(pagination.page * PER_PAGE, pagination.total)} of ${filterMode === "approval" ? rows.length : pagination.total} ${isParentStudentDirectory ? "students" : "users"}`}</p>
             <div className="flex max-w-full items-center gap-1 overflow-hidden">
               <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"><ChevronLeft className="w-4 h-4" /></button>
               {Array.from({ length: totalPages }, (_, i) => i + 1).filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 1).map((n, index, visiblePages) => (
@@ -2531,7 +2640,7 @@ export default function UserManagementPage() {
         <EditParentModal user={editUser} onClose={() => setEditUser(null)} onAudit={addAudit}
           onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }} />
       )}
-      {showBulkDeletion && <BulkDeletionModal users={users} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
+      {showBulkDeletion && <BulkDeletionModal users={users} candidates={bulkDeletionCandidates} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
       {showAdviserTransfers && <AdviserTransferQueueModal configured={adviserTransfersConfigured} transfers={scheduledAdviserTransfers} onClose={() => setShowAdviserTransfers(false)} onChanged={loadData} />}
     </div>
   );

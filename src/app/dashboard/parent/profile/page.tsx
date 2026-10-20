@@ -11,6 +11,7 @@ import {
 import Sidebar from "../components/Sidebar";
 import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import FirstLoginSetupModal from "./FirstLoginSetupModal";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
 // ─── Password input ───────────────────────────────────────────────────────────
@@ -564,13 +565,16 @@ export default function ProfilePage() {
     const [loadError, setLoadError] = useState("");
     const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
-    const [emailNotif,   setEmailNotif]   = useState(true);
-    const [smsNotif,     setSmsNotif]     = useState(false);
+    // Avoid an Email-selected flash while a newly registered Parent's saved
+    // server preference loads. Existing choices replace these values below.
+    const [emailNotif,   setEmailNotif]   = useState(false);
+    const [smsNotif,     setSmsNotif]     = useState(true);
     const [savingNotificationPreferences, setSavingNotificationPreferences] = useState(false);
     const [notificationPreferencesError, setNotificationPreferencesError] = useState("");
     const [notificationPreferencesNotice, setNotificationPreferencesNotice] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [settingsTab,  setSettingsTab]  = useState<"profile" | "password">("profile");
+    const [requiresAccountSetup, setRequiresAccountSetup] = useState(false);
 
     function openSettings(tab: "profile" | "password" = "profile") {
         setSettingsTab(tab);
@@ -606,6 +610,7 @@ export default function ProfilePage() {
                     address: data.parent.address || "",
                     profilePicture: data.parent.profilePicture || "",
                 });
+                setRequiresAccountSetup(data.parent.requiresAccountSetup === true);
                 setStudents(data.students ?? []);
 
                 try {
@@ -679,6 +684,14 @@ export default function ProfilePage() {
         } finally {
             setSavingNotificationPreferences(false);
         }
+    }
+
+    function finishRequiredAccountSetup() {
+        setRequiresAccountSetup(false);
+        // The dashboard contains the normal first-use guide. It is not mounted
+        // on this Profile route while the required setup modal is open. The
+        // completion API has already refreshed the HttpOnly session cookie.
+        window.location.assign("/dashboard/parent");
     }
 
     const fullName = getFullName(profile);
@@ -864,6 +877,12 @@ export default function ProfilePage() {
                     initialTab={settingsTab}
                     onSave={saveProfile}
                     onClose={() => setShowSettings(false)}
+                />
+            )}
+            {requiresAccountSetup && (
+                <FirstLoginSetupModal
+                    currentEmail={profile.email}
+                    onCompleted={finishRequiredAccountSetup}
                 />
             )}
         </div>

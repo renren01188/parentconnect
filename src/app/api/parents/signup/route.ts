@@ -31,6 +31,7 @@ import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmati
 const SECRET = getJwtSecret();
 const ENROLLMENT_ERROR = "We could not verify this enrollment request. Please contact the school office for assistance.";
 const CAPTCHA_ERROR = "Security verification is missing, expired, or incorrect. Please complete the CAPTCHA again.";
+const MOBILE_NUMBER_IN_USE_MESSAGE = "This mobile number is already linked to a ParentConnect account. Sign in to that account, or use another verified mobile number.";
 
 type MatchedParent = {
   id: number;
@@ -279,6 +280,20 @@ export async function POST(req: NextRequest) {
       matchedParent = linkedUnclaimedParents[0];
     } else if (linkedUnclaimedParents.length > 1) {
       return enrollmentFailure(req, 409);
+    }
+
+    // Mobile numbers are valid Parent login identifiers and are unique in the
+    // database. Check before emailing a temporary password so a shared or
+    // previously registered number cannot fail later at verification with a
+    // generic database error. A matching legacy placeholder is allowed to be
+    // claimed because it is the same pending account.
+    const { data: phoneRows, error: phoneError } = await supabase
+      .from("parents")
+      .select("id")
+      .eq("login_contact_number", contactNumber);
+    if (phoneError) throw phoneError;
+    if ((phoneRows ?? []).some((parent) => Number(parent.id) !== matchedParent?.id)) {
+      return NextResponse.json({ success: false, message: MOBILE_NUMBER_IN_USE_MESSAGE }, { status: 409 });
     }
 
     // A parent who already completed registration can submit another child's

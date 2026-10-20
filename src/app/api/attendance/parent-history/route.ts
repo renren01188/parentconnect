@@ -11,6 +11,8 @@ function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "Server error.";
 }
 
+const ATTENDANCE_LOG_PAGE_SIZE = 1_000;
+
 export async function GET(req: NextRequest) {
     try {
         // Verify parent token
@@ -57,15 +59,53 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        // Fetch all attendance logs for this student
-        const { data: logs, error: logsError } = await supabase
-            .from("attendance_logs")
-            .select("id, attendance_date, time_logged, type, status, via, remark")
-            .eq("student_id", studentLrn)
-            .order("attendance_date", { ascending: false })
-            .order("time_logged", { ascending: true });
+        // Attendance summaries are explicitly scoped to the active school
+        // year. Never silently show a parent an all-time total under a
+        // "This school year" label.
+        const { data: activeSchoolYear, error: schoolYearError } = await supabase
+            .from("school_year_config")
+            .select("id, start_date, end_date, school_year_label")
+            .eq("is_active", true)
+            .limit(1)
+            .maybeSingle();
 
-        if (logsError) throw logsError;
+        if (schoolYearError) throw schoolYearError;
+        if (!activeSchoolYear) {
+            return NextResponse.json(
+                { success: false, message: "Attendance is unavailable because no active school year is configured." },
+                { status: 503 },
+            );
+        }
+
+        // Read every current-school-year row. PostgREST applies a response
+        // cap, so a single unpaginated request would eventually omit older
+        // records and produce an incorrect rate.
+        type AttendanceLog = {
+            id: number;
+            attendance_date: string;
+            time_logged: string;
+            type: string;
+            status: string;
+            via: string;
+        };
+        const logs: AttendanceLog[] = [];
+        for (let from = 0; ; from += ATTENDANCE_LOG_PAGE_SIZE) {
+            const { data: page, error: logsError } = await supabase
+                .from("attendance_logs")
+                .select("id, attendance_date, time_logged, type, status, via")
+                .eq("student_id", studentLrn)
+                .gte("attendance_date", activeSchoolYear.start_date)
+                .lte("attendance_date", activeSchoolYear.end_date)
+                .order("attendance_date", { ascending: false })
+                .order("time_logged", { ascending: true })
+                .order("id", { ascending: true })
+                .range(from, from + ATTENDANCE_LOG_PAGE_SIZE - 1);
+
+            if (logsError) throw logsError;
+            const rows = (page ?? []) as AttendanceLog[];
+            logs.push(...rows);
+            if (rows.length < ATTENDANCE_LOG_PAGE_SIZE) break;
+        }
 
         // Group by date — one record per date with time_in and time_out
         const dateMap = new Map<string, {
@@ -76,7 +116,7 @@ export async function GET(req: NextRequest) {
             via: string;
         }>();
 
-        for (const log of (logs || [])) {
+        for (const log of logs) {
             const date = log.attendance_date;
             if (!dateMap.has(date)) {
                 dateMap.set(date, {
@@ -111,6 +151,13 @@ export async function GET(req: NextRequest) {
             success: true,
             records,
             stats: { present, late, absent, excused },
+            schoolYear: {
+                startDate: activeSchoolYear.start_date,
+                endDate: activeSchoolYear.end_date,
+                label: activeSchoolYear.school_year_label
+                    || `${activeSchoolYear.start_date.slice(0, 4)}–${activeSchoolYear.end_date.slice(0, 4)}`,
+            },
+            generatedAt: new Date().toISOString(),
         });
     } catch (error) {
         console.error("GET /api/attendance/parent-history error:", error);

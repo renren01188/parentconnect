@@ -74,6 +74,10 @@ type UserRow = {
   id: string;
   accountIds?: number[];
   parentAccountPasswordSet?: boolean;
+  /** Present only in the student-centred Parents & Students directory. */
+  parentStudentLinkState?: "Already Linked" | "Unlinked";
+  parentStudentLrn?: string;
+  linkedParentLabel?: string;
   initials: string;
   name: string;
   email: string;
@@ -82,6 +86,7 @@ type UserRow = {
   status: Status;
   students?: string[];
   studentDetails?: {
+    studentDbId?: number;
     originalStudentId?: string;
     displayName: string;
     firstName: string;
@@ -404,7 +409,7 @@ export async function GET(request: NextRequest) {
         .order("last_name", { ascending: true }),
       supabase
         .from("parents")
-        .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set, archive_status")
+        .select("id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set, archive_status")
         .order("parent_last_name", { ascending: true }),
       supabase
         .from("parent_student_links")
@@ -554,6 +559,7 @@ export async function GET(request: NextRequest) {
         const displayName = student ? fullName(student) : String(sid ?? "Linked student");
 
         return {
+          studentDbId: Number(student?.id) || undefined,
           displayName,
           firstName: student?.first_name ?? "",
           middleName: student?.middle_name ?? "",
@@ -618,6 +624,7 @@ export async function GET(request: NextRequest) {
         const studentName = fullName(student) || String(student.student_id);
         const parentName = primary ? fullName({ first_name: primary.first_name, middle_name: primary.middle_name, last_name: primary.last_name, suffix: primary.suffix }) : "Pending Parent / Guardian";
         const detail = {
+          studentDbId: Number(student.id),
           displayName: studentName, firstName: student.first_name ?? "", middleName: student.middle_name ?? "", lastName: student.last_name ?? "", studentId: student.student_id,
           gender: student.gender ?? "", grade: student.grade ?? "", section: student.section ?? "", rfid: student.rfid_card ?? "",
           birthDate: student.birth_date ?? "", motherTongue: student.mother_tongue ?? "", ipEthnicGroup: student.ip_ethnic_group ?? "", religion: student.religion ?? "",
@@ -633,12 +640,195 @@ export async function GET(request: NextRequest) {
         };
       });
 
+    // Parents & Students is intentionally student-centred. A parent who has
+    // not completed password setup is a pre-sign-up record, so it must not
+    // make a student appear "Already Linked". Build this from the visible
+    // student roster and use sets at every relationship boundary: one signed
+    // up parent linked to multiple students is valid, but never duplicates a
+    // student in the directory or its counts.
+    const signedUpParentsById = new Map<number, (typeof visibleParents)[number]>();
+    for (const parent of visibleParents) {
+      if (!isPreSignupParentRecord([parent.id], parent.password_set)) {
+        signedUpParentsById.set(Number(parent.id), parent);
+      }
+    }
+
+    const signedUpParentIdsByStudentId = new Map<string, Set<number>>();
+    const addSignedUpParentLink = (studentId: unknown, parentId: unknown) => {
+      const normalizedStudentId = String(studentId ?? "").trim();
+      const normalizedParentId = Number(parentId);
+      if (!normalizedStudentId || !visibleStudentIds.has(normalizedStudentId) || !signedUpParentsById.has(normalizedParentId)) return;
+      const parentIds = signedUpParentIdsByStudentId.get(normalizedStudentId) ?? new Set<number>();
+      parentIds.add(normalizedParentId);
+      signedUpParentIdsByStudentId.set(normalizedStudentId, parentIds);
+    };
+
+    for (const link of visibleLinks) addSignedUpParentLink(link.student_id, link.parent_id);
+    // Keep support for older family records created before parent_student_links
+    // existed. reconcileParentStudentLinks will normally have created a link,
+    // but reading the direct relation here makes the directory accurate during
+    // that transition as well.
+    for (const parent of visibleParents) addSignedUpParentLink(parent.student_id, parent.id);
+
+    const parentStudentRows: UserRow[] = visibleStudents
+      .map((student: (typeof visibleStudents)[number]) => {
+        const studentId = String(student.student_id ?? "").trim();
+        const linkedParentIds = [...(signedUpParentIdsByStudentId.get(studentId) ?? new Set<number>())];
+        const linkedParents = linkedParentIds
+          .map((parentId) => signedUpParentsById.get(parentId))
+          .filter((parent): parent is (typeof visibleParents)[number] => Boolean(parent))
+          .sort((left, right) => fullName(left).localeCompare(fullName(right), undefined, { sensitivity: "base" }));
+        const primaryParent = linkedParents[0];
+        const isLinked = linkedParents.length > 0;
+        const parentStudentLinkState: NonNullable<UserRow["parentStudentLinkState"]> = isLinked ? "Already Linked" : "Unlinked";
+        const family = familyByStudent.get(student.id) ?? [];
+        const father = family.find((item) => item.role === "Father");
+        const mother = family.find((item) => item.role === "Mother");
+        const guardian = family.find((item) => item.role === "Guardian");
+        const fatherNames = separateGivenNames(father);
+        const motherNames = separateGivenNames(mother);
+        const guardianNames = separateGivenNames(guardian);
+        const displayName = fullName(student) || studentId;
+        const linkedParentNames = linkedParents.map((parent) => fullName(parent)).filter(Boolean);
+        const linkedParentLabel = isLinked
+          ? `${linkedParentNames.join(", ")}${linkedParentNames.length > 1 ? ` (${linkedParentNames.length} parent accounts)` : ""}`
+          : "No signed-up parent account";
+
+        return {
+          // The student id is part of the key even when a parent has multiple
+          // children; this makes every row and its pagination unit a student.
+          id: `parent-student-${student.id}`,
+          accountIds: primaryParent ? [Number(primaryParent.id)] : [],
+          parentAccountPasswordSet: primaryParent?.password_set === true || primaryParent?.password_set === 1,
+          parentStudentLinkState,
+          parentStudentLrn: studentId,
+          linkedParentLabel,
+          initials: initials(student.first_name, student.last_name),
+          name: displayName,
+          email: primaryParent?.email ?? "",
+          role: "Parent" as Role,
+          classGrade: student.grade ? `${student.grade}${student.section ? ` – ${student.section}` : ""}` : "",
+          status: primaryParent ? normalizeStatus(primaryParent.status) : "Active" as Status,
+          students: [displayName],
+          studentDetails: [{
+            studentDbId: Number(student.id),
+            displayName,
+            firstName: student.first_name ?? "",
+            middleName: student.middle_name ?? "",
+            lastName: student.last_name ?? "",
+            studentId,
+            gender: student.gender ?? "",
+            grade: student.grade ?? "",
+            section: student.section ?? "",
+            rfid: student.rfid_card ?? "",
+            birthDate: student.birth_date ?? "", motherTongue: student.mother_tongue ?? "", ipEthnicGroup: student.ip_ethnic_group ?? "", religion: student.religion ?? "",
+            houseStreetSitioPurok: student.house_street_sitio_purok ?? "", barangay: student.barangay ?? "", municipalityCity: student.municipality_city ?? "", province: student.province ?? "", learningModality: student.learning_modality ?? "",
+            fatherFirstName: fatherNames.firstName, fatherMiddleName: fatherNames.middleName, fatherLastName: father?.last_name ?? "", fatherSuffix: father?.suffix ?? "",
+            motherFirstName: motherNames.firstName, motherMiddleName: motherNames.middleName, motherLastName: mother?.last_name ?? "",
+            guardianFirstName: guardianNames.firstName, guardianMiddleName: guardianNames.middleName, guardianLastName: guardian?.last_name ?? "", guardianSuffix: guardian?.suffix ?? "", guardianRelationship: guardian?.relationship ?? "", contactNumber: family[0]?.contact_number ?? primaryParent?.contact_number ?? "",
+          }],
+          firstName: primaryParent?.parent_first_name ?? "",
+          middleName: primaryParent?.parent_middle_name ?? "",
+          lastName: primaryParent?.parent_last_name ?? "",
+          suffix: primaryParent?.parent_suffix ?? "None",
+          phone: primaryParent?.contact_number ?? family[0]?.contact_number ?? "",
+          relationship: primaryParent?.relationship ?? "",
+          address: primaryParent?.address ?? "",
+          familyDetails: primaryParent ? familyDetailsForParent(family, primaryParent) : familyDetailsFromMembers(family),
+        };
+      })
+      .sort((left, right) => left.classGrade.localeCompare(right.classGrade, undefined, { numeric: true, sensitivity: "base" }) || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+
     const requestedPage = Math.max(1, Number.parseInt(request.nextUrl.searchParams.get("page") ?? "1", 10) || 1);
     const requestedPageSize = Math.min(25, Math.max(1, Number.parseInt(request.nextUrl.searchParams.get("pageSize") ?? "5", 10) || 5));
     const requestedRole = request.nextUrl.searchParams.get("role") ?? "all";
     const requestedQuery = (request.nextUrl.searchParams.get("query") ?? "").trim().toLowerCase();
     const requestedEmails = new Set((request.nextUrl.searchParams.get("emails") ?? "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean));
+    const requestedParentGrade = request.nextUrl.searchParams.get("parentGrade") ?? "";
+    const requestedParentSection = request.nextUrl.searchParams.get("parentSection") ?? "";
+    const requestedParentLinkState = request.nextUrl.searchParams.get("parentLinkState") ?? "all";
     const allUsers = [...ictRows, ...guidanceRows, ...adviserRows, ...parentRows, ...pendingRegistrationRows];
+    // The modal needs a compact, unpaginated source for a genuine bulk action.
+    // Do not send full editable profiles simply to select records for archival.
+    const bulkDeletionCandidates = {
+      parents: parentRows.map((parent) => ({
+        id: Number(parent.accountIds?.[0]),
+        name: parent.name,
+        email: parent.email,
+        students: (parent.studentDetails ?? []).map((student) => ({
+          name: student.displayName,
+          lrn: student.studentId,
+          grade: student.grade,
+          section: student.section,
+        })),
+      })),
+      students: visibleStudents.map((student: any) => ({
+        id: Number(student.id),
+        name: fullName(student) || String(student.student_id ?? "Student"),
+        lrn: String(student.student_id ?? ""),
+        grade: String(student.grade ?? ""),
+        section: String(student.section ?? ""),
+      })),
+    };
+
+    if (requestedRole === "parent_students") {
+      const inSelectedClass = parentStudentRows.filter((student) => {
+        const detail = student.studentDetails?.[0];
+        return (!requestedParentGrade || detail?.grade === requestedParentGrade)
+          && (!requestedParentSection || detail?.section === requestedParentSection);
+      });
+      const parentStudentCounts = {
+        total: inSelectedClass.length,
+        alreadyLinked: inSelectedClass.filter((student) => student.parentStudentLinkState === "Already Linked").length,
+        unlinked: inSelectedClass.filter((student) => student.parentStudentLinkState === "Unlinked").length,
+      };
+      const matchingParentStudents = inSelectedClass.filter((student) => {
+        const matchesLinkState = requestedParentLinkState === "all"
+          || (requestedParentLinkState === "linked" && student.parentStudentLinkState === "Already Linked")
+          || (requestedParentLinkState === "unlinked" && student.parentStudentLinkState === "Unlinked");
+        const detail = student.studentDetails?.[0];
+        return matchesLinkState && matchesSearchQuery(requestedQuery, [
+          student.name,
+          student.parentStudentLrn ?? "",
+          student.linkedParentLabel ?? "",
+          student.email,
+          detail?.grade ?? "",
+          detail?.section ?? "",
+        ]);
+      });
+      const totalPages = Math.max(1, Math.ceil(matchingParentStudents.length / requestedPageSize));
+      const page = Math.min(requestedPage, totalPages);
+      const pageStart = (page - 1) * requestedPageSize;
+      const parentStudentGrades = [...new Set(parentStudentRows.map((student) => student.studentDetails?.[0]?.grade ?? "").filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
+      const parentStudentSections = parentStudentRows
+        .map((student) => ({ grade: student.studentDetails?.[0]?.grade ?? "", name: student.studentDetails?.[0]?.section ?? "" }))
+        .filter((section) => section.grade && section.name)
+        .filter((section, index, allSections) => allSections.findIndex((candidate) => candidate.grade === section.grade && candidate.name === section.name) === index)
+        .sort((left, right) => left.grade.localeCompare(right.grade, undefined, { numeric: true, sensitivity: "base" }) || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+
+      return NextResponse.json({
+        success: true,
+        users: matchingParentStudents.slice(pageStart, pageStart + requestedPageSize),
+        pagination: { page, pageSize: requestedPageSize, total: matchingParentStudents.length, totalPages },
+        counts: {
+          total: allUsers.length,
+          advisers: adviserRows.length,
+          ict: ictRows.length,
+          guidance: guidanceRows.length,
+          parents: parentRows.length + pendingRegistrationRows.length,
+        },
+        parentStudentFilters: {
+          grades: parentStudentGrades,
+          sections: parentStudentSections,
+          counts: parentStudentCounts,
+        },
+        sections: sectionCatalog ?? [],
+        bulkDeletionCandidates,
+        approvals: [],
+        auditLog: [],
+      });
+    }
     const matchingUsers = allUsers.filter((user) => {
       const matchesRole = requestedRole === "all"
         || (requestedRole === "adviser" && user.role === "Adviser")
@@ -681,6 +871,7 @@ export async function GET(request: NextRequest) {
         parents: parentRows.length + pendingRegistrationRows.length,
       },
       sections: sectionCatalog ?? [],
+      bulkDeletionCandidates,
       approvals: [],
       auditLog: [],
     });

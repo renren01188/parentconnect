@@ -27,6 +27,7 @@ export default function VerifyTemporaryPasswordPage() {
   const [error, setError] = useState("");
   const [expiresAtMs, setExpiresAtMs] = useState<number | null>(null);
   const [resendAvailableAtMs, setResendAvailableAtMs] = useState<number | null>(null);
+  const [recipientEmailMasked, setRecipientEmailMasked] = useState("");
   const [resendAvailabilityLoading, setResendAvailabilityLoading] = useState(true);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendMessage, setResendMessage] = useState("");
@@ -83,6 +84,7 @@ export default function VerifyTemporaryPasswordPage() {
         const nextResendAvailableAt = timestampFrom(data.resendAvailableAt);
         if (nextExpiry) setExpiresAtMs(nextExpiry);
         if (nextResendAvailableAt) setResendAvailableAtMs(nextResendAvailableAt);
+        if (typeof data.recipientEmailMasked === "string") setRecipientEmailMasked(data.recipientEmailMasked);
       } catch {
         if (!disposed) setError("Unable to check when a new temporary password can be requested. Please refresh the page.");
       } finally {
@@ -156,6 +158,7 @@ export default function VerifyTemporaryPasswordPage() {
       const nextResendAvailableAt = timestampFrom(data.resendAvailableAt);
       if (nextExpiry) setExpiresAtMs(nextExpiry);
       if (nextResendAvailableAt) setResendAvailableAtMs(nextResendAvailableAt);
+      if (typeof data.recipientEmailMasked === "string") setRecipientEmailMasked(data.recipientEmailMasked);
       setCurrentTime(Date.now());
       setPassword("");
       setShowPassword(false);
@@ -189,7 +192,9 @@ export default function VerifyTemporaryPasswordPage() {
           </div>
           <h1 className="text-2xl font-extrabold text-slate-800">Verify Temporary Password</h1>
           <p className="text-slate-500 text-sm text-center mt-1.5 max-w-sm leading-5">
-            {PARENT_SIGNUP_CONFIRMATION_MESSAGE}
+            {recipientEmailMasked
+              ? <>A temporary password was sent to <span className="font-semibold text-slate-700">{recipientEmailMasked}</span>. Check that inbox and its spam folder, then enter it here to finish creating your account.</>
+              : PARENT_SIGNUP_CONFIRMATION_MESSAGE}
           </p>
           <p className="mt-3 max-w-sm text-center text-xs leading-5 text-slate-400">
             Didn&apos;t receive it? Delivery can take a few minutes, including in the spam folder. You can request a new temporary password every two minutes.

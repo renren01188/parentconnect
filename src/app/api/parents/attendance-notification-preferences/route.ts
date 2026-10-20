@@ -34,10 +34,36 @@ async function getParentId() {
   }
 }
 
-function responsePreferences(row: { attendance_email_notifications: boolean; attendance_sms_notifications: boolean }) {
+type AttendancePreference = "SMS" | "Email" | "Neither";
+
+type PreferenceRow = {
+  attendance_email_notifications: boolean | null;
+  attendance_sms_notifications: boolean | null;
+  attendance_notification_preference: string | null;
+};
+
+function savedPreference(value: unknown): AttendancePreference | null {
+  return value === "SMS" || value === "Email" || value === "Neither" ? value : null;
+}
+
+function responsePreferences(row: PreferenceRow) {
+  const preference = savedPreference(row.attendance_notification_preference);
+  // The marker is authoritative for new saves. The boolean fallback keeps all
+  // legacy Email, SMS, and Neither choices unchanged after this rollout.
+  const emailEnabled = preference === "Email"
+    ? true
+    : preference === "SMS" || preference === "Neither"
+      ? false
+      : row.attendance_email_notifications === true;
+  const smsEnabled = preference === "SMS"
+    ? true
+    : preference === "Email" || preference === "Neither"
+      ? false
+      : row.attendance_sms_notifications === true;
   return {
-    emailEnabled: row.attendance_email_notifications,
-    smsEnabled: row.attendance_sms_notifications,
+    emailEnabled,
+    smsEnabled,
+    preference: preference ?? (emailEnabled ? "Email" : smsEnabled ? "SMS" : "Neither"),
   };
 }
 
@@ -48,14 +74,40 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("parents")
-      .select("attendance_email_notifications, attendance_sms_notifications")
+      .select("attendance_email_notifications, attendance_sms_notifications, attendance_notification_preference")
       .eq("id", parentId)
       .maybeSingle();
     if (error) throw error;
     if (!data) return NextResponse.json({ success: false, message: "Parent account not found." }, { status: 404 });
 
+    // Very old rows may have no preference values at all. That is the only
+    // unsaved state, and it receives the SMS default. Rows with existing
+    // booleans retain those values even if they predate the marker column.
+    let preferencesRow = data as PreferenceRow;
+    if (
+      !savedPreference(preferencesRow.attendance_notification_preference)
+      && preferencesRow.attendance_email_notifications === null
+      && preferencesRow.attendance_sms_notifications === null
+    ) {
+      const { data: defaulted, error: defaultError } = await supabase
+        .from("parents")
+        .update({
+          attendance_email_notifications: false,
+          attendance_sms_notifications: true,
+          attendance_notification_preference: "SMS",
+        })
+        .eq("id", parentId)
+        .is("attendance_notification_preference", null)
+        .is("attendance_email_notifications", null)
+        .is("attendance_sms_notifications", null)
+        .select("attendance_email_notifications, attendance_sms_notifications, attendance_notification_preference")
+        .maybeSingle();
+      if (defaultError) throw defaultError;
+      if (defaulted) preferencesRow = defaulted as PreferenceRow;
+    }
+
     return NextResponse.json(
-      { success: true, preferences: responsePreferences(data) },
+      { success: true, preferences: responsePreferences(preferencesRow) },
       { headers: noStoreHeaders },
     );
   } catch (error: unknown) {
@@ -79,14 +131,16 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, message: "Choose Email, SMS, or Neither for attendance notifications." }, { status: 400 });
     }
 
+    const preference: AttendancePreference = body.emailEnabled ? "Email" : body.smsEnabled ? "SMS" : "Neither";
     const { data, error } = await supabase
       .from("parents")
       .update({
         attendance_email_notifications: body.emailEnabled,
         attendance_sms_notifications: body.smsEnabled,
+        attendance_notification_preference: preference,
       })
       .eq("id", parentId)
-      .select("attendance_email_notifications, attendance_sms_notifications")
+      .select("attendance_email_notifications, attendance_sms_notifications, attendance_notification_preference")
       .maybeSingle();
     if (error) throw error;
     if (!data) return NextResponse.json({ success: false, message: "Parent account not found." }, { status: 404 });

@@ -50,13 +50,57 @@ type SectionChange = {
   class_session?: "Morning" | "Afternoon";
 };
 
+type StudentSectionRecord = {
+  id: number;
+  archive_status?: string | null;
+};
+
+/** Older imports may not have set archive_status. Only explicit archival removes a student from a section. */
+function isActiveStudent(record: { archive_status?: string | null }) {
+  const status = String(record.archive_status ?? "").trim().toLowerCase();
+  return status !== "archived" && status !== "deleted";
+}
+
+function sectionInUseResponse(name: string, studentCount: number, adviserCount: number) {
+  const users = [
+    studentCount ? `${studentCount} student${studentCount === 1 ? "" : "s"}` : "",
+    adviserCount ? `${adviserCount} adviser${adviserCount === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" and ");
+  return NextResponse.json(
+    {
+      success: false,
+      code: "SECTION_IN_USE",
+      message: `Cannot delete \"${name}\" because it is still assigned to ${users}. Remove or reassign the students first.`,
+    },
+    { status: 409 }
+  );
+}
+
+function occupiedSectionRaceResponse(name: string) {
+  return NextResponse.json(
+    {
+      success: false,
+      code: "SECTION_IN_USE",
+      message: `Cannot delete \"${name}\" because students were assigned while the deletion was being processed. Remove or reassign them first.`,
+    },
+    { status: 409 }
+  );
+}
+
+/** The database trigger uses a foreign-key-style error to close race conditions after this preflight. */
+function isOccupiedSectionDatabaseError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string };
+  return candidate.code === "23503" && /section|student/i.test(candidate.message ?? "");
+}
+
 async function ensureSectionCanBeDeleted(name: string, grade: string) {
   // A section must be reassigned before it can be removed. Keep this guard
   // server-side so it cannot be bypassed from the browser or a staged batch.
-  const [{ count: studentCount, error: studentError }, { data: adviserRows, error: adviserError }] = await Promise.all([
+  const [{ data: studentRows, error: studentError }, { data: adviserRows, error: adviserError }] = await Promise.all([
     supabase
       .from("students")
-      .select("id", { count: "exact", head: true })
+      .select("id, archive_status")
       .eq("section", name)
       .eq("grade", grade),
     supabase
@@ -67,24 +111,13 @@ async function ensureSectionCanBeDeleted(name: string, grade: string) {
   if (studentError) throw studentError;
   if (adviserError) throw adviserError;
 
+  const studentCount = ((studentRows ?? []) as StudentSectionRecord[]).filter(isActiveStudent).length;
+
   const adviserCount = (adviserRows ?? []).filter((adviser) =>
     adviser.section === name
     || (Array.isArray(adviser.sections) && adviser.sections.includes(name))
   ).length;
-  if ((studentCount ?? 0) > 0 || adviserCount > 0) {
-    const users = [
-      studentCount ? `${studentCount} student${studentCount === 1 ? "" : "s"}` : "",
-      adviserCount ? `${adviserCount} adviser${adviserCount === 1 ? "" : "s"}` : "",
-    ].filter(Boolean).join(" and ");
-    return NextResponse.json(
-      {
-        success: false,
-        code: "SECTION_IN_USE",
-        message: `Cannot delete \"${name}\" because it is still assigned to ${users}. Reassign them first.`,
-      },
-      { status: 409 }
-    );
-  }
+  if (studentCount > 0 || adviserCount > 0) return sectionInUseResponse(name, studentCount, adviserCount);
 
   return null;
 }
@@ -140,7 +173,7 @@ export async function GET(req: NextRequest) {
     const shouldFilterBySession = classSessionFilter === "Morning" || classSessionFilter === "Afternoon";
 
     // Get student counts per section
-    let studentQuery = supabase.from("students").select("section");
+    let studentQuery = supabase.from("students").select("section, archive_status");
     if (grade) studentQuery = studentQuery.eq("grade", grade);
 
     // Get adviser sections
@@ -157,15 +190,18 @@ export async function GET(req: NextRequest) {
     if (shouldFilterBySession) sectionsTableQuery = sectionsTableQuery.eq("class_session", classSessionFilter);
 
     const [
-      { data: studentRows },
-      { data: adviserRows },
-      { data: sectionsTableRows },
+      { data: studentRows, error: studentError },
+      { data: adviserRows, error: adviserError },
+      { data: sectionsTableRows, error: sectionsTableError },
     ] = await Promise.all([studentQuery, adviserQuery, sectionsTableQuery]);
+    if (studentError) throw studentError;
+    if (adviserError) throw adviserError;
+    if (sectionsTableError) throw sectionsTableError;
 
     // Count students per section
     const countMap = new Map<string, number>();
     for (const row of studentRows ?? []) {
-      if (row.section) {
+      if (row.section && isActiveStudent(row)) {
         countMap.set(row.section, (countMap.get(row.section) ?? 0) + 1);
       }
     }
@@ -272,7 +308,10 @@ export async function DELETE(req: NextRequest) {
       .delete()
       .eq("name", sectionName)
       .eq("grade", sectionGrade);
-    if (error) throw error;
+    if (error) {
+      if (isOccupiedSectionDatabaseError(error)) return occupiedSectionRaceResponse(sectionName);
+      throw error;
+    }
 
     await Promise.all([
       publishPublicSectionsInvalidation(),
@@ -333,7 +372,10 @@ export async function PUT(req: NextRequest) {
         .delete()
         .eq("name", change.name)
         .eq("grade", change.grade);
-      if (error) throw error;
+      if (error) {
+        if (isOccupiedSectionDatabaseError(error)) return occupiedSectionRaceResponse(change.name);
+        throw error;
+      }
     }
 
     await Promise.all([

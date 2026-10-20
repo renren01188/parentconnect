@@ -140,7 +140,7 @@ export async function GET(req: NextRequest) {
     // year's date range and explicitly enabled weekdays.
     const { data: activeSY, error: schoolYearError } = await supabase
       .from("school_year_config")
-      .select("start_date, end_date, attendance_weekdays")
+      .select("id, start_date, end_date, attendance_weekdays")
       .eq("is_active", true)
       .limit(1)
       .maybeSingle();
@@ -163,6 +163,20 @@ export async function GET(req: NextRequest) {
     // Only consider days up to today (can't have records for the future)
     const today = getToday();
     const validDays = schoolDays.filter((date) => date <= today);
+
+    let holidayDates: string[] = [];
+    if (activeSY) {
+      const { data: holidays, error: holidayError } = await supabase
+        .from("school_holidays")
+        .select("holiday_date")
+        .eq("school_year_config_id", activeSY.id)
+        .gte("holiday_date", `${year}-${String(month).padStart(2, "0")}-01`)
+        .lte("holiday_date", `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`);
+      // Existing installations can export before the optional holidays
+      // migration has been applied.
+      if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+      holidayDates = (holidays ?? []).map((holiday) => String(holiday.holiday_date));
+    }
 
     const startDate = validDays[0];
     const endDate = validDays[validDays.length - 1];
@@ -188,7 +202,7 @@ export async function GET(req: NextRequest) {
       const activeFrom = activeSY
         ? (registeredOn && registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
         : (registeredOn ?? validDays[0] ?? null);
-      return activeFrom && validDays.some((date) => date >= activeFrom)
+      return activeFrom && schoolDays.some((date) => date >= activeFrom)
         ? [{ student, activeFrom }]
         : [];
     });
@@ -252,12 +266,14 @@ export async function GET(req: NextRequest) {
       if (log.type === "Time Out") logMap[dbId][date].timeOut = entry;
     }
 
-    // Build one row per student per valid school day
+    // Build one row per student per configured school day. Future dates have
+    // no saved status, but retaining them lets the export keep the complete
+    // selected calendar and roster visible.
     const rows: MonthlyAttendanceRow[] = [];
 
     for (const { student, activeFrom } of eligibleStudents) {
       const fullName = buildFullName(student);
-      for (const dateStr of validDays.filter((date) => date >= activeFrom)) {
+      for (const dateStr of schoolDays.filter((date) => date >= activeFrom)) {
         const dayLogs = logMap[student.id]?.[dateStr];
         const timeIn = dayLogs?.timeIn;
         const timeOut = dayLogs?.timeOut;
@@ -289,7 +305,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       rows,
-      schoolDays: validDays,
+      schoolDays,
+      holidayDates,
       studentCount: eligibleStudents.length,
       schoolYearLabel: activeSY
         ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`

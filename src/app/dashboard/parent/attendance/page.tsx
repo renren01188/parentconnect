@@ -14,7 +14,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
     ChevronDown, TrendingUp, TrendingDown,
-    Send, X, Paperclip, AlertCircle, CheckCircle, Loader2,
+    Send, X, Paperclip, AlertCircle, CheckCircle, Loader2, RefreshCw,
 } from "lucide-react";
 
 import Sidebar from "../components/Sidebar";
@@ -26,6 +26,7 @@ import {
 } from "@/lib/excuseLetterAttachment";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.cjs";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +67,9 @@ interface StudentData {
     lateDelta: number;
     attendanceRate: number;
     rateLabel: string;
+    hasAttendanceRecords: boolean;
+    schoolYearLabel: string;
+    lastUpdatedAt: string;
     months: MonthData[];
 }
 
@@ -112,6 +116,18 @@ function formatDateLabel(dateStr: string) {
     return new Date(y, m - 1, d).toLocaleDateString("en-US", {
         month: "long", day: "numeric", year: "numeric",
     });
+}
+
+function formatLastUpdated(value: string) {
+    const timestamp = new Date(value);
+    if (Number.isNaN(timestamp.getTime())) return "";
+    return new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    }).format(timestamp);
 }
 
 function rfidBadgeClass(scan: string) {
@@ -530,7 +546,10 @@ export default function ParentAttendancePage() {
     const [monthDrop, setMonthDrop] = useState(false);
     const [showExcuseModal, setShowExcuseModal] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [error, setError] = useState("");
+    const [refreshError, setRefreshError] = useState("");
+    const [lastUpdatedAt, setLastUpdatedAt] = useState("");
     const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
     const studentDropRef = useRef<HTMLDivElement>(null);
@@ -538,11 +557,15 @@ export default function ParentAttendancePage() {
 
     const fetchAttendance = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
         try {
-            if (!background) setIsLoading(true);
-            setError("");
+            if (background) {
+                setIsRefreshing(true);
+                setRefreshError("");
+            } else {
+                setIsLoading(true);
+                setError("");
+            }
             if (!session?.success) {
-                setError("Failed to load data.");
-                return;
+                throw new Error("Your parent session is no longer available. Please sign in again.");
             }
 
             const sessionStudents = (session.students ?? [session.student]) as Array<{
@@ -552,7 +575,10 @@ export default function ParentAttendancePage() {
             const apiStudents: StudentData[] = await Promise.all(
                 sessionStudents.map(async (s) => {
                     const attRes = await fetch(`/api/attendance/parent-history?student_id=${s.lrn}`, { cache: "no-store" });
-                    const attData = await attRes.json();
+                    const attData = await attRes.json().catch(() => null);
+                    if (!attRes.ok || !attData?.success) {
+                        throw new Error(attData?.message || "Attendance records could not be loaded.");
+                    }
 
                     // Group records by month
                     const monthMap = new Map<string, AttendanceRecord[]>();
@@ -573,6 +599,7 @@ export default function ParentAttendancePage() {
                     const months: MonthData[] = Array.from(monthMap.entries()).map(([label, records]) => ({ label, records }));
 
                     const stats = attData.stats || {};
+                    const hasAttendanceRecords = (attData.records || []).length > 0;
                     const rate = calculateAttendanceRate({
                         present: stats.present,
                         late: stats.late,
@@ -595,22 +622,39 @@ export default function ParentAttendancePage() {
                         lateDays: stats.late ?? 0,
                         lateDelta: 0,
                         attendanceRate: rate,
-                        rateLabel: rate >= 95 ? "Excellent standing" : rate >= 85 ? "Good standing" : "Needs attention",
+                        rateLabel: hasAttendanceRecords
+                            ? (rate >= 95 ? "Excellent standing" : rate >= 85 ? "Good standing" : "Needs attention")
+                            : "No attendance records yet",
+                        hasAttendanceRecords,
+                        schoolYearLabel: String(attData.schoolYear?.label || "Current school year"),
+                        lastUpdatedAt: String(attData.generatedAt || new Date().toISOString()),
                         months: months.length > 0 ? months : [{ label: "No Records", records: [] }],
                     } satisfies StudentData;
                 })
             );
 
             setStudents(apiStudents);
+            setLastUpdatedAt(apiStudents[0]?.lastUpdatedAt ?? "");
+            setRefreshError("");
             // A background Realtime refresh must not throw a parent back to
             // their first child or month while they are reading a record.
             setSelectedId((current) => apiStudents.some((student) => student.id === current)
                 ? current
                 : apiStudents[0]?.id ?? "");
-        } catch {
-            setError("Failed to connect to server.");
+        } catch (fetchError) {
+            const message = fetchError instanceof Error && fetchError.message
+                ? fetchError.message
+                : "Failed to connect to the attendance service.";
+            if (background) {
+                // Keep the last verified snapshot visible if a Realtime or
+                // recovery refresh fails; it must never turn into zeros.
+                setRefreshError(`Live update could not be loaded. Showing the last verified records. ${message}`);
+            } else {
+                setError(message);
+            }
         } finally {
-            if (!background) setIsLoading(false);
+            if (background) setIsRefreshing(false);
+            else setIsLoading(false);
         }
     }, [session]);
 
@@ -636,6 +680,11 @@ export default function ParentAttendancePage() {
         }
     });
 
+    // Realtime is the primary update path. This visible-only recovery refresh
+    // reconciles the screen after a missed websocket event or laptop sleep
+    // without creating a background polling load for inactive tabs.
+    useVisibleRefresh(() => fetchAttendance({ background: true }));
+
     useEffect(() => {
         function handleOutsideClick(e: MouseEvent) {
             if (studentDrop && studentDropRef.current && !studentDropRef.current.contains(e.target as Node)) {
@@ -652,6 +701,7 @@ export default function ParentAttendancePage() {
     const student = students.find(s => s.id === selectedId) ?? students[0];
     const safeMonthIdx = student ? Math.min(monthIdx, student.months.length - 1) : 0;
     const currentMonth = student?.months[safeMonthIdx];
+    const schoolYearCaption = student?.schoolYearLabel || "Current school year";
     const guideHighlight = (target: string) => guideTarget === target
         ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-[#eef2f7]"
         : "";
@@ -703,13 +753,27 @@ export default function ParentAttendancePage() {
                         <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">Attendance</h1>
                         <p className="text-slate-500 text-sm mt-0.5">View your child&apos;s attendance records and history</p>
                     </div>
-                    <button type="button" onClick={() => setShowExcuseModal(true)}
-                        data-parent-guide="excuse-letter"
-                        className={`inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-600 sm:w-auto ${guideHighlight("excuse-letter")}`}>
-                        <Send className="w-4 h-4" />
-                        Excuse Letter
-                    </button>
+                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                        <button type="button" onClick={() => void fetchAttendance({ background: true })} disabled={isRefreshing}
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm font-bold text-blue-600 shadow-sm transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-70">
+                            <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+                            {isRefreshing ? "Refreshing..." : "Refresh"}
+                        </button>
+                        <button type="button" onClick={() => setShowExcuseModal(true)}
+                            data-parent-guide="excuse-letter"
+                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-600 ${guideHighlight("excuse-letter")}`}>
+                            <Send className="w-4 h-4" />
+                            Excuse Letter
+                        </button>
+                    </div>
                 </div>
+
+                {(lastUpdatedAt || refreshError) && (
+                    <div className="mb-4" aria-live="polite">
+                        {lastUpdatedAt && <p className="text-xs text-slate-500">Last updated: {formatLastUpdated(lastUpdatedAt)} (Manila time)</p>}
+                        {refreshError && <p className="mt-1 text-xs font-medium text-amber-700">{refreshError}</p>}
+                    </div>
+                )}
 
                 {/* Student selector */}
                 {students.length > 0 && (
@@ -753,11 +817,11 @@ export default function ParentAttendancePage() {
                 {student && (
                     <div data-parent-guide="attendance-summary" className={`mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 ${guideHighlight("attendance-summary")}`}>
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-                            <p className="text-xs font-semibold text-slate-500 mb-2">Total Present Days</p>
+                            <p className="text-xs font-semibold text-slate-500 mb-2">Days Attended</p>
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.totalPresent}</p>
                             <div className="flex items-center gap-1.5">
                                 <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
-                                <span className="text-xs text-blue-400 font-medium">This school year</span>
+                                <span className="text-xs text-blue-400 font-medium">{schoolYearCaption}</span>
                             </div>
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -765,7 +829,7 @@ export default function ParentAttendancePage() {
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.absentDays}</p>
                             <div className="flex items-center gap-1.5">
                                 <TrendingDown className="w-3.5 h-3.5 text-blue-400" />
-                                <span className="text-xs text-blue-400 font-medium">This school year</span>
+                                <span className="text-xs text-blue-400 font-medium">{schoolYearCaption}</span>
                             </div>
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -773,12 +837,12 @@ export default function ParentAttendancePage() {
                             <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.lateDays}</p>
                             <div className="flex items-center gap-1.5">
                                 <TrendingDown className="w-3.5 h-3.5 text-blue-400" />
-                                <span className="text-xs text-blue-400 font-medium">This school year</span>
+                                <span className="text-xs text-blue-400 font-medium">{schoolYearCaption}</span>
                             </div>
                         </div>
                         <div className="rounded-2xl border border-blue-200 bg-white p-4 shadow-sm sm:p-5">
                             <p className="text-xs font-semibold text-slate-500 mb-2">Attendance Rate</p>
-                            <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.attendanceRate}%</p>
+                            <p className="text-4xl font-extrabold text-blue-500 leading-none mb-2">{student.hasAttendanceRecords ? `${student.attendanceRate}%` : "—"}</p>
                             <p className="text-xs font-semibold text-blue-500">{student.rateLabel}</p>
                         </div>
                     </div>
@@ -821,7 +885,7 @@ export default function ParentAttendancePage() {
                                 <tbody>
                                     {currentMonth.records.length === 0 ? (
                                         <tr>
-                                            <td colSpan={6} className="px-6 py-10 text-center text-sm text-slate-400">No records for this month.</td>
+                                            <td colSpan={6} className="px-6 py-10 text-center text-sm text-slate-400">No attendance records have been recorded for this school year.</td>
                                         </tr>
                                     ) : currentMonth.records.map((rec, i) => (
                                         <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 transition-colors">
@@ -851,7 +915,7 @@ export default function ParentAttendancePage() {
 
                         <div className="space-y-3 p-4 md:hidden">
                             {currentMonth.records.length === 0 ? (
-                                <p className="py-8 text-center text-sm text-slate-400">No records for this month.</p>
+                                <p className="py-8 text-center text-sm text-slate-400">No attendance records have been recorded for this school year.</p>
                             ) : currentMonth.records.map((rec, i) => (
                                 <article key={i} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                                     <div className="mb-3 flex items-start justify-between gap-3">

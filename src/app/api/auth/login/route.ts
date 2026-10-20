@@ -11,6 +11,11 @@ import {
   rememberLoginGuard,
 } from "@/lib/loginProtection";
 import { parentAccountAccessIssue } from "@/lib/parentAccountAccess";
+import { isParentAccountOwnerRole } from "@/lib/parentAccountOwner";
+import {
+  normalizeParentLoginContactNumber,
+  normalizeParentLoginEmail,
+} from "@/lib/parentLoginIdentifier";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import {
   legacyTemporaryPasswordExpiryEpochSeconds,
@@ -24,32 +29,41 @@ function errorMessage(error: unknown) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password, captchaToken } = await req.json();
+    const { identifier, email, password, captchaToken } = await req.json();
+    const suppliedIdentifier = typeof identifier === "string" && identifier.trim()
+      ? identifier
+      : email;
+    const mobileNumber = normalizeParentLoginContactNumber(suppliedIdentifier);
+    const emailAddress = mobileNumber ? null : normalizeParentLoginEmail(suppliedIdentifier);
 
-    if (!email || !password) {
+    if ((!mobileNumber && !emailAddress) || !password) {
       return NextResponse.json(
-        { success: false, message: "Email and password are required." },
+        { success: false, message: "Enter your email address or registered mobile number and password." },
         { status: 400 }
       );
     }
 
-    const { data: parents, error } = await supabase
+    const parentQuery = supabase
       .from("parents")
       .select(`
-        id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number,
+        id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number, login_contact_number, account_owner_role, requires_account_setup,
         parent_first_name, parent_last_name,
         students!inner ( first_name, last_name, grade, section )
-      `)
-      .eq("email", email.toLowerCase().trim())
-      .order("password_set", { ascending: false });
+      `);
+    const { data: parents, error } = mobileNumber
+      ? await parentQuery.eq("login_contact_number", mobileNumber).order("password_set", { ascending: false })
+      : await parentQuery.eq("email", emailAddress!).order("password_set", { ascending: false });
 
     if (error) throw error;
 
-    const parent = parents?.find((row) =>
+    const matchingParents = parents?.filter((row) =>
       !(row.parent_first_name === "Parent" && row.parent_last_name === "Guardian" && !row.contact_number)
-    );
+    ) ?? [];
+    const hasAmbiguousMobileAccount = Boolean(mobileNumber && matchingParents.length > 1);
+    const parent = hasAmbiguousMobileAccount ? undefined : matchingParents[0];
+    const loginIdentifier = mobileNumber ?? emailAddress!;
 
-    const guardSubject = parent ? `account:${parent.id}` : `identifier:${String(email).trim()}`;
+    const guardSubject = parent ? `account:${parent.id}` : `identifier:${loginIdentifier}`;
     await rememberLoginGuard("parent", guardSubject);
     const protection = await checkLoginProtection("parent", guardSubject, req, captchaToken, PARENT_LOGIN_GUARD_SCOPE);
     if (!protection.allowed) {
@@ -60,7 +74,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (!parent) {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "account not found" });
+      await logSecurityAlert({
+        request: req,
+        identifier: loginIdentifier,
+        role: "Parent",
+        reason: hasAmbiguousMobileAccount ? "ambiguous mobile login identifier" : "account not found",
+      });
       const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
         { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
@@ -77,7 +96,7 @@ export async function POST(req: NextRequest) {
 
     const accessIssue = parentAccountAccessIssue(parent);
     if (accessIssue === "archived") {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "archived account" });
+      await logSecurityAlert({ request: req, identifier: loginIdentifier, role: "Parent", reason: "archived account" });
       const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
         { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
@@ -85,7 +104,7 @@ export async function POST(req: NextRequest) {
       );
     }
     if (accessIssue) {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: `account is temporarily unavailable: ${accessIssue}` });
+      await logSecurityAlert({ request: req, identifier: loginIdentifier, role: "Parent", reason: `account is temporarily unavailable: ${accessIssue}` });
       const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
         { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
@@ -95,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     const passwordMatch = await bcrypt.compare(password, parent.password);
     if (!passwordMatch) {
-      await logSecurityAlert({ request: req, identifier: String(email).trim(), role: "Parent", reason: "invalid password" });
+      await logSecurityAlert({ request: req, identifier: loginIdentifier, role: "Parent", reason: "invalid password" });
       const failed = await failedLoginResult("parent", guardSubject, req, PARENT_LOGIN_GUARD_SCOPE);
       return NextResponse.json(
         { success: false, message: failed.message, captchaRequired: failed.captchaRequired, lockedUntil: failed.lockedUntil },
@@ -104,6 +123,10 @@ export async function POST(req: NextRequest) {
     }
 
     const passwordSet = parent.password_set === true || parent.password_set === 1;
+    // Account Owner selection belongs only to direct SQL-imported accounts.
+    // Normal Guardian Sign Up already verifies the chosen relationship.
+    const requiresAccountSetup = parent.requires_account_setup === true;
+    const ownerRoleSelected = isParentAccountOwnerRole(parent.account_owner_role);
     const temporaryPasswordExpirySeconds = passwordSet
       ? null
       : temporaryPasswordExpiryEpochSeconds(parent.temporary_password_expires_at)
@@ -142,6 +165,7 @@ export async function POST(req: NextRequest) {
       section:     student.section,
       role:        "parent",
       passwordSet,
+      ownerRoleSelected,
       sessionIssuedAt: Date.now(),
       temporaryPasswordVerified: passwordSet,
       ...(temporaryPasswordExpirySeconds ? {
@@ -167,6 +191,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success:     true,
       passwordSet,
+      requiresOwnerSelection: passwordSet && requiresAccountSetup && !ownerRoleSelected,
       expiresAt: temporaryPasswordExpirySeconds
         ? new Date(temporaryPasswordExpirySeconds * 1_000).toISOString()
         : undefined,

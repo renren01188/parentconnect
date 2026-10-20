@@ -9,6 +9,7 @@ import {
     isAttendedExportStatus,
     toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
+import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
@@ -115,6 +116,7 @@ type MonthlyAttendanceRow = {
 type MonthlyAttendanceData = {
     rows: MonthlyAttendanceRow[];
     schoolDays: string[];
+    holidayDates: string[];
     studentCount: number;
     schoolYearLabel: string | null;
 };
@@ -546,23 +548,17 @@ function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, res
     ws.getCell(ref).value = { formula, result };
 }
 
-function getSchoolDayPlacementsForMonth(month: number, year: number, schoolDayDates: string[]) {
-    const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
-    const dayLabels = ["SU", "M", "T", "W", "TH", "F", "SA"] as const;
-    const dates = [...new Set(schoolDayDates)]
-        .filter((date) => date.startsWith(monthPrefix) && /^\d{4}-\d{2}-\d{2}$/.test(date))
-        .sort();
+function getSchoolDayPlacementsForMonth(month: number, year: number) {
+    const dates = weekdayExportDatesForMonth(year, month);
     if (dates.length > SF2_DAY_SLOTS.length) {
-        throw new Error(`The SF2 template has ${SF2_DAY_SLOTS.length} daily slots, but this school calendar has ${dates.length} class days. Use a template that supports all configured class days.`);
+        throw new Error(`The SF2 template has ${SF2_DAY_SLOTS.length} daily slots, but ${dates.length} weekdays were selected. Use a template that supports all weekdays.`);
     }
-    return dates.map((date, slotIdx) => {
-        const day = Number(date.slice(-2));
-        const [dateYear, dateMonth] = date.split("-").map(Number);
+    return dates.map(({ date, day, weekdayLabel }, slotIdx) => {
         return {
             date,
             day,
             slotIdx,
-            dowLabel: dayLabels[new Date(Date.UTC(dateYear, dateMonth - 1, day)).getUTCDay()],
+            dowLabel: weekdayLabel,
         };
     });
 }
@@ -604,10 +600,10 @@ async function exportMonthlySF2(
     if (!ws) throw new Error("Template worksheet not found.");
 
     const monthName = MONTH_NAMES[month - 1];
-    const placements = getSchoolDayPlacementsForMonth(month, year, schoolDayDates);
+    const placements = getSchoolDayPlacementsForMonth(month, year);
     const holidaySet = new Set(holidayDates);
     const schoolDaySet = new Set(schoolDayDates);
-    const classPlacements = placements.filter(({ date }) => !holidaySet.has(date));
+    const classPlacements = placements.filter(({ date }) => schoolDaySet.has(date) && !holidaySet.has(date));
 
     const [gradePart, sectionPartRaw] = sectionLabel.split("·").map(s => s.trim());
     const gradeLabel = gradePart || "";
@@ -701,13 +697,13 @@ async function exportMonthlySF2(
             placements.forEach(({ day, date: iso, slotIdx }) => {
                 const [col0] = SF2_DAY_SLOTS[slotIdx];
 
-                if (!schoolDaySet.has(iso)) return;
                 if (iso < student.activeFrom) return;
-
                 if (holidaySet.has(iso)) {
                     setCellValue(ws, col0ToRef(col0, row), getSf2StatusCode(null, true));
                     return;
                 }
+
+                if (!schoolDaySet.has(iso)) return;
 
                 const rec = dayMap.get(day);
 
@@ -748,9 +744,8 @@ async function exportMonthlySF2(
             if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, totalRow));
         }
 
-        placements.forEach(({ date: iso, slotIdx }) => {
+        classPlacements.forEach(({ slotIdx }) => {
             const [col0] = SF2_DAY_SLOTS[slotIdx];
-            if (holidaySet.has(iso)) return;
             const formula = studentList.length
                 ? `COUNTIF(${col0ToRef(col0, startRow)}:${col0ToRef(col0, totalRow - 1)},"X")`
                 : "0";
@@ -770,12 +765,12 @@ async function exportMonthlySF2(
     setCellFormula(ws, `AM${combinedRow}`, `AM${maleTotalRow}+AM${femaleTotalRow}`);
     setCellFormula(ws, `AO${combinedRow}`, `AO${maleTotalRow}+AO${femaleTotalRow}`);
 
-    placements.forEach(({ slotIdx }) => {
+    classPlacements.forEach(({ slotIdx }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
         setCellFormula(ws, col0ToRef(col0, combinedRow), `${col0ToRef(col0, maleTotalRow)}+${col0ToRef(col0, femaleTotalRow)}`);
     });
 
-    setCellValue(ws, `AM${summaryStartRow}`, `Month : ${monthName.toUpperCase()}`);
+    setCellValue(ws, `AM${summaryStartRow}`, `Month : ${monthName.toUpperCase()} ${year}`);
     const todayIso = toLocalDateString(new Date());
     const pastClassDaysCount = classPlacements.filter(({ date }) => date <= todayIso).length;
     setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${pastClassDaysCount}`);
@@ -814,21 +809,26 @@ async function exportMonthlySF2(
     const detailHeader = detailWs.getRow(4);
     detailHeader.font = { bold: true, color: { argb: "FFFFFFFF" } };
     detailHeader.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF047857" } };
-    for (const detailRow of [...rows].sort((first, second) =>
-        first.full_name.localeCompare(second.full_name) || first.date.localeCompare(second.date)
-    )) {
-        detailWs.addRow([
-            detailRow.student_id,
-            detailRow.full_name,
-            detailRow.grade,
-            detailRow.section,
-            detailRow.date,
-            getAttendanceDetailStatus(toAttendanceExportStatus(detailRow.time_in_status)),
-            detailRow.time_in ?? "",
-            detailRow.time_out ?? "",
-            detailRow.via ?? "",
-            detailRow.remark ?? "",
-        ]);
+    for (const student of students) {
+        const recordsByDate = new Map(student.days.map((record) => [record.date, record]));
+        for (const { date } of placements) {
+            if (date < student.activeFrom) continue;
+            const detailRow = recordsByDate.get(date);
+            detailWs.addRow([
+                student.student_id,
+                student.name,
+                detailRow?.grade ?? "",
+                detailRow?.section ?? "",
+                date,
+                holidaySet.has(date)
+                    ? "Holiday"
+                    : getAttendanceDetailStatus(toAttendanceExportStatus(detailRow?.time_in_status)),
+                detailRow?.time_in ?? "",
+                detailRow?.time_out ?? "",
+                detailRow?.via ?? "",
+                detailRow?.remark ?? "",
+            ]);
+        }
     }
     detailWs.columns = [
         { width: 16 }, { width: 32 }, { width: 14 }, { width: 18 }, { width: 14 },
@@ -1000,6 +1000,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
     const [error, setError] = useState("");
     const [preview, setPreview] = useState<{ totalDays: number; totalStudents: number; presentPct: number } | null>(null);
     const [holidayDates, setHolidayDates] = useState<string[]>([]);
+    const [configuredHolidayDates, setConfiguredHolidayDates] = useState<string[]>([]);
     const [availableHolidayDates, setAvailableHolidayDates] = useState<string[]>([]);
 
     // Build selectable years (current year and 2 previous)
@@ -1014,6 +1015,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                 const monthlyData = {
                     rows: data.rows as MonthlyAttendanceRow[],
                     schoolDays: Array.isArray(data.schoolDays) ? data.schoolDays as string[] : [],
+                    holidayDates: Array.isArray(data.holidayDates) ? data.holidayDates as string[] : [],
                     studentCount: Number(data.studentCount ?? 0),
                     schoolYearLabel: typeof data.schoolYearLabel === "string" ? data.schoolYearLabel : null,
                 };
@@ -1041,12 +1043,19 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             .then((data) => {
                 if (!cancelled && data.success && Array.isArray(data.schoolDays)) {
                     const dates = data.schoolDays as string[];
+                    const configuredDates = Array.isArray(data.holidayDates)
+                        ? (data.holidayDates as string[]).filter((date) => dates.includes(date))
+                        : [];
                     setAvailableHolidayDates(dates);
                     setHolidayDates((previous) => previous.filter((date) => dates.includes(date)));
+                    setConfiguredHolidayDates([...new Set(configuredDates)].sort());
                 }
             })
             .catch(() => {
-                if (!cancelled) setAvailableHolidayDates([]);
+                if (!cancelled) {
+                    setAvailableHolidayDates([]);
+                    setConfiguredHolidayDates([]);
+                }
             });
         return () => { cancelled = true; };
     }, [activeSection, selectedMonth, selectedYear]);
@@ -1055,7 +1064,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
         const monthlyData = await fetchMonthlyData();
         if (!monthlyData) return;
 
-        const holidaySet = new Set(holidayDates);
+        const holidaySet = new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates]);
         const countableRows = monthlyData.rows.filter((row) => !holidaySet.has(row.date));
         const present = countableRows.filter((row) =>
             isAttendedExportStatus(toAttendanceExportStatus(row.time_in_status))
@@ -1079,7 +1088,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             selectedYear,
             selectedMonth,
             sectionLabel,
-            holidayDates,
+            Array.from(new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates])).sort(),
             monthlyData.schoolDays,
             monthlyData.schoolYearLabel,
         );
@@ -1204,12 +1213,14 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                         <div className="max-h-32 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50 p-2">
                             <div className="grid grid-cols-2 gap-2">
                                 {availableHolidayDates.map((dateStr) => {
-                                    const checked = holidayDates.includes(dateStr);
+                                    const isConfiguredHoliday = configuredHolidayDates.includes(dateStr);
+                                    const checked = isConfiguredHoliday || holidayDates.includes(dateStr);
                                     return (
                                         <label key={dateStr} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-2 text-xs transition-colors ${checked ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600"}`}>
                                             <input
                                                 type="checkbox"
                                                 checked={checked}
+                                                disabled={isConfiguredHoliday}
                                                 onChange={(e) => {
                                                     setPreview(null);
                                                     setHolidayDates((prev) =>
@@ -1220,7 +1231,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                                                 }}
                                                 className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
                                             />
-                                            <span>{formatDateLabel(dateStr)}</span>
+                                            <span>{formatDateLabel(dateStr)}{isConfiguredHoliday ? " (configured)" : ""}</span>
                                         </label>
                                     );
                                 })}

@@ -40,7 +40,16 @@ const absence = loadTypeScriptModule("src/lib/automaticAttendanceAbsence.ts", {
   "@/lib/audit": { logAudit: async () => undefined },
   "@/lib/schoolCalendar": { isScheduledAttendanceDate: () => true },
   "@/lib/attendanceScannerSchedule": {
-    getSchoolClock: () => ({ date: "2026-10-20", time: "09:00:00", minutes: 540 }),
+    getSchoolClock: (now = new Date("2026-10-20T01:00:00.000Z")) => {
+      const manila = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+      const hour = manila.getUTCHours();
+      const minute = manila.getUTCMinutes();
+      return {
+        date: manila.toISOString().slice(0, 10),
+        time: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`,
+        minutes: hour * 60 + minute,
+      };
+    },
     timeToMinutes: (value) => {
       const [hour, minute] = value.slice(0, 5).split(":").map(Number);
       return hour * 60 + minute;
@@ -59,6 +68,7 @@ const students = [
   { id: 2, student_id: "NO-SCAN", created_at: "2026-10-01T00:00:00.000Z" },
   { id: 3, student_id: "EXCUSED", created_at: "2026-10-01T00:00:00.000Z" },
   { id: 4, student_id: "NEW-TODAY", created_at: "2026-10-20T02:00:00.000Z" },
+  { id: 5, student_id: "ENROLLED-BEFORE-END", created_at: "2026-10-20T00:30:00.000Z" },
 ];
 
 const afterCompletedSession = absence.studentsMissingSessionAttendance({
@@ -82,6 +92,19 @@ const withRfidDisabled = absence.studentsMissingSessionAttendance({
   sessionDate: "2026-10-20",
 });
 assert.deepEqual(withRfidDisabled.map((student) => student.student_id), ["NO-SCAN"]);
+
+const sameDayEnrolment = absence.studentsMissingSessionAttendance({
+  students,
+  recordedStudentDbIds: [1],
+  excusedStudentIds: ["EXCUSED"],
+  sessionDate: "2026-10-20",
+  sessionEnd: "08:55:00",
+});
+assert.deepEqual(
+  sameDayEnrolment.map((student) => student.student_id),
+  ["NO-SCAN", "ENROLLED-BEFORE-END"],
+  "A student enrolled before today's session end is eligible; one enrolled after it is not retroactively absent.",
+);
 
 const repeatRun = absence.studentsMissingSessionAttendance({
   students,
@@ -111,6 +134,7 @@ assert.match(processor, /rowError\.code === "23505"/, "Overlapping schedule invo
 assert.match(processor, /sessionDate !== schoolClock\.date/, "The job must not silently backfill a historical day using the current clock.");
 assert.match(processor, /isScheduledAttendanceDate/);
 assert.match(processor, /school_holidays/);
+assert.match(processor, /sessionEnd: session\.scheduled_end/, "The session-end processor must evaluate same-day enrolment against the saved session end.");
 assert.match(studentRoute, /markAutomaticAbsences\(\{[\s\S]*?scope: \{ grade: adviser\.grade \?\? "", sections: \[activeSection\] \}/);
 assert.match(studentRoute, /recordedStatus \?\? "—"/, "The adviser panel must render actual records, not infer an absence.");
 assert.doesNotMatch(studentRoute, /hasReachedAbsenceCutoff/);

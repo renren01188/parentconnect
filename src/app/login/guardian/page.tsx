@@ -40,7 +40,7 @@ function GuardianLoginPageContent() {
   const searchParams = useSearchParams();
 
   const [mode, setMode] = useState<Mode>(() => searchParams.get("signup") === "1" ? "signup" : "login");
-  const [email, setEmail] = useState("");
+  const [loginIdentifier, setLoginIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -200,7 +200,7 @@ function GuardianLoginPageContent() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, captchaToken }),
+        body: JSON.stringify({ identifier: loginIdentifier, password, captchaToken }),
       });
       const data = await res.json();
 
@@ -220,6 +220,10 @@ function GuardianLoginPageContent() {
           ? `/login/guardian/verify-temp-password?expiresAt=${encodeURIComponent(expiresAt)}`
           : "/login/guardian/verify-temp-password");
       } else {
+        if (data.requiresOwnerSelection === true) {
+          window.location.assign("/login/guardian/account-owner");
+          return;
+        }
         // Start the dashboard from a new document after the server has set
         // the parent session cookie. App-router navigation can otherwise mount
         // the Reports client before its Realtime capability request sees this
@@ -290,7 +294,7 @@ function GuardianLoginPageContent() {
           // The form has already completed its account-linking step.
         }
         switchMode("login");
-        setEmail(signup.email);
+        setLoginIdentifier(signup.email);
         setPassword("");
         setSuccess(data.message || "This student is linked to your existing Parent account. Please log in or recover access.");
         return;
@@ -385,16 +389,19 @@ function GuardianLoginPageContent() {
           {mode === "login" ? (
             <form onSubmit={handleLogin} className="flex flex-col gap-4">
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email Address</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Mobile Number or Email Address</label>
                 <input
-                  type="email"
-                  placeholder="Enter your email"
+                  type="text"
+                  inputMode="text"
+                  autoComplete="username"
+                  placeholder="e.g. 09171234567 or name@email.com"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={loginIdentifier}
+                  onChange={(e) => setLoginIdentifier(e.target.value)}
                   disabled={isLocked}
                   className={inputClass}
                 />
+                <p className="mt-1 text-xs text-slate-500">Use the mobile number registered with the school, or your email address.</p>
               </div>
 
               <div>

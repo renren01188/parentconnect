@@ -32,7 +32,7 @@ assert.match(sectionApi, /additions\.map\(\(change\) => \(\{/);
 assert.match(sectionApi, /from\("students"\)/);
 assert.match(sectionApi, /from\("advisers"\)/);
 assert.match(sectionApi, /code: "SECTION_IN_USE"/);
-assert.match(sectionApi, /Reassign them first/);
+assert.match(sectionApi, /Remove or reassign/);
 assert.match(sectionApi, /\{ status: 409 \}/);
 assert.doesNotMatch(sectionApi, /update\(\{ section: null \}\)/);
 

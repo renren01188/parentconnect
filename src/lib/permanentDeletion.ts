@@ -23,7 +23,9 @@ export async function archiveTarget(item: ArchiveTarget, actor: ArchiveActor) {
     archived_at: new Date().toISOString(), archived_by: String(actor.id ?? "system"),
     archive_reason: item.reason?.trim() || "No reason provided", archive_status: "archived",
     archive_previous_status: (current as { status?: string | null }).status ?? null,
-  }).eq("id", id).eq("archive_status", "active").select("id").maybeSingle();
+  // Legacy rows can have a NULL archive status. Treat that the same as active,
+  // while retaining the conditional update so two workers cannot archive twice.
+  }).eq("id", id).or("archive_status.eq.active,archive_status.is.null").select("id").maybeSingle();
   if (error) throw error;
   if (!data) throw new Error("Archive request was already processed or selected record changed.");
   return data;

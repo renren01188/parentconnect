@@ -56,3 +56,7 @@ node_modules/
 *.log
 
 *.rar
+
+# One-time SF1 imports include student and family information. Keep generated
+# SQL outside source control.
+/.local-imports/

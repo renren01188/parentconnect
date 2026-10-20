@@ -107,6 +107,18 @@ function retryAfterSeconds(availableAtMs: number) {
   return Math.max(1, Math.ceil((availableAtMs - Date.now()) / 1_000));
 }
 
+/**
+ * The pending-signup token is the source of truth for delivery. Return only
+ * a masked version to the browser so a guardian can spot a typo without
+ * exposing the full address in the page or URL.
+ */
+function maskRecipientEmail(email: string) {
+  const [localPart, domain] = email.trim().toLowerCase().split("@");
+  if (!localPart || !domain) return "";
+  const visibleCharacters = Math.min(2, localPart.length);
+  return `${localPart.slice(0, visibleCharacters)}${"*".repeat(Math.max(3, localPart.length - visibleCharacters))}@${domain}`;
+}
+
 async function readPendingSignup() {
   const cookieStore = await cookies();
   const token = cookieStore.get("parent_signup_token")?.value;
@@ -146,6 +158,7 @@ export async function GET() {
     success: true,
     expiresAt: new Date(pending.expiresAtMs).toISOString(),
     resendAvailableAt: new Date(availableAtMs).toISOString(),
+    recipientEmailMasked: maskRecipientEmail(pending.signup.email),
   });
 }
 
@@ -173,9 +186,20 @@ export async function POST() {
     return NextResponse.json({ success: false, message: "Unable to issue a new temporary password. Please try again." }, { status: 500 });
   }
 
+  // Always use the address verified during this exact signup. Do not look up
+  // a placeholder/imported parent address, which can differ from the
+  // guardian's chosen login email.
+  const recipientEmail = pending.signup.email.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+    return NextResponse.json({
+      success: false,
+      message: "The signup email is no longer valid. Please restart your parent sign up.",
+    }, { status: 400 });
+  }
+
   try {
     await sendTempPasswordEmail({
-      parentEmail: pending.signup.email,
+      parentEmail: recipientEmail,
       parentName: pending.signup.parentName,
       studentName: pending.signup.studentName,
       tempPassword: password,
@@ -235,6 +259,7 @@ export async function POST() {
     success: true,
     expiresAt: expiresAt.toISOString(),
     resendAvailableAt: nextResendAvailableAt.toISOString(),
+    recipientEmailMasked: maskRecipientEmail(recipientEmail),
     message: `${PARENT_SIGNUP_CONFIRMATION_MESSAGE} Earlier valid temporary passwords remain usable until they expire.`,
   });
 }

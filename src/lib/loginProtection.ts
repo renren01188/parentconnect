@@ -35,9 +35,11 @@ const INVALID_CREDENTIALS_MESSAGE = "Invalid email, employee ID, or password.";
 const LOCKOUT_MESSAGE = "Too many failed attempts. Please try again later.";
 
 function invalidCredentialsMessage(role: ProtectedLoginRole) {
-  // Parent/Guardian authentication accepts an email address only. Keep the
-  // staff-specific Employee ID guidance for the roles that support it.
-  return role === "parent" ? "Invalid email or password." : INVALID_CREDENTIALS_MESSAGE;
+  // Parents can authenticate with their registered mobile number or email.
+  // Keep the staff-specific Employee ID guidance for the remaining roles.
+  return role === "parent"
+    ? "Invalid mobile number, email address, or password."
+    : INVALID_CREDENTIALS_MESSAGE;
 }
 
 function hmac(value: string) {

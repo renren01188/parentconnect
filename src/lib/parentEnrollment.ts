@@ -128,6 +128,12 @@ export async function provisionParentForStudent(input: ParentEnrollmentInput) {
         temporary_password_expires_at: null,
         password_set: 0,
         status: "active",
+        // Pending records become real Parent accounts after guardian signup.
+        // Set that future account's one delivery default now, rather than
+        // relying on a client-side initial value.
+        attendance_email_notifications: false,
+        attendance_sms_notifications: true,
+        attendance_notification_preference: "SMS",
       })
       .select("id")
       .single();

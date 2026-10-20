@@ -17,17 +17,20 @@ const parentMeRoute = read("src/app/api/parents/me/route.ts");
 // Existing, authenticated Parent accounts are located by their email, then a
 // submitted LRN is linked directly. A duplicate attempt remains idempotent.
 assert.match(signupRoute, /\.eq\("email", email\)/);
+assert.match(signupRoute, /\.eq\("login_contact_number", contactNumber\)/);
 assert.match(signupRoute, /await ensureParentStudentLink\(\{[\s\S]*?parentId: matchedParent\.id,[\s\S]*?studentId: student\.student_id,[\s\S]*?relationship,/);
 assert.match(signupRoute, /accountExists: true/);
 assert.match(signupRoute, /Please log in, or use Forgot password/);
-assert.match(guardianPage, /if \(data\.accountExists === true\)[\s\S]*?switchMode\("login"\)[\s\S]*?setEmail\(signup\.email\)/);
+assert.match(guardianPage, /if \(data\.accountExists === true\)[\s\S]*?switchMode\("login"\)[\s\S]*?setLoginIdentifier\(signup\.email\)/);
 
 // Do not select an account from every matching Father/Mother/Guardian name.
 // A same-name parent with another email must be allowed to sign up normally.
 assert.doesNotMatch(signupRoute, /roleRows|parentsByIdentity|identityParent/);
 assert.doesNotMatch(verifyRoute, /roleRows|conflictingIdentity/);
 assert.match(verifyRoute, /\.eq\("email", signup\.email\)/);
+assert.match(verifyRoute, /\.eq\("login_contact_number", signup\.contactNumber\)/);
 assert.match(verifyRoute, /await ensureParentStudentLink\(\{/);
+assert.match(verifyRoute, /await reconcileParentStudentLinks\(\{ parentId: parent\.id \}\)/);
 
 // Background reconciliation is stricter than a name match: it requires a
 // role, normalized name, and identical stored phone number before linking

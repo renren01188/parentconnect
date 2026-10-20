@@ -431,8 +431,16 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
     setErrors(p => { const n = new Map(p); n.delete(key); return n; });
   };
 
-  const requestDeleteSection = (grade: string, sectionName: string) => {
+  const requestDeleteSection = (grade: string, sectionName: string, studentCount: number) => {
     const key = `${grade}__${activeTab}`;
+    if (studentCount > 0) {
+      setErrors(prev => {
+        const next = new Map(prev);
+        next.set(key, `Cannot delete ${sectionName}: ${studentCount} student${studentCount === 1 ? " is" : "s are"} still assigned. Remove or reassign them first.`);
+        return next;
+      });
+      return;
+    }
     // Stage the deletion only. The server repeats its student/adviser guard
     // when the final, password-authorized batch is submitted.
     setSectionsMap(prev => {
@@ -580,19 +588,24 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                     ) : (
                       <div className="space-y-1.5">
                         {sections.map(sec => {
+                          const hasStudents = sec.count > 0;
                           return (
                             <div key={sec.name} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 group">
                               <div className="flex items-center gap-2">
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: cfg.color }} />
                                 <span className="text-xs font-semibold text-gray-800">{sec.name}</span>
                                 <span className="text-[10px] text-gray-400">{sec.count} student{sec.count !== 1 ? "s" : ""}</span>
+                                {hasStudents && <span className="text-[10px] font-medium text-amber-700">Remove or reassign students first.</span>}
                               </div>
                               <button
-                                onClick={() => requestDeleteSection(grade, sec.name)}
-                                className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] font-bold text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50 transition"
+                                type="button"
+                                disabled={hasStudents}
+                                title={hasStudents ? "Remove or reassign the students before deleting this section." : "Delete section"}
+                                onClick={() => requestDeleteSection(grade, sec.name, sec.count)}
+                                className={`flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-lg transition ${hasStudents ? "cursor-not-allowed text-gray-400" : "opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 hover:text-red-700"}`}
                               >
                                 <Trash2 className="w-3 h-3" />
-                                Delete
+                                {hasStudents ? "Occupied" : "Delete"}
                               </button>
                             </div>
                           );

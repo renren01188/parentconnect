@@ -56,19 +56,12 @@ function result(
   };
 }
 
-function registrationDate(createdAt?: string | null) {
+function registrationSchoolClock(createdAt?: string | null) {
   if (!createdAt) return null;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(createdAt));
-  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
-  const year = read("year");
-  const month = read("month");
-  const day = read("day");
-  return year && month && day ? `${year}-${month}-${day}` : null;
+  const timestamp = new Date(createdAt);
+  if (Number.isNaN(timestamp.getTime())) return null;
+  const clock = getSchoolClock(timestamp);
+  return { date: clock.date, minutes: clock.minutes };
 }
 
 function assignmentPart(value: string | null | undefined) {
@@ -93,16 +86,26 @@ export function studentsMissingSessionAttendance<T extends Pick<StudentRow, "id"
   recordedStudentDbIds: Iterable<number>;
   excusedStudentIds?: Iterable<string>;
   sessionDate: string;
+  sessionEnd?: string | null;
 }) {
   const recorded = new Set(input.recordedStudentDbIds);
   const excused = new Set(input.excusedStudentIds ?? []);
+  const sessionEndMinutes = input.sessionEnd ? timeToMinutes(input.sessionEnd) : Number.NaN;
   return input.students.filter((student) => {
-    const activeFrom = registrationDate(student.created_at);
+    const registration = registrationSchoolClock(student.created_at);
+    const wasEnrolledBeforeSessionEnded = !registration
+      || registration.date < input.sessionDate
+      || (
+        registration.date === input.sessionDate
+        && Number.isFinite(sessionEndMinutes)
+        && registration.minutes < sessionEndMinutes
+      );
     return !recorded.has(student.id)
       && !excused.has(student.student_id)
-      // A student registered on this date might have been added after the
-      // session ended, so never create a retroactive absence for them.
-      && (activeFrom === null || activeFrom < input.sessionDate);
+      // A student added after the session ended must not receive a
+      // retroactive absence. A student registered earlier the same day did
+      // attend the scheduled period and is therefore eligible.
+      && wasEnrolledBeforeSessionEnded;
   });
 }
 
@@ -268,6 +271,7 @@ export async function markAutomaticAbsences(input: {
     recordedStudentDbIds: recordedIds,
     excusedStudentIds,
     sessionDate,
+    sessionEnd: session.scheduled_end,
   })
     .map((student) => ({
       student_db_id: student.id,

@@ -74,6 +74,9 @@ assert.match(editRoute, /Excused attendance is protected/);
 assert.match(editRoute, /Excused attendance cannot be changed from this editor/);
 assert.match(editRoute, /\.update\(\{ status: newStatus, via: "Manual" \}\)/);
 assert.doesNotMatch(editRoute, /\.insert\(/, "Editing attendance must never create a second record.");
+assert.match(editRoute, /suppressPendingSmsForAttendanceEdits/);
+assert.match(editRoute, /\.from\("attendance_sms_jobs"\)[\s\S]*?status: "skipped"[\s\S]*?\.eq\("status", "pending"\)/);
+assert.doesNotMatch(editRoute, /enqueueAttendanceSms|processAttendanceSmsJobs|sendSms/, "Editing attendance must never queue or send an SMS.");
 
 // The page fetches date-scoped records, supports individual selection, and
 // saves a uniform Present/Absent change only for checked attendance IDs.

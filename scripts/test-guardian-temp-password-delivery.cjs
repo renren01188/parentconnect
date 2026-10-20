@@ -26,6 +26,7 @@ assert.match(temporaryPasswords, /PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES = 2
 assert.match(temporaryPasswords, /export function temporaryPasswordProofEntries/);
 assert.match(temporaryPasswords, /export function matchingTemporaryPasswordProof/);
 assert.match(signup, /temporaryPasswordProofEntries: \[\{/);
+assert.match(signup, /parentEmail: email/);
 assert.ok(
   signup.indexOf('cookieStore.set("parent_signup_token"') < signup.indexOf("await sendTempPasswordEmail"),
   "The pending signup cookie must be saved before delivery is attempted",
@@ -34,6 +35,9 @@ assert.match(signup, /deliveryPending: true/);
 assert.match(signup, /status: 202/);
 assert.match(resend, /temporaryPasswordProofEntries\(pending\.payload\)/);
 assert.match(resend, /PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES/);
+assert.match(resend, /const recipientEmail = pending\.signup\.email\.trim\(\)\.toLowerCase\(\)/);
+assert.match(resend, /parentEmail: recipientEmail/);
+assert.match(resend, /recipientEmailMasked: maskRecipientEmail\(recipientEmail\)/);
 assert.match(resend, /Earlier valid temporary passwords remain usable until they expire\./);
 
 // Verification accepts only a matching unexpired proof and writes that
@@ -46,7 +50,14 @@ assert.match(verify, /if \(!matchingProof\) \{[\s\S]*?INCORRECT_PASSWORD_MESSAGE
 // The page no longer tells the guardian that a delayed earlier email is invalid.
 assert.match(page, /Delivery can take a few minutes/);
 assert.match(page, /deliveryPending/);
+assert.match(page, /recipientEmailMasked/);
 assert.match(page, /earlier temporary password remains usable until its own expiry/i);
 assert.doesNotMatch(page, /only the newest temporary password will work/i);
+
+// The mail includes an HTML version and a plain-text fallback so a temporary
+// password remains readable in mail clients that block HTML content.
+const mailer = read("src/lib/mailer.ts");
+assert.match(mailer, /export async function sendTempPasswordEmail/);
+assert.match(mailer, /text: \[/);
 
 console.log("guardian temporary-password delivery checks passed");
