@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { SignJWT } from "jose";
+import crypto from "crypto";
 import { supabase } from "@/lib/supabase";
 import { cleanNamePart, sameParentEnrollmentName } from "@/lib/familyName";
 import { sendTempPasswordEmail } from "@/lib/mailer";
@@ -32,6 +33,7 @@ const SECRET = getJwtSecret();
 const ENROLLMENT_ERROR = "We could not verify this enrollment request. Please contact the school office for assistance.";
 const CAPTCHA_ERROR = "Security verification is missing, expired, or incorrect. Please complete the CAPTCHA again.";
 const MOBILE_NUMBER_IN_USE_MESSAGE = "This mobile number is already linked to a ParentConnect account. Sign in to that account, or use another verified mobile number.";
+const PHONE_SIGNUP_PENDING_TTL_SECONDS = 30 * 60;
 
 type MatchedParent = {
   id: number;
@@ -130,7 +132,7 @@ export async function POST(req: NextRequest) {
 
     if (
       !firstName || !lastName || !/^\d{12}$/.test(studentLrn) || !relationship || body?.termsAccepted !== true
-      || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || contactNumber.length !== 11
+      || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || contactNumber.length !== 11
     ) return genericEnrollmentError();
     if (relationship === "Guardian" && (
       isMissingOtherGuardianRelationship(guardianRelationshipSelection, body?.guardianRelationshipOther)
@@ -207,13 +209,16 @@ export async function POST(req: NextRequest) {
     });
 
     const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
-    const { data: emailRows, error: emailError } = await supabase
-      .from("parents")
-      .select(parentColumns)
-      .eq("email", email);
-    if (emailError) throw emailError;
-
-    const parentsByEmail = (emailRows ?? []) as MatchedParent[];
+    const parentsByEmail: MatchedParent[] = email
+      ? await (async () => {
+        const { data, error: emailError } = await supabase
+          .from("parents")
+          .select(parentColumns)
+          .eq("email", email);
+        if (emailError) throw emailError;
+        return (data ?? []) as MatchedParent[];
+      })()
+      : [];
     // An email identifies an account. Never locate an account by a shared
     // family name alone: two different Fathers/Mothers/Guardians can share a
     // name, but must be able to use their own account and child LRN.
@@ -323,16 +328,26 @@ export async function POST(req: NextRequest) {
       lastName,
       suffix || currentFamilyMember.suffix,
     ].filter(Boolean).join(" ") || "Parent / Guardian";
+    const verificationMethod = email ? "email" : "sms";
+    const otpChallengeId = crypto.randomUUID();
     const temporaryPasswordIssuedAt = new Date();
     const temporaryPasswordResendAvailableAt = new Date(
       temporaryPasswordIssuedAt.getTime() + PARENT_TEMPORARY_PASSWORD_RESEND_DELAY_SECONDS * 1_000,
     );
-    const { password: temporaryPassword, expiresAt: temporaryPasswordExpiresAt } = createTemporaryPassword(
-      temporaryPasswordIssuedAt.getTime(),
-    );
-    const temporaryPasswordProof = createTemporaryPasswordProof(temporaryPassword);
-    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt);
-    if (!temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
+    const temporaryPasswordDetails = email
+      ? createTemporaryPassword(temporaryPasswordIssuedAt.getTime())
+      : null;
+    const temporaryPassword = temporaryPasswordDetails?.password ?? null;
+    const temporaryPasswordExpiresAt = temporaryPasswordDetails?.expiresAt ?? null;
+    const temporaryPasswordProof = temporaryPassword ? createTemporaryPasswordProof(temporaryPassword) : null;
+    const temporaryPasswordExpiresAtSeconds = temporaryPasswordExpiresAt
+      ? temporaryPasswordExpiryEpochSeconds(temporaryPasswordExpiresAt)
+      : null;
+    if (email && !temporaryPasswordExpiresAtSeconds) throw new Error("Unable to create a temporary password expiry.");
+    const pendingExpiresAt = new Date(temporaryPasswordIssuedAt.getTime() + (
+      email ? PARENT_TEMPORARY_PASSWORD_TTL_SECONDS : PHONE_SIGNUP_PENDING_TTL_SECONDS
+    ) * 1_000);
+    const pendingExpirySeconds = Math.floor(pendingExpiresAt.getTime() / 1_000);
 
     // Keep the approved enrollment only in this short-lived, HttpOnly cookie
     // until the recipient proves they received the emailed password. This
@@ -353,18 +368,21 @@ export async function POST(req: NextRequest) {
       contactNumber,
       relationship,
       guardianRelationship,
+      verificationMethod,
+      otpChallengeId,
+      pendingExpiresAt: pendingExpiresAt.toISOString(),
       temporaryPasswordProof,
-      temporaryPasswordProofEntries: [{
+      temporaryPasswordProofEntries: temporaryPasswordProof && temporaryPasswordExpiresAt ? [{
         proof: temporaryPasswordProof,
         expiresAt: temporaryPasswordExpiresAt.toISOString(),
-      }],
-      temporaryPasswordExpiresAt: temporaryPasswordExpiresAt.toISOString(),
-      temporaryPasswordIssuedAt: temporaryPasswordIssuedAt.toISOString(),
-      temporaryPasswordResendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
+      }] : [],
+      temporaryPasswordExpiresAt: temporaryPasswordExpiresAt?.toISOString() ?? "",
+      temporaryPasswordIssuedAt: email ? temporaryPasswordIssuedAt.toISOString() : "",
+      temporaryPasswordResendAvailableAt: email ? temporaryPasswordResendAvailableAt.toISOString() : "",
     })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt(Math.floor(temporaryPasswordIssuedAt.getTime() / 1_000))
-      .setExpirationTime(temporaryPasswordExpiresAtSeconds)
+      .setExpirationTime(pendingExpirySeconds)
       .sign(SECRET);
 
     const cookieStore = await cookies();
@@ -372,7 +390,7 @@ export async function POST(req: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: PARENT_TEMPORARY_PASSWORD_TTL_SECONDS,
+      maxAge: email ? PARENT_TEMPORARY_PASSWORD_TTL_SECONDS : PHONE_SIGNUP_PENDING_TTL_SECONDS,
       path: "/",
     });
 
@@ -380,12 +398,21 @@ export async function POST(req: NextRequest) {
     // prior guard state so an earlier typo cannot affect the new account.
     await clearEnrollmentFailures(req);
 
+    if (!email) {
+      return NextResponse.json({
+        success: true,
+        verificationMethod: "sms",
+        redirectTo: "/login/guardian/send-otp",
+        message: "Your enrollment details are ready. Send a verification code to your contact number to continue.",
+      });
+    }
+
     try {
       await sendTempPasswordEmail({
         parentEmail: email,
         parentName,
         studentName: `${student.first_name} ${student.last_name}`.trim(),
-        tempPassword: temporaryPassword,
+        tempPassword: temporaryPassword!,
       });
     } catch {
       // The signed cookie has no account record or raw password. Preserve it
@@ -395,7 +422,7 @@ export async function POST(req: NextRequest) {
         success: true,
         deliveryPending: true,
         redirectTo: "/login/guardian/verify-temp-password",
-        expiresAt: temporaryPasswordExpiresAt.toISOString(),
+        expiresAt: temporaryPasswordExpiresAt!.toISOString(),
         resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
         message: "We could not confirm email delivery. Please check your inbox and spam folder, then request a new temporary password when it becomes available.",
       }, { status: 202 });
@@ -404,7 +431,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       redirectTo: "/login/guardian/verify-temp-password",
-      expiresAt: temporaryPasswordExpiresAt.toISOString(),
+      expiresAt: temporaryPasswordExpiresAt!.toISOString(),
       resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
       message: PARENT_SIGNUP_CONFIRMATION_MESSAGE,
     });

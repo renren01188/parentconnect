@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, CheckCircle, Eye, EyeOff, KeyRound, Mail, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
+import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 
 const INCORRECT_PASSWORD_MESSAGE = "Please check the correct temporary password or check your email address if it is correct.";
 const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
@@ -176,27 +177,31 @@ export default function VerifyTemporaryPasswordPage() {
   const resendReady = secondsUntilResend === 0;
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans">
-      <div className="bg-white rounded-2xl shadow-lg border border-slate-100 w-full max-w-md p-8">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-slate-50 font-sans text-slate-800">
+      <LoginLandingHeader />
+      <main className="relative flex flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,#f8fbff_0%,#f1f7f8_100%)] px-4 py-10 sm:px-6 sm:py-14">
+        <div aria-hidden="true" className="absolute -left-24 top-12 h-64 w-64 rounded-full bg-sky-200/35 blur-3xl" />
+        <div aria-hidden="true" className="absolute -right-24 bottom-12 h-72 w-72 rounded-full bg-emerald-200/35 blur-3xl" />
+        <section className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200/90 bg-white/95 p-5 shadow-[0_22px_60px_rgba(15,43,76,0.13)] backdrop-blur-sm sm:p-8">
         <button
           type="button"
           onClick={() => router.push("/login/guardian?signup=1")}
-          className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium mb-6 transition-colors"
+          className="flex w-fit items-center gap-1.5 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
         >
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
 
-        <div className="flex flex-col items-center mb-7">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 8px 24px rgba(26,32,53,0.25)" }}>
+        <div className="mt-6 flex flex-col items-center text-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 8px 24px rgba(26,32,53,0.25)" }}>
             <ShieldCheck className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-extrabold text-slate-800">Verify Temporary Password</h1>
-          <p className="text-slate-500 text-sm text-center mt-1.5 max-w-sm leading-5">
+          <h1 className="mt-4 text-2xl font-extrabold text-slate-800">Verify Temporary Password</h1>
+          <p className="mt-1.5 max-w-sm text-sm leading-5 text-slate-500">
             {recipientEmailMasked
               ? <>A temporary password was sent to <span className="font-semibold text-slate-700">{recipientEmailMasked}</span>. Check that inbox and its spam folder, then enter it here to finish creating your account.</>
               : PARENT_SIGNUP_CONFIRMATION_MESSAGE}
           </p>
-          <p className="mt-3 max-w-sm text-center text-xs leading-5 text-slate-400">
+          <p className="mt-3 max-w-sm text-xs leading-5 text-slate-400">
             Didn&apos;t receive it? Delivery can take a few minutes, including in the spam folder. You can request a new temporary password every two minutes.
           </p>
         </div>
@@ -220,7 +225,7 @@ export default function VerifyTemporaryPasswordPage() {
                 placeholder="Enter the password from your email"
                 autoComplete="one-time-code"
                 required
-                className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition placeholder-slate-400"
+                className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-11 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-[#4f5fa3] focus:outline-none focus:ring-2 focus:ring-[#dbe3f0]"
               />
               <button
                 type="button"
@@ -260,7 +265,7 @@ export default function VerifyTemporaryPasswordPage() {
             type="button"
             onClick={handleResend}
             disabled={resendLoading || resendAvailabilityLoading || !resendReady}
-            className="inline-flex items-center justify-center gap-2 text-sm font-bold text-indigo-700 hover:text-indigo-900 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center justify-center gap-2 text-sm font-bold text-[#4f5fa3] hover:text-[#1a2035] disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
           >
             <Mail className="w-4 h-4" />
             {resendLoading ? "Sending..." : "Resend Temporary Password"}
@@ -268,8 +273,17 @@ export default function VerifyTemporaryPasswordPage() {
           <p className="mt-2 text-[11px] leading-4 text-slate-400">
             If a resend is delayed, an earlier temporary password remains usable until its own expiry.
           </p>
+          <button
+            type="button"
+            onClick={() => router.push("/login/guardian/send-otp")}
+            className="mt-4 text-xs font-bold text-[#4f5fa3] underline underline-offset-2 hover:text-[#1a2035]"
+          >
+            Switch to SMS OTP
+          </button>
         </div>
-      </div>
+        </section>
+      </main>
+      <footer className="bg-[#15233f] px-4 py-5 text-center text-sm text-slate-300">© 2026 Santiago Elementary School. All rights reserved.</footer>
     </div>
   );
 }

@@ -569,6 +569,7 @@ export default function ProfilePage() {
     // server preference loads. Existing choices replace these values below.
     const [emailNotif,   setEmailNotif]   = useState(false);
     const [smsNotif,     setSmsNotif]     = useState(true);
+    const [emailAvailable, setEmailAvailable] = useState(false);
     const [savingNotificationPreferences, setSavingNotificationPreferences] = useState(false);
     const [notificationPreferencesError, setNotificationPreferencesError] = useState("");
     const [notificationPreferencesNotice, setNotificationPreferencesNotice] = useState("");
@@ -623,6 +624,7 @@ export default function ProfilePage() {
                     const smsEnabled = Boolean(preferencesData.preferences?.smsEnabled);
                     setEmailNotif(emailEnabled);
                     setSmsNotif(smsEnabled);
+                    setEmailAvailable(preferencesData.preferences?.emailAvailable === true);
                     if (emailEnabled && smsEnabled) {
                         setNotificationPreferencesError("Choose Email, SMS, or Neither for attendance notifications.");
                     }
@@ -656,6 +658,7 @@ export default function ProfilePage() {
         }
 
         setProfile(data.parent ?? updated);
+        setEmailAvailable(Boolean(String(data.parent?.email ?? updated.email ?? "").trim()));
         // The API returns a refreshed HttpOnly cookie with the saved identity
         // claims. Refreshing this shared snapshot keeps the sidebar and other
         // Parent pages in the same logged-in session.
@@ -846,10 +849,10 @@ export default function ProfilePage() {
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">Notifications</h2>
                             <p className="text-xs text-slate-400 mb-4">Choose one way to receive RFID attendance alerts for every child linked to your account.</p>
                             <div className="flex flex-col gap-2" role="radiogroup" aria-label="Attendance notification method">
-                                <button type="button" role="radio" aria-checked={emailNotif && !smsNotif} onClick={() => void saveNotificationPreferences(true, false)} disabled={savingNotificationPreferences}
-                                    className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${emailNotif && !smsNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
+                                <button type="button" role="radio" aria-checked={emailNotif && !smsNotif} onClick={() => void saveNotificationPreferences(true, false)} disabled={savingNotificationPreferences || !emailAvailable}
+                                    className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${emailNotif && !smsNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>
                                     <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${emailNotif && !smsNotif ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}>{emailNotif && !smsNotif && <CheckCircle className="h-3.5 w-3.5 text-white" />}</span>
-                                    <span><span className="block text-xs font-semibold text-slate-700">Email notifications</span><span className="mt-0.5 block text-[10px] text-slate-400">Send attendance alerts only to your email address.</span></span>
+                                    <span><span className="block text-xs font-semibold text-slate-700">Email notifications</span><span className="mt-0.5 block text-[10px] text-slate-400">{emailAvailable ? "Send attendance alerts only to your email address." : "Add an email address in Settings to enable this option."}</span></span>
                                 </button>
                                 <button type="button" role="radio" aria-checked={smsNotif && !emailNotif} onClick={() => void saveNotificationPreferences(false, true)} disabled={savingNotificationPreferences}
                                     className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60 ${smsNotif && !emailNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>

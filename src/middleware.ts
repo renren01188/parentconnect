@@ -225,6 +225,7 @@ export async function middleware(req: NextRequest) {
   const isPublicSessionBootstrapApi = pathname === "/api/auth/login"
     || pathname === "/api/auth/forgot-password"
     || pathname === "/api/auth/reset-password"
+    || pathname.startsWith("/api/auth/password-reset/")
     || pathname === "/api/auth/adviser/login"
     || pathname === "/api/auth/guidance/login"
     || pathname === "/api/auth/principal/login"
@@ -232,6 +233,7 @@ export async function middleware(req: NextRequest) {
     || pathname === "/api/parents/signup"
     || pathname === "/api/parents/check-email"
     || pathname === "/api/parents/verify-temp-password"
+    || pathname === "/api/parents/signup-otp"
     || pathname === "/api/parents/resend-temp-password";
   if (pathname.startsWith("/api/") && !isPublicSessionBootstrapApi) {
     const expiredResponse = await expiredDashboardApiSession(req);
@@ -243,6 +245,7 @@ export async function middleware(req: NextRequest) {
     // A new account has no parent ID yet. This endpoint validates the signed
     // short-lived signup cookie before it creates the parent session.
     || pathname === "/api/parents/verify-temp-password"
+    || pathname === "/api/parents/signup-otp"
     // A pending signup has no parent session yet. This endpoint validates its
     // signed, short-lived cookie before it reveals or sends a replacement.
     || pathname === "/api/parents/resend-temp-password";

@@ -25,8 +25,9 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
     event.preventDefault();
     setError("");
 
-    if (!emailAlreadySaved && !hasEmail(email)) {
-      setError("Enter a valid email address to complete account setup.");
+    const enteredEmail = email.trim();
+    if (!emailAlreadySaved && enteredEmail && !hasEmail(enteredEmail)) {
+      setError("Enter a valid email address, or leave the field blank.");
       return;
     }
     if (newPassword.length < 8 || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
@@ -44,7 +45,7 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...(emailAlreadySaved ? {} : { email }),
+          ...(emailAlreadySaved ? {} : { email: enteredEmail }),
           newPassword,
           confirmPassword,
         }),
@@ -84,28 +85,27 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
 
         <form onSubmit={(event) => { void submit(event); }} className="space-y-4 px-5 py-5 sm:px-6">
           <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm leading-5 text-blue-800">
-            Please complete your account setup by adding an email address and changing your password before continuing to your dashboard.
+            Please complete your account setup by changing your password before continuing to your dashboard.
           </div>
 
-          {emailAlreadySaved ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-              <p className="font-semibold text-slate-700">Registered email</p>
-              <p className="mt-1 break-words text-xs">{currentEmail}</p>
-            </div>
-          ) : (
-            <label className="block">
-              <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Mail className="h-3.5 w-3.5" /> Email Address *</span>
-              <input
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="name@example.com"
-                disabled={saving}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
-              />
-            </label>
-          )}
+          <label className="block">
+            <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Mail className="h-3.5 w-3.5" /> Email Address</span>
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="name@example.com"
+              readOnly={emailAlreadySaved}
+              disabled={saving}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 read-only:cursor-default read-only:bg-slate-50 disabled:bg-slate-50"
+            />
+            <p className="mt-1.5 text-xs leading-5 text-slate-500">
+              {emailAlreadySaved
+                ? "Your existing email is already saved. You only need to change your password."
+                : "Optional: If you do not have an email address, you may leave this field blank."}
+            </p>
+          </label>
 
           <label className="block">
             <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Lock className="h-3.5 w-3.5" /> New Password *</span>
@@ -115,7 +115,7 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               disabled={saving}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
             />
           </label>
 
@@ -127,7 +127,7 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               disabled={saving}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
             />
           </label>
 

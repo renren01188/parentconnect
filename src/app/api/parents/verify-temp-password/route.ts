@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { supabase } from "@/lib/supabase";
 import { getJwtSecret } from "@/lib/authSecret";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
@@ -16,6 +17,7 @@ import {
   temporaryPasswordExpiryEpochSeconds,
   temporaryPasswordProofEntries,
 } from "@/lib/parentTemporaryPassword";
+import { verifyParentOtp } from "@/lib/parentVerificationOtp";
 
 const SECRET = getJwtSecret();
 const INCORRECT_PASSWORD_MESSAGE = "Please check the correct temporary password or check your email address if it is correct.";
@@ -64,6 +66,7 @@ type PendingSignup = {
   guardianRelationship: string;
   temporaryPasswordProof: string;
   temporaryPasswordExpiresAt: string;
+  otpChallengeId: string;
 };
 
 const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
@@ -121,6 +124,7 @@ function pendingSignupFromPayload(payload: Record<string, unknown>): PendingSign
     guardianRelationship: readString(payload, "guardianRelationship"),
     temporaryPasswordProof: readString(payload, "temporaryPasswordProof"),
     temporaryPasswordExpiresAt: readString(payload, "temporaryPasswordExpiresAt"),
+    otpChallengeId: readString(payload, "otpChallengeId"),
   };
 
   if (
@@ -128,17 +132,14 @@ function pendingSignupFromPayload(payload: Record<string, unknown>): PendingSign
     || !validPendingParentId
     || !signup.firstName
     || !signup.lastName
-    || !signup.email
     || !signup.studentId
     || !signup.contactNumber
     || !["Father", "Mother", "Guardian"].includes(signup.relationship)
-    || !signup.temporaryPasswordProof
-    || !signup.temporaryPasswordExpiresAt
   ) return null;
   return signup;
 }
 
-async function finalizePendingSignup(signup: PendingSignup, password: string) {
+async function finalizePendingSignup(signup: PendingSignup, password: string, verificationExpiresAt = signup.temporaryPasswordExpiresAt) {
   const { data: student, error: studentError } = await supabase
     .from("students")
     .select("id, student_id, first_name, last_name, grade, section")
@@ -175,12 +176,17 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     }
   }
 
-  const { data: emailRows, error: emailError } = await supabase
-    .from("parents")
-    .select(parentColumns)
-    .eq("email", signup.email);
-  if (emailError) throw emailError;
-  const conflictingEmail = ((emailRows ?? []) as ParentRow[]).some((parent) => parent.id !== existingParent?.id);
+  const emailRows: ParentRow[] = signup.email
+    ? await (async () => {
+      const { data, error: emailError } = await supabase
+        .from("parents")
+        .select(parentColumns)
+        .eq("email", signup.email);
+      if (emailError) throw emailError;
+      return (data ?? []) as ParentRow[];
+    })()
+    : [];
+  const conflictingEmail = emailRows.some((parent) => parent.id !== existingParent?.id);
   // A matching name is not an account identifier. The verified LRN and the
   // email account are the only records considered here, so same-name parents
   // can complete separate signups without being blocked or cross-linked.
@@ -198,7 +204,7 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     throw new Error(MOBILE_NUMBER_IN_USE_MESSAGE);
   }
 
-  const expirySeconds = temporaryPasswordExpiryEpochSeconds(signup.temporaryPasswordExpiresAt);
+  const expirySeconds = temporaryPasswordExpiryEpochSeconds(verificationExpiresAt);
   if (!expirySeconds || expirySeconds * 1_000 <= Date.now()) throw new Error(SIGNUP_RETRY_MESSAGE);
   const temporaryPasswordHash = await bcrypt.hash(password, 12);
   const patch = {
@@ -207,11 +213,11 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     parent_last_name: signup.lastName,
     parent_suffix: signup.suffix || familyMember.suffix || null,
     relationship: signup.relationship,
-    email: signup.email,
+    email: signup.email || null,
     contact_number: signup.contactNumber,
     password: temporaryPasswordHash,
     temp_password: null,
-    temporary_password_expires_at: signup.temporaryPasswordExpiresAt,
+    temporary_password_expires_at: verificationExpiresAt,
     password_set: 0,
     // The row is still a pending registration at this point, so it has no
     // Parent-selected preference to preserve. Newly registered Parents begin
@@ -269,14 +275,15 @@ async function finalizePendingSignup(signup: PendingSignup, password: string) {
     console.error("Parent sibling-link reconciliation failed after verified signup:", safeErrorCode(error));
   }
 
-  return { parent, student, expiresAt: signup.temporaryPasswordExpiresAt };
+  return { parent, student, expiresAt: verificationExpiresAt };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null);
     const password = body?.password;
-    if (!password || typeof password !== "string") {
+    const otp = body?.otp;
+    if ((!password || typeof password !== "string") && (!otp || typeof otp !== "string")) {
       return NextResponse.json({ success: false, message: INCORRECT_PASSWORD_MESSAGE }, { status: 401 });
     }
 
@@ -305,6 +312,56 @@ export async function POST(req: NextRequest) {
       }
 
       const signup = pendingSignupFromPayload(pendingPayload);
+      if (typeof otp === "string") {
+        if (!signup?.otpChallengeId || !/^\d{6}$/.test(otp)) {
+          return NextResponse.json({ success: false, message: "Enter the six-digit verification code." }, { status: 400 });
+        }
+        const otpResult = await verifyParentOtp(signup.otpChallengeId, "signup", otp);
+        if (otpResult.result !== "verified" || !otpResult.expiresAt) {
+          const wait = otpResult.retryAfterSeconds > 0
+            ? ` Please wait ${otpResult.retryAfterSeconds} seconds before trying again.`
+            : "";
+          const message = otpResult.result === "expired"
+            ? "This verification code has expired. Request a new code."
+            : otpResult.result === "used"
+              ? "This verification code was already used. Request a new code."
+              : otpResult.result === "locked" || otpResult.result === "incorrect"
+                ? `The verification code is incorrect.${wait}`
+                : "This verification code is invalid. Request a new code.";
+          return NextResponse.json({ success: false, message, retryAfterSeconds: otpResult.retryAfterSeconds }, { status: 400 });
+        }
+
+        let otpCompleted: Awaited<ReturnType<typeof finalizePendingSignup>>;
+        try {
+          otpCompleted = await finalizePendingSignup(signup, crypto.randomUUID(), otpResult.expiresAt);
+        } catch (error) {
+          console.error("SMS parent signup finalization failed:", safeErrorCode(error));
+          return NextResponse.json({ success: false, message: safeFinalizationMessage(error) }, { status: 409 });
+        }
+        const otpParentName = [
+          otpCompleted.parent.parent_first_name,
+          otpCompleted.parent.parent_middle_name,
+          otpCompleted.parent.parent_last_name,
+          otpCompleted.parent.parent_suffix,
+        ].filter(Boolean).join(" ") || "Parent / Guardian";
+        const { token: otpVerifiedToken } = await issueDashboardIdleSession({
+          id: otpCompleted.parent.id,
+          role: "parent",
+          email: otpCompleted.parent.email,
+          studentId: otpCompleted.student.student_id,
+          parentName: otpParentName,
+          studentName: `${otpCompleted.student.first_name} ${otpCompleted.student.last_name}`.trim(),
+          grade: otpCompleted.student.grade,
+          section: otpCompleted.student.section,
+          passwordSet: false,
+          temporaryPasswordVerified: true,
+          temporaryPasswordExpiresAt: otpCompleted.expiresAt,
+        });
+        cookieStore.set("parent_token", otpVerifiedToken, dashboardSessionCookieOptions);
+        cookieStore.delete("parent_signup_token");
+        return NextResponse.json({ success: true, expiresAt: otpCompleted.expiresAt, redirectTo: "/login/guardian/set-password" });
+      }
+
       const proofEntries = temporaryPasswordProofEntries(pendingPayload);
       const hasActiveProof = proofEntries.some((entry) => {
         const proofExpiresAt = temporaryPasswordExpiryEpochSeconds(entry.expiresAt);
@@ -314,7 +371,7 @@ export async function POST(req: NextRequest) {
         ? matchingTemporaryPasswordProof(password, proofEntries)
         : null;
       const expirySeconds = temporaryPasswordExpiryEpochSeconds(matchingProof?.expiresAt);
-      if (!signup || !hasActiveProof) {
+      if (!signup || !signup.email || !hasActiveProof) {
         return temporaryPasswordExpired();
       }
       if (!matchingProof) {
@@ -356,6 +413,10 @@ export async function POST(req: NextRequest) {
       cookieStore.set("parent_token", verifiedToken, dashboardSessionCookieOptions);
       cookieStore.delete("parent_signup_token");
       return NextResponse.json({ success: true, expiresAt: completed.expiresAt, redirectTo: "/login/guardian/set-password" });
+    }
+
+    if (!password || typeof password !== "string") {
+      return NextResponse.json({ success: false, message: INCORRECT_PASSWORD_MESSAGE }, { status: 401 });
     }
 
     // Registrations that began before this change keep their existing flow.

@@ -65,13 +65,16 @@ export async function POST(request: NextRequest) {
     }
 
     const savedEmail = validEmail(parent.email);
-    const suppliedEmail = validEmail(body?.email);
-    const email = savedEmail ?? suppliedEmail;
-    if (!email) {
-      return NextResponse.json({ success: false, message: "Enter a valid email address to finish account setup." }, { status: 400 });
+    const rawEmail = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+    const suppliedEmail = validEmail(rawEmail);
+    // Email is optional for direct SQL-imported accounts. If an email is
+    // entered, validate and preserve it; a blank field remains blank.
+    if (rawEmail && !suppliedEmail) {
+      return NextResponse.json({ success: false, message: "Enter a valid email address, or leave the field blank." }, { status: 400 });
     }
+    const email = savedEmail ?? suppliedEmail ?? null;
 
-    if (!savedEmail) {
+    if (!savedEmail && suppliedEmail) {
       const { data: conflicts, error: conflictError } = await supabase
         .from("parents")
         .select("id")
@@ -93,7 +96,7 @@ export async function POST(request: NextRequest) {
       temporary_password_expires_at: null,
       requires_account_setup: false,
       account_setup_completed_at: new Date().toISOString(),
-      ...(savedEmail ? {} : { email }),
+      ...(savedEmail || !suppliedEmail ? {} : { email: suppliedEmail }),
     };
     const { error: updateError } = await supabase
       .from("parents")
@@ -112,7 +115,7 @@ export async function POST(request: NextRequest) {
       action: "Complete Parent Account Setup",
       performedBy: parentName,
       performedByRole: "Parent",
-      performedByEmail: email,
+      performedByEmail: email ?? undefined,
       targetUser: parentName,
       targetRole: "Parent",
       targetId: String(parentId),

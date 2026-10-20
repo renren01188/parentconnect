@@ -294,7 +294,7 @@ function GuardianLoginPageContent() {
           // The form has already completed its account-linking step.
         }
         switchMode("login");
-        setLoginIdentifier(signup.email);
+        setLoginIdentifier(signup.email || signup.contactNumber);
         setPassword("");
         setSuccess(data.message || "This student is linked to your existing Parent account. Please log in or recover access.");
         return;
@@ -506,14 +506,14 @@ function GuardianLoginPageContent() {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your Email Address</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your Email Address <span className="text-slate-400 font-normal">(optional)</span></label>
                 <input
-                  required
                   type="email"
                   className={inputClass}
                   value={signup.email}
                   onChange={(e) => setSignup((prev) => ({ ...prev, email: e.target.value }))}
                 />
+                <p className="mt-1 text-xs text-slate-500">Parents without an email address can sign up using their contact number.</p>
               </div>
 
               <div>
@@ -534,7 +534,7 @@ function GuardianLoginPageContent() {
               </div>
 
               <p className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-[11px] leading-relaxed text-blue-700">
-                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional and will be saved only when provided. Your email address and mobile number are saved only after you verify the temporary password sent to your email. Then you will create your own password.
+                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional. With an email address, you verify a temporary password sent by email. With only a contact number, you send an SMS code yourself and then create your password.
               </p>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
@@ -557,7 +557,7 @@ function GuardianLoginPageContent() {
               <button type="submit" disabled={loading || !canSubmitGuardianSignup(terms) || !signupCaptchaToken}
                 className="flex items-center justify-center gap-2 w-full text-white font-bold py-3.5 rounded-xl transition-all duration-200 active:scale-95 mt-1 text-sm disabled:opacity-50"
                 style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>
-                {loading ? "Signing up..." : <>Create Parent Account <ArrowRight className="w-4 h-4" /></>}
+                {loading ? "Signing up..." : <>Create ParentConnect <ArrowRight className="w-4 h-4" /></>}
               </button>
             </form>
           )}

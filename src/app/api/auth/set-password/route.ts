@@ -11,6 +11,7 @@ import {
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
+import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
 
 const SECRET = getJwtSecret();
 
@@ -36,9 +37,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (newPassword.length < 8) {
+    if (!parentPasswordMeetsRequirements(newPassword)) {
       return NextResponse.json(
-        { success: false, message: "Password must be at least 8 characters." },
+        { success: false, message: PARENT_PASSWORD_REQUIREMENTS_MESSAGE },
         { status: 400 }
       );
     }
@@ -99,9 +100,8 @@ export async function POST(req: NextRequest) {
       || temporaryPasswordExpirySeconds * 1_000 <= Date.now()
     ) return temporaryPasswordExpired();
 
-    const parentEmail = typeof payload.email === "string" ? payload.email : "";
     const parentId = Number(payload.id);
-    if (!parentEmail || !Number.isInteger(parentId) || parentId <= 0) {
+    if (!Number.isInteger(parentId) || parentId <= 0) {
       return NextResponse.json(
         { success: false, message: "Invalid session. Please log in again." },
         { status: 401 }
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
 
     const { data: parent, error: parentError } = await supabase
       .from("parents")
-      .select("password_set, status, archive_status, temporary_password_expires_at")
+      .select("email, password_set, status, archive_status, temporary_password_expires_at")
       .eq("id", parentId)
       .maybeSingle();
     if (parentError) throw parentError;
@@ -153,10 +153,12 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      await sendParentRegistrationConfirmation({
-        parentEmail,
-        parentName: String(payload.parentName || "Parent / Guardian"),
-      });
+      if (typeof parent.email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parent.email)) {
+        await sendParentRegistrationConfirmation({
+          parentEmail: parent.email,
+          parentName: String(payload.parentName || "Parent / Guardian"),
+        });
+      }
     } catch (mailError) {
       console.error("Registration confirmation email failed:", mailError);
     }
