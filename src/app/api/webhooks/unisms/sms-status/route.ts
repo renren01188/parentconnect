@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     if (["delivered", "success"].includes(providerStatus)) update.delivered_at = new Date().toISOString();
 
     const { error } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update(update)
       .eq("provider", "unisms")
       .eq("provider_message_id", providerMessageId);

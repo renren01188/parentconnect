@@ -156,8 +156,6 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     const [toDate, setToDate] = useState("");
     const [attachments, setAttachments] = useState<File[]>([]);
     const [attachmentError, setAttachmentError] = useState("");
-    const [accepted, setAccepted] = useState(false);
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const [submitted, setSubmitted] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState("");
@@ -175,7 +173,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
     })();
     const invalidDateRange = !!fromDate && !!toDate && totalDays === 0;
     const canSubmit = !!studentId && !!message.trim() && !!fromDate && !!toDate
-        && !invalidDateRange && attachments.length > 0 && !attachmentError && accepted && !isSubmitting;
+        && !invalidDateRange && !attachmentError && !isSubmitting;
 
     // Keep the tracker current without requiring Supabase Realtime.
     useEffect(() => {
@@ -435,13 +433,12 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
 
                             <div>
                                 <label className="block text-sm font-bold text-slate-700 mb-1.5">
-                                    Attachment <span className="text-red-500">*</span>
+                                    Attachment <span className="font-medium text-slate-400">(optional)</span>
                                 </label>
 
                                 <input
                                     key={attachments.length}
                                     id="excuse-file-input"   // ← add this
-                                    ref={fileInputRef}
                                     type="file"
                                     accept={EXCUSE_LETTER_FILE_INPUT_ACCEPT}
                                     style={{ display: "none" }}   // ← change this
@@ -459,8 +456,8 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                     onClick={(e) => e.stopPropagation()}
                                     className="w-full flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 transition cursor-pointer">
                                     <Paperclip className="w-6 h-6 text-slate-400" />
-                                    <span className="text-sm font-bold text-slate-600">Click here to attach one file</span>
-                                    <span className="text-xs text-slate-400">Exactly one JPG, PNG, WEBP, PDF, DOC, or DOCX file · 5 MB maximum</span>
+                                    <span className="text-sm font-bold text-slate-600">Click here to attach a file</span>
+                                    <span className="text-xs text-slate-400">One optional JPG, PNG, WEBP, PDF, DOC, or DOCX file · 5 MB maximum</span>
                                 </label>
 
                                 {attachments.length > 0 && (
@@ -489,12 +486,6 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                                 )}
                             </div>
 
-                            {/* Confirmation checkbox */}
-                            <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 cursor-pointer">
-                                <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} className="mt-0.5" />
-                                <span className="text-xs text-amber-800 leading-relaxed">I confirm that the attached excuse letter includes my signature and that the information submitted is true and valid for school approval.</span>
-                            </label>
-
                             {submitError && (
                                 <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-200 px-4 py-3">
                                     <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
@@ -505,7 +496,7 @@ function ExcuseLetterModal({ students, defaultStudentId, onClose }: {
                             {!canSubmit && !submitError && (
                                 <div className="flex items-start gap-2 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
                                     <AlertCircle className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                                    <p className="text-xs text-slate-500">Complete the message, student, date range, required attachment, and terms checkbox before sending.</p>
+                                    <p className="text-xs text-slate-500">Complete the message, student, and date range before sending.</p>
                                 </div>
                             )}
                         </div>

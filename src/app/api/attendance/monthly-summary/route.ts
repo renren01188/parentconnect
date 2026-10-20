@@ -299,6 +299,11 @@ export async function GET(req: NextRequest) {
 
                 if (dayRecord?.status === "Excused") {
                     excused++;
+                    // Keep the distinct Excused category in the dashboard,
+                    // while including it in the official absent total. SF2
+                    // exports render the day as X through the shared helper.
+                    absent++;
+                    dailyAbsences[dayOfMonth] = true;
                     dailyExcused[dayOfMonth] = true;
             } else if (dayRecord?.status === "Present" || dayRecord?.status === "On Time") {
                     present++;

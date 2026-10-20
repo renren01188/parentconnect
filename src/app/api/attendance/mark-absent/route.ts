@@ -6,7 +6,7 @@ import { markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 
 /**
  * Manual retry endpoint for ICT. The scheduled processor is authoritative;
- * this is safe to call at or after Absent After because the writer is
+ * this is safe to call at or after the configured session end because the writer is
  * idempotent and never overwrites any existing Time In record.
  */
 export async function POST(req: NextRequest) {

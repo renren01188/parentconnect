@@ -10,7 +10,7 @@
 //   GET handler: unchanged — already handles multi-section correctly.
 
 import { sendDeletionEmail } from "@/lib/mailer";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { normalizeRfidCard } from "@/lib/rfid";
 import { archiveTarget } from "@/lib/permanentDeletion";
@@ -18,7 +18,10 @@ import { logAudit } from "@/lib/audit";
 import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getActiveIct } from "@/lib/apiAuthorization";
-import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  publishAttendanceRealtimeInvalidation,
+  publishStudentRealtimeInvalidation,
+} from "@/lib/realtimeInvalidation";
 import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
@@ -28,6 +31,7 @@ import {
   isAttendedAttendanceStatus,
 } from "@/lib/attendanceRate.cjs";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import { markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
@@ -47,24 +51,6 @@ function getToday() {
   const month = parts.find((p) => p.type === "month")?.value;
   const day = parts.find((p) => p.type === "day")?.value;
   return `${year}-${month}-${day}`;
-}
-
-function getCurrentMinutes() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-
-  return Number(parts.find((part) => part.type === "hour")?.value ?? 0) * 60
-    + Number(parts.find((part) => part.type === "minute")?.value ?? 0);
-}
-
-function timeToMinutes(value: string | null | undefined) {
-  if (!value) return Number.NaN;
-  const [hour, minute] = value.slice(0, 5).split(":").map(Number);
-  return hour * 60 + minute;
 }
 
 type AttendanceLog = {
@@ -95,7 +81,6 @@ type SessionSchedule = {
   session_type: string;
   scheduled_start: string;
   scheduled_end: string;
-  absent_after: string | null;
 };
 
 const ATTENDANCE_STATUS = new Map<string, "Present" | "Late" | "Excused" | "Absent">([
@@ -231,7 +216,7 @@ async function getSchedulesForDates(dates: string[]) {
   for (let start = 0; start < dates.length; start += 100) {
     const { data, error } = await supabase
       .from("class_sessions")
-      .select("session_date, session_type, scheduled_start, scheduled_end, absent_after")
+      .select("session_date, session_type, scheduled_start, scheduled_end")
       .in("session_date", dates.slice(start, start + 100));
     if (error) throw error;
     schedules.push(...((data ?? []) as SessionSchedule[]));
@@ -528,16 +513,16 @@ export async function GET(req: NextRequest) {
     // section record is the source of truth for Morning/Afternoon assignment.
     const classSessionByStudentId = new Map<string, string | null>();
     const classSessionBySection = new Map<string, string | null>();
-    if (studentIds.length > 0) {
-      for (const student of rowsForCalculation) {
+    if (rows.length > 0) {
+      for (const student of rows) {
         classSessionByStudentId.set(student.student_id, student.class_session ?? null);
       }
 
       const sectionNames = Array.from(new Set(
-        rowsForCalculation.map((row) => row.section).filter(Boolean)
+        rows.map((row) => row.section).filter(Boolean)
       ));
       const grades = Array.from(new Set(
-        rowsForCalculation.map((row) => row.grade).filter(Boolean)
+        rows.map((row) => row.grade).filter(Boolean)
       ));
       if (sectionNames.length > 0 && grades.length > 0) {
         const { data: sectionAssignments, error: sectionAssignmentsError } = await supabase
@@ -550,6 +535,39 @@ export async function GET(req: NextRequest) {
         for (const section of sectionAssignments ?? []) {
           classSessionBySection.set(`${section.grade}|${section.name}`, section.class_session ?? null);
         }
+      }
+    }
+
+    // A roster visit is also a safe fallback for the scheduled worker. It
+    // checks exactly this adviser's active class, writes only missing records,
+    // and does not depend on RFID being enabled. Await it before reading the
+    // logs below so the Student panel and the export source see the same
+    // durable Absent record immediately after a completed session.
+    const activeClassSession = classSessionBySection.get(`${adviser.grade}|${activeSection}`)
+      ?? rows.find((row) => row.grade === adviser.grade && row.section === activeSection)?.class_session
+      ?? null;
+    if (
+      isTodayScheduledClassDay
+      && activeSection
+      && (activeClassSession === "Morning" || activeClassSession === "Afternoon")
+    ) {
+      try {
+        const absenceResult = await markAutomaticAbsences({
+          sessionType: activeClassSession,
+          sessionDate: today,
+          scope: { grade: adviser.grade ?? "", sections: [activeSection] },
+        });
+        if (absenceResult.affectedStudentDbIds.length) {
+          after(() => Promise.all(
+            absenceResult.affectedStudentDbIds.map((studentDbId) =>
+              publishAttendanceRealtimeInvalidation({ studentDbId }),
+            ),
+          ).then(() => undefined));
+        }
+      } catch (absenceError) {
+        // The scheduled endpoint remains the primary processor. A transient
+        // fallback failure must never make the adviser roster unavailable.
+        console.error("Adviser roster automatic absence check failed:", errorMessage(absenceError));
       }
     }
 
@@ -602,7 +620,7 @@ export async function GET(req: NextRequest) {
     const attendanceRateByStudentId = new Map<string, number | null>();
     const attendanceTotals = new Map<string, { attended: number; rateEligible: number }>();
     for (const log of validAttendanceLogs) {
-      // Excused records are neutral. Present and Late are both attended.
+      // Excused records are absent for rates; Present and Late are attended.
       if (!isAttendanceRateEligibleStatus(log.status)) continue;
       const totals = attendanceTotals.get(log.student_id) ?? { attended: 0, rateEligible: 0 };
       totals.rateEligible += 1;
@@ -638,8 +656,6 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const currentMinutes = getCurrentMinutes();
-
     let data = rowsForCalculation.map((row) => {
       const classSession = classSessionBySection.get(`${row.grade}|${row.section}`)
         ?? classSessionByStudentId.get(row.student_id) ?? null;
@@ -647,21 +663,16 @@ export async function GET(req: NextRequest) {
       const recordedStatus = classSession
         ? todayLogByStudentAndSession.get(`${row.student_id}|${classSession}`)
         : undefined;
-      const absenceCutoff = timeToMinutes(session?.absent_after ?? session?.scheduled_end);
-      const hasReachedAbsenceCutoff = Number.isFinite(absenceCutoff) && currentMinutes >= absenceCutoff;
-
-      // Do not infer an absence until this student's ICT-assigned session has
-      // reached its configured cutoff. Before a session starts and while it is
-      // active, only a real attendance log may supply a Today status.
+      // The Student panel displays only durable attendance records. Once a
+      // class ends, the shared processor creates its missing Absent records;
+      // it never guesses an absence in the UI or overwrites a scan/excuse.
       const todayStatus = !isTodayScheduledClassDay || !session
         ? "No Classes"
         : row.student_id && registeredTodayIds.has(row.student_id)
           ? "—"
           : row.student_id && excusedStudentIds.has(row.student_id)
             ? "Excused"
-            : recordedStatus === "Absent" && !hasReachedAbsenceCutoff
-              ? "—"
-              : recordedStatus ?? (hasReachedAbsenceCutoff ? "Absent" : "—");
+            : recordedStatus ?? "—";
 
       return {
         ...row,

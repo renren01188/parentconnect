@@ -25,9 +25,10 @@ export function isAttendedExportStatus(status: AttendanceExportStatus | null | u
 }
 
 /**
- * Marks fit in the narrow daily cells of the SF2 layout. A holiday has
- * priority over attendance because its date is deliberately excluded from
- * the month's attendance totals.
+ * Marks fit in the narrow daily cells of the SF2 layout. Excused remains
+ * identifiable in Attendance Detail, but the official SF2 daily mark is X:
+ * it is an absence, not an attended or neutral day. A holiday has priority
+ * because its date is deliberately excluded from the month's totals.
  */
 export function getSf2StatusCode(
   status: AttendanceExportStatus | null | undefined,
@@ -37,8 +38,8 @@ export function getSf2StatusCode(
   switch (status) {
     case "Present":
     case "Late": return "✓";
-    case "Absent": return "X";
-    case "Excused": return "E";
+    case "Absent":
+    case "Excused": return "X";
     default: return null;
   }
 }

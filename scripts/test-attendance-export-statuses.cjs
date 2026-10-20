@@ -25,7 +25,7 @@ async function run() {
     ["On Time", "Present", "✓", true],
     ["Late", "Late", "✓", true],
     ["Absent", "Absent", "X", false],
-    ["Excused", "Excused", "E", false],
+    ["Excused", "Excused", "X", false],
     [null, null, null, false],
   ];
 
@@ -43,13 +43,13 @@ async function run() {
   sheet.addRow(["Fixture student", "Holiday", status.getSf2StatusCode(null, true), false]);
 
   const attended = fixture.filter(([, , , isAttended]) => isAttended).length;
-  const absent = fixture.filter(([, normalized]) => normalized === "Absent").length;
+  const absent = fixture.filter(([, normalized]) => normalized === "Absent" || normalized === "Excused").length;
   assert.equal(attended, 2, "Present and Late must both count as attended.");
-  assert.equal(absent, 1, "Only an explicit Absent record may count as absent.");
+  assert.equal(absent, 2, "Absent and Excused records must both count as absent.");
   assert.equal(
-    attendanceRate.calculateAttendanceRate({ present: 1, late: 1, absent: 1 }),
-    66.7,
-    "The rate must use Present + Late over Present + Late + Absent; Holiday and Excused are neutral.",
+    attendanceRate.calculateAttendanceRate({ present: 1, late: 1, absent: 2 }),
+    50,
+    "The rate must use Present + Late over Present + Late + Absent + Excused.",
   );
 
   const output = await workbook.xlsx.writeBuffer();
@@ -57,7 +57,7 @@ async function run() {
   await reloaded.xlsx.load(output);
   const rows = reloaded.getWorksheet("Attendance Detail").getRows(2, 6);
   assert.deepEqual(rows.map((row) => row.getCell(2).value), ["Present", "Late", "Absent", "Excused", "No Record", "Holiday"]);
-  assert.deepEqual(rows.map((row) => row.getCell(3).value), ["✓", "✓", "X", "E", null, "H"]);
+  assert.deepEqual(rows.map((row) => row.getCell(3).value), ["✓", "✓", "X", "X", null, "H"]);
   assert.deepEqual(rows.map((row) => row.getCell(4).value), [true, true, false, false, false, false]);
 
   const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
@@ -70,6 +70,8 @@ async function run() {
     assert.match(source, /getSf2StatusCode\(savedStatus\)/, `${name} must write the saved status code to SF2.`);
     assert.match(source, /getSf2StatusCode\(null, true\)/, `${name} must write H for a selected holiday.`);
     assert.match(source, /isAttendedExportStatus\(savedStatus\)/, `${name} must count Late as attended.`);
+    assert.match(source, /COUNTIF\([\s\S]*?"X"\)/, `${name} must count every Excused SF2 X in the absent total.`);
+    assert.doesNotMatch(source, /COUNTIF\([\s\S]*?"E"\)/, `${name} must not treat Excused as a separate SF2 mark.`);
     assert.match(source, /Attendance Detail/, `${name} must include an explicit-status worksheet.`);
     assert.doesNotMatch(source, /pastClassDays - absenceCount/, `${name} must not default a missing daily record to Present.`);
   }
@@ -83,7 +85,7 @@ async function run() {
   assert.doesNotMatch(automaticAbsence, /\.eq\("archive_status", "active"\)/, "Automatic absence marking must include imported learners with null archive status.");
   assert.match(automaticAbsence, /archiveStatus !== "archived" && archiveStatus !== "deleted"/, "Automatic absence marking must exclude only explicitly inactive learners.");
 
-  console.log("Attendance export mark checks passed (✓, X, H, E, and No Record)." );
+  console.log("Attendance export mark checks passed (✓, X, H, and No Record)." );
 }
 
 run().catch((error) => {

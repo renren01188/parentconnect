@@ -78,14 +78,6 @@ function normalizeTodayStatus(value: unknown): Student["today_status"] {
   return "Absent";
 }
 
-function isWeekendInApplicationTimezone() {
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    weekday: "short",
-  }).format(new Date());
-  return weekday === "Sat" || weekday === "Sun";
-}
-
 interface AdviserInfo {
   section: string | null;
   sections: string[];
@@ -430,10 +422,13 @@ function AdviserStudentsPageContent() {
       const res = await fetch(`/api/students?${qs}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || json.message || "Unknown error");
-      const isWeekend = isWeekendInApplicationTimezone();
       setStudents((json.data ?? []).map((student: Student) => ({
         ...student,
-        today_status: isWeekend ? "No Classes" : normalizeTodayStatus(student.today_status),
+        // The API evaluates the actual Manila calendar date against the
+        // configured school-year range and attendance weekdays. Do not
+        // overwrite a durable status here based on a client-side Sat/Sun
+        // shortcut: some schools explicitly schedule weekend classes.
+        today_status: normalizeTodayStatus(student.today_status),
       })));
       setPagination(json.pagination);
       if (json.adviser) {
@@ -469,9 +464,11 @@ function AdviserStudentsPageContent() {
 
   useEffect(() => { void refreshReadyTransferSummary(); }, [refreshReadyTransferSummary]);
 
-  // ICT changes can add, move, archive, or update a student while this page
-  // is open. Refresh the same authorized roster snapshot as the initial
-  // load, not merely the transfer-summary chip.
+  // Refresh the authorized roster when a profile changes and when a durable
+  // attendance record is written. In particular, the session-end worker
+  // publishes an `attendance` invalidation after auto-marking an unscanned
+  // student Absent; without this scope an already-open roster would retain a
+  // stale em dash until the user manually refreshed the page.
   const scheduleStudentsRefresh = useDebouncedRealtimeRefresh(async () => {
     await Promise.all([
       fetchStudents(page, { background: true }),
@@ -479,7 +476,7 @@ function AdviserStudentsPageContent() {
     ]);
   });
   useSessionInvalidation((event) => {
-    if (!event.scope || event.scope === "students" || event.scope === "accounts") {
+    if (!event.scope || ["students", "accounts", "attendance", "dashboard"].includes(event.scope)) {
       scheduleStudentsRefresh();
     }
   });

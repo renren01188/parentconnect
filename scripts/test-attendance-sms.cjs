@@ -123,22 +123,25 @@ const unismsStatusSource = fs.readFileSync(
   "utf8",
 );
 const scanSource = fs.readFileSync(path.join(root, "src/app/api/attendance/scan/route.ts"), "utf8");
-const pendingSmsMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261019120000_refresh_pending_attendance_sms_templates.sql"),
+const normalizedJobsMigration = fs.readFileSync(
+  path.join(root, "supabase/migrations/20261020090000_normalize_attendance_sms_jobs.sql"),
   "utf8",
 );
 assert.doesNotMatch(queueSource, /recorded attendance at Santiago Elementary School/i);
 assert.doesNotMatch(queueSource, /attendanceGreeting/);
-for (const source of [queueSource, workerSource, unismsStatusSource, pendingSmsMigration]) {
-  assert.match(source, /attendance_sms_job/);
-  assert.doesNotMatch(source, /attendance_sms_jobs/);
+for (const source of [queueSource, workerSource, unismsStatusSource]) {
+  assert.match(source, /attendance_sms_jobs/);
+  assert.doesNotMatch(source, /attendance_sms_job(?!s)/);
 }
 assert.match(queueSource, /\.update\(\{ message \}\)[\s\S]*?\.eq\("status", "pending"\)/);
+assert.match(queueSource, /onConflict: "attendance_log_id,parent_id"/);
+assert.match(workerSource, /sendSms\(\{ recipient: job\.recipient_phone, message: job\.message, queueId: job\.id \}\)/);
 assert.doesNotMatch(scanSource, /PConnect:\s*Your child/i);
 assert.match(scanSource, /enqueueAttendanceSms\(input\)[\s\S]*processAttendanceSmsJobs\(\{ attendanceLogId: input\.attendanceLogId/);
-assert.match(pendingSmsMigration, /sms_job\.status = 'pending'/);
-assert.match(pendingSmsMigration, /PConnect: Good Morning!/);
-assert.match(pendingSmsMigration, /PConnect: Good Afternoon!/);
+assert.match(normalizedJobsMigration, /sms_job\.status = 'pending'/);
+assert.match(normalizedJobsMigration, /PConnect: Good Morning!/);
+assert.match(normalizedJobsMigration, /PConnect: Good Afternoon!/);
+assert.match(normalizedJobsMigration, /attendance_sms_jobs_template_guard/);
 
 console.log("RFID Time In/Out SMS templates and Semaphore payload checks passed.");
 })().catch((error) => {

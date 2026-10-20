@@ -20,8 +20,10 @@ type ManualBody = {
   type: "Time In" | "Time Out";
   // Kept optional for backwards compatibility. On Time/Late is always
   // calculated on the server from ICT's saved Late After value.
-  status?: "On Time" | "Late" | "Absent" | "Present";
+  status?: "On Time" | "Late" | "Absent" | "Excused" | "Present";
   remark?: string;
+  date_from?: string;
+  date_to?: string;
 };
 
 type StudentNameFields = {
@@ -70,6 +72,15 @@ function timeToMinutes(value: string) {
   return hour * 60 + minute;
 }
 
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
 function buildFullName(student: StudentNameFields) {
   return [student.first_name, student.middle_name, student.last_name, student.suffix]
     .filter(Boolean)
@@ -89,6 +100,86 @@ export async function POST(req: NextRequest) {
         { success: false, message: "student_id and type are required" },
         { status: 400 }
       );
+    }
+
+    // An adviser-created Excused attendance entry follows the same approved
+    // excuse-letter range rules as the approval modal. The database function
+    // re-checks the adviser/student class boundary and creates only valid
+    // class-day Time In records, never replacing Present or Late attendance.
+    if (body.status === "Excused") {
+      if (body.type !== "Time In") {
+        return NextResponse.json(
+          { success: false, message: "Excused attendance is recorded only as a Time In status." },
+          { status: 400 },
+        );
+      }
+
+      const reason = body.remark?.trim();
+      if (!reason) {
+        return NextResponse.json(
+          { success: false, message: "A reason is required when marking a student Excused." },
+          { status: 400 },
+        );
+      }
+      if (!isIsoDate(body.date_from) || !isIsoDate(body.date_to)) {
+        return NextResponse.json(
+          { success: false, message: "A valid start date and end date are required when marking a student Excused." },
+          { status: 400 },
+        );
+      }
+      const dateFrom = body.date_from;
+      const dateTo = body.date_to;
+      if (dateTo < dateFrom) {
+        return NextResponse.json(
+          { success: false, message: "End date cannot be before start date." },
+          { status: 400 },
+        );
+      }
+
+      const { data: manualExcuse, error: manualExcuseError } = await supabase.rpc("record_manual_excuse", {
+        p_student_id: body.student_id,
+        p_adviser_id: adviser.id,
+        p_date_from: dateFrom,
+        p_date_to: dateTo,
+        p_reason: reason,
+      });
+      if (manualExcuseError) {
+        const message = manualExcuseError.message || "Unable to save the manual excuse.";
+        const status = /not assigned/i.test(message) ? 403 : /not found|required|valid|before|school year/i.test(message) ? 400 : 500;
+        return NextResponse.json({ success: false, message }, { status });
+      }
+
+      const savedExcuse = manualExcuse?.[0] as {
+        excuse_letter_id: number;
+        student_db_id: number;
+        student_id: string;
+        date_from: string;
+        date_to: string;
+      } | undefined;
+      if (!savedExcuse) {
+        return NextResponse.json({ success: false, message: "Unable to save the manual excuse." }, { status: 500 });
+      }
+
+      await logAudit({
+        action: "Manual Excuse Recorded",
+        performedById: adviser.id,
+        performedBy: buildFullName(adviser),
+        performedByRole: "Adviser",
+        module: "Attendance",
+        targetType: "Excuse Letter",
+        targetId: savedExcuse.excuse_letter_id,
+        targetUser: savedExcuse.student_id,
+        targetRole: "Student",
+        relatedStudentId: savedExcuse.student_id,
+        newStatus: "Excused",
+        details: `Recorded an approved manual excuse for ${savedExcuse.date_from} through ${savedExcuse.date_to}.`,
+      });
+      after(() => publishAttendanceRealtimeInvalidation({ studentDbId: savedExcuse.student_db_id }));
+      return NextResponse.json({
+        success: true,
+        message: "Manual excuse saved for the selected date range.",
+        manual_excuse: savedExcuse,
+      });
     }
 
     // ── CHANGE: resolve full sections array ────────────────────────────
@@ -246,7 +337,7 @@ export async function POST(req: NextRequest) {
 
     if (body.type === "Time Out" && body.status === "Absent") {
       return NextResponse.json(
-        { success: false, message: "An absence is recorded only as a Time In status; Time Out cannot be marked Absent." },
+        { success: false, message: "Absent attendance is recorded only as a Time In status." },
         { status: 400 },
       );
     }

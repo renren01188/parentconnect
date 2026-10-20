@@ -16,13 +16,13 @@ import {
     CreditCard, UserPlus, History, Check,
     ChevronDown, IdCard, ChevronLeft, ChevronRight,
     Calendar, AlertCircle, X, Printer, FileText,
-    CalendarDays, Paperclip, PlayCircle,
+    CalendarDays, Paperclip, PlayCircle, Pencil,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ScanMode = "Time In" | "Time Out";
 type AttendanceStatus = "Present" | "On Time" | "Late" | "Absent" | "Excused";
-type ManualAttendanceStatus = "On Time" | "Absent" | "Present";
+type ManualAttendanceStatus = "On Time" | "Absent" | "Excused" | "Present";
 type AttendanceVia = "RFID" | "Manual" | "Auto";
 
 type ClassSessionStatus = "Active" | "Ended" | "Not Started";
@@ -78,6 +78,18 @@ type HistorySummaryRow = {
     via: AttendanceVia | null;
     remark: string | null;
     is_absent: boolean;
+};
+
+type EditableAttendanceRecord = {
+    student_id: string;
+    full_name: string;
+    attendance_log_id: number | null;
+    time_logged: string | null;
+    status: AttendanceStatus | null;
+    via: AttendanceVia | null;
+    remark: string | null;
+    editable: boolean;
+    read_only_reason: string | null;
 };
 
 
@@ -709,13 +721,13 @@ async function exportMonthlySF2(
                 const savedStatus = toAttendanceExportStatus(rec?.time_in_status);
                 const code = getSf2StatusCode(savedStatus);
                 if (code) setCellValue(ws, col0ToRef(col0, row), code);
-                if (savedStatus === "Absent") absenceCount += 1;
+                if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
                 if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
             });
 
             setCellValue(ws, `AM${row}`, absenceCount);
-            // Late is attended; missing and excused dates are not silently
-            // converted to Present in the attendance-rate numerator.
+            // Late is attended. Excused stays visible in Attendance Detail,
+            // but its official SF2 mark and total are absent.
             setCellValue(ws, `AO${row}`, attendedCount);
         });
 
@@ -1044,9 +1056,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
         if (!monthlyData) return;
 
         const holidaySet = new Set(holidayDates);
-        const countableRows = monthlyData.rows.filter((row) =>
-            !holidaySet.has(row.date) && !row.is_excused
-        );
+        const countableRows = monthlyData.rows.filter((row) => !holidaySet.has(row.date));
         const present = countableRows.filter((row) =>
             isAttendedExportStatus(toAttendanceExportStatus(row.time_in_status))
         ).length;
@@ -1634,10 +1644,20 @@ export default function AdviserAttendancePage() {
     const [manualType, setManualType] = useState<ScanMode>("Time In");
     const [manualStatus, setManualStatus] = useState<ManualAttendanceStatus>("On Time");
     const [manualRemark, setManualRemark] = useState("");
+    const [manualExcuseStartDate, setManualExcuseStartDate] = useState(toLocalDateString(new Date()));
+    const [manualExcuseEndDate, setManualExcuseEndDate] = useState(toLocalDateString(new Date()));
     const [manualStudentSearch, setManualStudentSearch] = useState("");
     const [isManualStudentPickerOpen, setIsManualStudentPickerOpen] = useState(false);
     const [manualMessage, setManualMessage] = useState("");
     const [isSavingManual, setIsSavingManual] = useState(false);
+    const [showEditAttendance, setShowEditAttendance] = useState(false);
+    const [editAttendanceDate, setEditAttendanceDate] = useState(toLocalDateString(new Date()));
+    const [editableAttendanceRecords, setEditableAttendanceRecords] = useState<EditableAttendanceRecord[]>([]);
+    const [selectedEditLogIds, setSelectedEditLogIds] = useState<number[]>([]);
+    const [editAttendanceStatus, setEditAttendanceStatus] = useState<"Present" | "Absent">("Present");
+    const [isLoadingEditableAttendance, setIsLoadingEditableAttendance] = useState(false);
+    const [isSavingEditedAttendance, setIsSavingEditedAttendance] = useState(false);
+    const [editAttendanceMessage, setEditAttendanceMessage] = useState("");
 
     const [todayLogSearch, setTodayLogSearch] = useState("");
     const [todayLogPage, setTodayLogPage] = useState(1);
@@ -1680,6 +1700,11 @@ export default function AdviserAttendancePage() {
     // A school-wide session can be active while this adviser's section belongs
     // to the other session. Scanning must be enabled only for matching sections.
     const selectedSectionSession = students.find((student) => student.class_session)?.class_session ?? null;
+    const editableAttendanceLogIds = editableAttendanceRecords.flatMap((record) =>
+        record.editable && record.attendance_log_id !== null ? [record.attendance_log_id] : [],
+    );
+    const allEditableAttendanceSelected = editableAttendanceLogIds.length > 0
+        && editableAttendanceLogIds.every((id) => selectedEditLogIds.includes(id));
     const isScanningOpen = Boolean(
         classSession && selectedSectionSession === classSession.session_type
     );
@@ -1830,11 +1855,22 @@ export default function AdviserAttendancePage() {
 
     async function handleManualSave() {
         if (selectedStudentIds.length === 0 || isSavingManual) return;
+        if (manualStatus === "Excused") {
+            if (!manualRemark.trim() || !manualExcuseStartDate || !manualExcuseEndDate) {
+                setManualMessage("An excuse reason, start date, and end date are required.");
+                return;
+            }
+            if (manualExcuseEndDate < manualExcuseStartDate) {
+                setManualMessage("The excuse end date cannot be before the start date.");
+                return;
+            }
+        }
 
         const studentIdsToSave = [...selectedStudentIds];
         const failedStudentIds: string[] = [];
         const failures: string[] = [];
         let savedCount = 0;
+        let savedManualExcuse = false;
 
         try {
             setIsSavingManual(true);
@@ -1843,7 +1879,16 @@ export default function AdviserAttendancePage() {
                 try {
                     const res = await fetch("/api/attendance/manual", {
                         method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ student_id: studentId, type: manualType, status: manualStatus, remark: manualRemark }),
+                        body: JSON.stringify({
+                            student_id: studentId,
+                            type: manualType,
+                            status: manualStatus,
+                            remark: manualRemark,
+                            ...(manualStatus === "Excused" ? {
+                                date_from: manualExcuseStartDate,
+                                date_to: manualExcuseEndDate,
+                            } : {}),
+                        }),
                     });
                     const data = await res.json();
                     if (!data.success) {
@@ -1852,11 +1897,15 @@ export default function AdviserAttendancePage() {
                         continue;
                     }
 
-                    const newLog: AttendanceLog = data.log;
-                    setLogs(prev => prev.some(log => log.id === newLog.id)
-                        ? prev.map(log => log.id === newLog.id ? newLog : log)
-                        : [newLog, ...prev]);
-                    setLastScanned(newLog);
+                    const newLog = data.log as AttendanceLog | undefined;
+                    if (newLog) {
+                        setLogs(prev => prev.some(log => log.id === newLog.id)
+                            ? prev.map(log => log.id === newLog.id ? newLog : log)
+                            : [newLog, ...prev]);
+                        setLastScanned(newLog);
+                    } else if (manualStatus === "Excused") {
+                        savedManualExcuse = true;
+                    }
                     savedCount += 1;
                 } catch (error) {
                     console.error("Manual save failed:", error);
@@ -1870,13 +1919,100 @@ export default function AdviserAttendancePage() {
             if (failedStudentIds.length === 0) {
                 setManualStudentSearch(""); setManualType("Time In");
                 setManualStatus("On Time"); setManualRemark("");
+                setManualExcuseStartDate(toLocalDateString(new Date()));
+                setManualExcuseEndDate(toLocalDateString(new Date()));
                 setManualMessage(`Manual attendance saved for ${savedCount} student${savedCount === 1 ? "" : "s"}.`);
             } else {
                 setManualMessage(
                     `${savedCount} saved; ${failedStudentIds.length} still selected. ${failures[0] ?? "Review and try again."}`,
                 );
             }
+            if (savedManualExcuse) await loadTodayLogs();
         } finally { setIsSavingManual(false); }
+    }
+
+    async function loadEditableAttendance(date: string) {
+        const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
+        if (!date || !section) {
+            setEditableAttendanceRecords([]);
+            setEditAttendanceMessage("Choose a section and date to load attendance records.");
+            return;
+        }
+
+        try {
+            setIsLoadingEditableAttendance(true);
+            setEditAttendanceMessage("");
+            const params = new URLSearchParams({ date, section });
+            const response = await fetch(`/api/attendance/edit?${params.toString()}`, {
+                cache: "no-store",
+                credentials: "same-origin",
+            });
+            const data = await response.json();
+            if (!data.success) {
+                setEditableAttendanceRecords([]);
+                setEditAttendanceMessage(data.message || "Unable to load attendance records.");
+                return;
+            }
+            setEditableAttendanceRecords(data.records || []);
+        } catch (error) {
+            console.error("Attendance edit list failed:", error);
+            setEditableAttendanceRecords([]);
+            setEditAttendanceMessage("Unable to load attendance records.");
+        } finally {
+            setIsLoadingEditableAttendance(false);
+        }
+    }
+
+    function openEditAttendance() {
+        const date = toLocalDateString(new Date());
+        setEditAttendanceDate(date);
+        setSelectedEditLogIds([]);
+        setEditAttendanceStatus("Present");
+        setEditAttendanceMessage("");
+        setShowEditAttendance(true);
+        void loadEditableAttendance(date);
+    }
+
+    async function handleEditedAttendanceSave() {
+        if (selectedEditLogIds.length === 0 || isSavingEditedAttendance) return;
+        const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
+        if (!section) {
+            setEditAttendanceMessage("Choose a section before editing attendance.");
+            return;
+        }
+
+        try {
+            setIsSavingEditedAttendance(true);
+            setEditAttendanceMessage("Saving selected attendance records...");
+            const response = await fetch("/api/attendance/edit", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({
+                    date: editAttendanceDate,
+                    section,
+                    updates: selectedEditLogIds.map((attendance_log_id) => ({
+                        attendance_log_id,
+                        status: editAttendanceStatus,
+                    })),
+                }),
+            });
+            const data = await response.json();
+            if (!data.success) {
+                setEditAttendanceMessage(data.message || "Unable to update attendance records.");
+                return;
+            }
+
+            setSelectedEditLogIds([]);
+            if (editAttendanceDate === toLocalDateString(new Date())) await loadTodayLogs();
+            if (showHistory && historyDate === editAttendanceDate) await loadHistory(historyDate);
+            setShowEditAttendance(false);
+        } catch (error) {
+            console.error("Attendance edit save failed:", error);
+            setEditAttendanceMessage("Unable to update attendance records.");
+        } finally {
+            setIsSavingEditedAttendance(false);
+        }
     }
 
     async function handleRegisterNewRfid() {
@@ -2350,7 +2486,14 @@ export default function AdviserAttendancePage() {
                     <div data-parent-guide="manual-attendance" className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("manual-attendance")}`}>
                         <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                             <h3 className="text-base font-bold text-slate-800">Manual Attendance</h3>
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-400">ICT schedule rules apply</span>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button type="button" onClick={openEditAttendance}
+                                    className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700">
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    Edit Attendance
+                                </button>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-400">ICT schedule rules apply</span>
+                            </div>
                         </div>
                         <div className="p-4 sm:p-5">
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
@@ -2447,17 +2590,21 @@ export default function AdviserAttendancePage() {
                             </div>
                             <div className="mt-4">
                                 <label className="mb-1.5 block text-xs font-semibold text-slate-600">Status</label>
-                                <div className="grid grid-cols-3 gap-3">
-                                    {(["On Time", "Late", "Absent"] as const).map(status => (
-                                        <button key={status} type="button" onClick={() => status !== "Late" && setManualStatus(status)} disabled={status === "Late"}
-                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${status === "Late"
-                                                ? "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
-                                                : manualStatus === status
-                                                    ? status === "On Time" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
-                                                        : "border-red-500 bg-red-500 text-white shadow-sm"
-                                                    : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
-                                                }`}>{status}</button>
-                                    ))}
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                    {(["On Time", "Late", "Absent", "Excused"] as const).map(status => {
+                                        const disabled = status === "Late" || (status === "Excused" && manualType === "Time Out");
+                                        return (
+                                            <button key={status} type="button" onClick={() => { if (status !== "Late") setManualStatus(status); }} disabled={disabled}
+                                                className={`h-10 rounded-xl border text-xs font-bold transition-all ${disabled
+                                                    ? "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                                    : manualStatus === status
+                                                        ? status === "On Time" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
+                                                            : status === "Excused" ? "border-sky-500 bg-sky-500 text-white shadow-sm"
+                                                                : "border-red-500 bg-red-500 text-white shadow-sm"
+                                                        : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
+                                                    }`}>{status}</button>
+                                        );
+                                    })}
                                     {(selectedManualLateLog || selectedManualAutoAbsentLog) && (
                                         <button type="button" onClick={() => setManualStatus("Present")}
                                             className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === "Present"
@@ -2466,18 +2613,39 @@ export default function AdviserAttendancePage() {
                                                 }`}>Present</button>
                                     )}
                                 </div>
-                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : selectedManualAutoAbsentLog ? " Select Present with a remark to correct this system-created absence after the session." : ""}</p>
+                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence. Excused requires a reason and date range; it is immediately approved and recorded as Time In only on scheduled class days.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : selectedManualAutoAbsentLog ? " Select Present with a remark to correct this system-created absence after the session." : ""}</p>
                             </div>
                             <div className="mt-4">
                                 <div className="mb-1.5 flex items-center justify-between">
-                                    <label className="text-xs font-semibold text-slate-600">Remark</label>
-                                    <span className="text-xs text-slate-400">Optional</span>
+                                    <label className="text-xs font-semibold text-slate-600">{manualStatus === "Excused" ? "Reason for Excused" : "Remark"}</label>
+                                    <span className="text-xs text-slate-400">{manualStatus === "Excused" ? "Required" : "Optional"}</span>
                                 </div>
                                 <input value={manualRemark} onChange={e => setManualRemark(e.target.value)}
-                                placeholder={selectedManualAutoAbsentLog && manualStatus === "Present" ? "Required: reason for correcting the automatic absence" : "e.g. Excuse letter submitted"}
+                                placeholder={manualStatus === "Excused" ? "Required: reason for excusing this student" : selectedManualAutoAbsentLog && manualStatus === "Present" ? "Required: reason for correcting the automatic absence" : "e.g. Excuse letter submitted"}
                                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                             </div>
-                            <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0}
+                            {manualStatus === "Excused" && (
+                                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div>
+                                        <label htmlFor="manual-excuse-start" className="mb-1.5 block text-xs font-semibold text-slate-600">Excuse start date <span className="text-red-500">*</span></label>
+                                        <input id="manual-excuse-start" type="date" value={manualExcuseStartDate}
+                                            onChange={(event) => {
+                                                const date = event.target.value;
+                                                setManualExcuseStartDate(date);
+                                                if (manualExcuseEndDate && date > manualExcuseEndDate) setManualExcuseEndDate(date);
+                                            }}
+                                            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="manual-excuse-end" className="mb-1.5 block text-xs font-semibold text-slate-600">Excuse end date <span className="text-red-500">*</span></label>
+                                        <input id="manual-excuse-end" type="date" value={manualExcuseEndDate} min={manualExcuseStartDate}
+                                            onChange={(event) => setManualExcuseEndDate(event.target.value)}
+                                            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                    </div>
+                                    <p className="sm:col-span-2 text-xs text-slate-400">The excuse is immediately approved and applied only to scheduled class days in this range. Existing Present or Late records stay unchanged.</p>
+                                </div>
+                            )}
+                            <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0 || (manualStatus === "Excused" && (!manualRemark.trim() || !manualExcuseStartDate || !manualExcuseEndDate || manualExcuseEndDate < manualExcuseStartDate))}
                                 className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white transition-colors disabled:opacity-60">
                                 <Check className="h-4 w-4" />
                                 {isSavingManual ? "Saving..." : selectedStudentIds.length > 1 ? `Save Attendance for ${selectedStudentIds.length} Students` : "Save Attendance"}
@@ -2640,6 +2808,126 @@ export default function AdviserAttendancePage() {
                     onClose={() => setShowExcuseApproval(false)}
                     adviserGrade={adviser?.grade || ""}
                 />
+            )}
+            {showEditAttendance && (
+                <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="edit-attendance-title">
+                    <div className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-h-[88vh] sm:rounded-2xl">
+                        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-6">
+                            <div>
+                                <h2 id="edit-attendance-title" className="text-lg font-extrabold text-slate-800">Edit Attendance</h2>
+                                <p className="mt-0.5 text-sm text-slate-400">Update existing Time In records for {sectionLabel}. Unchecked students are not changed.</p>
+                            </div>
+                            <button type="button" onClick={() => setShowEditAttendance(false)} aria-label="Close edit attendance"
+                                className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
+                            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                                <div>
+                                    <label htmlFor="edit-attendance-date" className="mb-1.5 block text-xs font-semibold text-slate-600">Attendance date</label>
+                                    <input id="edit-attendance-date" type="date" value={editAttendanceDate} max={todayStr}
+                                        onChange={(event) => {
+                                            const date = event.target.value;
+                                            setEditAttendanceDate(date);
+                                            setSelectedEditLogIds([]);
+                                            if (date) void loadEditableAttendance(date);
+                                        }}
+                                        className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                </div>
+                                <button type="button" onClick={() => { setSelectedEditLogIds([]); void loadEditableAttendance(editAttendanceDate); }} disabled={isLoadingEditableAttendance}
+                                    className="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                    {isLoadingEditableAttendance ? "Loading..." : "Refresh records"}
+                                </button>
+                            </div>
+
+                            <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
+                                <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+                                    <span aria-hidden="true" />
+                                    <span>Student</span>
+                                    <span>Status</span>
+                                    <span className="hidden sm:block">Recorded time</span>
+                                </div>
+                                {isLoadingEditableAttendance ? (
+                                    <p className="px-4 py-8 text-center text-sm text-slate-400">Loading attendance records...</p>
+                                ) : editableAttendanceRecords.length === 0 ? (
+                                    <p className="px-4 py-8 text-center text-sm text-slate-400">{editAttendanceMessage || "No students or attendance records found for this date."}</p>
+                                ) : editableAttendanceRecords.map((record) => {
+                                    const logId = record.attendance_log_id;
+                                    const selected = logId !== null && selectedEditLogIds.includes(logId);
+                                    return (
+                                        <label key={record.student_id} className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] ${record.editable ? "cursor-pointer hover:bg-emerald-50/50" : "bg-slate-50/60"}`}>
+                                            <input type="checkbox" disabled={!record.editable || logId === null} checked={selected}
+                                                onChange={() => {
+                                                    if (logId === null || !record.editable) return;
+                                                    setSelectedEditLogIds((current) => current.includes(logId)
+                                                        ? current.filter((id) => id !== logId)
+                                                        : [...current, logId]);
+                                                }}
+                                                className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400 disabled:cursor-not-allowed" />
+                                            <span className="min-w-0">
+                                                <span className="block truncate text-sm font-semibold text-slate-700">{record.full_name}</span>
+                                                <span className="block text-xs text-slate-400">{record.student_id}{record.read_only_reason ? ` · ${record.read_only_reason}` : ""}</span>
+                                            </span>
+                                            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(record.status)}`}>{record.status || "No record"}</span>
+                                            <span className="hidden text-xs text-slate-500 sm:block">{formatTime(record.time_logged)}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                            {editableAttendanceRecords.length > 0 && (
+                                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-xs text-slate-500">
+                                        {editableAttendanceLogIds.length} editable record{editableAttendanceLogIds.length === 1 ? "" : "s"}
+                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <button type="button"
+                                            onClick={() => setSelectedEditLogIds(editableAttendanceLogIds)}
+                                            disabled={isLoadingEditableAttendance || editableAttendanceLogIds.length === 0 || allEditableAttendanceSelected}
+                                            className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                            Check all
+                                        </button>
+                                        <button type="button"
+                                            onClick={() => setSelectedEditLogIds([])}
+                                            disabled={isLoadingEditableAttendance || selectedEditLogIds.length === 0}
+                                            className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                            Uncheck all
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            {editAttendanceMessage && editableAttendanceRecords.length > 0 && (
+                                <p className="mt-3 text-sm text-red-600">{editAttendanceMessage}</p>
+                            )}
+
+                            <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                                <p className="text-sm font-bold text-slate-700">Apply to selected students ({selectedEditLogIds.length})</p>
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                    {(["Present", "Absent"] as const).map((status) => (
+                                        <button key={status} type="button" onClick={() => setEditAttendanceStatus(status)}
+                                            className={`h-10 rounded-xl border text-sm font-bold transition-all ${editAttendanceStatus === status
+                                                ? status === "Present" ? "border-emerald-500 bg-emerald-500 text-white" : "border-red-500 bg-red-500 text-white"
+                                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                                            {status}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="mt-2 text-xs text-slate-500">Present is saved as On Time. This editor updates only existing Time In records and keeps Excused records protected.</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-col-reverse gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:justify-end sm:px-6">
+                            <button type="button" onClick={() => setShowEditAttendance(false)} disabled={isSavingEditedAttendance}
+                                className="min-h-11 rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-60">
+                                Cancel
+                            </button>
+                            <button type="button" onClick={handleEditedAttendanceSave} disabled={isSavingEditedAttendance || selectedEditLogIds.length === 0}
+                                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60">
+                                <Check className="h-4 w-4" />
+                                {isSavingEditedAttendance ? "Saving..." : `Save ${selectedEditLogIds.length || ""} Selected`.trim()}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
             <AdviserAttendanceGuide onStepChange={setGuideTarget} />
         </main>

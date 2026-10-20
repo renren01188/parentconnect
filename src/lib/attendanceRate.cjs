@@ -3,8 +3,9 @@
  *
  * "Late" is an arrival status, not an absence. Keep it visibly distinct in
  * status breakdowns, but include it in every attended-days and rate total.
- * Excused records are neutral and therefore do not affect the rate's
- * numerator or denominator.
+ * Excused records remain visibly identifiable, but are absences for all
+ * attendance totals and rate denominators. This keeps an SF2 `E` distinct
+ * from `X` without crediting the day as attended.
  */
 
 function toCount(value) {
@@ -22,7 +23,10 @@ function isAttendedAttendanceStatus(status) {
 }
 
 function isAttendanceRateEligibleStatus(status) {
-  return isAttendedAttendanceStatus(status) || normalizeAttendanceStatus(status) === "absent";
+  const normalized = normalizeAttendanceStatus(status);
+  return isAttendedAttendanceStatus(normalized)
+    || normalized === "absent"
+    || normalized === "excused";
 }
 
 function attendedDayCount({ present = 0, late = 0 } = {}) {

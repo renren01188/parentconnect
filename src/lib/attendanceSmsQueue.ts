@@ -114,7 +114,7 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
   const message = buildAttendanceSmsMessage(input);
   if (parents.length > 0) {
     const { error } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .upsert(parents.map((parent) => ({
         attendance_log_id: input.attendanceLogId,
         parent_id: parent.parentId,
@@ -132,7 +132,7 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
     // old trigger template cannot reach Semaphore, while sent/processing jobs
     // remain immutable and cannot be sent a second time.
     const { error: templateError } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update({ message })
       .eq("attendance_log_id", input.attendanceLogId)
       .in("parent_id", parents.map((parent) => parent.parentId))

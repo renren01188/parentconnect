@@ -210,8 +210,9 @@ export async function GET(req: NextRequest) {
         time_out_status: timeOutLog ? timeOutLog.status : null,
         via: timeInLog ? timeInLog.via : isAutoAbsent ? "Auto" : null,
         remark: timeInLog ? timeInLog.remark ?? null : null,
-        // Not absent if excused
-        is_absent: !isExcused && (isAutoAbsent || timeInLog?.status === "Absent"),
+        // Excused remains identifiable in details, but it is absent for
+        // attendance totals and rates rather than an attended day.
+        is_absent: isAutoAbsent || timeInLog?.status === "Absent" || isExcused,
         logs: studentLogs,
       };
     });

@@ -16,6 +16,18 @@ type StudentRow = {
 
 type ExistingLogRow = { student_db_id: number };
 
+type SessionSchedule = {
+  scheduled_start: string;
+  scheduled_end: string;
+  late_after: string | null;
+  absent_after: string | null;
+};
+
+export type AutomaticAbsenceScope = {
+  grade: string;
+  sections: string[];
+};
+
 export type AutomaticAbsenceResult = {
   success: boolean;
   status: number;
@@ -59,14 +71,99 @@ function registrationDate(createdAt?: string | null) {
   return year && month && day ? `${year}-${month}-${day}` : null;
 }
 
+function assignmentPart(value: string | null | undefined) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function isStudentInScope(student: StudentRow, scope?: AutomaticAbsenceScope) {
+  if (!scope) return true;
+  const grade = assignmentPart(scope.grade);
+  const sections = new Set(scope.sections.map(assignmentPart).filter(Boolean));
+  return assignmentPart(student.grade) === grade && sections.has(assignmentPart(student.section));
+}
+
+/** Session end is the attendance deadline; RFID availability does not affect it. */
+export function hasReachedSessionEnd(currentMinutes: number, scheduledEnd: string | null | undefined) {
+  const end = scheduledEnd ? timeToMinutes(scheduledEnd) : Number.NaN;
+  return Number.isFinite(end) && currentMinutes >= end;
+}
+
+export function studentsMissingSessionAttendance<T extends Pick<StudentRow, "id" | "student_id" | "created_at">>(input: {
+  students: T[];
+  recordedStudentDbIds: Iterable<number>;
+  excusedStudentIds?: Iterable<string>;
+  sessionDate: string;
+}) {
+  const recorded = new Set(input.recordedStudentDbIds);
+  const excused = new Set(input.excusedStudentIds ?? []);
+  return input.students.filter((student) => {
+    const activeFrom = registrationDate(student.created_at);
+    return !recorded.has(student.id)
+      && !excused.has(student.student_id)
+      // A student registered on this date might have been added after the
+      // session ended, so never create a retroactive absence for them.
+      && (activeFrom === null || activeFrom < input.sessionDate);
+  });
+}
+
+async function getOrCreateSessionSnapshot(
+  sessionDate: string,
+  sessionType: SessionType,
+): Promise<SessionSchedule | null> {
+  const { data: existing, error: existingError } = await supabase
+    .from("class_sessions")
+    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .eq("session_date", sessionDate)
+    .eq("session_type", sessionType)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) return existing as SessionSchedule;
+
+  // This has no RFID dependency. A saved ICT schedule becomes an idempotent
+  // daily snapshot even if the class-session browser UI was never opened.
+  const { data: latest, error: latestError } = await supabase
+    .from("class_sessions")
+    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .eq("session_type", sessionType)
+    .lt("session_date", sessionDate)
+    .order("session_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestError) throw latestError;
+  if (!latest) return null;
+
+  const { error: snapshotError } = await supabase
+    .from("class_sessions")
+    .upsert({
+      session_date: sessionDate,
+      session_type: sessionType,
+      scheduled_start: latest.scheduled_start,
+      scheduled_end: latest.scheduled_end,
+      late_after: latest.late_after ?? latest.scheduled_start,
+      absent_after: latest.absent_after ?? latest.scheduled_end,
+      status: "Not Started",
+    }, { onConflict: "session_date,session_type", ignoreDuplicates: true });
+  if (snapshotError) throw snapshotError;
+
+  const { data: snapshot, error: snapshotReadError } = await supabase
+    .from("class_sessions")
+    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .eq("session_date", sessionDate)
+    .eq("session_type", sessionType)
+    .maybeSingle();
+  if (snapshotReadError) throw snapshotReadError;
+  return snapshot as SessionSchedule | null;
+}
+
 /**
- * Writes only the missing Time In rows for one session once its ICT-configured
- * Absent After cutoff has arrived. It is deliberately idempotent so a cron
+ * Writes only the missing Time In rows for one session once its configured
+ * session end has arrived. It is deliberately idempotent so a cron
  * retry, a duplicate invocation, or an ICT action can never overwrite a scan.
  */
 export async function markAutomaticAbsences(input: {
   sessionType: SessionType;
   sessionDate?: string;
+  scope?: AutomaticAbsenceScope;
 }): Promise<AutomaticAbsenceResult> {
   const schoolClock = getSchoolClock();
   const sessionDate = input.sessionDate ?? schoolClock.date;
@@ -104,18 +201,11 @@ export async function markAutomaticAbsences(input: {
     return result(false, 409, "Absent marking is unavailable on school holidays.");
   }
 
-  const { data: session, error: sessionError } = await supabase
-    .from("class_sessions")
-    .select("absent_after, scheduled_end")
-    .eq("session_date", sessionDate)
-    .eq("session_type", input.sessionType)
-    .maybeSingle();
-  if (sessionError) throw sessionError;
+  const session = await getOrCreateSessionSnapshot(sessionDate, input.sessionType);
   if (!session) return result(false, 409, "ICT has not saved this class schedule.");
 
-  const cutoff = session.absent_after ?? session.scheduled_end;
-  if (schoolClock.minutes < timeToMinutes(cutoff)) {
-    return result(false, 409, "Students can be marked absent only after ICT's configured Absent After time.");
+  if (!hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)) {
+    return result(false, 409, "Students can be marked absent only after the configured class session has ended.");
   }
 
   const { data: students, error: studentsError } = await supabase
@@ -128,7 +218,7 @@ export async function markAutomaticAbsences(input: {
 
   const activeStudents = (students as StudentRow[]).filter((student) => {
     const archiveStatus = String(student.archive_status ?? "").trim().toLowerCase();
-    return archiveStatus !== "archived" && archiveStatus !== "deleted";
+    return archiveStatus !== "archived" && archiveStatus !== "deleted" && isStudentInScope(student, input.scope);
   });
   const sectionNames = [...new Set(activeStudents.map((student) => student.section).filter(Boolean))] as string[];
   const grades = [...new Set(activeStudents.map((student) => student.grade).filter(Boolean))] as string[];
@@ -157,14 +247,28 @@ export async function markAutomaticAbsences(input: {
   if (logsError) throw logsError;
   const recordedIds = new Set(((existingLogs ?? []) as ExistingLogRow[]).map((log) => log.student_db_id));
 
-  const absentInserts = sessionStudents
-    .filter((student) => {
-      const activeFrom = registrationDate(student.created_at);
-      // Legacy/imported learners can have no creation timestamp. They are
-      // still current roster members; only a known later registration date
-      // excludes them from this session.
-      return !recordedIds.has(student.id) && (activeFrom === null || activeFrom <= sessionDate);
-    })
+  // An approval normally creates an Excused Time In row. The explicit letter
+  // check also prevents a concurrent approval from being overwritten before
+  // that row is visible to this worker.
+  let excusedStudentIds = new Set<string>();
+  if (sessionStudents.length) {
+    const { data: approvedExcuses, error: approvedExcusesError } = await supabase
+      .from("excuse_letters")
+      .select("student_id")
+      .in("student_id", sessionStudents.map((student) => student.student_id))
+      .eq("status", "Approved")
+      .lte("date_from", sessionDate)
+      .gte("date_to", sessionDate);
+    if (approvedExcusesError) throw approvedExcusesError;
+    excusedStudentIds = new Set((approvedExcuses ?? []).map((letter) => String(letter.student_id)));
+  }
+
+  const absentInserts = studentsMissingSessionAttendance({
+    students: sessionStudents,
+    recordedStudentDbIds: recordedIds,
+    excusedStudentIds,
+    sessionDate,
+  })
     .map((student) => ({
       student_db_id: student.id,
       student_id: student.student_id,
@@ -174,7 +278,7 @@ export async function markAutomaticAbsences(input: {
       session_type: input.sessionType,
       status: "Absent",
       via: "Auto",
-      remark: `Auto-marked absent after the ${input.sessionType} session Absent After cutoff`,
+      remark: `Auto-marked absent after the ${input.sessionType} class session ended`,
     }));
   if (!absentInserts.length) return result(true, 200, "All students already have a Time In record.");
 
@@ -219,7 +323,7 @@ export async function markAutomaticAbsences(input: {
       targetUser: `${input.sessionType} session`,
       targetRole: "Class Session",
       newStatus: "Absent",
-      details: `Auto-marked ${marked} student(s) absent after the ${input.sessionType} Absent After cutoff.`,
+      details: `Auto-marked ${marked} student(s) absent after the ${input.sessionType} class session ended.`,
     });
   }
 
@@ -238,7 +342,7 @@ export async function markAutomaticAbsences(input: {
   });
 }
 
-/** Runs every session whose cutoff has passed on the current Manila date. */
+/** Runs every session whose scheduled end has passed on the current Manila date. */
 export async function processDueAutomaticAbsences() {
   const schoolClock = getSchoolClock();
   const { data: activeSY, error: schoolYearError } = await supabase
@@ -263,57 +367,15 @@ export async function processDueAutomaticAbsences() {
   if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
   if ((holidays?.length ?? 0) > 0) return { schoolDate: schoolClock.date, processedSessions: [] };
 
-  // The dashboard normally creates today's snapshot. The job repeats that
-  // small idempotent step so a browser never has to be open for absence
-  // processing to happen at the configured cutoff.
-  for (const sessionType of ["Morning", "Afternoon"] as const) {
-    const { data: existing, error: existingError } = await supabase
-      .from("class_sessions")
-      .select("session_date")
-      .eq("session_date", schoolClock.date)
-      .eq("session_type", sessionType)
-      .maybeSingle();
-    if (existingError) throw existingError;
-    if (existing) continue;
-
-    const { data: latest, error: latestError } = await supabase
-      .from("class_sessions")
-      .select("scheduled_start, scheduled_end, late_after, absent_after")
-      .eq("session_type", sessionType)
-      .lt("session_date", schoolClock.date)
-      .order("session_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latestError) throw latestError;
-    if (!latest) continue;
-    const { error: insertError } = await supabase
-      .from("class_sessions")
-      .upsert({
-        session_date: schoolClock.date,
-        session_type: sessionType,
-        scheduled_start: latest.scheduled_start,
-        scheduled_end: latest.scheduled_end,
-        late_after: latest.late_after ?? latest.scheduled_start,
-        absent_after: latest.absent_after ?? latest.scheduled_end,
-        status: "Not Started",
-      }, { onConflict: "session_date,session_type", ignoreDuplicates: true });
-    if (insertError) throw insertError;
-  }
-
-  const { data: sessions, error } = await supabase
-    .from("class_sessions")
-    .select("session_type, absent_after, scheduled_end")
-    .eq("session_date", schoolClock.date);
-  if (error) throw error;
-
-  const dueTypes = [...new Set(
-    (sessions ?? [])
-      .filter((session) =>
-        (session.session_type === "Morning" || session.session_type === "Afternoon") &&
-        schoolClock.minutes >= timeToMinutes(session.absent_after ?? session.scheduled_end),
-      )
-      .map((session) => session.session_type as SessionType),
-  )];
+  const sessionSnapshots = await Promise.all(
+    (["Morning", "Afternoon"] as const).map(async (sessionType) => ({
+      sessionType,
+      session: await getOrCreateSessionSnapshot(schoolClock.date, sessionType),
+    })),
+  );
+  const dueTypes = sessionSnapshots
+    .filter(({ session }) => !!session && hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end))
+    .map(({ sessionType }) => sessionType);
   const processedSessions: AutomaticAbsenceResult[] = [];
   for (const sessionType of dueTypes) {
     processedSessions.push(await markAutomaticAbsences({ sessionType, sessionDate: schoolClock.date }));

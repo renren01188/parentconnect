@@ -26,6 +26,7 @@ for (const [name, source] of [["manual attendance", manualAttendance], ["RFID at
 assert.match(principalSummary, /\.from\("attendance_logs"\)/, "The Principal summary must read the shared attendance table.");
 assert.match(principalSummary, /\.select\("id, student_db_id, attendance_date, time_logged, type, status"\)/, "The Principal summary must read the matching attendance fields.");
 assert.match(principalSummary, /if \(log\.type && log\.type !== "Time In"\) continue/, "The Principal daily summary must use the Time In status once per student/day.");
+assert.match(principalSummary, /dayRecord\?\.status === "Excused"[\s\S]*?excused\+\+;[\s\S]*?absent\+\+/, "Excused must remain identifiable while also increasing the Principal absent total.");
 assert.match(principalSummary, /\.gte\("attendance_date", validDays\[0\]\)/, "The Principal summary must constrain records to the selected month and valid school days.");
 assert.match(principalSummary, /getScheduledDaysInMonth\(/, "The Summary must derive each selected class day from the active school-year range.");
 assert.match(principalSummary, /activeSY\?\.attendance_weekdays/, "The Summary must honor the ICT-selected class weekdays, with the weekday-only default as fallback.");
@@ -34,5 +35,6 @@ assert.doesNotMatch(principalSummary, /parent_student_links/, "The Principal sum
 assert.match(invalidation, /supabase\.from\("principals"\)\.select\("id"\)/, "Attendance changes must include active Principals as recipients.");
 assert.match(principalPage, /\["attendance", "students", "dashboard"\]\.includes\(scope\)/, "The Principal page must refresh when attendance is saved.");
 assert.match(principalPage, /\/api\/attendance\/monthly-summary/, "The Principal page must reload the shared attendance summary endpoint.");
+assert.match(principalPage, /getSf2StatusCode\(savedStatus\)/, "The Principal SF2 export must use the shared status-to-X mapping.");
 
 console.log("Adviser/RFID to Principal attendance-summary data-flow checks passed.");

@@ -262,8 +262,9 @@ export async function GET(req: NextRequest) {
         const timeIn = dayLogs?.timeIn;
         const timeOut = dayLogs?.timeOut;
         const isExcused = !!dayLogs?.isExcused;
-        // Excused is not absent and not a normal present — its own category
-        const isAbsent = !isExcused && timeIn?.status === "Absent";
+        // Excused remains its own visible category, but it contributes to
+        // official absence totals and attendance-rate denominators.
+        const isAbsent = timeIn?.status === "Absent" || isExcused;
 
         rows.push({
           student_id: student.student_id,

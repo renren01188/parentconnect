@@ -430,13 +430,13 @@ function populateSF2Worksheet(
         const savedStatus = toAttendanceExportStatus(st.dailyStatuses?.[day]);
         const code = getSf2StatusCode(savedStatus);
         if (code) setCellValue(ws, col0ToRef(col0, row), code);
-        if (savedStatus === "Absent") absenceCount += 1;
+        if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
         if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
       });
 
       setCellValue(ws, `AM${row}`, absenceCount);
-      // Both Present and Late are attended. Excused and No Record are not
-      // included in the rate numerator or silently treated as Present.
+      // Both Present and Late are attended. Excused remains visible in
+      // Attendance Detail but is an X/absent SF2 day, never attendance.
       setCellValue(ws, `AO${row}`, attendedCount);
     });
 

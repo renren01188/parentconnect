@@ -5,7 +5,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 type ExcuseLetterRow = {
     id: number;
     student_id: string;
-    parent_id: number;
+    parent_id: number | null;
     date_from: string;
     date_to: string;
     message: string;
@@ -15,6 +15,8 @@ type ExcuseLetterRow = {
     file_name: string | null;
     file_type: string | null;
     file_data: string | null;
+    submitted_by_role: string | null;
+    submitted_by_id: number | null;
 };
 
 type EnrichedExcuseLetter = ExcuseLetterRow & {
@@ -70,7 +72,8 @@ export async function GET(req: NextRequest) {
             .select(`
                 id, student_id, parent_id, date_from, date_to,
                 message, status, decline_reason, submitted_at,
-                file_name, file_type, file_data
+                file_name, file_type, file_data,
+                submitted_by_role, submitted_by_id
             `)
             .in("student_id", ids)
             .order("submitted_at", { ascending: false });
@@ -87,23 +90,28 @@ export async function GET(req: NextRequest) {
 
                 const student = studentRows?.[0] ?? null;
 
-                const { data: parentRows } = await supabase
-                    .from("parents")
-                    .select("parent_first_name, parent_last_name, relationship")
-                    .eq("id", letter.parent_id)
-                    .limit(1);
-
-                const parent = parentRows?.[0] ?? null;
+                const parent = letter.parent_id
+                    ? (await supabase
+                        .from("parents")
+                        .select("parent_first_name, parent_last_name, relationship")
+                        .eq("id", letter.parent_id)
+                        .limit(1)).data?.[0] ?? null
+                    : null;
+                const isManualAdviserExcuse = letter.submitted_by_role === "Adviser";
 
                 return {
                     ...letter,
                     studentName: student
                         ? `${student.first_name} ${student.last_name}`
                         : letter.student_id,
-                    parentName: parent
+                    parentName: isManualAdviserExcuse
+                        ? "Class Adviser"
+                        : parent
                         ? `${parent.parent_first_name} ${parent.parent_last_name}`
                         : "Unknown",
-                    relationship: parent?.relationship || "Guardian",
+                    relationship: isManualAdviserExcuse
+                        ? "Manual attendance"
+                        : parent?.relationship || "Guardian",
                     attachment: letter.file_name
                         ? {
                             file_name: letter.file_name,

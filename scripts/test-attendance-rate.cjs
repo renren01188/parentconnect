@@ -20,14 +20,14 @@ assert.equal(isAttendedAttendanceStatus("Excused"), false);
 assert.equal(isAttendanceRateEligibleStatus("Present"), true);
 assert.equal(isAttendanceRateEligibleStatus("Late"), true);
 assert.equal(isAttendanceRateEligibleStatus("Absent"), true);
-assert.equal(isAttendanceRateEligibleStatus("Excused"), false);
+assert.equal(isAttendanceRateEligibleStatus("Excused"), true);
 
 assert.equal(attendedDayCount({ present: 2, late: 1 }), 3);
 assert.equal(calculateAttendanceRate({ present: 1, late: 1, absent: 1 }), 66.7);
 assert.equal(calculateAttendanceRate({ present: 0, late: 1, absent: 0 }), 100);
 assert.equal(calculateAttendanceRate({ present: 0, late: 0, absent: 1 }), 0);
 assert.equal(calculateAttendanceRate({ present: 0, late: 0, absent: 0 }), 0);
-assert.equal(calculateAttendanceRate({ present: 1, late: 0, absent: 0, excused: 4 }), 100);
+assert.equal(calculateAttendanceRate({ present: 1, late: 0, absent: 4 }), 20);
 
 const parentAttendance = read("src/app/dashboard/parent/attendance/page.tsx");
 const parentDashboard = read("src/app/dashboard/parent/page.tsx");
@@ -41,4 +41,4 @@ assert.match(parentDashboard, /attendedDayCount\(/, "Parent dashboard days prese
 assert.match(adviserStudentsApi, /isAttendedAttendanceStatus\(log\.status\)/, "Adviser student rates must count Late as attended.");
 assert.match(principalDashboardApi, /isAttendedAttendanceStatus\(record\.status\)/, "Principal attendance percentage must use the shared attended-status rule.");
 
-console.log("Attendance-rate rules passed: Present and Late attended; Absent counted; Excused neutral; no records 0%.");
+console.log("Attendance-rate rules passed: Present and Late attended; Absent and Excused counted; no records 0%.");

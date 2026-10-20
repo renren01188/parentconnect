@@ -39,7 +39,7 @@ function errorResponse(error: unknown) {
 async function claimJob(attendanceLogId?: number): Promise<SmsJob | null> {
   const now = new Date();
   let query = supabase
-    .from("attendance_sms_job")
+    .from("attendance_sms_jobs")
     .select("id, status")
     .eq("status", "pending")
     .lte("available_at", now.toISOString())
@@ -51,7 +51,7 @@ async function claimJob(attendanceLogId?: number): Promise<SmsJob | null> {
 
   for (const candidate of candidates ?? []) {
     const base = supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update({ status: "processing", locked_at: now.toISOString(), last_error: null })
       .eq("id", candidate.id)
       .eq("status", "pending")
@@ -73,7 +73,7 @@ async function claimJob(attendanceLogId?: number): Promise<SmsJob | null> {
 async function failStaleProcessingJobs(attendanceLogId?: number) {
   const staleBefore = new Date(Date.now() - PROCESSING_STALE_AFTER_MS).toISOString();
   let query = supabase
-    .from("attendance_sms_job")
+    .from("attendance_sms_jobs")
     .update({
       status: "failed",
       locked_at: null,
@@ -88,7 +88,7 @@ async function failStaleProcessingJobs(attendanceLogId?: number) {
 
 async function skipPendingJobs(attendanceLogId?: number) {
   let query = supabase
-    .from("attendance_sms_job")
+    .from("attendance_sms_jobs")
     .update({ status: "skipped", locked_at: null, last_error: "Attendance SMS notifications are disabled." })
     .eq("status", "pending");
   if (attendanceLogId !== undefined) query = query.eq("attendance_log_id", attendanceLogId);
@@ -99,7 +99,7 @@ async function skipPendingJobs(attendanceLogId?: number) {
 async function processJob(job: SmsJob) {
   if (!await isAttendanceSmsEnabled()) {
     const { error } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update({ status: "skipped", locked_at: null, last_error: "Attendance SMS notifications are disabled." })
       .eq("id", job.id)
       .eq("status", "processing");
@@ -111,7 +111,7 @@ async function processJob(job: SmsJob) {
   try {
     const result = await sendSms({ recipient: job.recipient_phone, message: job.message, queueId: job.id });
     const { error } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update({
         status: "sent",
         attempts: attempt,
@@ -131,7 +131,7 @@ async function processJob(job: SmsJob) {
     const retryable = canRetrySmsProviderError(error);
     const status = retryable && attempt < MAX_SMS_ATTEMPTS ? "pending" : "failed";
     const { error: updateError } = await supabase
-      .from("attendance_sms_job")
+      .from("attendance_sms_jobs")
       .update({
         status,
         attempts: attempt,

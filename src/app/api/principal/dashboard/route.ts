@@ -205,7 +205,7 @@ export async function GET() {
         if (isAttendedAttendanceStatus(record.status)) attendedCount++;
         if (record.status === "Present" || record.status === "On Time") presentCount++;
         else if (record.status === "Late") lateCount++;
-        else if (record.status === "Absent") absentCount++;
+        else if (record.status === "Absent" || record.status === "Excused") absentCount++;
       }
 
       const denominator = eligibleStudentIds.length;

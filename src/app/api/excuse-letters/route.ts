@@ -14,10 +14,12 @@ function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "Server error.";
 }
 
-function validateSingleAttachment(value: unknown) {
-    if (!Array.isArray(value) || value.length !== 1) {
-        throw new Error("Exactly one attachment is required for each excuse letter.");
+function validateOptionalAttachment(value: unknown) {
+    if (value === undefined || value === null) return null;
+    if (!Array.isArray(value) || value.length > 1) {
+        throw new Error("Each excuse letter may include one attachment.");
     }
+    if (value.length === 0) return null;
     const validated = validateExcuseLetterAttachmentPayload(value[0]);
     if (!validated.ok) throw new Error(validated.message);
     return validated.attachment;
@@ -75,9 +77,9 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ success: false, message: "All fields are required." }, { status: 400 });
         }
 
-        let attachment: { file_name: string; file_type: string; file_data: string };
+        let attachment: { file_name: string; file_type: string; file_data: string } | null;
         try {
-            attachment = validateSingleAttachment(attachments);
+            attachment = validateOptionalAttachment(attachments);
         } catch (attachmentError) {
             return NextResponse.json({ success: false, message: errorMessage(attachmentError) }, { status: 400 });
         }
@@ -166,10 +168,10 @@ export async function POST(req: NextRequest) {
                 date_to,
                 message: message.trim(),
                 status: "Pending",
-                file_name: attachment.file_name,
-                file_data: attachment.file_data,
-                file_type: attachment.file_type,
-                attachment_uploaded_at: new Date().toISOString(),
+                file_name: attachment?.file_name ?? null,
+                file_data: attachment?.file_data ?? null,
+                file_type: attachment?.file_type ?? null,
+                attachment_uploaded_at: attachment ? new Date().toISOString() : null,
             })
             .select("id")
             .single();

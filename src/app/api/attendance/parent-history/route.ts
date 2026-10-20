@@ -102,7 +102,9 @@ export async function GET(req: NextRequest) {
         // Compute overall stats
         const present = records.filter(r => r.status === "On Time" || r.status === "Present").length;
         const late = records.filter(r => r.status === "Late").length;
-        const absent = records.filter(r => r.status === "Absent").length;
+        // Excused stays distinct in the record list but contributes to the
+        // absent total and rate denominator.
+        const absent = records.filter(r => r.status === "Absent" || r.status === "Excused").length;
         const excused = records.filter(r => r.status === "Excused").length;
 
         return NextResponse.json({
