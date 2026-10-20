@@ -204,15 +204,6 @@ export async function POST(req: NextRequest) {
     const now = getCurrentMinutes();
     const start = timeToMinutes(session.scheduled_start);
     const end = timeToMinutes(session.scheduled_end);
-    if (now < start || now >= end) {
-      return NextResponse.json(
-        { success: false, message: now < start
-          ? "Manual attendance is not started yet. It opens at the ICT-configured scheduled start."
-          : "Manual attendance is unavailable because the ICT-configured class session has ended." },
-        { status: 409 }
-      );
-    }
-
     // An adviser can explicitly record a known absence. Otherwise, the
     // server calculates On Time/Late so the UI cannot override ICT's rule.
     const computedStatus: "On Time" | "Late" | "Absent" = body.status === "Absent"
@@ -221,7 +212,7 @@ export async function POST(req: NextRequest) {
 
     const { data: existing, error: existingError } = await supabase
       .from("attendance_logs")
-      .select("id, type, status, remark")
+      .select("id, type, status, via, remark")
       .eq("student_db_id", student.id)
       .eq("attendance_date", attendanceDate)
       .eq("session_type", sessionType);
@@ -236,6 +227,38 @@ export async function POST(req: NextRequest) {
     }
 
     const existingSameType = (existing ?? []).find((log) => log.type === body.type);
+    const automaticAbsence = body.type === "Time In" &&
+      body.status === "Present" &&
+      existingSameType?.status === "Absent" &&
+      existingSameType.via === "Auto";
+
+    // A normal manual entry is allowed only in the configured class window.
+    // The one exception is a documented correction of an automatic absence:
+    // it can be corrected after the session, but never creates a new record.
+    if (now < start || (now >= end && !automaticAbsence)) {
+      return NextResponse.json(
+        { success: false, message: now < start
+          ? "Manual attendance is not started yet. It opens at the ICT-configured scheduled start."
+          : "Manual attendance is unavailable because the ICT-configured class session has ended. Only an automatic absence can be corrected after the session." },
+        { status: 409 }
+      );
+    }
+
+    if (body.type === "Time Out" && body.status === "Absent") {
+      return NextResponse.json(
+        { success: false, message: "An absence is recorded only as a Time In status; Time Out cannot be marked Absent." },
+        { status: 400 },
+      );
+    }
+    if (body.type === "Time Out") {
+      const timeIn = (existing ?? []).find((log) => log.type === "Time In");
+      if (!timeIn || !["On Time", "Late"].includes(timeIn.status)) {
+        return NextResponse.json(
+          { success: false, message: "Time Out requires a recorded On Time or Late Time In for this session." },
+          { status: 409 },
+        );
+      }
+    }
 
     // "Present" is a correction request, not a new attendance status. Keep
     // the established On Time value so existing history, reports, and parent
@@ -275,7 +298,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (body.status === "Present") {
+    if (body.status === "Present" && !automaticAbsence) {
       return NextResponse.json(
         { success: false, message: "Present can only be used to correct an existing Late record of the same type." },
         { status: 409 },
@@ -286,14 +309,21 @@ export async function POST(req: NextRequest) {
     // reversible placeholder, not proof that the student was absent. An
     // Adviser can correct it after the session by replacing it with the
     // verified manual Time In (On Time or Late).
-    if (body.type === "Time In" && existingSameType?.status === "Absent") {
+    if (automaticAbsence) {
+      const correctionRemark = body.remark?.trim();
+      if (!correctionRemark) {
+        return NextResponse.json(
+          { success: false, message: "A remark is required when correcting an automatic absence after the session." },
+          { status: 400 },
+        );
+      }
       const { data: log, error: correctionError } = await supabase
         .from("attendance_logs")
         .update({
           time_logged: timeLogged,
-          status: computedStatus,
+          status: "On Time",
           via: "Manual",
-          remark: body.remark || "Corrected from automatic absence by adviser",
+          remark: correctionRemark,
         })
         .eq("id", existingSameType.id)
         .select()
@@ -301,11 +331,11 @@ export async function POST(req: NextRequest) {
 
       if (correctionError) throw correctionError;
 
-      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: computedStatus, details: `Corrected automatic absence to manual ${body.type} for ${buildFullName(student)} (${student.student_id}).` });
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: "On Time", details: `Corrected automatic absence to Present for ${buildFullName(student)} (${student.student_id}).` });
       after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
       return NextResponse.json({
         success: true,
-        message: "Automatic absence corrected with a manual Time In",
+        message: "Automatic absence corrected to Present",
         log: {
           id: log.id,
           student_id: student.student_id,
@@ -316,7 +346,7 @@ export async function POST(req: NextRequest) {
           time_logged: timeLogged,
           type: body.type,
           session_type: sessionType,
-          status: computedStatus,
+          status: "On Time",
           via: "Manual",
         },
       });

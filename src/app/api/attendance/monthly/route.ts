@@ -23,7 +23,7 @@ type LogRow = {
   attendance_date: string;
   time_logged: string;
   type: "Time In" | "Time Out";
-  status: "On Time" | "Late" | "Absent" | "Excused";
+  status: "Present" | "On Time" | "Late" | "Absent" | "Excused";
   via: "RFID" | "Manual" | "Auto";
   remark: string | null;
 };
@@ -98,6 +98,20 @@ function registrationDate(createdAt?: string | null) {
   return year && month && day ? `${year}-${month}-${day}` : null;
 }
 
+function shouldReplaceTimeIn(
+  current: { id: number; time_logged: string; status: LogRow["status"] } | undefined,
+  next: { id: number; time_logged: string; status: LogRow["status"] },
+) {
+  if (!current) return true;
+  // A recorded arrival corrects a provisional automatic absence. Preserve an
+  // excused record over a non-excused record, then use the latest saved event.
+  if (current.status === "Absent" && next.status !== "Absent") return true;
+  if (next.status === "Absent" && current.status !== "Absent") return false;
+  if (next.status === "Excused" && current.status !== "Excused") return true;
+  if (current.status === "Excused" && next.status !== "Excused") return false;
+  return next.time_logged > current.time_logged || (next.time_logged === current.time_logged && next.id > current.id);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
@@ -168,9 +182,12 @@ export async function GET(req: NextRequest) {
     const students = (studentRows ?? []) as StudentRow[];
     const eligibleStudents = students.flatMap((student) => {
       const registeredOn = registrationDate(student.created_at);
-      const activeFrom = registeredOn && activeSY
-        ? (registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
-        : null;
+      // Imports can lack created_at. They are not silently removed from an
+      // export; use the school-year start (or requested range) until a known
+      // later registration date says otherwise.
+      const activeFrom = activeSY
+        ? (registeredOn && registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
+        : (registeredOn ?? validDays[0] ?? null);
       return activeFrom && validDays.some((date) => date >= activeFrom)
         ? [{ student, activeFrom }]
         : [];
@@ -179,23 +196,33 @@ export async function GET(req: NextRequest) {
 
     // Fetch logs only for students in the active section. This avoids a costly
     // attendance_logs -> students join over the whole monthly date range.
-    let logs: LogRow[] = [];
+    const logs: LogRow[] = [];
     if (studentDbIds.length > 0 && startDate && endDate) {
-      const { data: logRows, error: logError } = await supabase
-        .from("attendance_logs")
-        .select("id, student_id, student_db_id, attendance_date, time_logged, type, status, via, remark")
-        .in("student_db_id", studentDbIds)
-        .gte("attendance_date", startDate)
-        .lte("attendance_date", endDate)
-        .order("attendance_date", { ascending: true })
-        .order("time_logged", { ascending: true });
+      // A full class-month can exceed Supabase's response limit. Read every
+      // page so later students/dates cannot disappear from the export.
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const { data: logRows, error: logError } = await supabase
+          .from("attendance_logs")
+          .select("id, student_id, student_db_id, attendance_date, time_logged, type, status, via, remark")
+          .in("student_db_id", studentDbIds)
+          .gte("attendance_date", startDate)
+          .lte("attendance_date", endDate)
+          .order("attendance_date", { ascending: true })
+          .order("time_logged", { ascending: true })
+          .order("id", { ascending: true })
+          .range(from, from + pageSize - 1);
 
-      if (logError) throw logError;
-      logs = (logRows ?? []) as LogRow[];
+        const page = (logRows ?? []) as LogRow[];
+        if (logError) throw logError;
+        logs.push(...page);
+        if (page.length < pageSize) break;
+      }
     }
 
     // Build lookup: student_db_id → date → { time_in_log, time_out_log }
     type LogEntry = {
+      id: number;
       time_logged: string;
       status: LogRow["status"];
       via: LogRow["via"];
@@ -209,14 +236,18 @@ export async function GET(req: NextRequest) {
       if (!logMap[dbId]) logMap[dbId] = {};
       if (!logMap[dbId][date]) logMap[dbId][date] = {};
       const entry: LogEntry = {
+        id: log.id,
         time_logged: log.time_logged,
         status: log.status,
         via: log.via,
         remark: log.remark,
       };
       if (log.type === "Time In") {
-        logMap[dbId][date].timeIn = entry;
-        if (log.status === "Excused") logMap[dbId][date].isExcused = true;
+        const current = logMap[dbId][date].timeIn;
+        if (shouldReplaceTimeIn(current, entry)) {
+          logMap[dbId][date].timeIn = entry;
+          logMap[dbId][date].isExcused = log.status === "Excused";
+        }
       }
       if (log.type === "Time Out") logMap[dbId][date].timeOut = entry;
     }
@@ -259,6 +290,9 @@ export async function GET(req: NextRequest) {
       rows,
       schoolDays: validDays,
       studentCount: eligibleStudents.length,
+      schoolYearLabel: activeSY
+        ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`
+        : null,
     });
 
   } catch (error) {

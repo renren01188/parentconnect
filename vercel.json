@@ -4,6 +4,10 @@
     {
       "path": "/api/scheduled-deletions/process",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/attendance/process-absences",
+      "schedule": "* * * * *"
     }
   ]
 }

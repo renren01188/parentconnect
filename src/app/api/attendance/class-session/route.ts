@@ -5,24 +5,15 @@ import { getIctFromToken } from "@/lib/getIctFromToken";
 import { logAudit } from "@/lib/audit";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import {
+  getClassSessionAvailability,
+  getSchoolClock,
+  getSchoolYearScannerAvailability,
+  timeToMinutes,
+} from "@/lib/attendanceScannerSchedule";
 
 function getToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${year}-${month}-${day}`;
-}
-
-function timeToMinutes(value: string) {
-  const [hour, minute] = value.slice(0, 5).split(":").map(Number);
-  return hour * 60 + minute;
+  return getSchoolClock().date;
 }
 
 function validateSchedule(
@@ -109,22 +100,18 @@ async function ensureSessionRow(
   if (insertError) throw insertError;
 }
 
-function getCurrentMinutes() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(new Date());
-  return Number(parts.find((p) => p.type === "hour")?.value ?? 0) * 60
-    + Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-}
-
 // A daily row is a snapshot of the schedule ICT saved.  Its visible state is
 // deliberately time-derived: advisers must never need a separate start/end
 // setting before the scanner follows the configured window.
-function getScheduleStatus(session: { scheduled_start: string; scheduled_end: string }) {
-  const now = getCurrentMinutes();
-  if (now < timeToMinutes(session.scheduled_start)) return "Not Started" as const;
-  if (now >= timeToMinutes(session.scheduled_end)) return "Ended" as const;
-  return "Active" as const;
+function getScheduleStatus(session: { scheduled_start: string; scheduled_end: string; status?: string | null }) {
+  // ICT may explicitly close a session early. An explicit end can shorten a
+  // window, but an explicit start never opens it ahead of the saved schedule.
+  if (session.status === "Ended") return "Ended" as const;
+  return getClassSessionAvailability(
+    getSchoolClock().minutes,
+    session.scheduled_start,
+    session.scheduled_end,
+  ).status;
 }
 
 async function isSchoolHoliday(schoolYearId: number, date: string) {
@@ -163,19 +150,50 @@ export async function GET() {
       .limit(1)
       .maybeSingle();
     if (schoolYearError) throw schoolYearError;
-    if (
-      !activeSY
-      || !isScheduledAttendanceDate(
-        today,
-        activeSY.start_date,
-        activeSY.end_date,
-        activeSY.attendance_weekdays,
-      )
-    ) {
-      return NextResponse.json({ success: true, sessions: [] });
+    if (!activeSY) {
+      return NextResponse.json({
+        success: true,
+        sessions: [],
+        availability: {
+          available: false,
+          message: "RFID scanning is unavailable because no active school year is configured.",
+        },
+      });
+    }
+
+    const schoolYearAvailability = getSchoolYearScannerAvailability(
+      today,
+      activeSY.start_date,
+      activeSY.end_date,
+    );
+    if (!schoolYearAvailability.available) {
+      return NextResponse.json({ success: true, sessions: [], availability: schoolYearAvailability });
+    }
+
+    if (!isScheduledAttendanceDate(
+      today,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
+      return NextResponse.json({
+        success: true,
+        sessions: [],
+        availability: {
+          available: false,
+          message: "RFID scanning is unavailable because today is not a selected class day.",
+        },
+      });
     }
     if (await isSchoolHoliday(activeSY.id, today)) {
-      return NextResponse.json({ success: true, sessions: [] });
+      return NextResponse.json({
+        success: true,
+        sessions: [],
+        availability: {
+          available: false,
+          message: "RFID scanning is unavailable on a school holiday.",
+        },
+      });
     }
 
     // Upsert today's rows using the latest saved schedule
@@ -215,11 +233,19 @@ export async function GET() {
 
     if (error) throw error;
 
+    const sessions = (data ?? []).map((session) => ({ ...session, status: getScheduleStatus(session) }));
+
     return NextResponse.json({
       success: true,
-      // Do not expose the manually persisted status as the attendance state.
-      // The saved ICT times are authoritative for every consumer.
-      sessions: (data ?? []).map((session) => ({ ...session, status: getScheduleStatus(session) })),
+    // Saved ICT times are authoritative. A persisted Ended state may shorten
+    // the window when ICT deliberately closes a session early.
+      sessions,
+      availability: sessions.length > 0
+        ? undefined
+        : {
+          available: false,
+          message: "RFID scanning is unavailable until ICT saves the class schedule.",
+        },
     });
   } catch (error) {
     console.error("class-session GET error:", error);

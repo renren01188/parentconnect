@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type ExcelJS from "exceljs";
 import { resolveRfidScanValue } from "@/lib/rfid";
+import {
+    getAttendanceDetailStatus,
+    getSf2StatusCode,
+    isAttendedExportStatus,
+    toAttendanceExportStatus,
+} from "@/lib/attendanceExportStatus";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
@@ -15,7 +21,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ScanMode = "Time In" | "Time Out";
-type AttendanceStatus = "On Time" | "Late" | "Absent" | "Excused";
+type AttendanceStatus = "Present" | "On Time" | "Late" | "Absent" | "Excused";
 type ManualAttendanceStatus = "On Time" | "Absent" | "Present";
 type AttendanceVia = "RFID" | "Manual" | "Auto";
 
@@ -98,6 +104,7 @@ type MonthlyAttendanceData = {
     rows: MonthlyAttendanceRow[];
     schoolDays: string[];
     studentCount: number;
+    schoolYearLabel: string | null;
 };
 
 type HistoryStats = { total: number; present: number; late: number; absent: number; excused?: number };
@@ -182,19 +189,6 @@ const MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ];
-
-
-function getWeekdayDateStrings(year: number, month: number): string[] {
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const dates: string[] = [];
-    for (let day = 1; day <= daysInMonth; day++) {
-        const jsDow = new Date(year, month - 1, day).getDay();
-        if (jsDow === 0 || jsDow === 6) continue;
-        dates.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
-    }
-    return dates;
-}
-
 
 
 // ── Daily Export Helpers ───────────────────────────────────────────────────────
@@ -540,27 +534,25 @@ function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, res
     ws.getCell(ref).value = { formula, result };
 }
 
-function getSchoolDayPlacementsForMonth(month: number, year: number) {
-    const jsMonth = month - 1;
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const firstJsDay = new Date(year, jsMonth, 1).getDay();
-    const firstMondayBased = firstJsDay === 0 ? 6 : firstJsDay - 1;
-    const DOW_LABELS: Record<number, "M" | "T" | "W" | "TH" | "F"> = {
-        1: "M", 2: "T", 3: "W", 4: "TH", 5: "F",
-    };
-    const placements: { day: number; slotIdx: number; dowLabel: "M" | "T" | "W" | "TH" | "F" }[] = [];
-
-    for (let day = 1; day <= daysInMonth; day++) {
-        const jsDow = new Date(year, jsMonth, day).getDay();
-        if (jsDow === 0 || jsDow === 6) continue;
-        const mondayBasedDow = jsDow - 1;
-        const weekIndex = Math.floor((firstMondayBased + (day - 1)) / 7);
-        const slotIdx = weekIndex * 5 + mondayBasedDow;
-        if (slotIdx >= 0 && slotIdx < SF2_DAY_SLOTS.length) {
-            placements.push({ day, slotIdx, dowLabel: DOW_LABELS[jsDow] });
-        }
+function getSchoolDayPlacementsForMonth(month: number, year: number, schoolDayDates: string[]) {
+    const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
+    const dayLabels = ["SU", "M", "T", "W", "TH", "F", "SA"] as const;
+    const dates = [...new Set(schoolDayDates)]
+        .filter((date) => date.startsWith(monthPrefix) && /^\d{4}-\d{2}-\d{2}$/.test(date))
+        .sort();
+    if (dates.length > SF2_DAY_SLOTS.length) {
+        throw new Error(`The SF2 template has ${SF2_DAY_SLOTS.length} daily slots, but this school calendar has ${dates.length} class days. Use a template that supports all configured class days.`);
     }
-    return placements;
+    return dates.map((date, slotIdx) => {
+        const day = Number(date.slice(-2));
+        const [dateYear, dateMonth] = date.split("-").map(Number);
+        return {
+            date,
+            day,
+            slotIdx,
+            dowLabel: dayLabels[new Date(Date.UTC(dateYear, dateMonth - 1, day)).getUTCDay()],
+        };
+    });
 }
 
 function downloadWorkbook(buffer: ArrayBuffer, filename: string) {
@@ -584,6 +576,7 @@ async function exportMonthlySF2(
     sectionLabel: string,
     holidayDates: string[] = [],
     schoolDayDates: string[] = [],
+    schoolYearLabel: string | null = null,
 ) {
     // Keep the large spreadsheet library out of the normal attendance page.
     // It is loaded only after the user explicitly requests an SF2 export.
@@ -599,20 +592,17 @@ async function exportMonthlySF2(
     if (!ws) throw new Error("Template worksheet not found.");
 
     const monthName = MONTH_NAMES[month - 1];
-    const placements = getSchoolDayPlacementsForMonth(month, year);
+    const placements = getSchoolDayPlacementsForMonth(month, year, schoolDayDates);
     const holidaySet = new Set(holidayDates);
     const schoolDaySet = new Set(schoolDayDates);
-    const classPlacements = placements.filter(({ day }) => {
-        const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return schoolDaySet.has(iso) && !holidaySet.has(iso);
-    });
+    const classPlacements = placements.filter(({ date }) => !holidaySet.has(date));
 
     const [gradePart, sectionPartRaw] = sectionLabel.split("·").map(s => s.trim());
     const gradeLabel = gradePart || "";
     const sectionName = sectionPartRaw || sectionLabel;
 
     setCellValue(ws, "F3", 107966);
-    setCellValue(ws, "M3", `${year} - ${year + 1}`);
+    setCellValue(ws, "M3", schoolYearLabel ?? `${year} - ${year + 1}`);
     setCellValue(ws, "AA3", monthName.toUpperCase());
     setCellValue(ws, "F4", "Santiago Elementary School");
     setCellValue(ws, "AA4", gradeLabel);
@@ -627,11 +617,10 @@ async function exportMonthlySF2(
         }
     }
 
-    placements.forEach(({ day, slotIdx, dowLabel }) => {
+    placements.forEach(({ day, date, slotIdx, dowLabel }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
-        const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         setSf2DateHeader(ws, col0, day);
-        setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(iso) ? "H" : dowLabel);
+        setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(date) ? "H" : dowLabel);
     });
 
     const grouped = new Map<string, MonthlyAttendanceRow[]>();
@@ -696,57 +685,38 @@ async function exportMonthlySF2(
             });
 
             let absenceCount = 0;
-            placements.forEach(({ day, slotIdx }) => {
+            let attendedCount = 0;
+            placements.forEach(({ day, date: iso, slotIdx }) => {
                 const [col0] = SF2_DAY_SLOTS[slotIdx];
-                const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
                 if (!schoolDaySet.has(iso)) return;
                 if (iso < student.activeFrom) return;
 
                 if (holidaySet.has(iso)) {
-                    setCellValue(ws, col0ToRef(col0, row), "H");
+                    setCellValue(ws, col0ToRef(col0, row), getSf2StatusCode(null, true));
                     return;
                 }
 
                 const rec = dayMap.get(day);
 
                 // Future dates — leave blank, no record possible yet
-                const isoDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
                 const today = toLocalDateString(new Date());
-                if (isoDate > today) return;
+                if (iso > today) return;
 
-                const isExcused =
-                    !!rec && (rec.is_excused === true || rec.time_in_status === "Excused");
-
-                const isPresent =
-                    !!rec &&
-                    !isExcused &&
-                    (rec.time_in_status === "On Time" ||
-                        rec.time_in_status === "Late" ||
-                        rec.time_out_status === "On Time" ||
-                        rec.time_out_status === "Late");
-
-                const isAbsent =
-                    !isExcused &&
-                    !!rec &&
-                    (rec.is_absent === true || rec.time_in_status === "Absent");
-
-                if (isExcused) {
-                    setCellValue(ws, col0ToRef(col0, row), "E");
-                    // Not counted in absenceCount — excused days are neutral
-                } else if (isAbsent && !isPresent) {
-                    setCellValue(ws, col0ToRef(col0, row), "X");
-                    absenceCount += 1;
-                }
+                // Time In is the daily attendance event. Do not treat a
+                // missing Time In record—or a Time Out status—as evidence of
+                // presence. This preserves the saved Present/Late/Absent value.
+                const savedStatus = toAttendanceExportStatus(rec?.time_in_status);
+                const code = getSf2StatusCode(savedStatus);
+                if (code) setCellValue(ws, col0ToRef(col0, row), code);
+                if (savedStatus === "Absent") absenceCount += 1;
+                if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
             });
 
             setCellValue(ws, `AM${row}`, absenceCount);
-            const today = toLocalDateString(new Date());
-            const pastClassDays = classPlacements.filter(({ day }) => {
-                const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                return iso >= student.activeFrom && iso <= today;
-            }).length;
-            setCellValue(ws, `AO${row}`, pastClassDays - absenceCount);
+            // Late is attended; missing and excused dates are not silently
+            // converted to Present in the attendance-rate numerator.
+            setCellValue(ws, `AO${row}`, attendedCount);
         });
 
         setCellValue(ws, `A${totalRow}`, studentList.length);
@@ -766,9 +736,8 @@ async function exportMonthlySF2(
             if (mergePartner !== null) clearCellPreserveFormat(ws, col0ToRef(mergePartner, totalRow));
         }
 
-        placements.forEach(({ day, slotIdx }) => {
+        placements.forEach(({ date: iso, slotIdx }) => {
             const [col0] = SF2_DAY_SLOTS[slotIdx];
-            const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             if (holidaySet.has(iso)) return;
             const formula = studentList.length
                 ? `COUNTIF(${col0ToRef(col0, startRow)}:${col0ToRef(col0, totalRow - 1)},"X")`
@@ -796,10 +765,7 @@ async function exportMonthlySF2(
 
     setCellValue(ws, `AM${summaryStartRow}`, `Month : ${monthName.toUpperCase()}`);
     const todayIso = toLocalDateString(new Date());
-    const pastClassDaysCount = classPlacements.filter(({ day }) => {
-        const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return iso <= todayIso;
-    }).length;
+    const pastClassDaysCount = classPlacements.filter(({ date }) => date <= todayIso).length;
     setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${pastClassDaysCount}`);
     const enrollmentRow = summaryStartRow + 2;
     const attendanceRow = summaryStartRow + 8;
@@ -827,6 +793,36 @@ async function exportMonthlySF2(
         clearCellPreserveFormat(ws, `AN${expandedRow}`);
         if (templateRow === 80) clearCellPreserveFormat(ws, `Z${expandedRow}`);
     });
+
+    const detailWs = workbook.addWorksheet("Attendance Detail");
+    detailWs.addRow([`Attendance detail — ${sectionLabel} — ${monthName} ${year}`]);
+    detailWs.addRow(["SF2 marks: ✓ = Present or Late, X = Absent, H = Holiday, E = approved excuse. No Record means no saved Time In status."]);
+    detailWs.addRow([]);
+    detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status", "Time In", "Time Out", "Via", "Remark"]);
+    const detailHeader = detailWs.getRow(4);
+    detailHeader.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    detailHeader.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF047857" } };
+    for (const detailRow of [...rows].sort((first, second) =>
+        first.full_name.localeCompare(second.full_name) || first.date.localeCompare(second.date)
+    )) {
+        detailWs.addRow([
+            detailRow.student_id,
+            detailRow.full_name,
+            detailRow.grade,
+            detailRow.section,
+            detailRow.date,
+            getAttendanceDetailStatus(toAttendanceExportStatus(detailRow.time_in_status)),
+            detailRow.time_in ?? "",
+            detailRow.time_out ?? "",
+            detailRow.via ?? "",
+            detailRow.remark ?? "",
+        ]);
+    }
+    detailWs.columns = [
+        { width: 16 }, { width: 32 }, { width: 14 }, { width: 18 }, { width: 14 },
+        { width: 16 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 42 },
+    ];
+    detailWs.views = [{ state: "frozen", ySplit: 4 }];
 
     const out = await workbook.xlsx.writeBuffer();
     const safeSection = sectionName.replace(/[^a-z0-9]+/gi, "_");
@@ -992,11 +988,10 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
     const [error, setError] = useState("");
     const [preview, setPreview] = useState<{ totalDays: number; totalStudents: number; presentPct: number } | null>(null);
     const [holidayDates, setHolidayDates] = useState<string[]>([]);
+    const [availableHolidayDates, setAvailableHolidayDates] = useState<string[]>([]);
 
     // Build selectable years (current year and 2 previous)
     const years = [now.getFullYear(), now.getFullYear() - 1, now.getFullYear() - 2];
-    const availableHolidayDates = getWeekdayDateStrings(selectedYear, selectedMonth);
-
     async function fetchMonthlyData(): Promise<MonthlyAttendanceData | null> {
         setIsLoading(true); setError("");
         try {
@@ -1004,11 +999,14 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             const res = await fetch(`/api/attendance/monthly?year=${selectedYear}&month=${selectedMonth}${sectionParam}`, { cache: "no-store" });
             const data = await res.json();
             if (data.success) {
-                return {
+                const monthlyData = {
                     rows: data.rows as MonthlyAttendanceRow[],
                     schoolDays: Array.isArray(data.schoolDays) ? data.schoolDays as string[] : [],
                     studentCount: Number(data.studentCount ?? 0),
+                    schoolYearLabel: typeof data.schoolYearLabel === "string" ? data.schoolYearLabel : null,
                 };
+                setAvailableHolidayDates(monthlyData.schoolDays);
+                return monthlyData;
             }
             setError(data.message || "Failed to fetch monthly data");
             return null;
@@ -1020,6 +1018,27 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
         }
     }
 
+    // The API decides which dates are valid class days from the configured
+    // school year. This includes configured weekends and excludes dates
+    // outside the school year, rather than assuming Monday through Friday.
+    useEffect(() => {
+        let cancelled = false;
+        const sectionParam = activeSection ? `&section=${encodeURIComponent(activeSection)}` : "";
+        void fetch(`/api/attendance/monthly?year=${selectedYear}&month=${selectedMonth}${sectionParam}`, { cache: "no-store" })
+            .then((res) => res.json())
+            .then((data) => {
+                if (!cancelled && data.success && Array.isArray(data.schoolDays)) {
+                    const dates = data.schoolDays as string[];
+                    setAvailableHolidayDates(dates);
+                    setHolidayDates((previous) => previous.filter((date) => dates.includes(date)));
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setAvailableHolidayDates([]);
+            });
+        return () => { cancelled = true; };
+    }, [activeSection, selectedMonth, selectedYear]);
+
     async function handlePreview() {
         const monthlyData = await fetchMonthlyData();
         if (!monthlyData) return;
@@ -1029,8 +1048,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             !holidaySet.has(row.date) && !row.is_excused
         );
         const present = countableRows.filter((row) =>
-            row.time_in_status === "On Time" || row.time_in_status === "Late" ||
-            row.time_out_status === "On Time" || row.time_out_status === "Late"
+            isAttendedExportStatus(toAttendanceExportStatus(row.time_in_status))
         ).length;
         const pct = countableRows.length > 0 ? Math.round((present / countableRows.length) * 100) : 0;
         setPreview({
@@ -1046,7 +1064,15 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             setError("No records found for this month.");
             return;
         }
-        await exportMonthlySF2(monthlyData.rows, selectedYear, selectedMonth, sectionLabel, holidayDates, monthlyData.schoolDays);
+        await exportMonthlySF2(
+            monthlyData.rows,
+            selectedYear,
+            selectedMonth,
+            sectionLabel,
+            holidayDates,
+            monthlyData.schoolDays,
+            monthlyData.schoolYearLabel,
+        );
     }
 
     async function handlePrintPDF() {
@@ -1720,9 +1746,9 @@ export default function AdviserAttendancePage() {
         finally { setIsLoadingHistory(false); }
     }
 
-    const loadClassSession = useCallback(async () => {
+    const loadClassSession = useCallback(async (background = false) => {
         try {
-            setSessionLoading(true);
+            if (!background) setSessionLoading(true);
             const res = await fetch("/api/attendance/class-session", { cache: "no-store" });
             const data = await res.json();
             if (data.success) {
@@ -1736,7 +1762,7 @@ export default function AdviserAttendancePage() {
                 } else if (upcoming) {
                     setScanMessage(`Not started. Scanning opens at ${formatTime(upcoming.scheduled_start)} under ICT's saved schedule.`);
                 } else if (sessions.length === 0) {
-                    setScanMessage("Scanning is unavailable today because there is no school session.");
+                    setScanMessage(data.availability?.message || "Scanning is unavailable today because there is no school session.");
                 } else {
                     setScanMessage("Ended. Scanning is unavailable outside ICT's saved class schedule.");
                 }
@@ -1747,7 +1773,7 @@ export default function AdviserAttendancePage() {
             console.error("Failed to load class session:", error);
             setScanMessage("Failed to load class session");
         } finally {
-            setSessionLoading(false);
+            if (!background) setSessionLoading(false);
         }
     }, []);
 
@@ -1770,7 +1796,6 @@ export default function AdviserAttendancePage() {
             scanValueRef.current = "";
             setScanValue("");
             await loadClassSession();
-            setScanMessage("RFID scanning is unavailable outside this section's ICT-configured class schedule.");
             scanInFlightRef.current = false;
             inputRef.current?.focus();
             return;
@@ -1918,9 +1943,9 @@ export default function AdviserAttendancePage() {
     // the Adviser leaves this page open while a session changes state.
     useEffect(() => {
         const refreshWhenVisible = () => {
-            if (document.visibilityState === "visible") void loadClassSession();
+            if (document.visibilityState === "visible") void loadClassSession(true);
         };
-        const timer = window.setInterval(refreshWhenVisible, 300_000);
+        const timer = window.setInterval(refreshWhenVisible, 15_000);
         document.addEventListener("visibilitychange", refreshWhenVisible);
         return () => {
             window.clearInterval(timer);
@@ -1981,6 +2006,9 @@ export default function AdviserAttendancePage() {
         : undefined;
     const selectedManualLateLog = selectedStudentIds.length === 1
         ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === manualType && log.status === "Late")
+        : undefined;
+    const selectedManualAutoAbsentLog = selectedStudentIds.length === 1 && manualType === "Time In"
+        ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === "Time In" && log.status === "Absent" && log.via === "Auto")
         : undefined;
     const filteredTodayLogs = logs.filter(log => {
         const search = todayLogSearch.trim().toLowerCase();
@@ -2080,7 +2108,9 @@ export default function AdviserAttendancePage() {
                     </div>
                     <h3 className="text-sm font-bold">Class Session</h3>
                     <p className="mt-1 text-xs opacity-80">
-                        {isScanningOpen && classSession ? `${classSession.session_type} class is accepting RFID scans` : "Scanning follows the saved class schedule"}
+                        {isScanningOpen && classSession
+                            ? `${classSession.session_type} class is accepting RFID scans`
+                            : scanMessage}
                     </p>
                     {selectedSchedule ? (
                         <p className="mt-3 rounded-lg bg-white/15 px-2.5 py-2 text-[11px] leading-5 opacity-95">
@@ -2428,7 +2458,7 @@ export default function AdviserAttendancePage() {
                                                     : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
                                                 }`}>{status}</button>
                                     ))}
-                                    {selectedManualLateLog && (
+                                    {(selectedManualLateLog || selectedManualAutoAbsentLog) && (
                                         <button type="button" onClick={() => setManualStatus("Present")}
                                             className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === "Present"
                                                 ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
@@ -2436,7 +2466,7 @@ export default function AdviserAttendancePage() {
                                                 }`}>Present</button>
                                     )}
                                 </div>
-                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : ""}</p>
+                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : selectedManualAutoAbsentLog ? " Select Present with a remark to correct this system-created absence after the session." : ""}</p>
                             </div>
                             <div className="mt-4">
                                 <div className="mb-1.5 flex items-center justify-between">
@@ -2444,7 +2474,7 @@ export default function AdviserAttendancePage() {
                                     <span className="text-xs text-slate-400">Optional</span>
                                 </div>
                                 <input value={manualRemark} onChange={e => setManualRemark(e.target.value)}
-                                    placeholder="e.g. Excuse letter submitted"
+                                placeholder={selectedManualAutoAbsentLog && manualStatus === "Present" ? "Required: reason for correcting the automatic absence" : "e.g. Excuse letter submitted"}
                                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                             </div>
                             <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0}

@@ -20,7 +20,7 @@ assert.match(middleware, /pathname === "\/api\/excuse-letters"/);
 assert.doesNotMatch(middleware, /pathname\.startsWith\("\/api\/excuse-letters"\)/);
 assert.match(adviserListRoute, /await getAdviserFromToken\(\)/);
 assert.match(decisionRoute, /await getAdviserFromToken\(\)/);
-assert.match(adviserAuth, /if \(tokenAdviser\.role !== "adviser"\) return null/);
+assert.match(adviserAuth, /if \(tokenAdviser\.role !== "adviser" \|\| !isCurrentDashboardIdleSession\(payload\)\) return null/);
 
 // The list is restricted to the authenticated adviser's assigned grade and
 // section(s); a caller-provided section cannot expand that scope.

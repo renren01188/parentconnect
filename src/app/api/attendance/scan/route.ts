@@ -11,6 +11,12 @@ import { settleAttendanceNotificationTasks } from "@/lib/attendanceNotificationD
 import { normalizeRfidCard } from "@/lib/rfid";
 import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import {
+  getClassSessionAvailability,
+  getSchoolClock,
+  getSchoolYearScannerAvailability,
+  timeToMinutes,
+} from "@/lib/attendanceScannerSchedule";
 
 type ScanBody = {
   rfid_card: string;
@@ -37,82 +43,68 @@ const RFID_TIME_OUT_MIN_DELAY_SECONDS = Math.max(
   ),
 );
 
-function getToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${year}-${month}-${day}`;
-}
-
-function getNowTime() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-
-  const hour = parts.find((p) => p.type === "hour")?.value ?? "00";
-  const minute = parts.find((p) => p.type === "minute")?.value ?? "00";
-  const second = parts.find((p) => p.type === "second")?.value ?? "00";
-  return `${hour}:${minute}:${second}`;
-}
-
-function getCurrentMinutes() {
-  const [hour, minute] = getNowTime().split(":").map(Number);
-  return hour * 60 + minute;
-}
-
-function timeToMinutes(value: string) {
-  const [hour, minute] = value.slice(0, 5).split(":").map(Number);
-  return hour * 60 + minute;
-}
-
 /**
  * Determines availability and Present/Late from the saved ICT schedule.  A
  * scanner cannot be opened merely because somebody previously clicked Start.
  */
-async function getScheduledSessionStatus(): Promise<
+async function getScheduledSessionStatus(today: string, currentMinutes: number): Promise<
   | { status: "On Time" | "Late"; sessionType: ClassSessionType }
   | { unavailable: true; message: string }
 > {
-  const today = getToday();
-  const now = getCurrentMinutes();
+  type SavedSession = {
+    session_type: ClassSessionType;
+    scheduled_start: string;
+    scheduled_end: string;
+    late_after: string | null;
+    absent_after: string | null;
+    status?: string | null;
+  };
 
-  const { data: sessions } = await supabase
+  const { data: dailySessions, error: dailySessionsError } = await supabase
     .from("class_sessions")
     .select("session_type, scheduled_start, scheduled_end, late_after, absent_after, status")
     .eq("session_date", today)
     .order("scheduled_start", { ascending: true });
+  if (dailySessionsError) throw dailySessionsError;
 
-  const activeSession = sessions?.find((session) => {
-    const start = timeToMinutes(session.scheduled_start);
-    const end = timeToMinutes(session.scheduled_end);
-    return now >= start && now < end;
-  });
+  const sessions = [...((dailySessions ?? []) as SavedSession[])];
+  // The dashboard normally snapshots the saved schedule for today. Retaining
+  // this fallback keeps the server-side gate correct if a hardware reader
+  // submits before the dashboard has refreshed today's session row.
+  for (const sessionType of ["Morning", "Afternoon"] as const) {
+    if (sessions.some((session) => session.session_type === sessionType)) continue;
+    const { data: latest, error: latestError } = await supabase
+      .from("class_sessions")
+      .select("session_type, scheduled_start, scheduled_end, late_after, absent_after")
+      .eq("session_type", sessionType)
+      .lt("session_date", today)
+      .order("session_date", { ascending: false })
+      .limit(1);
+    if (latestError) throw latestError;
+    if (latest?.[0]) sessions.push(latest[0] as SavedSession);
+  }
+
+  const activeSession = sessions.find((session) =>
+    session.status !== "Ended" &&
+    getClassSessionAvailability(currentMinutes, session.scheduled_start, session.scheduled_end).available,
+  );
   if (!activeSession) {
-    if (!sessions?.length) {
+    if (!sessions.length) {
       return { unavailable: true, message: "Scanning is unavailable until ICT saves the class schedule." };
     }
-    const hasFutureSession = sessions?.some((session) => now < timeToMinutes(session.scheduled_start));
+    const nextSession = sessions.find((session) =>
+      getClassSessionAvailability(currentMinutes, session.scheduled_start, session.scheduled_end).status === "Not Started",
+    );
     return {
       unavailable: true,
-      message: hasFutureSession
-        ? "Scanning is not started yet. It opens at the ICT-configured scheduled start."
+      message: nextSession
+        ? `RFID scanning has not started. It opens at ${nextSession.scheduled_start.slice(0, 5)} under the ICT-configured class schedule.`
         : "Scanning is unavailable because the ICT-configured class schedule has ended.",
     };
   }
 
   return {
-    status: now <= timeToMinutes(activeSession.late_after ?? activeSession.scheduled_start) ? "On Time" : "Late",
+    status: currentMinutes <= timeToMinutes(activeSession.late_after ?? activeSession.scheduled_start) ? "On Time" : "Late",
     sessionType: activeSession.session_type as ClassSessionType,
   };
 }
@@ -182,7 +174,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── School year guard ────────────────────────────────────────────
-    const today = getToday();
+    // Use one Manila clock for every guard and the saved attendance timestamp.
+    // A browser or server running in another timezone must not extend a class.
+    const schoolClock = getSchoolClock();
+    const today = schoolClock.date;
     const { data: activeSY } = await supabase
       .from("school_year_config")
       .select("id, start_date, end_date, attendance_weekdays")
@@ -197,13 +192,55 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (today < activeSY.start_date || today > activeSY.end_date) {
+    const schoolYearAvailability = getSchoolYearScannerAvailability(
+      today,
+      activeSY.start_date,
+      activeSY.end_date,
+    );
+    if (!schoolYearAvailability.available) {
       return NextResponse.json(
-        { success: false, message: "Attendance scanning is only available during the active school year." },
+        { success: false, message: schoolYearAvailability.message },
         { status: 403 }
       );
     }
     // ── End guard ────────────────────────────────────────────────────
+
+    if (!isScheduledAttendanceDate(
+      today,
+      activeSY.start_date,
+      activeSY.end_date,
+      activeSY.attendance_weekdays,
+    )) {
+      return NextResponse.json(
+        { success: false, message: "Attendance scanning is unavailable because today is not a selected class day." },
+        { status: 403 }
+      );
+    }
+
+    const { data: holidayRows, error: holidayError } = await supabase
+      .from("school_holidays")
+      .select("id")
+      .eq("school_year_config_id", activeSY.id)
+      .eq("holiday_date", today)
+      .limit(1);
+    // school_holidays is optional until its migration has been applied.
+    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+    if ((holidayRows?.length ?? 0) > 0) {
+      return NextResponse.json(
+        { success: false, message: "Attendance scanning is unavailable on a school holiday." },
+        { status: 403 }
+      );
+    }
+
+    // This is deliberately before RFID/student lookup. A scan at or after the
+    // cutoff always reports the schedule state and never creates a new log.
+    const sessionStatus = await getScheduledSessionStatus(today, schoolClock.minutes);
+    if ("unavailable" in sessionStatus) {
+      return NextResponse.json(
+        { success: false, message: sessionStatus.message },
+        { status: 409 }
+      );
+    }
 
     const adviserSections: string[] =
       adviser?.sections?.length
@@ -262,42 +299,8 @@ export async function POST(req: NextRequest) {
         { status: 403 }
       );
     }
-    if (!isScheduledAttendanceDate(
-      today,
-      activeSY.start_date,
-      activeSY.end_date,
-      activeSY.attendance_weekdays,
-    )) {
-      return NextResponse.json(
-        { success: false, message: "Attendance scanning is unavailable because today is not a selected class day." },
-        { status: 403 }
-      );
-    }
-    const { data: holidayRows, error: holidayError } = await supabase
-      .from("school_holidays")
-      .select("id")
-      .eq("school_year_config_id", activeSY.id)
-      .eq("holiday_date", today)
-      .limit(1);
-    // school_holidays is optional until its migration has been applied.
-    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
-    if ((holidayRows?.length ?? 0) > 0) {
-      return NextResponse.json(
-        { success: false, message: "Attendance scanning is unavailable on a school holiday." },
-        { status: 403 }
-      );
-    }
-    const attendanceDate = getToday();
-    const timeLogged = getNowTime();
-
-    // Compute On Time / Late using the ICT-controlled saved schedule.
-    const sessionStatus = await getScheduledSessionStatus();
-    if ("unavailable" in sessionStatus) {
-      return NextResponse.json(
-        { success: false, message: sessionStatus.message },
-        { status: 409 }
-      );
-    }
+    const attendanceDate = today;
+    const timeLogged = schoolClock.time;
 
     const { status, sessionType } = sessionStatus;
 

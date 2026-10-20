@@ -749,27 +749,13 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
           action: confirm.action,
           scheduled_start: ctrl.scheduledStart,
           scheduled_end: ctrl.scheduledEnd,
+          late_after: ctrl.lateAfter,
+          absent_after: ctrl.absentAfter,
         }),
       });
       const data = await res.json();
 
       if (!data.success) throw new Error(data.message ?? "Failed to update session");
-
-      if (confirm.action === "end") {
-        try {
-          const absenceRes = await fetch("/api/attendance/mark-absent", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session_type: confirm.session }),
-          });
-          const absenceData = await absenceRes.json();
-          if (!absenceData.success) {
-            setApiError(`Class ended, but automatic absence marking failed: ${absenceData.message ?? "Unknown error"}`);
-          }
-        } catch {
-          setApiError("Class ended, but automatic absence marking could not be reached.");
-        }
-      }
 
       const time = nowTimeStr();
       const updater = (prev: ClassControl): ClassControl =>

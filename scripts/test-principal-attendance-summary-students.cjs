@@ -15,11 +15,9 @@ const invalidation = read("src/lib/realtimeInvalidation.ts");
 assert.match(route, /function isVisibleStudent/, "The summary must explicitly include non-archived students.");
 assert.match(route, /return status !== "archived" && status !== "deleted"/, "Only explicitly archived or deleted students may be excluded.");
 assert.doesNotMatch(route, /\.eq\("archive_status", "active"\)/, "Legacy imports with a null archive status must not be hidden.");
-assert.match(
-  route,
-  /\(!activeSY \|\| \(date >= activeSY\.start_date && date <= activeSY\.end_date\)\)/,
-  "An absent school-year configuration must fall back to elapsed weekdays."
-);
+assert.match(route, /const rangeStart = startDate \?\?/, "An absent school-year configuration must fall back to the selected calendar year's first date.");
+assert.match(route, /const rangeEnd = endDate \?\?/, "An absent school-year configuration must fall back to the selected calendar year's last date.");
+assert.match(route, /isScheduledAttendanceDate\(dateStr, rangeStart, rangeEnd, attendanceWeekdays\)/, "Fallback dates must still honor the configured weekday schedule.");
 assert.match(route, /activeFrom <= summaryPeriodEnd/, "Students added after the selected month must remain excluded from historical data.");
 assert.match(route, /summarySections\.set\(key, \{ key, grade: student\.grade\.trim\(\), name: student\.section!\.trim\(\) \}\)/, "Imported assignments missing from the sections catalog must still be displayed.");
 assert.doesNotMatch(route, /parent_student_links/, "The Principal attendance roster must not require a Parent link.");

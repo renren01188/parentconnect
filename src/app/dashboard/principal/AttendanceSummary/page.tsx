@@ -5,6 +5,12 @@ import type ExcelJS from "exceljs";
 import PrincipalAttendanceSummaryGuide from "../components/PrincipalAttendanceSummaryGuide";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import {
+  getAttendanceDetailStatus,
+  getSf2StatusCode,
+  isAttendedExportStatus,
+  toAttendanceExportStatus,
+} from "@/lib/attendanceExportStatus";
 
 
 // ─── Color Palette ────────────────────────────────────────────────
@@ -32,6 +38,7 @@ interface StudentRecord {
   absent: number;
   late: number;
   excused: number;
+  dailyStatuses?: Record<number, "Present" | "On Time" | "Late" | "Absent" | "Excused">;
   dailyAbsences?: Record<number, boolean>;
   dailyExcused?: Record<number, boolean>;
   active_from: string;
@@ -54,21 +61,6 @@ const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
-
-// ─── Holiday helpers ──────────────────────────────────────────────
-function getWeekdayDatesOfMonth(month: string, year: number): string[] {
-  const monthIdx = MONTHS.indexOf(month);
-  if (monthIdx < 0) return [];
-  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
-  const dates: string[] = [];
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(year, monthIdx, d).getDay();
-    if (dow !== 0 && dow !== 6) {
-      dates.push(`${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-    }
-  }
-  return dates;
-}
 
 function formatDateLabel(dateStr: string) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -94,45 +86,28 @@ const COMBINED_ROW = 48;
 const MAX_MALE_ROWS = 21;
 const MAX_FEMALE_ROWS = 17;
 
-function getSchoolDaysOfMonth(m: string, y: number): number[] {
-  const monthIdx = MONTHS.indexOf(m);
-  if (monthIdx < 0) return [];
-  const daysInMonth = new Date(y, monthIdx + 1, 0).getDate();
-  const days: number[] = [];
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(y, monthIdx, d).getDay();
-    if (dow !== 0 && dow !== 6) days.push(d);
-  }
-  return days;
-}
-
 type SchoolDayPlacement = {
+  date: string;
   day: number;
   slotIdx: number;
-  dowLabel: "M" | "T" | "W" | "TH" | "F";
+  dowLabel: "SU" | "M" | "T" | "W" | "TH" | "F" | "SA";
 };
 
-function getSchoolDayPlacements(month: string, year: number): SchoolDayPlacement[] {
+function getSchoolDayPlacements(month: string, year: number, schoolDayDates: string[]): SchoolDayPlacement[] {
   const monthIdx = MONTHS.indexOf(month);
   if (monthIdx < 0) return [];
-  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
-  const firstJsDay = new Date(year, monthIdx, 1).getDay();
-  const firstMondayBased = firstJsDay === 0 ? 6 : firstJsDay - 1;
-  const DOW_LABELS: Record<number, "M" | "T" | "W" | "TH" | "F"> = {
-    1: "M", 2: "T", 3: "W", 4: "TH", 5: "F",
-  };
-  const placements: SchoolDayPlacement[] = [];
-  for (let day = 1; day <= daysInMonth; day++) {
-    const jsDow = new Date(year, monthIdx, day).getDay();
-    if (jsDow === 0 || jsDow === 6) continue;
-    const mondayBasedDow = jsDow - 1;
-    const weekIndex = Math.floor((firstMondayBased + (day - 1)) / 7);
-    const slotIdx = weekIndex * 5 + mondayBasedDow;
-    if (slotIdx >= 0 && slotIdx < SF2_DAY_SLOTS.length) {
-      placements.push({ day, slotIdx, dowLabel: DOW_LABELS[jsDow] });
-    }
+  const prefix = `${year}-${String(monthIdx + 1).padStart(2, "0")}-`;
+  const dates = [...new Set(schoolDayDates)]
+    .filter((date) => date.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort();
+  if (dates.length > SF2_DAY_SLOTS.length) {
+    throw new Error(`The SF2 template has ${SF2_DAY_SLOTS.length} daily slots, but this school calendar has ${dates.length} class days. Use a template that supports all configured class days.`);
   }
-  return placements;
+  const labels = ["SU", "M", "T", "W", "TH", "F", "SA"] as const;
+  return dates.map((date, slotIdx) => {
+    const day = Number(date.slice(-2));
+    return { date, day, slotIdx, dowLabel: labels[new Date(Date.UTC(year, monthIdx, day)).getUTCDay()] };
+  });
 }
 
 function col0ToRef(col0: number, row: number): string {
@@ -377,24 +352,17 @@ function populateSF2Worksheet(
   year: number,
   holidayDates: string[] = [],
   schoolDayDates: string[] = [],
+  schoolYearLabel: string | null = null,
 ) {
   const maleCount = section.students.filter((student) => student.gender === "M").length;
   const femaleCount = section.students.filter((student) => student.gender === "F").length;
   const ws = copyWorksheetWithDynamicAttendanceRows(workbook, templateWs, maleCount, femaleCount);
   const holidaySet = new Set(holidayDates);
-  const allSchoolDaysList = getSchoolDaysOfMonth(month, year);
-  const monthIdx = MONTHS.indexOf(month);
-  const allSchoolDayPlacements = getSchoolDayPlacements(month, year);
-  const fallbackSchoolDays = allSchoolDaysList
-    .map((day) => `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`)
-    .filter((date) => date <= toManilaDateString());
-  const schoolDaySet = new Set(schoolDayDates.length ? schoolDayDates : fallbackSchoolDays);
+  const allSchoolDayPlacements = getSchoolDayPlacements(month, year, schoolDayDates);
+  const schoolDaySet = new Set(schoolDayDates);
 
   // Class days are the server-provided, eligible dates excluding selected holidays.
-  const classPlacements = allSchoolDayPlacements.filter(({ day }) => {
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    return schoolDaySet.has(iso) && !holidaySet.has(iso);
-  });
+  const classPlacements = allSchoolDayPlacements.filter(({ date }) => !holidaySet.has(date));
   const schoolDays = classPlacements.length;
 
   const maleStudents = section.students.filter((s) => s.gender === "M");
@@ -407,7 +375,7 @@ function populateSF2Worksheet(
   const totalRowDelta = (maleStudents.length - MAX_MALE_ROWS) + (femaleStudents.length - MAX_FEMALE_ROWS);
 
   setCellValue(ws, "F3", 107966);
-  setCellValue(ws, "M3", `${year} - ${year + 1}`);
+  setCellValue(ws, "M3", schoolYearLabel ?? `${year} - ${year + 1}`);
   setCellValue(ws, "AA3", month.toUpperCase());
   setCellValue(ws, "F4", "Santiago Elementary School");
   setCellValue(ws, "AA4", gradeLabel);
@@ -424,11 +392,10 @@ function populateSF2Worksheet(
   }
 
   // Write date headers — holidays get "H" label
-  allSchoolDayPlacements.forEach(({ day, slotIdx, dowLabel }) => {
+  allSchoolDayPlacements.forEach(({ day, date, slotIdx, dowLabel }) => {
     const [col0] = SF2_DAY_SLOTS[slotIdx];
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     setSf2DateHeader(ws, col0, day);
-    setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(iso) ? "H" : dowLabel);
+    setCellValue(ws, col0ToRef(col0, 7), holidaySet.has(date) ? "H" : dowLabel);
   });
 
   function fillRows(
@@ -447,33 +414,30 @@ function populateSF2Worksheet(
       }
 
       let absenceCount = 0;
+      let attendedCount = 0;
 
-      allSchoolDayPlacements.forEach(({ day, slotIdx }) => {
+      allSchoolDayPlacements.forEach(({ day, date: iso, slotIdx }) => {
         const [col0] = SF2_DAY_SLOTS[slotIdx];
-        const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         if (!schoolDaySet.has(iso)) return;
         if (iso < st.active_from) return;
         if (holidaySet.has(iso)) {
-          setCellValue(ws, col0ToRef(col0, row), "H");
+          setCellValue(ws, col0ToRef(col0, row), getSf2StatusCode(null, true));
           return;
         }
-        const isExcused = !!st.dailyExcused?.[day];
-        const isAbsent = !!st.dailyAbsences?.[day];
-        if (isExcused) {
-          setCellValue(ws, col0ToRef(col0, row), "E");
-          // Excused days: not counted as absent, not counted as present
-        } else if (isAbsent) {
-          setCellValue(ws, col0ToRef(col0, row), "X");
-          absenceCount += 1;
-        }
+        // The API returns the final saved Time In status for this learner and
+        // day. A missing value stays blank/No Record; it is never assumed
+        // Present merely because it is a class day.
+        const savedStatus = toAttendanceExportStatus(st.dailyStatuses?.[day]);
+        const code = getSf2StatusCode(savedStatus);
+        if (code) setCellValue(ws, col0ToRef(col0, row), code);
+        if (savedStatus === "Absent") absenceCount += 1;
+        if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
       });
 
       setCellValue(ws, `AM${row}`, absenceCount);
-      const pastClassDays = classPlacements.filter(({ day }) => {
-        const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return iso >= st.active_from;
-      }).length;
-      setCellValue(ws, `AO${row}`, pastClassDays - absenceCount);
+      // Both Present and Late are attended. Excused and No Record are not
+      // included in the rate numerator or silently treated as Present.
+      setCellValue(ws, `AO${row}`, attendedCount);
     });
 
     setCellValue(ws, `A${totalRow}`, students.length);
@@ -541,6 +505,34 @@ function populateSF2Worksheet(
   setCellFormula(ws, `AR${attendancePctRow}`, `IF(AR${registeredRow}=0,0,AR${dailyAttendanceRow}/AR${registeredRow})`);
   setCellFormula(ws, `AS${attendancePctRow}`, `IF(AS${registeredRow}=0,0,AS${dailyAttendanceRow}/AS${registeredRow})`);
   setCellFormula(ws, `AT${attendancePctRow}`, `IF(AT${registeredRow}=0,0,AT${dailyAttendanceRow}/AT${registeredRow})`);
+
+  const detailSheetName = `Attendance Detail ${section.name}`
+    .replace(/[:\\/?*\[\]]/g, "")
+    .slice(0, 31) || "Attendance Detail";
+  const detailWs = workbook.addWorksheet(detailSheetName);
+  detailWs.addRow([`Attendance detail — ${gradeLabel} ${section.name} — ${month} ${year}`]);
+  detailWs.addRow(["SF2 marks: ✓ = Present or Late, X = Absent, H = Holiday, E = approved excuse. No Record means no saved Time In status."]);
+  detailWs.addRow([]);
+  detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status"]);
+  const detailHeader = detailWs.getRow(4);
+  detailHeader.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  detailHeader.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF522081" } };
+  const detailDates = classPlacements.map(({ date }) => date);
+  for (const student of [...section.students].sort((first, second) => first.name.localeCompare(second.name))) {
+    for (const date of detailDates) {
+      const day = Number(date.slice(-2));
+      detailWs.addRow([
+        student.student_id,
+        student.name,
+        gradeLabel,
+        section.name,
+        date,
+        getAttendanceDetailStatus(toAttendanceExportStatus(student.dailyStatuses?.[day])),
+      ]);
+    }
+  }
+  detailWs.columns = [{ width: 16 }, { width: 32 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 16 }];
+  detailWs.views = [{ state: "frozen", ySplit: 4 }];
 }
 
 async function exportSF2(
@@ -550,11 +542,12 @@ async function exportSF2(
   year: number,
   holidayDates: string[] = [],
   schoolDayDates: string[] = [],
+  schoolYearLabel: string | null = null,
 ) {
   const { default: ExcelJS } = await import("exceljs");
   const workbook = await loadTemplateWorkbook(ExcelJS);
   const worksheet = getTemplateWorksheet(workbook);
-  populateSF2Worksheet(workbook, worksheet, section, gradeLabel, month, year, holidayDates, schoolDayDates);
+  populateSF2Worksheet(workbook, worksheet, section, gradeLabel, month, year, holidayDates, schoolDayDates, schoolYearLabel);
   const out = await workbook.xlsx.writeBuffer();
   downloadArrayBuffer(out as ArrayBuffer, `SF2_${section.name}_${month}_${year}.xlsx`);
 }
@@ -565,6 +558,7 @@ async function exportGradeSF2(
   year: number,
   holidayDates: string[] = [],
   schoolDayDates: string[] = [],
+  schoolYearLabel: string | null = null,
 ) {
   const { default: ExcelJS } = await import("exceljs");
   const templateWorkbook = await loadTemplateWorkbook(ExcelJS);
@@ -576,7 +570,7 @@ async function exportGradeSF2(
   for (const section of grade.sections) {
     const sheetName = String(section?.name ?? "").replace(/[:\\/?*\[\]]/g, "").substring(0, 31) || "Sheet";
     const ws = copyWorksheetToWorkbook(templateSheet, outputWorkbook, sheetName);
-    populateSF2Worksheet(outputWorkbook, ws, section, grade.label, month, year, holidayDates, schoolDayDates);
+    populateSF2Worksheet(outputWorkbook, ws, section, grade.label, month, year, holidayDates, schoolDayDates, schoolYearLabel);
   }
   const out = await outputWorkbook.xlsx.writeBuffer();
   downloadArrayBuffer(out as ArrayBuffer, `SF2_${grade.label.replace(" ", "_")}_${month}_${year}.xlsx`);
@@ -650,15 +644,16 @@ interface SF2ExportModalProps {
   month: string;
   year: number;
   schoolDayDates: string[];
+  schoolYearLabel: string | null;
   onClose: () => void;
 }
 
-function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, onClose }: SF2ExportModalProps) {
+function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, schoolYearLabel, onClose }: SF2ExportModalProps) {
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<"sf2" | "print" | null>(null);
 
-  const availableWeekdays = getWeekdayDatesOfMonth(month, year);
+  const availableWeekdays = schoolDayDates;
   const now = new Date();
   const isFuture =
     year > now.getFullYear() ||
@@ -669,7 +664,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, onCl
   async function handleExportSF2() {
     setExporting(true);
     try {
-      await exportSF2(section, gradeLabel, month, year, holidayDates, schoolDayDates);
+      await exportSF2(section, gradeLabel, month, year, holidayDates, schoolDayDates, schoolYearLabel);
       setExported("sf2");
       setTimeout(() => setExported(null), 2500);
     } catch (e) {
@@ -911,15 +906,16 @@ interface GradeSF2ExportModalProps {
   month: string;
   year: number;
   schoolDayDates: string[];
+  schoolYearLabel: string | null;
   onClose: () => void;
 }
 
-function GradeSF2ExportModal({ grade, month, year, schoolDayDates, onClose }: GradeSF2ExportModalProps) {
+function GradeSF2ExportModal({ grade, month, year, schoolDayDates, schoolYearLabel, onClose }: GradeSF2ExportModalProps) {
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<"sf2" | "print" | null>(null);
 
-  const availableWeekdays = getWeekdayDatesOfMonth(month, year);
+  const availableWeekdays = schoolDayDates;
   const now = new Date();
   const isFuture =
     year > now.getFullYear() ||
@@ -934,7 +930,7 @@ function GradeSF2ExportModal({ grade, month, year, schoolDayDates, onClose }: Gr
   async function handleExportSF2() {
     setExporting(true);
     try {
-      await exportGradeSF2(grade, month, year, holidayDates, schoolDayDates);
+      await exportGradeSF2(grade, month, year, holidayDates, schoolDayDates, schoolYearLabel);
       setExported("sf2");
       setTimeout(() => setExported(null), 2500);
     } catch (e) {
@@ -1136,6 +1132,7 @@ function ExportModal({
   month,
   year,
   schoolDayDates,
+  schoolYearLabel,
   onClose,
 }: {
   section: Section;
@@ -1143,6 +1140,7 @@ function ExportModal({
   month: string;
   year: number;
   schoolDayDates: string[];
+  schoolYearLabel: string | null;
   onClose: () => void;
 }) {
   const [showSF2Modal, setShowSF2Modal] = useState(false);
@@ -1161,6 +1159,7 @@ function ExportModal({
         month={month}
         year={year}
         schoolDayDates={schoolDayDates}
+        schoolYearLabel={schoolYearLabel}
         onClose={onClose}
       />
     );
@@ -1274,7 +1273,7 @@ function StudentTable({ students }: { students: StudentRecord[] }) {
 }
 
 // ─── Grade Export Modal (with holiday picker trigger) ─────────────
-function GradeExportModal({ grade, month, year, schoolDayDates, onClose }: { grade: GradeLevel; month: string; year: number; schoolDayDates: string[]; onClose: () => void; }) {
+function GradeExportModal({ grade, month, year, schoolDayDates, schoolYearLabel, onClose }: { grade: GradeLevel; month: string; year: number; schoolDayDates: string[]; schoolYearLabel: string | null; onClose: () => void; }) {
   const [showSF2Modal, setShowSF2Modal] = useState(false);
 
   const allStudents = grade.sections.flatMap(sec => sec.students.map(st => ({ ...st, section: sec.name, adviser: sec.adviser })));
@@ -1305,7 +1304,7 @@ function GradeExportModal({ grade, month, year, schoolDayDates, onClose }: { gra
   }
 
   if (showSF2Modal) {
-    return <GradeSF2ExportModal grade={grade} month={month} year={year} schoolDayDates={schoolDayDates} onClose={onClose} />;
+    return <GradeSF2ExportModal grade={grade} month={month} year={year} schoolDayDates={schoolDayDates} schoolYearLabel={schoolYearLabel} onClose={onClose} />;
   }
 
   return (
@@ -1416,6 +1415,7 @@ export default function AttendanceSummaryPage() {
   // ── new ──────────────────────────────────────────────────────────
   const [gradeData, setGradeData] = useState<GradeLevel[]>([]);
   const [schoolDayDates, setSchoolDayDates] = useState<string[]>([]);
+  const [schoolYearLabel, setSchoolYearLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -1455,11 +1455,13 @@ export default function AttendanceSummaryPage() {
             : null);
         }
         setSchoolDayDates(Array.isArray(json.schoolDays) ? json.schoolDays : []);
+        setSchoolYearLabel(typeof json.schoolYearLabel === "string" ? json.schoolYearLabel : null);
       } catch (err: unknown) {
         if (controller.signal.aborted) return;
         setFetchError(err instanceof Error ? err.message : "Failed to load attendance data");
         setGradeData([]);
         setSchoolDayDates([]);
+        setSchoolYearLabel(null);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -1770,6 +1772,7 @@ export default function AttendanceSummaryPage() {
           month={selectedMonth}
           year={selectedYear}
           schoolDayDates={schoolDayDates}
+          schoolYearLabel={schoolYearLabel}
           onClose={() => setShowExport(false)}
         />
       )}
@@ -1780,6 +1783,7 @@ export default function AttendanceSummaryPage() {
           month={selectedMonth}
           year={selectedYear}
           schoolDayDates={schoolDayDates}
+          schoolYearLabel={schoolYearLabel}
           onClose={() => setShowExport(false)}
         />
       )}

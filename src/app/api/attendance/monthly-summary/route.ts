@@ -206,6 +206,9 @@ export async function GET(req: NextRequest) {
         const students = studentRows.flatMap((student) => {
             if (!isVisibleStudent(student) || !assignmentKey(student.grade, student.section)) return [];
             const registeredOn = registrationDate(student.created_at);
+            // Missing created_at is common in historical imports. Keep the
+            // learner in the report from the start of its requested period;
+            // only a known later registration limits the dates shown.
             const activeFrom = registeredOn && registeredOn > summaryPeriodStart
                 ? registeredOn
                 : summaryPeriodStart;
@@ -218,7 +221,7 @@ export async function GET(req: NextRequest) {
         });
 
         // ── 4. Fetch attendance logs for the month (only valid days) ─────────────
-        let logs: LogRow[] = [];
+        const logs: LogRow[] = [];
         if (validDays.length > 0) {
             // PostgREST caps a response at the project's max row limit (1,000
             // rows here). A school-wide month can exceed that limit, so fetch
@@ -276,6 +279,7 @@ export async function GET(req: NextRequest) {
             absent: number;
             late: number;
             excused: number;
+            dailyStatuses: Record<number, AttendanceStatus>;
             active_from: string;
             dailyAbsences: Record<number, boolean>;  // day-of-month → true if absent
             dailyExcused: Record<number, boolean>;   // day-of-month → true if excused
@@ -285,10 +289,13 @@ export async function GET(req: NextRequest) {
             let present = 0, absent = 0, late = 0, excused = 0;
             const dailyAbsences: Record<number, boolean> = {};
             const dailyExcused: Record<number, boolean> = {};
+            const dailyStatuses: Record<number, AttendanceStatus> = {};
 
             for (const dateStr of validDays.filter((date) => date >= s.active_from)) {
                 const dayRecord = logMap[s.id]?.[dateStr];
                 const dayOfMonth = parseInt(dateStr.split("-")[2], 10);
+
+                if (dayRecord) dailyStatuses[dayOfMonth] = dayRecord.status;
 
                 if (dayRecord?.status === "Excused") {
                     excused++;
@@ -314,6 +321,7 @@ export async function GET(req: NextRequest) {
                 excused,
                 dailyAbsences,
                 dailyExcused,
+                dailyStatuses,
                 active_from: s.active_from,
             };
         });
@@ -389,7 +397,16 @@ export async function GET(req: NextRequest) {
             sensitivity: "base",
         }));
 
-        return NextResponse.json({ success: true, gradeData, schoolDays: validDays, month, year });
+        return NextResponse.json({
+            success: true,
+            gradeData,
+            schoolDays: validDays,
+            schoolYearLabel: activeSY
+                ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`
+                : null,
+            month,
+            year,
+        });
 
     } catch (error) {
         console.error("Monthly summary route error:", error);
