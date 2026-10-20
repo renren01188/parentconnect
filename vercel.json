@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/attendance/process-absences",
-      "schedule": "* * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
