@@ -56,6 +56,7 @@ export async function PATCH(request: NextRequest) {
 
     await logAudit({
       action: "Password Updated",
+      performedById: session.id,
       performedBy: session.name,
       performedByRole: "Guidance Counselor",
       performedByEmail: session.email || undefined,

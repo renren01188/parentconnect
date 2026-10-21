@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { acceptedGuidanceRecipientForReport, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
   getAdviserSession,
   getGuidanceSession,
@@ -49,7 +49,6 @@ export async function POST(
     }
 
     let report: RealtimeReport | null = null;
-    let currentGuidanceId: number | null = null;
 
     if (role === "parent") {
       const parent = await getParentSession();
@@ -62,7 +61,6 @@ export async function POST(
     } else if (role === "guidance") {
       const guidance = await getGuidanceSession();
       if (!guidance) return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
-      currentGuidanceId = guidance.id;
       const { data, error } = await supabase
         .from("parent_adviser_reports")
         .select("id, parent_id, adviser_id, status, escalated_to_guidance, escalated_to_principal, subject, allow_history_access")
@@ -103,23 +101,15 @@ export async function POST(
       if (report.escalated_to_principal) {
         return NextResponse.json({ success: false, message: "This report is now assigned to the Principal." }, { status: 403 });
       }
-      const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
-      if (assignedGuidanceId !== null && assignedGuidanceId !== currentGuidanceId) {
-        return NextResponse.json({ success: false, message: "This report is assigned to another Guidance user." }, { status: 403 });
-      }
     }
 
     const principalConversation = Boolean(report.escalated_to_principal);
     const guidanceConversation = !principalConversation && Boolean(report.escalated_to_guidance);
-    const guidanceId = guidanceConversation
-      ? await acceptedGuidanceRecipientForReport(reportId)
-      : null;
     await publishReportRealtimeInvalidation({
       parentId: report.parent_id,
       adviserId: principalConversation || guidanceConversation ? null : report.adviser_id,
       includeAdviser: !principalConversation && !guidanceConversation,
       includeGuidance: guidanceConversation,
-      guidanceId,
       includePrincipals: principalConversation,
       reportId,
       kind: "typing",

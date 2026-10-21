@@ -90,6 +90,9 @@ async function main() {
   if ((env.SMS_PROVIDER || "semaphore").trim().toLowerCase() !== "semaphore") {
     throw new Error("The configured SMS provider is not Semaphore.");
   }
+  const semaphoreRoute = env.SEMAPHORE_ATTENDANCE_ROUTE?.trim().toLowerCase() === "priority"
+    ? "priority"
+    : "regular";
 
   const jobs = await request(
     url,
@@ -138,7 +141,7 @@ async function main() {
   try {
     const form = new URLSearchParams({ apikey: semaphoreKey, number: String(job.recipient_phone), message });
     if (env.SEMAPHORE_SENDER_NAME) form.set("sendername", env.SEMAPHORE_SENDER_NAME);
-    response = await fetch("https://api.semaphore.co/api/v4/messages", {
+    response = await fetch(`https://api.semaphore.co/api/v4/${semaphoreRoute === "priority" ? "priority" : "messages"}`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form,
@@ -171,6 +174,7 @@ async function main() {
       provider_response: {
         provider_status: providerStatus,
         provider_message_id: String(first?.message_id ?? first?.id ?? "") || null,
+        provider_route: semaphoreRoute,
       },
       sent_at: new Date().toISOString(),
       locked_at: null,

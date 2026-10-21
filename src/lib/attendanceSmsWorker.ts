@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { isAttendanceSmsEnabled } from "@/lib/attendanceNotificationSettings";
+import { configuredAttendanceSmsRoute } from "@/lib/attendanceSmsRoute";
 import { mapWithConcurrency, retryAt } from "@/lib/deletionEmailQueue";
 import { canRetrySmsProviderError, sendSms, SmsProviderError } from "@/lib/smsProvider";
 
@@ -109,7 +110,12 @@ async function processJob(job: SmsJob) {
 
   const attempt = job.attempts + 1;
   try {
-    const result = await sendSms({ recipient: job.recipient_phone, message: job.message, queueId: job.id });
+    const result = await sendSms({
+      recipient: job.recipient_phone,
+      message: job.message,
+      queueId: job.id,
+      semaphoreRoute: configuredAttendanceSmsRoute(),
+    });
     const { error } = await supabase
       .from("attendance_sms_jobs")
       .update({

@@ -39,7 +39,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .from("ict_announcements")
       .select("id, title, audience, status")
       .eq("id", announcementId)
-      .eq("sender_id", ict.id)
       .maybeSingle();
 
     if (existingError) throw existingError;
@@ -49,7 +48,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .from("ict_announcements")
       .update({ title: title.trim(), message: message.trim(), audience, status, scheduled_at: schedule.scheduledAt })
       .eq("id", announcementId)
-      .eq("sender_id", ict.id)
       .select()
       .single();
 
@@ -74,8 +72,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (notificationError) throw notificationError;
     }
 
-    const recipients = await recipientsForRoles([...affectedRoles]);
-    recipients.push({ role: "ict", id: Number(ict.id) });
+    // Every active ICT account shares this announcement workspace.
+    const recipients = await recipientsForRoles(["ict", ...affectedRoles]);
     await publishRealtimeInvalidation(recipients, "announcements");
 
     await logAnnouncementAudit({
@@ -106,7 +104,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       .from("ict_announcements")
       .select("id, title, audience, status")
       .eq("id", announcementId)
-      .eq("sender_id", ict.id)
       .maybeSingle();
 
     if (existingError) throw existingError;
@@ -122,16 +119,15 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { error } = await supabase
       .from("ict_announcements")
       .delete()
-      .eq("id", announcementId)
-      .eq("sender_id", ict.id);
+      .eq("id", announcementId);
 
     if (error) throw error;
 
     const audience = normalizeIctAnnouncementAudience(existing.audience) ?? [];
-    const recipients = await recipientsForRoles(
-      existing.status === "Published" ? ictAnnouncementRecipientRoles(audience) : [],
-    );
-    recipients.push({ role: "ict", id: Number(ict.id) });
+    const recipients = await recipientsForRoles([
+      "ict",
+      ...(existing.status === "Published" ? ictAnnouncementRecipientRoles(audience) : []),
+    ]);
     await publishRealtimeInvalidation(recipients, "announcements");
 
     await logAnnouncementAudit({

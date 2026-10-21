@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { sendGuidancePrincipalEscalationEmail } from "@/lib/mailer";
 import { getGuidanceSession, listMessages, toGuidanceReport, unreadGuidanceMessageIds } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
-import { acceptedGuidanceRecipientForReport, publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -38,10 +38,6 @@ export async function PATCH(
       .maybeSingle();
     if (currentReportError) throw currentReportError;
     if (!currentReport) return NextResponse.json({ success: false, message: "Escalated report not found." }, { status: 404 });
-    const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
-    if (assignedGuidanceId !== null && assignedGuidanceId !== guidance.id) {
-      return NextResponse.json({ success: false, message: "This report is assigned to another Guidance user." }, { status: 403 });
-    }
     if (String(currentReport.status ?? "").toLowerCase() === "cancelled") {
       return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });
     }

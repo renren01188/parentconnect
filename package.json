@@ -10,6 +10,7 @@
     "test:sf1-names": "node scripts/test-sf1-names.cjs",
     "test:lrn-input-limit": "node scripts/test-lrn-input-limit.cjs",
     "test:attendance-sms": "node scripts/test-attendance-sms.cjs",
+    "test:attendance-sms-priority-route": "node scripts/test-attendance-sms-priority-route.cjs",
     "test:attendance-sms-live": "node scripts/verify-attendance-sms-live.cjs",
     "test:attendance-rate": "node scripts/test-attendance-rate.cjs",
     "test:parent-attendance-history": "node scripts/test-parent-attendance-history.cjs",

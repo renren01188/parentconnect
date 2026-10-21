@@ -1,12 +1,20 @@
 export type SmsProviderName = "semaphore" | "unisms";
+export type SemaphoreSmsRoute = "regular" | "priority";
 
 export type SmsSendResult = {
   provider: SmsProviderName;
+  // The Semaphore endpoint used for this message. UniSMS has no equivalent
+  // route, so its result is null.
+  providerRoute: SemaphoreSmsRoute | null;
   providerMessageId: string | null;
   providerStatus: string;
   // Only delivery metadata is persisted. Provider payloads can echo a phone
   // number or SMS content, so they must not be copied into application logs.
-  response: { provider_status: string; provider_message_id: string | null };
+  response: {
+    provider_status: string;
+    provider_message_id: string | null;
+    provider_route: SemaphoreSmsRoute | null;
+  };
 };
 
 export class SmsProviderError extends Error {
@@ -137,7 +145,17 @@ function unismsDetails(body: unknown) {
   };
 }
 
-export async function sendSms({ recipient, message, queueId }: { recipient: string; message: string; queueId: string }): Promise<SmsSendResult> {
+export async function sendSms({
+  recipient,
+  message,
+  queueId,
+  semaphoreRoute = "regular",
+}: {
+  recipient: string;
+  message: string;
+  queueId: string;
+  semaphoreRoute?: SemaphoreSmsRoute;
+}): Promise<SmsSendResult> {
   const provider = configuredProvider();
   let response: Response;
 
@@ -147,7 +165,8 @@ export async function sendSms({ recipient, message, queueId }: { recipient: stri
       if (!apiKey) throw new SmsProviderError("SEMAPHORE_API_KEY is not configured.", false);
       const form = new URLSearchParams({ apikey: apiKey, number: recipient, message });
       if (process.env.SEMAPHORE_SENDER_NAME) form.set("sendername", process.env.SEMAPHORE_SENDER_NAME);
-      response = await fetch("https://api.semaphore.co/api/v4/messages", {
+      const endpoint = semaphoreRoute === "priority" ? "priority" : "messages";
+      response = await fetch(`https://api.semaphore.co/api/v4/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form,
@@ -192,10 +211,12 @@ export async function sendSms({ recipient, message, queueId }: { recipient: stri
   }
   return {
     provider,
+    providerRoute: provider === "semaphore" ? semaphoreRoute : null,
     ...details,
     response: {
       provider_status: details.providerStatus,
       provider_message_id: details.providerMessageId,
+      provider_route: provider === "semaphore" ? semaphoreRoute : null,
     },
   };
 }

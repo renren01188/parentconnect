@@ -84,6 +84,7 @@ export async function PATCH(req: NextRequest) {
     if (insertError) throw insertError;
     await logAudit({
       action: "Update",
+      performedById: session.id,
       performedBy: fullName(current) || "Guidance Counselor",
       performedByRole: "Guidance Counselor",
       performedByEmail: current.email ?? undefined,

@@ -31,28 +31,16 @@ import {
   isAttendedAttendanceStatus,
 } from "@/lib/attendanceRate.cjs";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
-import { markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
+import { hasReachedSessionEnd, markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
 import { normalizeStudentAge } from "@/lib/studentAge";
+import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
+import { resolveTodayAttendanceStatus } from "@/lib/todayAttendanceStatus";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
-}
-
-function getToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${year}-${month}-${day}`;
 }
 
 type AttendanceLog = {
@@ -74,7 +62,6 @@ type RosterStudent = {
   section: string;
   rfid_card: string | null;
   class_session: string | null;
-  created_at: string | null;
   archive_status: string | null;
 };
 
@@ -175,7 +162,7 @@ async function listAdviserRoster(grade: string, section: string) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
       .from("students")
-      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, class_session, created_at, archive_status")
+      .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, rfid_card, class_session, archive_status")
       .eq("grade", grade)
       .eq("section", section)
       .eq("archive_status", "active")
@@ -528,7 +515,8 @@ export async function GET(req: NextRequest) {
       getCurrentSchoolYear(),
     ]);
 
-    const today = getToday();
+    const schoolClock = getSchoolClock();
+    const today = schoolClock.date;
 
     const isTodayScheduledClassDay = !!currentSchoolYear
       && isScheduledAttendanceDate(
@@ -624,18 +612,6 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Fetch registration dates to avoid marking brand-new students as Absent
-    const registeredTodayIds = new Set<string>();
-    if (studentIds.length > 0) {
-      for (const student of rowsForCalculation) {
-        if (student.created_at) {
-          const regDate = new Date(new Date(student.created_at).getTime() + 8 * 60 * 60 * 1000)
-            .toISOString().split("T")[0];
-          if (regDate === today) registeredTodayIds.add(student.student_id);
-        }
-      }
-    }
-
     let excusedStudentIds = new Set<string>();
     if (studentIds.length > 0) {
       const { data: approvedExcuses, error: excusesError } = await supabase
@@ -716,16 +692,16 @@ export async function GET(req: NextRequest) {
       const recordedStatus = classSession
         ? todayLogByStudentAndSession.get(`${row.student_id}|${classSession}`)
         : undefined;
-      // The Student panel displays only durable attendance records. Once a
-      // class ends, the shared processor creates its missing Absent records;
-      // it never guesses an absence in the UI or overwrites a scan/excuse.
-      const todayStatus = !isTodayScheduledClassDay || !session
-        ? "No Classes"
-        : row.student_id && registeredTodayIds.has(row.student_id)
-          ? "—"
-          : row.student_id && excusedStudentIds.has(row.student_id)
-            ? "Excused"
-            : recordedStatus ?? "—";
+      const todayStatus = resolveTodayAttendanceStatus({
+        isScheduledClassDay: isTodayScheduledClassDay,
+        hasScheduledSession: Boolean(session),
+        hasApprovedExcuse: Boolean(row.student_id) && excusedStudentIds.has(row.student_id),
+        recordedStatus,
+        // The automatic-absence worker writes the durable record at this
+        // same boundary. This UI guard also prevents a manually-entered
+        // absence from appearing prematurely.
+        sessionEnded: Boolean(session && hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)),
+      });
 
       return {
         ...row,

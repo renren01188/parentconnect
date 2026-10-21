@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
+import { logAudit } from "@/lib/audit";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -83,6 +84,25 @@ export async function POST(req: NextRequest) {
     const { token: newToken } = await issueDashboardIdleSession({ ...payload, passwordSet: true });
 
     cookieStore.set("ict_token", newToken, dashboardSessionCookieOptions);
+
+    const name = [payload.first_name, payload.middle_name, payload.last_name, payload.suffix]
+      .filter((part): part is string => typeof part === "string" && Boolean(part))
+      .join(" ") || "ICT Admin";
+    await logAudit({
+      action: "Password Activated",
+      performedById: data.id,
+      performedBy: name,
+      performedByRole: "ICT Admin",
+      performedByEmail: typeof payload.email === "string" ? payload.email : undefined,
+      targetUser: name,
+      targetRole: "ICT Admin",
+      targetEmail: typeof payload.email === "string" ? payload.email : undefined,
+      targetType: "user",
+      targetId: data.id,
+      module: "Auth",
+      newStatus: "Active",
+      details: "Activated their ICT account and set a permanent password.",
+    });
 
     return NextResponse.json({
       success: true,

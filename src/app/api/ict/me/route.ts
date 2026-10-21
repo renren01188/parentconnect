@@ -40,10 +40,22 @@ async function getIctSession() {
   try {
     const verified = await jwtVerify(token, SECRET);
     if (verified.payload.role !== "ict" || !isCurrentDashboardIdleSession(verified.payload)) return null;
+    const ictId = Number(verified.payload.id);
+    if (!Number.isSafeInteger(ictId) || ictId <= 0) return null;
+
+    // Direct API calls must follow the same active-account and first-login
+    // boundary as the ICT dashboard routes.
+    const { data: account, error } = await supabase
+      .from("ict_admins")
+      .select("status, archive_status, password_set")
+      .eq("id", ictId)
+      .maybeSingle();
+    const passwordSet = account?.password_set == null || account?.password_set === true || account?.password_set === 1;
+    if (error || !account || account.status !== "active" || account.archive_status === "archived" || !passwordSet) return null;
 
     return {
       payload: verified.payload,
-      ictId: Number(verified.payload.id),
+      ictId,
     };
   } catch {
     return null;
@@ -178,6 +190,7 @@ export async function PATCH(req: NextRequest) {
 
     await logAudit({
       action: "Update",
+      performedById: session.ictId,
       performedBy: getFullName(data) || "ICT Admin",
       performedByRole: "ICT Admin",
       performedByEmail: data.email,

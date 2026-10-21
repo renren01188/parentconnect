@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
     cookieStore.set("guidance_token", token, dashboardSessionCookieOptions);
 
     const fullName = [guidance.first_name, guidance.middle_name, guidance.last_name, guidance.suffix].filter(Boolean).join(" ") || "Guidance Counselor";
-    await logAudit({ action: "Login", performedBy: fullName, performedByRole: "Guidance Counselor", performedByEmail: guidance.email, module: "Auth", details: `Guidance Counselor "${fullName}" logged in.` });
+    await logAudit({ action: "Login", performedById: guidance.id, performedBy: fullName, performedByRole: "Guidance Counselor", performedByEmail: guidance.email, module: "Auth", details: `Guidance Counselor "${fullName}" logged in.` });
 
     return NextResponse.json({
       success: true,

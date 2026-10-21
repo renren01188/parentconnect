@@ -174,16 +174,13 @@ assert.match(reportRealtimeHook, /if \(invalidation\.scope === "tickets"\)/);
 assert.match(guidanceReports, /onTicketUpdate: async \(\) => \{ await refreshTickets\("background"\); \}/);
 assert.match(guidanceNotificationContext, /if \(scope === "tickets"\)[\s\S]*?Promise\.all\(\[refreshGuidanceCounts\(\), refreshNotificationCounts\(\)\]\)/);
 
-// After Guidance accepts a ticket, report messages and ephemeral typing use
-// the accepted counselor's opaque channel. Older ticketless escalations keep
-// the existing active-Guidance fallback, so no authorized conversation loses
-// live updates during a migration.
-assert.match(realtimePublisher, /async function acceptedGuidanceRecipientForReport\(reportId: number\)/);
-assert.match(realtimePublisher, /guidanceId\?: number \| null/);
-assert.match(realtimePublisher, /\{ id: Number\(guidanceId\) \}/);
-assert.match(messageRoute, /await acceptedGuidanceRecipientForReport\(reportId\)/);
-assert.match(messageRoute, /guidanceId,/);
-assert.match(reportPresenceRoute, /await acceptedGuidanceRecipientForReport\(reportId\)/);
+// Guidance report messages and typing are shared with every active Guidance
+// account. A ticket assignee is a coordination field, never a visibility or
+// Realtime recipient boundary.
+assert.doesNotMatch(realtimePublisher, /acceptedGuidanceRecipientForReport|guidanceId\?: number \| null/);
+assert.match(realtimePublisher, /from\("guidance_counselors"\)\.select\("id"\)\.eq\("status", "active"\)/);
+assert.doesNotMatch(messageRoute, /acceptedGuidanceRecipientForReport|assigned to another Guidance user/);
+assert.doesNotMatch(reportPresenceRoute, /acceptedGuidanceRecipientForReport|assigned to another Guidance user/);
 assert.match(reportPresenceRoute, /kind: "typing"/);
 assert.match(parentReports, /useReportTyping\(selectedReportId, "parent"\)/);
 assert.match(parentReports, /reportTyping\.onDraftChange\(hasDraft\)/);

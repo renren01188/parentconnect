@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
+import { logAudit } from "@/lib/audit";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -92,6 +93,25 @@ export async function POST(req: NextRequest) {
     const { token: newToken } = await issueDashboardIdleSession({ ...payload, passwordSet: true, sessionIssuedAt: Date.now() });
 
     cookieStore.set("guidance_token", newToken, dashboardSessionCookieOptions);
+
+    const name = [payload.first_name, payload.middle_name, payload.last_name, payload.suffix]
+      .filter((part): part is string => typeof part === "string" && Boolean(part))
+      .join(" ") || "Guidance Counselor";
+    await logAudit({
+      action: "Password Activated",
+      performedById: data.id,
+      performedBy: name,
+      performedByRole: "Guidance Counselor",
+      performedByEmail: typeof payload.email === "string" ? payload.email : undefined,
+      targetUser: name,
+      targetRole: "Guidance Counselor",
+      targetEmail: typeof payload.email === "string" ? payload.email : undefined,
+      targetType: "user",
+      targetId: data.id,
+      module: "Auth",
+      newStatus: "Active",
+      details: "Activated their Guidance account and set a permanent password.",
+    });
 
     return NextResponse.json({
       success: true,

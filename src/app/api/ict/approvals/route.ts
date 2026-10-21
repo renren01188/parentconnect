@@ -193,7 +193,8 @@ export async function PATCH(req: NextRequest) {
             if (updateError) throw updateError;
             await logAudit({
                 action: action === "approve" ? "Approve" : "Reject",
-                performedBy: "ICT Admin",
+                performedById: session.ictId,
+                performedBy: `ICT Admin #${session.ictId}`,
                 performedByRole: "ICT Admin",
                 targetUser: requestData.guidance_name,
                 targetRole: "Guidance Counselor",
@@ -372,7 +373,8 @@ export async function PATCH(req: NextRequest) {
 
         await logAudit({
             action: action === "approve" ? "Approve" : "Reject",
-            performedBy: "ICT Admin",
+            performedById: session.ictId,
+            performedBy: `ICT Admin #${session.ictId}`,
             performedByRole: "ICT Admin",
             targetUser: requestData.adviser_name,
             targetRole: "Adviser",

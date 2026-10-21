@@ -210,7 +210,7 @@ export default function AnnouncementsPage() {
 
       <div className="inline-flex w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:w-fit" role="tablist" aria-label="Announcement source">
         <button type="button" role="tab" aria-selected={activeTab === "incoming"} onClick={() => setActiveTab("incoming")} className={`min-h-11 flex-1 px-4 text-sm font-bold transition sm:flex-none ${activeTab === "incoming" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"}`}>Incoming Announcements</button>
-        <button type="button" role="tab" aria-selected={activeTab === "mine"} onClick={() => setActiveTab("mine")} className={`min-h-11 flex-1 px-4 text-sm font-bold transition sm:flex-none ${activeTab === "mine" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"}`}>My Announcements</button>
+        <button type="button" role="tab" aria-selected={activeTab === "mine"} onClick={() => setActiveTab("mine")} className={`min-h-11 flex-1 px-4 text-sm font-bold transition sm:flex-none ${activeTab === "mine" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"}`}>Guidance Announcements</button>
       </div>
 
       {loading ? (
@@ -237,7 +237,7 @@ export default function AnnouncementsPage() {
           </section>
         )
       ) : myAnnouncements.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><p className="font-bold text-slate-700">No announcements yet.</p><p className="mt-1 text-sm text-slate-400">Your published and scheduled announcements will appear here.</p></div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><p className="font-bold text-slate-700">No announcements yet.</p><p className="mt-1 text-sm text-slate-400">Published and scheduled announcements from the Guidance team will appear here.</p></div>
       ) : (
         <section className="flex flex-col gap-3">
           {myAnnouncements.map((announcement) => (

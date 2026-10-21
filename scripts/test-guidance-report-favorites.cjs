@@ -19,15 +19,14 @@ assert.match(migration, /PRIMARY KEY \(guidance_id, report_id\)/);
 const favoriteTableDefinition = migration.match(/CREATE TABLE[\s\S]*?\n\);/)?.[0] ?? "";
 assert.doesNotMatch(favoriteTableDefinition, /\b(status|guidance_seen_at|escalated_to_guidance)\b/);
 
-// Server operations are tied to the authenticated counselor and reuse the
-// accepted-ticket assignment boundary already used by the Guidance feed.
+// Favorites remain tied to the authenticated counselor while the underlying
+// escalated report workspace is shared by the Guidance role.
 assert.match(route, /getGuidanceSession/);
 assert.match(route, /\.eq\("guidance_id", guidance\.id\)/);
-assert.match(route, /listGuidanceTickets\(\[reportId\], false\)/);
-assert.match(route, /assignedGuidanceId !== guidanceId/);
 assert.match(route, /onConflict: "guidance_id,report_id"/);
 assert.match(route, /\.delete\(\)[\s\S]*?\.eq\("guidance_id", guidance\.id\)[\s\S]*?\.eq\("report_id", reportId\)/);
 assert.doesNotMatch(route, /parent_adviser_reports"\)[\s\S]{0,250}\.update\(/);
+assert.doesNotMatch(route, /assignedGuidanceId|listGuidanceTickets/);
 
 // The report-card action has an accessible star control, and only the derived
 // ordering changes. The existing report data remains the source of unread and

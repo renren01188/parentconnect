@@ -18,7 +18,6 @@ export async function GET() {
     const { data, error } = await supabase
       .from("guidance_announcements")
       .select("*")
-      .eq("guidance_id", guidance.id)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -70,11 +69,11 @@ export async function POST(req: NextRequest) {
     if (status === "Published") {
       await deliverGuidanceAnnouncement(ann, audience);
 
-      const recipientRoles: RealtimeRecipientRole[] = [];
+      // Guidance announcements are shared by all active Guidance accounts.
+      const recipientRoles: RealtimeRecipientRole[] = ["guidance"];
       if (audience === "Parents" || audience === "Both") recipientRoles.push("parent");
       if (audience === "Class Advisers" || audience === "Both") recipientRoles.push("adviser");
       const recipients = await recipientsForRoles(recipientRoles);
-      recipients.push({ role: "guidance", id: Number(guidance.id) });
       await publishRealtimeInvalidation(recipients, "announcements");
     }
 

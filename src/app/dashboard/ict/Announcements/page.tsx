@@ -314,7 +314,7 @@ export default function ICTAnnouncementsPage() {
           role="tab"
           aria-selected={activeTab === "mine"}
         >
-          My Announcements
+          ICT Announcements
         </button>
       </div></div>
 
@@ -327,7 +327,7 @@ export default function ICTAnnouncementsPage() {
         ) : activeAnnouncements.length === 0 ? (
           <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-10 flex flex-col items-center gap-2">
             <p className="text-sm font-semibold text-gray-700">No announcements yet</p>
-            <p className="text-xs text-gray-400">Your published and scheduled announcements will appear here.</p>
+            <p className="text-xs text-gray-400">Published and scheduled announcements from the ICT team will appear here.</p>
           </div>
         ) : (
           activeAnnouncements.map((announcement) => (

@@ -19,8 +19,10 @@ export async function POST() {
         .filter(Boolean).join(" ") || "Unknown ICT Admin";
       await logAudit({
         action:          "Logout",
+        performedById:   Number(payload.id),
         performedBy:     name,
         performedByRole: "ICT Admin",
+        performedByEmail: typeof payload.email === "string" ? payload.email : undefined,
         details:         `ICT Admin "${name}" logged out.`,
         module:          "Auth",
       });

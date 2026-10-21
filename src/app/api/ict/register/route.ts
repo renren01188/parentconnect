@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { sendIctTempPasswordEmail } from "@/lib/mailer";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { logAudit } from "@/lib/audit";
 import {
   assertStaffEmployeeIdAvailable,
   isStaffEmployeeIdConflict,
@@ -19,7 +20,8 @@ function generateTempPassword(): string {
 
 export async function POST(req: NextRequest) {
   try {
-    if (!(await getActiveIct())) {
+    const ict = await getActiveIct();
+    if (!ict) {
       return NextResponse.json({ success: false, message: "ICT administrator access is required." }, { status: 403 });
     }
 
@@ -105,6 +107,22 @@ export async function POST(req: NextRequest) {
         { status: 503 },
       );
     }
+
+    await logAudit({
+      action: "Account Created",
+      performedById: ict.id,
+      performedBy: [ict.first_name, ict.middle_name, ict.last_name, ict.suffix].filter(Boolean).join(" ") || "ICT Admin",
+      performedByRole: "ICT Admin",
+      performedByEmail: ict.email,
+      targetUser: `${firstName.trim()} ${lastName.trim()}`,
+      targetRole: "ICT Admin",
+      targetEmail: normalizedEmail,
+      targetType: "user",
+      targetId: createdIct.id,
+      module: "User Management",
+      newStatus: "Pending Activation",
+      details: "Created an ICT account and sent its activation password.",
+    });
 
     await publishAccountRealtimeInvalidation([{ role: "ict", id: Number(createdIct.id) }]);
 

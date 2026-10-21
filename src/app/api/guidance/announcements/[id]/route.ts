@@ -34,7 +34,6 @@ export async function PATCH(
       .from("guidance_announcements")
       .select("id, title, audience, status")
       .eq("id", id)
-      .eq("guidance_id", guidance.id)
       .maybeSingle();
     if (existingError) throw existingError;
     if (!existing) return NextResponse.json({ success: false, message: "Announcement not found." }, { status: 404 });
@@ -52,7 +51,6 @@ export async function PATCH(
       .from("guidance_announcements")
       .update(updatePayload)
       .eq("id", id)
-      .eq("guidance_id", guidance.id)
       .select("*")
       .single();
 
@@ -84,7 +82,6 @@ export async function PATCH(
       if (nextAudience === "Class Advisers" || nextAudience === "Both") roles.add("adviser");
     }
     const recipients = await recipientsForRoles([...roles]);
-    recipients.push({ role: "guidance", id: Number(guidance.id) });
     await publishRealtimeInvalidation(recipients, "announcements");
 
     await logAnnouncementAudit({
@@ -121,7 +118,6 @@ export async function DELETE(
       .from("guidance_announcements")
       .select("id, title, audience, status")
       .eq("id", id)
-      .eq("guidance_id", guidance.id)
       .maybeSingle();
 
     if (announcementLookupError) throw announcementLookupError;
@@ -142,8 +138,7 @@ export async function DELETE(
     const { error } = await supabase
       .from("guidance_announcements")
       .delete()
-      .eq("id", id)
-      .eq("guidance_id", guidance.id);
+      .eq("id", id);
 
     if (error) throw error;
 
@@ -154,8 +149,8 @@ export async function DELETE(
     const recipientRoles: RealtimeRecipientRole[] = [];
     if (announcement.status === "Published" && (audience === "Parents" || audience === "Both")) recipientRoles.push("parent");
     if (announcement.status === "Published" && (audience === "Class Advisers" || audience === "Both")) recipientRoles.push("adviser");
+    recipientRoles.push("guidance");
     const recipients = await recipientsForRoles(recipientRoles);
-    recipients.push({ role: "guidance", id: Number(guidance.id) });
     await publishRealtimeInvalidation(recipients, "announcements");
 
     await logAnnouncementAudit({

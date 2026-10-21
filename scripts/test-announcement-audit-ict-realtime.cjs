@@ -59,6 +59,15 @@ assert.match(ictRoute, /normalizeIctAnnouncementAudience\(rawAudience\)/);
 assert.match(ictRoute, /ictAnnouncementRecipientRoles\(audience\)/);
 assert.match(ictRoute, /await publishRealtimeInvalidation\(recipients, "announcements"\)/);
 
+// ICT and Guidance announce from shared role workspaces. All accounts within
+// the role see and can maintain one canonical set of announcements.
+assert.doesNotMatch(ictRoute, /\.eq\("sender_id", ict\.id\)/);
+assert.doesNotMatch(ictMutationRoute, /\.eq\("sender_id", ict\.id\)/);
+assert.match(ictRoute, /\["ict", \.\.\.ictAnnouncementRecipientRoles\(audience\)\]/);
+assert.doesNotMatch(guidanceRoute, /\.eq\("guidance_id", guidance\.id\)/);
+assert.doesNotMatch(guidanceMutationRoute, /\.eq\("guidance_id", guidance\.id\)/);
+assert.match(guidanceRoute, /RealtimeRecipientRole\[\] = \["guidance"\]/);
+
 // Parent delivery remains per-recipient and durable. Editing an ICT
 // announcement refreshes both the prior and new audiences; deletion removes
 // its durable rows before invalidating only its original published audience.

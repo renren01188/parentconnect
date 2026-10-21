@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getGuidanceSession, listGuidanceTickets } from "../../parent-adviser/_lib";
+import { getGuidanceSession } from "../../parent-adviser/_lib";
 
 function validReportId(value: unknown) {
   const reportId = Number(value);
@@ -8,12 +8,11 @@ function validReportId(value: unknown) {
 }
 
 /**
- * Mirrors the Guidance report-feed boundary: an active counselor can access
- * unassigned legacy escalations, while an accepted ticket stays private to its
- * assigned counselor. Favorites are personal, but must never become a way to
- * discover or retain access to another counselor's report.
+ * Favorites are personal, while escalated reports are visible to every active
+ * Guidance account. This check therefore validates only role-wide report
+ * access; it never turns a personal favorite into shared report state.
  */
-async function ensureGuidanceCanAccessReport(reportId: number, guidanceId: number) {
+async function ensureGuidanceCanAccessReport(reportId: number) {
   const { data: report, error } = await supabase
     .from("parent_adviser_reports")
     .select("id")
@@ -22,17 +21,6 @@ async function ensureGuidanceCanAccessReport(reportId: number, guidanceId: numbe
     .maybeSingle();
   if (error) throw error;
   if (!report) return { ok: false as const, status: 404, message: "Escalated report not found." };
-
-  const ticket = (await listGuidanceTickets([reportId], false)).get(reportId);
-  const assignedGuidanceId = Number(ticket?.assigned_guidance_id);
-  if (
-    ticket?.status === "accepted"
-    && Number.isSafeInteger(assignedGuidanceId)
-    && assignedGuidanceId > 0
-    && assignedGuidanceId !== guidanceId
-  ) {
-    return { ok: false as const, status: 403, message: "This report is assigned to another Guidance user." };
-  }
 
   return { ok: true as const };
 }
@@ -76,7 +64,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, message: "A report and favorite state are required." }, { status: 400 });
     }
 
-    const authorization = await ensureGuidanceCanAccessReport(reportId, guidance.id);
+    const authorization = await ensureGuidanceCanAccessReport(reportId);
     if (!authorization.ok) {
       return NextResponse.json({ success: false, message: authorization.message }, { status: authorization.status });
     }

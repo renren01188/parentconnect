@@ -24,7 +24,6 @@ export async function GET() {
     const { data, error } = await supabase
       .from("ict_announcements")
       .select("*")
-      .eq("sender_id", ict.id)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -88,9 +87,10 @@ export async function POST(req: NextRequest) {
     if (status === "Published") {
       await deliverIctAnnouncement(ann, senderName);
 
-      const recipientRoles: RealtimeRecipientRole[] = [...ictAnnouncementRecipientRoles(audience)];
+      // ICT announcements are maintained by the ICT role as one shared
+      // workspace. All active ICT accounts must refresh the same list.
+      const recipientRoles: RealtimeRecipientRole[] = ["ict", ...ictAnnouncementRecipientRoles(audience)];
       const recipients = await recipientsForRoles(recipientRoles);
-      recipients.push({ role: "ict", id: Number(ict.id) });
       await publishRealtimeInvalidation(recipients, "announcements");
     }
 

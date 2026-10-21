@@ -282,8 +282,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (role === "guidance") {
-      const guidance = await getGuidanceSession();
-      if (!guidance) {
+      if (!await getGuidanceSession()) {
         return NextResponse.json({ success: false, message: "Not authenticated." }, { status: 401 });
       }
 
@@ -297,20 +296,10 @@ export async function GET(req: NextRequest) {
 
       if (error) throw error;
 
-      const candidateRows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
-      const tickets = await listGuidanceTickets(candidateRows.map((row) => row.id), !summary);
-      // A report with an accepted ticket is an assigned one-counselor
-      // conversation. Keep legacy escalations with no assignment available
-      // to active Guidance accounts, matching the existing fallback used by
-      // the Realtime publisher.
-      const rows = candidateRows.filter((row) => {
-        const ticket = tickets.get(row.id);
-        const assignedGuidanceId = Number(ticket?.assigned_guidance_id);
-        return ticket?.status !== "accepted"
-          || !Number.isSafeInteger(assignedGuidanceId)
-          || assignedGuidanceId <= 0
-          || assignedGuidanceId === guidance.id;
-      });
+      // Escalated cases are a role-wide Guidance workspace. Ticket assignment
+      // remains a coordination detail, never a visibility or write boundary.
+      const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+      const tickets = await listGuidanceTickets(rows.map((row) => row.id), !summary);
       const messages = await (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id));
       return NextResponse.json({
         success: true,

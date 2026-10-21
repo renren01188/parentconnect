@@ -91,8 +91,10 @@ export async function POST(req: NextRequest) {
     // ── Audit log ──
     await logAudit({
       action:          "Login",
+      performedById:   ict.id,
       performedBy:     fullName,
       performedByRole: "ICT Admin",
+      performedByEmail: ict.email,
       details:         `ICT Admin "${fullName}" logged in.`,
       module:          "Auth",
     });

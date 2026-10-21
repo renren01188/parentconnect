@@ -56,6 +56,7 @@ const absence = loadTypeScriptModule("src/lib/automaticAttendanceAbsence.ts", {
     },
   },
 });
+const todayStatus = loadTypeScriptModule("src/lib/todayAttendanceStatus.ts");
 
 // A session finishes at scheduled_end. The optional Absence After field is
 // not an additional delay and RFID availability has no bearing on this rule.
@@ -114,6 +115,32 @@ const repeatRun = absence.studentsMissingSessionAttendance({
 });
 assert.deepEqual(repeatRun, [], "A second run cannot create a duplicate absence.");
 
+const scheduledSession = {
+  isScheduledClassDay: true,
+  hasScheduledSession: true,
+  hasApprovedExcuse: false,
+};
+assert.equal(
+  todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Present", sessionEnded: false }),
+  "Present",
+  "A recorded RFID Time In must appear immediately, even before the class ends.",
+);
+assert.equal(
+  todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Late", sessionEnded: false }),
+  "Late",
+  "A late Time In must appear immediately, even before the class ends.",
+);
+assert.equal(
+  todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Absent", sessionEnded: false }),
+  "—",
+  "Absent must remain pending until the scheduled session ends.",
+);
+assert.equal(
+  todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Absent", sessionEnded: true }),
+  "Absent",
+  "A durable absence must appear after the scheduled session ends.",
+);
+
 const processor = read("src/lib/automaticAttendanceAbsence.ts");
 const studentRoute = read("src/app/api/students/route.ts");
 const studentPage = read("src/app/dashboard/adviser/students/page.tsx");
@@ -136,7 +163,9 @@ assert.match(processor, /isScheduledAttendanceDate/);
 assert.match(processor, /school_holidays/);
 assert.match(processor, /sessionEnd: session\.scheduled_end/, "The session-end processor must evaluate same-day enrolment against the saved session end.");
 assert.match(studentRoute, /markAutomaticAbsences\(\{[\s\S]*?scope: \{ grade: adviser\.grade \?\? "", sections: \[activeSection\] \}/);
-assert.match(studentRoute, /recordedStatus \?\? "—"/, "The adviser panel must render actual records, not infer an absence.");
+assert.match(studentRoute, /resolveTodayAttendanceStatus/, "The adviser panel must render durable Present\/Late records immediately.");
+assert.match(studentRoute, /hasReachedSessionEnd\(schoolClock\.minutes, session\.scheduled_end\)/, "The adviser panel must defer Absent until the scheduled session ends.");
+assert.doesNotMatch(studentRoute, /registeredTodayIds/, "A student registered today must still display a recorded RFID Time In.");
 assert.doesNotMatch(studentRoute, /hasReachedAbsenceCutoff/);
 assert.doesNotMatch(studentPage, /isWeekendInApplicationTimezone/, "The Student panel must not hide configured weekend class records.");
 assert.match(studentPage, /today_status: normalizeTodayStatus\(student\.today_status\)/, "The Student panel must display the server's schedule-aware status.");
