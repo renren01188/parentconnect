@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff, CheckCircle, AlertCircle, BookOpen, ShieldCheck } from "lucide-react";
 
 function getStrength(pwd: string) {
@@ -32,8 +31,6 @@ function PasswordRule({ met, text }: { met: boolean; text: string }) {
 }
 
 export default function AdviserSetPasswordPage() {
-  const router = useRouter();
-
   const [newPwd,     setNewPwd]     = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
   const [showNew,    setShowNew]    = useState(false);
@@ -69,7 +66,10 @@ export default function AdviserSetPasswordPage() {
       const data = await res.json();
       if (!data.success) { setError(data.message || "Something went wrong."); return; }
       setDone(true);
-      setTimeout(() => { router.push("/dashboard/adviser"); router.refresh(); }, 2000);
+      // Use a document navigation after the response has stored the refreshed
+      // Adviser cookie. This avoids retaining the temporary-password route's
+      // client-router state during the first authenticated dashboard request.
+      window.setTimeout(() => window.location.replace("/dashboard/adviser"), 1200);
     } catch {
       setError("Cannot connect to server. Please try again.");
     } finally {

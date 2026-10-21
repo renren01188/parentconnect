@@ -877,7 +877,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
             <ScheduleTimePicker value={ctrl.absentAfter} disabled={loading} onChange={(value) => updateScheduleTime("absentAfter", value)} label="Absent After" className="px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-50" />
           </div>
         </div>
-        <p className="-mt-1 mb-3 text-[10px] text-gray-400">Scans after the Late After time are Late. When ICT ends the session, students without a Time In are automatically marked Absent.</p>
+        <p className="-mt-1 mb-3 text-[10px] text-gray-400">Each field accepts any valid time. Scans after Late After are Late; students without a Time In are automatically marked Absent at Absent After.</p>
 
         <div className="flex gap-2">
           {(() => {

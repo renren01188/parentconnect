@@ -19,11 +19,13 @@ function getToday() {
 function validateSchedule(
   sessionType: "Morning" | "Afternoon",
   scheduledStart: string,
-  scheduledEnd: string
+  scheduledEnd: string,
+  lateAfter: string,
+  absentAfter: string,
 ) {
-  const timePattern = /^\d{2}:\d{2}/;
-  if (!timePattern.test(scheduledStart) || !timePattern.test(scheduledEnd)) {
-    return "Schedule times must use HH:MM format.";
+  const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+  if (![scheduledStart, scheduledEnd, lateAfter, absentAfter].every((time) => timePattern.test(time))) {
+    return "Scheduled Start, Scheduled End, Late After, and Absent After must use valid 24-hour HH:MM times.";
   }
 
   const start = timeToMinutes(scheduledStart);
@@ -404,7 +406,9 @@ export async function POST(req: NextRequest) {
     }
     const start = scheduled_start;
     const end = scheduled_end;
-    const scheduleError = validateSchedule(session_type, start, end);
+    const lateAfter = late_after;
+    const absentAfter = absent_after;
+    const scheduleError = validateSchedule(session_type, start, end, lateAfter, absentAfter);
 
     if (scheduleError) {
       return NextResponse.json(
@@ -412,19 +416,9 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const lateAfter = late_after;
-    const absentAfter = absent_after;
-    if (
-      timeToMinutes(lateAfter) < timeToMinutes(start) ||
-      timeToMinutes(lateAfter) > timeToMinutes(end) ||
-      timeToMinutes(absentAfter) < timeToMinutes(lateAfter) ||
-      timeToMinutes(absentAfter) < timeToMinutes(end)
-    ) {
-      return NextResponse.json(
-        { success: false, message: "Late cutoff must be within the session, and absent cutoff must be on or after the scheduled end." },
-        { status: 400 }
-      );
-    }
+    // Late and absent are independent ICT-configured attendance cutoffs. Do
+    // not infer a range from the Morning/Afternoon label or force either
+    // cutoff into the scheduled scanning window.
 
     await ensureSessionRow(
       today,
@@ -436,31 +430,22 @@ export async function POST(req: NextRequest) {
       absentAfter
     );
 
-    const updates: Record<string, unknown> = {};
+    // Always write the complete schedule. In particular, starting or ending
+    // a session must not discard Late After or Absent After values that ICT
+    // selected in the same control panel.
+    const updates: Record<string, unknown> = {
+      scheduled_start: start,
+      scheduled_end: end,
+      late_after: lateAfter,
+      absent_after: absentAfter,
+    };
 
     if (!action || action === "save") {
-      const { error: scheduleUpdateError } = await supabase
-        .from("class_sessions")
-        .update({
-          scheduled_start: start,
-          scheduled_end: end,
-          late_after: lateAfter,
-          absent_after: absentAfter,
-        })
-        .eq("session_date", today)
-        .eq("grade", grade)
-        .eq("session_type", session_type);
-
-      if (scheduleUpdateError) throw scheduleUpdateError;
-
-      updates.scheduled_start = start;
-      updates.scheduled_end = end;
+      // The complete schedule patch above is sufficient for a normal save.
     } else if (action === "start") {
       updates.status = "Active";
       updates.actual_start = now;
       updates.actual_end = null;
-      if (scheduled_start) updates.scheduled_start = scheduled_start;
-      if (scheduled_end) updates.scheduled_end = scheduled_end;
     } else {
       updates.status = "Ended";
       updates.actual_end = now;

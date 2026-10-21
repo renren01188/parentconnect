@@ -77,9 +77,12 @@ function isStudentInScope(student: StudentRow, scope?: AutomaticAbsenceScope) {
     && (sections.size === 0 || sections.has(assignmentPart(student.section)));
 }
 
-/** Session end is the attendance deadline; RFID availability does not affect it. */
-export function hasReachedSessionEnd(currentMinutes: number, scheduledEnd: string | null | undefined) {
-  const end = scheduledEnd ? timeToMinutes(scheduledEnd) : Number.NaN;
+/**
+ * ICT's saved Absent After time is the attendance deadline. It is intentionally
+ * separate from the RFID scanning window, which still ends at Scheduled End.
+ */
+export function hasReachedSessionEnd(currentMinutes: number, absenceDeadline: string | null | undefined) {
+  const end = absenceDeadline ? timeToMinutes(absenceDeadline) : Number.NaN;
   return Number.isFinite(end) && currentMinutes >= end;
 }
 
@@ -182,7 +185,7 @@ async function getOrCreateSessionSnapshot(
 
 /**
  * Writes only the missing Time In rows for one session once its configured
- * session end has arrived. It is deliberately idempotent so a cron
+ * Absent After cutoff has arrived. It is deliberately idempotent so a cron
  * retry, a duplicate invocation, or an ICT action can never overwrite a scan.
  */
 export async function markAutomaticAbsences(input: {
@@ -234,8 +237,9 @@ export async function markAutomaticAbsences(input: {
   const session = await getOrCreateSessionSnapshot(sessionDate, input.sessionType, grade);
   if (!session) return result(false, 409, "ICT has not saved this class schedule.");
 
-  if (!hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)) {
-    return result(false, 409, "Students can be marked absent only after the configured class session has ended.");
+  const absenceDeadline = session.absent_after ?? session.scheduled_end;
+  if (!hasReachedSessionEnd(schoolClock.minutes, absenceDeadline)) {
+    return result(false, 409, "Students can be marked absent only after ICT's configured Absent After time.");
   }
 
   const { data: students, error: studentsError } = await supabase
@@ -298,7 +302,7 @@ export async function markAutomaticAbsences(input: {
     recordedStudentDbIds: recordedIds,
     excusedStudentIds,
     sessionDate,
-    sessionEnd: session.scheduled_end,
+    sessionEnd: absenceDeadline,
   })
     .map((student) => ({
       student_db_id: student.id,
@@ -310,7 +314,7 @@ export async function markAutomaticAbsences(input: {
       session_type: input.sessionType,
       status: "Absent",
       via: "Auto",
-      remark: `Auto-marked absent after the ${input.sessionType} class session ended`,
+      remark: `Auto-marked absent after ICT's ${input.sessionType} Absent After cutoff`,
     }));
   if (!absentInserts.length) return result(true, 200, "All students already have a Time In record.");
 
@@ -355,7 +359,7 @@ export async function markAutomaticAbsences(input: {
       targetUser: `${grade} ${input.sessionType} session`,
       targetRole: "Class Session",
       newStatus: "Absent",
-      details: `Auto-marked ${marked} student(s) absent after the ${grade} ${input.sessionType} class session ended.`,
+      details: `Auto-marked ${marked} student(s) absent after the ${grade} ${input.sessionType} Absent After cutoff.`,
     });
   }
 
@@ -374,7 +378,7 @@ export async function markAutomaticAbsences(input: {
   });
 }
 
-/** Runs every session whose scheduled end has passed on the current Manila date. */
+/** Runs every session whose ICT-configured Absent After cutoff has passed on the current Manila date. */
 export async function processDueAutomaticAbsences() {
   const schoolClock = getSchoolClock();
   const { data: activeSY, error: schoolYearError } = await supabase
@@ -421,7 +425,7 @@ export async function processDueAutomaticAbsences() {
   for (const [grade, sections] of sectionsByGrade) {
     for (const sessionType of ["Morning", "Afternoon"] as const) {
       const session = await getOrCreateSessionSnapshot(schoolClock.date, sessionType, grade);
-      if (!session || !hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)) continue;
+      if (!session || !hasReachedSessionEnd(schoolClock.minutes, session.absent_after ?? session.scheduled_end)) continue;
       processedSessions.push(await markAutomaticAbsences({
         sessionType,
         sessionDate: schoolClock.date,

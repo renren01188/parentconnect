@@ -58,8 +58,8 @@ const absence = loadTypeScriptModule("src/lib/automaticAttendanceAbsence.ts", {
 });
 const todayStatus = loadTypeScriptModule("src/lib/todayAttendanceStatus.ts");
 
-// A session finishes at scheduled_end. The optional Absence After field is
-// not an additional delay and RFID availability has no bearing on this rule.
+// ICT's saved Absent After time is the attendance deadline. It is independent
+// of the scanning window, so no Morning/Afternoon preset changes it.
 assert.equal(absence.hasReachedSessionEnd(8 * 60 + 54, "08:55:00"), false);
 assert.equal(absence.hasReachedSessionEnd(8 * 60 + 55, "08:55:00"), true);
 assert.equal(absence.hasReachedSessionEnd(8 * 60 + 55, null), false);
@@ -104,7 +104,7 @@ const sameDayEnrolment = absence.studentsMissingSessionAttendance({
 assert.deepEqual(
   sameDayEnrolment.map((student) => student.student_id),
   ["NO-SCAN", "ENROLLED-BEFORE-END"],
-  "A student enrolled before today's session end is eligible; one enrolled after it is not retroactively absent.",
+  "A student enrolled before today's absence deadline is eligible; one enrolled after it is not retroactively absent.",
 );
 
 const repeatRun = absence.studentsMissingSessionAttendance({
@@ -133,12 +133,12 @@ assert.equal(
 assert.equal(
   todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Absent", sessionEnded: false }),
   "—",
-  "Absent must remain pending until the scheduled session ends.",
+  "Absent must remain pending until ICT's configured absence deadline.",
 );
 assert.equal(
   todayStatus.resolveTodayAttendanceStatus({ ...scheduledSession, recordedStatus: "Absent", sessionEnded: true }),
   "Absent",
-  "A durable absence must appear after the scheduled session ends.",
+  "A durable absence must appear after ICT's configured absence deadline.",
 );
 
 const processor = read("src/lib/automaticAttendanceAbsence.ts");
@@ -149,7 +149,8 @@ const manualRoute = read("src/app/api/attendance/manual/route.ts");
 const monthlyExportRoute = read("src/app/api/attendance/monthly/route.ts");
 const vercel = JSON.parse(read("vercel.json"));
 
-assert.match(processor, /hasReachedSessionEnd\(schoolClock\.minutes, session\.scheduled_end\)/);
+assert.match(processor, /const absenceDeadline = session\.absent_after \?\? session\.scheduled_end/);
+assert.match(processor, /hasReachedSessionEnd\(schoolClock\.minutes, absenceDeadline\)/);
 assert.doesNotMatch(processor, /schoolClock\.minutes < timeToMinutes\(cutoff\)/);
 assert.match(processor, /scope\?: AutomaticAbsenceScope/);
 assert.match(processor, /isStudentInScope/);
@@ -161,10 +162,10 @@ assert.match(processor, /rowError\.code === "23505"/, "Overlapping schedule invo
 assert.match(processor, /sessionDate !== schoolClock\.date/, "The job must not silently backfill a historical day using the current clock.");
 assert.match(processor, /isScheduledAttendanceDate/);
 assert.match(processor, /school_holidays/);
-assert.match(processor, /sessionEnd: session\.scheduled_end/, "The session-end processor must evaluate same-day enrolment against the saved session end.");
+assert.match(processor, /sessionEnd: absenceDeadline/, "The absence processor must evaluate same-day enrolment against ICT's saved Absent After time.");
 assert.match(studentRoute, /markAutomaticAbsences\(\{[\s\S]*?scope: \{ grade: adviser\.grade \?\? "", sections: \[activeSection\] \}/);
 assert.match(studentRoute, /resolveTodayAttendanceStatus/, "The adviser panel must render durable Present\/Late records immediately.");
-assert.match(studentRoute, /hasReachedSessionEnd\(schoolClock\.minutes, session\.scheduled_end\)/, "The adviser panel must defer Absent until the scheduled session ends.");
+assert.match(studentRoute, /hasReachedSessionEnd\(schoolClock\.minutes, session\.absent_after \?\? session\.scheduled_end\)/, "The adviser panel must defer Absent until ICT's saved Absent After time.");
 assert.doesNotMatch(studentRoute, /registeredTodayIds/, "A student registered today must still display a recorded RFID Time In.");
 assert.doesNotMatch(studentRoute, /hasReachedAbsenceCutoff/);
 assert.doesNotMatch(studentPage, /isWeekendInApplicationTimezone/, "The Student panel must not hide configured weekend class records.");
@@ -181,4 +182,4 @@ assert.match(manualRoute, /Time Out requires a recorded On Time or Late Time In/
 assert.match(manualRoute, /A remark is required when correcting an automatic absence/);
 assert.match(manualRoute, /existingSameType\.via === "Auto"/);
 
-console.log("Automatic absence session-end, RFID-independent, scope, idempotency, and export checks passed.");
+console.log("Automatic absence cutoff, RFID-independent, scope, idempotency, and export checks passed.");

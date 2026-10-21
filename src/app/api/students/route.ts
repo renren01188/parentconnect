@@ -71,6 +71,7 @@ type SessionSchedule = {
   grade?: string | null;
   scheduled_start: string;
   scheduled_end: string;
+  absent_after: string | null;
 };
 
 const ATTENDANCE_STATUS = new Map<string, "Present" | "Late" | "Excused" | "Absent">([
@@ -206,7 +207,7 @@ async function getSchedulesForDates(dates: string[], grade: string) {
   for (let start = 0; start < dates.length; start += 100) {
     const { data, error } = await supabase
       .from("class_sessions")
-      .select("session_date, session_type, grade, scheduled_start, scheduled_end")
+      .select("session_date, session_type, grade, scheduled_start, scheduled_end, absent_after")
       .eq("grade", grade)
       .in("session_date", dates.slice(start, start + 100));
     if (error) throw error;
@@ -215,7 +216,7 @@ async function getSchedulesForDates(dates: string[], grade: string) {
     const gradeKeys = new Set((data ?? []).map((schedule) => `${schedule.session_date}|${schedule.session_type}`));
     const { data: legacy, error: legacyError } = await supabase
       .from("class_sessions")
-      .select("session_date, session_type, grade, scheduled_start, scheduled_end")
+      .select("session_date, session_type, grade, scheduled_start, scheduled_end, absent_after")
       .is("grade", null)
       .in("session_date", dates.slice(start, start + 100));
     if (legacyError) throw legacyError;
@@ -698,9 +699,9 @@ export async function GET(req: NextRequest) {
         hasApprovedExcuse: Boolean(row.student_id) && excusedStudentIds.has(row.student_id),
         recordedStatus,
         // The automatic-absence worker writes the durable record at this
-        // same boundary. This UI guard also prevents a manually-entered
+        // same ICT-configured boundary. This UI guard also prevents a manually-entered
         // absence from appearing prematurely.
-        sessionEnded: Boolean(session && hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)),
+        sessionEnded: Boolean(session && hasReachedSessionEnd(schoolClock.minutes, session.absent_after ?? session.scheduled_end)),
       });
 
       return {

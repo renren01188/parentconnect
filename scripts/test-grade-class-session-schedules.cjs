@@ -37,6 +37,10 @@ assert.match(classSessionApi, /\.eq\("grade", grade\)/);
 assert.match(classSessionApi, /onConflict: "session_date,session_type,grade"/);
 assert.match(classSessionApi, /legacy rows/);
 assert.doesNotMatch(classSessionApi, /timeToMinutes\("12:00"/);
+assert.doesNotMatch(classSessionApi, /Late cutoff must be within the session/);
+assert.match(classSessionApi, /Late and absent are independent ICT-configured attendance cutoffs/);
+assert.match(classSessionApi, /late_after: lateAfter/);
+assert.match(classSessionApi, /absent_after: absentAfter/);
 
 // ICT selects a grade and includes it on every save/load request. Adviser
 // refresh already consumes the dashboard invalidation without page reload.
@@ -57,6 +61,7 @@ assert.match(manualApi, /\.eq\("grade", student\.grade\)/);
 assert.match(manualApi, /class_session_id: session\.id/);
 assert.match(autoAbsence, /getOrCreateSessionSnapshot\(sessionDate, input\.sessionType, grade\)/);
 assert.match(autoAbsence, /class_session_id: session\.id/);
+assert.match(autoAbsence, /session\.absent_after \?\? session\.scheduled_end/);
 assert.match(autoAbsence, /for \(const \[grade, sections\] of sectionsByGrade\)/);
 assert.match(autoAbsence, /scope: \{ grade, sections: \[\.\.\.sections\] \}/);
 
