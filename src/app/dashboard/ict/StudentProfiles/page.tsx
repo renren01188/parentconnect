@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { normalizeStudentAge } from "@/lib/studentAge";
 import {
   DEFAULT_ATTENDANCE_WEEKDAYS,
   formatSchoolDate,
@@ -41,6 +42,7 @@ interface Student {
   gender: "Male" | "Female";
   grade: string;
   section: string;
+  parentLinkStatus: "Already Linked" | "Unlinked";
   linkedParent: string | null;
   parentInitials: string;
   parentColor: string;
@@ -49,20 +51,22 @@ interface Student {
   rfidStatus: "Registered" | "Unregistered";
   lastScanned: string | null;
   status: "Active" | "Inactive";
-  parentEmail?: string;
-  parentPhone?: string;
-  parentRelationship?: string;
-  parentAddress?: string;
-  birthDate?: string; motherTongue?: string; ipEthnicGroup?: string; religion?: string; learningModality?: string;
+  birthDate?: string; age?: string; motherTongue?: string; ipEthnicGroup?: string; religion?: string; learningModality?: string;
   houseStreetSitioPurok?: string; barangay?: string; municipalityCity?: string; province?: string;
+  remarkId?: number | null;
+  remarkType?: "Dropped out" | "Transferred In" | "Transferred Out" | "";
+  remarkDate?: string;
+  remarkNote?: string;
+  remarkSchoolName?: string;
 }
 
 type StudentProfileUpdate = Pick<
   Student,
   "firstName" | "middleName" | "lastName" | "suffix" | "studentId" | "gender" |
-  "grade" | "section" | "birthDate" | "motherTongue" | "ipEthnicGroup" |
+  "grade" | "section" | "birthDate" | "age" | "motherTongue" | "ipEthnicGroup" |
   "religion" | "learningModality" | "houseStreetSitioPurok" | "barangay" |
-  "municipalityCity" | "province"
+  "municipalityCity" | "province" | "remarkId" | "remarkType" | "remarkDate" |
+  "remarkNote" | "remarkSchoolName"
 >;
 
 type AuditAction = "registered" | "revoked" | "replaced" | "assigned";
@@ -153,16 +157,17 @@ function ActionBadge({ action }: { action: AuditAction }) {
 }
 
 // ─── Shared Inputs ───────────────────────────────────────────────
-function FInput({ label, placeholder, value, onChange, required, helper, icon: Icon, type = "text" }: {
+function FInput({ label, placeholder, value, onChange, required, helper, icon: Icon, type = "text", inputMode, maxLength }: {
   label: string; placeholder?: string; value: string; onChange: (v: string) => void;
   required?: boolean; helper?: string; icon?: React.ElementType; type?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; maxLength?: number;
 }) {
   return (
     <div>
       <label className="block text-xs font-semibold text-gray-600 mb-1.5">{label}{required && <span className="text-red-500 ml-0.5">*</span>}</label>
       <div className="relative">
         {Icon && <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />}
-        <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} inputMode={inputMode} maxLength={maxLength}
           className={`w-full border border-gray-200 rounded-lg py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition bg-white ${Icon ? "pl-8" : "px-3"} pr-3`} />
       </div>
       {helper && <p className="mt-1 text-[10px] text-gray-400">{helper}</p>}
@@ -633,9 +638,11 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
 }
 
 // ─── Class Control Modal ─────────────────────────────────────────
-function ClassControlModal({ onClose }: { onClose: () => void }) {
-  const [morning, setMorning] = useState<ClassControl>({ session: "Morning", status: "Not Started", startTime: null, endTime: null, scheduledStart: "", scheduledEnd: "", lateAfter: "", absentAfter: "" });
-  const [afternoon, setAfternoon] = useState<ClassControl>({ session: "Afternoon", status: "Not Started", startTime: null, endTime: null, scheduledStart: "", scheduledEnd: "", lateAfter: "", absentAfter: "" });
+function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: string[] }) {
+  const emptyClassControl = (session: ClassSession): ClassControl => ({ session, status: "Not Started", startTime: null, endTime: null, scheduledStart: "", scheduledEnd: "", lateAfter: "", absentAfter: "" });
+  const [selectedGrade, setSelectedGrade] = useState("");
+  const [morning, setMorning] = useState<ClassControl>(() => emptyClassControl("Morning"));
+  const [afternoon, setAfternoon] = useState<ClassControl>(() => emptyClassControl("Afternoon"));
   const [confirm, setConfirm] = useState<{ session: ClassSession; action: "start" | "end" } | null>(null);
   const [loading, setLoading] = useState(false);
   const [morningSaved, setMorningSaved] = useState(false);
@@ -650,13 +657,26 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
     if (!scope || scope === "dashboard") setSessionRefreshKey((key) => key + 1);
   });
 
+  useEffect(() => {
+    setSelectedGrade((current) => current && grades.includes(current) ? current : grades[0] ?? "");
+  }, [grades]);
+
   // Load today's sessions on mount and after an authorized class-session
   // invalidation. The Broadcast itself contains no schedule data.
   useEffect(() => {
     async function fetchSessions() {
+      if (!selectedGrade) {
+        setMorning(emptyClassControl("Morning"));
+        setAfternoon(emptyClassControl("Afternoon"));
+        setLoadingSession(false);
+        return;
+      }
       setLoadingSession(true);
+      setApiError("");
+      setMorning(emptyClassControl("Morning"));
+      setAfternoon(emptyClassControl("Afternoon"));
       try {
-        const res = await fetch("/api/attendance/class-session", { cache: "no-store" });
+        const res = await fetch(`/api/attendance/class-session?grade=${encodeURIComponent(selectedGrade)}`, { cache: "no-store" });
         const data = await res.json();
         if (data.success && data.sessions) {
           for (const s of data.sessions) {
@@ -677,15 +697,18 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
             if (s.session_type === "Morning") setMorning(ctrl);
             else setAfternoon(ctrl);
           }
+        } else {
+          setApiError(data.message ?? "Could not load this grade's class schedule.");
         }
       } catch (e) {
         console.error("Failed to load class sessions:", e);
+        setApiError("Could not load this grade's class schedule.");
       } finally {
         setLoadingSession(false);
       }
     }
     fetchSessions();
-  }, [sessionRefreshKey]);
+  }, [selectedGrade, sessionRefreshKey]);
 
   function handleAction(session: ClassSession, action: "start" | "end") {
     setApiError("");
@@ -693,6 +716,10 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
   }
 
   async function saveSchedule(ctrl: ClassControl) {
+    if (!selectedGrade) {
+      setApiError("Choose a grade level before saving a class schedule.");
+      return;
+    }
     setLoading(true);
     setApiError("");
     try {
@@ -700,6 +727,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          grade: selectedGrade,
           session_type: ctrl.session,
           action: "save",
           scheduled_start: ctrl.scheduledStart,
@@ -735,6 +763,11 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
 
   async function executeAction() {
     if (!confirm) return;
+    if (!selectedGrade) {
+      setApiError("Choose a grade level before changing a class session.");
+      setConfirm(null);
+      return;
+    }
     setLoading(true);
     setApiError("");
     try {
@@ -745,6 +778,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          grade: selectedGrade,
           session_type: confirm.session,
           action: confirm.action,
           scheduled_start: ctrl.scheduledStart,
@@ -909,7 +943,7 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
                 </div>
                 <div>
                   <h2 className="font-bold text-gray-900">Class Session Control</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Manage morning and afternoon attendance windows</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Manage grade-level morning and afternoon attendance windows</p>
                 </div>
               </div>
               <button onClick={onClose} aria-label="Close class session control" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
@@ -917,13 +951,28 @@ function ClassControlModal({ onClose }: { onClose: () => void }) {
             <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
                 <Info className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-blue-700">Set the schedule once. RFID scanning opens automatically during the saved class time and closes after the scheduled end.</p>
+                <p className="text-xs text-blue-700">Each grade has its own schedule. RFID scanning opens automatically during that grade&apos;s saved class time and closes after the scheduled end.</p>
+              </div>
+              <div>
+                <label htmlFor="class-control-grade" className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">Grade Level</label>
+                <select
+                  id="class-control-grade"
+                  value={selectedGrade}
+                  onChange={(event) => { setSelectedGrade(event.target.value); setMorningSaved(false); setAfternoonSaved(false); }}
+                  disabled={loading || grades.length === 0}
+                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20 disabled:cursor-not-allowed disabled:bg-gray-50"
+                >
+                  <option value="">{grades.length ? "Select grade level" : "No grade levels available"}</option>
+                  {grades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+                </select>
               </div>
               {loadingSession ? (
                 <div className="flex items-center justify-center py-8 gap-2 text-gray-400 text-sm">
                   <span className="w-4 h-4 border-2 border-gray-200 border-t-[#274e13] rounded-full animate-spin" />
                   Loading session status…
                 </div>
+              ) : !selectedGrade ? (
+                <p className="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">Select a grade level to view and configure its class sessions.</p>
               ) : (
                 <>
                   {apiError && (
@@ -1221,12 +1270,14 @@ function ViewStudentModal({ student, onClose, onEdit }: { student: Student; onCl
         </div>
         <div className="p-5">
           <div className="divide-y divide-gray-50 text-sm">
-            {[["Student ID", student.studentId], ["Adviser", student.adviser]].map(([l, v]) => (
+            {[["LRN", student.studentId], ["Age", student.age || "—"], ["Adviser", student.adviser]].map(([l, v]) => (
               <div key={l} className="flex items-center justify-between py-2.5"><span className="text-xs text-gray-500">{l}</span><span className="text-xs font-semibold text-gray-800">{v}</span></div>
             ))}
             <div className="flex items-center justify-between py-2.5">
               <span className="text-xs text-gray-500">Linked Parent</span>
-              {student.linkedParent ? <div className="flex items-center gap-1.5"><div className={`w-5 h-5 rounded-full ${student.parentColor} flex items-center justify-center text-white text-[9px] font-bold`}>{student.parentInitials}</div><span className="text-xs font-semibold text-gray-800">{student.linkedParent}</span></div> : <span className="text-xs font-bold text-red-500 flex items-center gap-1"><WifiOff className="w-3 h-3" />Not Linked</span>}
+              {student.parentLinkStatus === "Already Linked" && student.linkedParent
+                ? <div className="flex min-w-0 items-center gap-1.5"><span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">Already Linked</span><div className={`h-5 w-5 shrink-0 rounded-full ${student.parentColor} flex items-center justify-center text-[9px] font-bold text-white`}>{student.parentInitials}</div><span className="truncate text-xs font-semibold text-gray-800">{student.linkedParent}</span></div>
+                : <span className="flex items-center gap-1 text-xs font-bold text-amber-700"><WifiOff className="w-3 h-3" />Unlinked</span>}
             </div>
             <div className="flex items-center justify-between py-2.5">
               <span className="text-xs text-gray-500">RFID Card</span>
@@ -1236,6 +1287,13 @@ function ViewStudentModal({ student, onClose, onEdit }: { student: Student; onCl
               <div className="flex items-center justify-between py-2.5">
                 <span className="text-xs text-gray-500">Last Scanned</span>
                 <span className="text-xs font-semibold text-gray-600">{student.lastScanned ?? "—"}</span>
+              </div>
+            )}
+            {student.remarkType && (
+              <div className="py-2.5">
+                <span className="block text-xs text-gray-500 mb-1">Student Remark</span>
+                <p className="text-xs font-semibold text-gray-800">{student.remarkType} {student.remarkDate ? `• ${student.remarkDate}` : ""}</p>
+                <p className="mt-0.5 text-xs text-gray-600 whitespace-pre-wrap">{student.remarkType === "Dropped out" ? student.remarkNote : student.remarkSchoolName || student.remarkNote}</p>
               </div>
             )}
           </div>
@@ -1257,8 +1315,13 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
   const [form, setForm] = useState({
     firstName: student.firstName, middleName: student.middleName, lastName: student.lastName, suffix: student.suffix,
     studentId: student.studentId, gender: student.gender as "Male" | "Female", grade: student.grade, section: student.section,
-    birthDate: student.birthDate ?? "", motherTongue: student.motherTongue ?? "", ipEthnicGroup: student.ipEthnicGroup ?? "", religion: student.religion ?? "", learningModality: student.learningModality ?? "",
+    birthDate: student.birthDate ?? "", age: student.age ?? "", motherTongue: student.motherTongue ?? "", ipEthnicGroup: student.ipEthnicGroup ?? "", religion: student.religion ?? "", learningModality: student.learningModality ?? "",
     houseStreetSitioPurok: student.houseStreetSitioPurok ?? "", barangay: student.barangay ?? "", municipalityCity: student.municipalityCity ?? "", province: student.province ?? "",
+    remarkId: student.remarkId ?? null,
+    remarkType: student.remarkType ?? "",
+    remarkDate: student.remarkDate ?? "",
+    remarkNote: student.remarkNote ?? "",
+    remarkSchoolName: student.remarkSchoolName ?? "",
   });
   const set = (k: keyof typeof form) => (v: string) => setForm(p => ({ ...p, [k]: v }));
   const [editSections, setEditSections] = useState<string[]>([]);
@@ -1269,11 +1332,37 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
       .then(d => { if (d.success) setEditSections(d.sections); });
   }, [form.grade]);
   const changes: { field: string; from: string; to: string }[] = [];
-  const fields: [string, keyof typeof form][] = [["First Name", "firstName"], ["Middle Name", "middleName"], ["Last Name", "lastName"], ["Suffix", "suffix"], ["Student ID", "studentId"], ["Gender", "gender"], ["Birth Date", "birthDate"], ["Mother Tongue", "motherTongue"], ["IP (Ethnic Group)", "ipEthnicGroup"], ["Religion", "religion"], ["Learning Modality", "learningModality"], ["House # / Street / Sitio / Purok", "houseStreetSitioPurok"], ["Barangay", "barangay"], ["Municipality / City", "municipalityCity"], ["Province", "province"], ["Grade", "grade"], ["Section", "section"]];
+  const fields: [string, keyof typeof form][] = [["First Name", "firstName"], ["Middle Name", "middleName"], ["Last Name", "lastName"], ["Suffix", "suffix"], ["LRN", "studentId"], ["Gender", "gender"], ["Birth Date", "birthDate"], ["Age", "age"], ["Mother Tongue", "motherTongue"], ["IP (Ethnic Group)", "ipEthnicGroup"], ["Religion", "religion"], ["Remarks", "remarkType"], ["Remark date", "remarkDate"], ["Dropout reason", "remarkNote"], ["Transfer school", "remarkSchoolName"], ["Learning Modality", "learningModality"], ["House # / Street / Sitio / Purok", "houseStreetSitioPurok"], ["Barangay", "barangay"], ["Municipality / City", "municipalityCity"], ["Province", "province"], ["Grade", "grade"], ["Section", "section"]];
   fields.forEach(([label, key]) => { const from = String((student as any)[key] ?? ""); const to = String(form[key] ?? ""); if (from !== to) changes.push({ field: label, from, to }); });
   const hasChanges = changes.length > 0;
   const displayName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") + (form.suffix && form.suffix !== "None" ? ` ${form.suffix}` : "");
   const inBase = "w-full px-3.5 py-2.5 rounded-xl border text-gray-800 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition placeholder-gray-400 bg-gray-50 focus:ring-[#274e13]/25 border-gray-200";
+
+  function handleReview() {
+    setSaveError("");
+    const ageValidation = normalizeStudentAge(form.age);
+    if (ageValidation.error) {
+      setSaveError(ageValidation.error);
+      return;
+    }
+    if (form.remarkId && !form.remarkType) {
+      setSaveError("A saved student remark can be edited but is kept as part of the learner's SF2 history.");
+      return;
+    }
+    if (form.remarkType && !form.remarkDate) {
+      setSaveError("Select the effectivity date for this student remark.");
+      return;
+    }
+    if (form.remarkType === "Dropped out" && !form.remarkNote.trim()) {
+      setSaveError("Enter the reason for dropping out.");
+      return;
+    }
+    if ((form.remarkType === "Transferred In" || form.remarkType === "Transferred Out") && !form.remarkSchoolName.trim()) {
+      setSaveError("Enter the school name for this transfer.");
+      return;
+    }
+    setStep("confirm");
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -1325,7 +1414,7 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
                 <div><FInput label="Middle Name" required placeholder="e.g. Dela or N/A" value={form.middleName} onChange={set("middleName")} /><p className="mt-1 text-[10px] text-gray-400">Type N/A if no middle name</p></div>
                 <FInput label="Last Name" required placeholder="e.g. Santos" value={form.lastName} onChange={set("lastName")} />
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <FInput label="Student ID" required value={form.studentId} onChange={set("studentId")} />
+                  <FInput label="LRN" required value={form.studentId} onChange={set("studentId")} inputMode="numeric" maxLength={12} />
                   <FSelect label="Suffix" options={SUFFIXES} value={form.suffix} onChange={set("suffix")} placeholder="None" />
                 </div>
                 <div>
@@ -1336,9 +1425,22 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
                 </div>
                 <div className="border-t border-gray-100 pt-4 space-y-3">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Details</p>
-                  <FInput label="Birth Date" type="date" value={form.birthDate} onChange={set("birthDate")} />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><FInput label="Birth Date" type="date" value={form.birthDate} onChange={set("birthDate")} /><FInput label="Age" placeholder="e.g. 12" helper="Optional · whole years (1–120)" value={form.age} onChange={set("age")} inputMode="numeric" maxLength={3} /></div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><FInput label="Mother Tongue" value={form.motherTongue} onChange={set("motherTongue")} /><FInput label="IP (Ethnic Group)" value={form.ipEthnicGroup} onChange={set("ipEthnicGroup")} /></div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><FInput label="Religion" value={form.religion} onChange={set("religion")} /><FInput label="Learning Modality" value={form.learningModality} onChange={set("learningModality")} /></div>
+                  <FInput label="Religion" value={form.religion} onChange={set("religion")} />
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 space-y-3">
+                    <FSelect label="Remarks" options={["Dropped out", "Transferred In", "Transferred Out"]} value={form.remarkType} onChange={set("remarkType")} placeholder="No student remark" />
+                    {form.remarkType && <>
+                      <FInput label="Effectivity Date" required type="date" value={form.remarkDate} onChange={set("remarkDate")} />
+                      {form.remarkType === "Dropped out" ? (
+                        <FInput label="Reason for Dropping Out" required value={form.remarkNote} onChange={set("remarkNote")} placeholder="SF2 reason / legend detail" />
+                      ) : (
+                        <FInput label={form.remarkType === "Transferred In" ? "School Transferred From" : "School Transferred To"} required value={form.remarkSchoolName} onChange={set("remarkSchoolName")} placeholder="School name" />
+                      )}
+                    </>}
+                    <p className="text-[10px] leading-4 text-emerald-800">This dated student status is saved to the shared SF2 remarks record and appears in monthly exports.</p>
+                  </div>
+                  <FInput label="Learning Modality" value={form.learningModality} onChange={set("learningModality")} />
                 </div>
               </div>
               <div className="space-y-4 p-4 sm:p-6">
@@ -1371,9 +1473,10 @@ function EditStudentModal({ student, onClose, onSave, grades }: { student: Stude
             </div>
             <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div className="flex items-center gap-1.5 text-xs text-gray-400"><Info className="w-3.5 h-3.5" />Fields marked <span className="ml-0.5 font-bold text-red-500">*</span> are required.</div>
+              {saveError && <p className="text-xs font-medium text-red-600 flex items-center gap-1"><TriangleAlert className="w-3 h-3 shrink-0" />{saveError}</p>}
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button onClick={onClose} className="w-full rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:w-auto">Cancel</button>
-                <button onClick={() => setStep("confirm")} disabled={!hasChanges} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#274e13] px-6 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-40 sm:w-auto"><Save className="w-4 h-4" />Review Changes</button>
+                <button onClick={handleReview} disabled={!hasChanges} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#274e13] px-6 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-40 sm:w-auto"><Save className="w-4 h-4" />Review Changes</button>
               </div>
             </div>
           </div>
@@ -1579,7 +1682,21 @@ function RevokeRFIDModal({ student, onConfirm, onClose }: { student: Student; on
 // ─── Register New Card Modal (replaces Add Student) ──────────────
 type RegisterStep = 1 | 2 | 3 | 4;
 
-function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () => void; onAdd: (s: Student) => void; grades: string[] }) {
+function AddStudentModal({
+  onClose,
+  onAdd,
+  grades: modalGrades,
+  gradesLoading,
+  gradesError,
+  onRetryGrades,
+}: {
+  onClose: () => void;
+  onAdd: (s: Student) => void;
+  grades: string[];
+  gradesLoading: boolean;
+  gradesError: string;
+  onRetryGrades: () => void;
+}) {
   const [step, setStep] = useState<RegisterStep>(1);
   const [selectedGrade, setSelectedGrade] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
@@ -1591,27 +1708,89 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
   const [confirmingUid, setConfirmingUid] = useState(false);
   const [uidError, setUidError] = useState("");
 
-  const [modalStudents, setModalStudents] = useState<Student[]>([]);
   const [modalSections, setModalSections] = useState<string[]>([]);
+  const [modalGradeStudents, setModalGradeStudents] = useState<Student[]>([]);
+  const [loadingSections, setLoadingSections] = useState(false);
   const [loadingStudents, setLoadingStudents] = useState(false);
+  const [sectionsError, setSectionsError] = useState("");
+  const [studentsError, setStudentsError] = useState("");
+  const [optionsReloadKey, setOptionsReloadKey] = useState(0);
+  const registrationOptionsCache = useRef(new Map<string, { sections: string[]; students: Student[] }>());
 
   useEffect(() => {
-    if (!selectedGrade) { setModalSections([]); return; }
-    fetch(`/api/sections?grade=${encodeURIComponent(selectedGrade)}`)
-      .then(r => r.json())
-      .then(d => { if (d.success) setModalSections(d.sections); });
-  }, [selectedGrade]);
+    const grade = selectedGrade;
+    setSelectedSection("");
+    setSelectedStudent(null);
+    setModalSections([]);
+    setModalGradeStudents([]);
+    setSectionsError("");
+    setStudentsError("");
+    if (!grade) {
+      setLoadingSections(false);
+      setLoadingStudents(false);
+      return;
+    }
 
-  useEffect(() => {
-    if (!selectedGrade || !selectedSection) { setModalStudents([]); return; }
+    const cached = registrationOptionsCache.current.get(grade);
+    if (cached) {
+      setModalSections(cached.sections);
+      setModalGradeStudents(cached.students);
+      setLoadingSections(false);
+      setLoadingStudents(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoadingSections(true);
     setLoadingStudents(true);
-    fetch(`/api/ict/students?grade=${encodeURIComponent(selectedGrade)}&section=${encodeURIComponent(selectedSection)}`, { cache: "no-store" })
-      .then(r => r.json())
-      .then(d => {
-        if (d.success) setModalStudents(d.data.map(mapStudent));
-        setLoadingStudents(false);
+
+    const getJson = async (url: string) => {
+      const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to load registration options.");
+      return data;
+    };
+
+    Promise.all([
+      getJson(`/api/sections?grade=${encodeURIComponent(grade)}&purpose=rfid-registration`),
+      getJson(`/api/ict/students?grade=${encodeURIComponent(grade)}&purpose=rfid-registration`),
+    ])
+      .then(([sectionData, studentData]) => {
+        if (controller.signal.aborted) return;
+        const next = {
+          sections: Array.isArray(sectionData.sections) ? sectionData.sections : [],
+          students: Array.isArray(studentData.data) ? studentData.data.map(mapStudent) : [],
+        };
+        registrationOptionsCache.current.set(grade, next);
+        setModalSections(next.sections);
+        setModalGradeStudents(next.students);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : "Unable to load registration options.";
+        setSectionsError(message);
+        setStudentsError(message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingSections(false);
+          setLoadingStudents(false);
+        }
       });
-  }, [selectedGrade, selectedSection]);
+
+    return () => controller.abort();
+  }, [selectedGrade, optionsReloadKey]);
+
+  const modalStudents = useMemo(
+    () => modalGradeStudents.filter((student) => student.section === selectedSection),
+    [modalGradeStudents, selectedSection],
+  );
+
+  function retryRegistrationOptions() {
+    if (!selectedGrade) return;
+    registrationOptionsCache.current.delete(selectedGrade);
+    setOptionsReloadKey((key) => key + 1);
+  }
 
 
   const canStep1 = !!selectedGrade && !!selectedSection && !!selectedStudent;
@@ -1627,7 +1806,12 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
   }
 
   async function confirmUid() {
-    if (!normalizedTagId || confirmingUid) return;
+    if (!normalizedTagId) {
+      setUidConfirmed(false);
+      setUidError("Enter or scan an RFID UID before checking it.");
+      return;
+    }
+    if (confirmingUid) return;
     setConfirmingUid(true);
     setUidError("");
     try {
@@ -1637,7 +1821,7 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
       if (!res.ok || !data.success) throw new Error(data.message || "Could not check this RFID UID.");
       if (data.taken) {
         setUidConfirmed(false);
-        setUidError(`This RFID is already in use by ${data.owner.full_name} (${data.owner.grade} · ${data.owner.section}). Enter or scan a different card.`);
+        setUidError("This RFID is already registered. Enter or scan a different card.");
         return;
       }
       setUidConfirmed(true);
@@ -1734,13 +1918,15 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                 <div className="relative">
                   <select value={selectedGrade}
                     onChange={e => { setSelectedGrade(e.target.value); setSelectedSection(""); setSelectedStudent(null); changeTagId(""); }}
-                    className="w-full appearance-none border border-gray-200 rounded-xl py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white pr-8 transition">
-                    <option value="">Select a grade</option>
-                    {/* grades prop needed — see Issue 3b below */}
+                    disabled={gradesLoading || modalGrades.length === 0}
+                    className="w-full appearance-none border border-gray-200 rounded-xl py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white pr-8 transition disabled:cursor-not-allowed disabled:opacity-50">
+                    <option value="">{gradesLoading ? "Loading grade levels…" : modalGrades.length === 0 ? "No grade levels available" : "Select a grade"}</option>
                     {modalGrades.map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
                   <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
+                {gradesError && <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><span>{gradesError}</span><button type="button" onClick={onRetryGrades} className="shrink-0 font-bold underline">Retry</button></div>}
+                {!gradesLoading && !gradesError && modalGrades.length === 0 && <p className="mt-2 text-xs text-gray-500">No grade levels are available for RFID registration.</p>}
               </div>
 
               {/* Section */}
@@ -1749,13 +1935,15 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                 <div className="relative">
                   <select value={selectedSection}
                     onChange={e => { setSelectedSection(e.target.value); setSelectedStudent(null); changeTagId(""); }}
-                    disabled={!selectedGrade}
+                    disabled={!selectedGrade || loadingSections || !!sectionsError || modalSections.length === 0}
                     className="w-full appearance-none border border-gray-200 rounded-xl py-2.5 px-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] bg-white pr-8 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    <option value="">{selectedGrade ? "Select a section" : "Select a grade first"}</option>
+                    <option value="">{!selectedGrade ? "Select a grade first" : loadingSections ? "Loading sections…" : sectionsError ? "Unable to load sections" : modalSections.length === 0 ? "No sections available" : "Select a section"}</option>
                     {modalSections.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                   <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
+                {selectedGrade && sectionsError && <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><span>{sectionsError}</span><button type="button" onClick={retryRegistrationOptions} className="shrink-0 font-bold underline">Retry</button></div>}
+                {selectedGrade && !loadingSections && !sectionsError && modalSections.length === 0 && <p className="mt-2 text-xs text-gray-500">No sections are configured for {selectedGrade}.</p>}
               </div>
 
               {/* Student list */}
@@ -1763,8 +1951,14 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
                 <div>
                   <label className="block text-xs font-bold text-gray-600 mb-2">Student</label>
                   {loadingStudents ? (
-                    <div className="py-8 text-center">
+                    <div className="py-8 text-center" role="status">
                       <span className="w-5 h-5 border-2 border-gray-200 border-t-[#274e13] rounded-full animate-spin inline-block" />
+                      <p className="mt-2 text-xs text-gray-500">Loading students…</p>
+                    </div>
+                  ) : studentsError ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+                      <p>{studentsError}</p>
+                      <button type="button" onClick={retryRegistrationOptions} className="mt-2 font-bold underline">Retry loading students</button>
                     </div>
                   ) : modalStudents.length === 0 ? (
                     <div className="py-8 text-center border border-dashed border-gray-200 rounded-xl">
@@ -1896,7 +2090,13 @@ function AddStudentModal({ onClose, onAdd, grades: modalGrades }: { onClose: () 
 // ─── Main Page ────────────────────────────────────────────────────
 type MainTab = "profiles" | "rfid";
 function mapStudent(row: Record<string, any>): Student {
-  const parent = row.parents ?? null;
+  const linkedParentNames = Array.isArray(row.linked_parent_names)
+    ? row.linked_parent_names.filter((name: unknown): name is string => typeof name === "string" && Boolean(name.trim()))
+    : [];
+  const primaryParentName = linkedParentNames[0] ?? null;
+  const parentInitials = primaryParentName
+    ? primaryParentName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
+    : "";
   const ci = AVATAR_COLORS[row.id % AVATAR_COLORS.length];
   const pi = AVATAR_COLORS[(row.id + 3) % AVATAR_COLORS.length];
   return {
@@ -1911,19 +2111,22 @@ function mapStudent(row: Record<string, any>): Student {
     gender: row.gender ?? "Male",
     grade: row.grade ?? "",
     section: row.section ?? "",
-    linkedParent: parent ? `${parent.parent_first_name} ${parent.parent_last_name}` : null,
-    parentInitials: parent ? `${parent.parent_first_name?.[0] ?? ""}${parent.parent_last_name?.[0] ?? ""}` : "",
+    parentLinkStatus: row.parent_link_status === "Already Linked" ? "Already Linked" : "Unlinked",
+    linkedParent: linkedParentNames.join(", ") || null,
+    parentInitials,
     parentColor: pi,
     adviser: row.adviser_name ?? "",
     rfid: row.rfid_card ?? null,
     rfidStatus: row.rfid_card ? "Registered" : "Unregistered",
     lastScanned: null,
     status: "Active",
-    parentEmail: parent?.email ?? undefined,
-    parentPhone: parent?.contact_number ?? undefined,
-    parentRelationship: parent?.relationship ?? undefined,
-    birthDate: row.birth_date ?? "", motherTongue: row.mother_tongue ?? "", ipEthnicGroup: row.ip_ethnic_group ?? "", religion: row.religion ?? "", learningModality: row.learning_modality ?? "",
+    birthDate: row.birth_date ?? "", age: row.age == null ? "" : String(row.age), motherTongue: row.mother_tongue ?? "", ipEthnicGroup: row.ip_ethnic_group ?? "", religion: row.religion ?? "", learningModality: row.learning_modality ?? "",
     houseStreetSitioPurok: row.house_street_sitio_purok ?? "", barangay: row.barangay ?? "", municipalityCity: row.municipality_city ?? "", province: row.province ?? "",
+    remarkId: row.latest_remark?.id ?? null,
+    remarkType: row.latest_remark?.remark_type ?? "",
+    remarkDate: row.latest_remark?.effectivity_date ?? "",
+    remarkNote: row.latest_remark?.note ?? "",
+    remarkSchoolName: row.latest_remark?.school_name ?? "",
   };
 }
 
@@ -2164,6 +2367,9 @@ export default function StudentManagementPage() {
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [activeTab, setActiveTab] = useState<MainTab>("profiles");
   const [grades, setGrades] = useState<string[]>([]);
+  const [gradesLoading, setGradesLoading] = useState(true);
+  const [gradesError, setGradesError] = useState("");
+  const [gradesRetryKey, setGradesRetryKey] = useState(0);
   const [sections, setSections] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [studentRefreshKey, setStudentRefreshKey] = useState(0);
@@ -2173,6 +2379,7 @@ export default function StudentManagementPage() {
   const [query, setQuery] = useState("");
   const [gradeFilter, setGradeFilter] = useState("");
   const [sectionFilter, setSectionFilter] = useState("");
+  const [parentLinkFilter, setParentLinkFilter] = useState<"All" | "Already Linked" | "Unlinked">("All");
   const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
   const [viewStudent, setViewStudent] = useState<Student | null>(null);
@@ -2199,12 +2406,22 @@ export default function StudentManagementPage() {
   // Fetch grades on mount
   useEffect(() => {
     async function fetchGrades() {
-      const res = await fetch("/api/ict/grades");
-      const data = await res.json();
-      if (data.success) setGrades(data.grades);
+      setGradesLoading(true);
+      setGradesError("");
+      try {
+        const res = await fetch("/api/ict/grades", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) throw new Error(data?.message || "Could not load grade levels.");
+        setGrades(Array.isArray(data.grades) ? data.grades : []);
+      } catch (error) {
+        setGrades([]);
+        setGradesError(error instanceof Error ? error.message : "Could not load grade levels.");
+      } finally {
+        setGradesLoading(false);
+      }
     }
-    fetchGrades();
-  }, [referenceRefreshKey]);
+    void fetchGrades();
+  }, [referenceRefreshKey, gradesRetryKey]);
 
   useEffect(() => {
     async function fetchSchoolYear() {
@@ -2252,13 +2469,14 @@ export default function StudentManagementPage() {
       if (sectionFilter) params.set("section", sectionFilter);
       if (query) params.set("search", query);
       if (rfidStatusFilter !== "All") params.set("rfidStatus", rfidStatusFilter);
+      if (parentLinkFilter !== "All") params.set("parentLinkStatus", parentLinkFilter);
       const res = await fetch(`/api/ict/students?${params.toString()}`, { cache: "no-store" });
       const data = await res.json();
       if (data.success) setStudents(data.data.map(mapStudent));
       setLoading(false);
     }
     fetchStudents();
-  }, [gradeFilter, sectionFilter, query, rfidStatusFilter, studentRefreshKey]);
+  }, [gradeFilter, sectionFilter, query, rfidStatusFilter, parentLinkFilter, studentRefreshKey]);
 
   // Keep the active filters and modal state intact while refetching the
   // protected ICT student snapshot after an authorized profile/RFID change.
@@ -2282,8 +2500,9 @@ export default function StudentManagementPage() {
     const matchQ = !q || s.firstName.toLowerCase().includes(q) || s.lastName.toLowerCase().includes(q) || s.studentId.includes(q);
     const matchG = !gradeFilter || s.grade === gradeFilter;
     const matchS = !sectionFilter || s.section === sectionFilter;
-    return matchQ && matchG && matchS;
-  }), [students, query, gradeFilter, sectionFilter]);
+    const matchParentLink = parentLinkFilter === "All" || s.parentLinkStatus === parentLinkFilter;
+    return matchQ && matchG && matchS && matchParentLink;
+  }), [students, query, gradeFilter, sectionFilter, parentLinkFilter]);
 
   const filteredRFID = useMemo(() => students.filter(s => {
     const q = rfidSearch.toLowerCase();
@@ -2297,9 +2516,16 @@ export default function StudentManagementPage() {
   const totalPages = Math.max(1, Math.ceil(filteredProfiles.length / PER_PAGE));
   const rows = filteredProfiles.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
+  // A Realtime update or an Unlinked filter can reduce the result set while
+  // the user is on a later page. Keep pagination on a valid page rather than
+  // showing an avoidable empty table.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   const stats = {
     total: students.length,
-    linked: students.filter(s => !!s.linkedParent).length,
+    linked: students.filter(s => s.parentLinkStatus === "Already Linked").length,
     rfidRegistered: students.filter(s => s.rfidStatus === "Registered").length,
     sections: new Set(students.map(s => `${s.grade}-${s.section}`)).size,
   };
@@ -2344,7 +2570,16 @@ export default function StudentManagementPage() {
     const response = await fetch(`/api/ict/students/${student.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(update),
+      body: JSON.stringify({
+        ...update,
+        remark: {
+          id: update.remarkId,
+          remarkType: update.remarkType,
+          remarkDate: update.remarkDate,
+          remarkNote: update.remarkNote,
+          remarkSchoolName: update.remarkSchoolName,
+        },
+      }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success) {
@@ -2366,7 +2601,6 @@ export default function StudentManagementPage() {
         targetType: "student",
         targetId: student.id,
         targetName: [student.firstName, student.middleName, student.lastName, student.suffix !== "None" ? student.suffix : ""].filter(Boolean).join(" "),
-        targetEmail: student.parentEmail ?? null,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -2475,6 +2709,15 @@ export default function StudentManagementPage() {
               </select>
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
             </div>
+            <div className="relative w-full sm:w-auto">
+              <select aria-label="Parent account link status" value={parentLinkFilter} onChange={e => { setParentLinkFilter(e.target.value as typeof parentLinkFilter); setPage(1); }}
+                className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 sm:min-w-[145px]">
+                <option value="All">All Parent Links</option>
+                <option value="Already Linked">Already Linked</option>
+                <option value="Unlinked">Unlinked</option>
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            </div>
             {gradeFilter && (
               <div className="relative w-full sm:w-auto">
                 <select value={sectionFilter} onChange={e => { setSectionFilter(e.target.value); setPage(1); }}
@@ -2485,8 +2728,8 @@ export default function StudentManagementPage() {
                 <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               </div>
             )}
-            {(gradeFilter || sectionFilter || query) && (
-              <button onClick={() => { setQuery(""); setGradeFilter(""); setSectionFilter(""); setPage(1); }}
+            {(gradeFilter || sectionFilter || query || parentLinkFilter !== "All") && (
+              <button onClick={() => { setQuery(""); setGradeFilter(""); setSectionFilter(""); setParentLinkFilter("All"); setPage(1); }}
                 className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-500 transition hover:bg-red-50 sm:w-auto">
                 <X className="w-3.5 h-3.5" />Clear
               </button>
@@ -2512,9 +2755,9 @@ export default function StudentManagementPage() {
                   </td>
                   <td className="px-4 py-3.5 text-sm text-gray-600 whitespace-nowrap">{s.grade} — {s.section}</td>
                   <td className="px-4 py-3.5">
-                    {s.linkedParent
-                      ? <div className="flex items-center gap-2"><div className={`w-6 h-6 rounded-full ${s.parentColor} flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>{s.parentInitials}</div><span className="text-xs font-semibold text-gray-700 truncate max-w-28">{s.linkedParent}</span></div>
-                      : <span className="inline-flex items-center gap-1 text-xs font-bold text-red-500 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full"><WifiOff className="w-3 h-3" />Not Linked</span>}
+                    {s.parentLinkStatus === "Already Linked" && s.linkedParent
+                      ? <div className="min-w-0 space-y-1"><span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">Already Linked</span><div className="flex min-w-0 items-center gap-2"><div className={`w-6 h-6 rounded-full ${s.parentColor} flex shrink-0 items-center justify-center text-[9px] font-bold text-white`}>{s.parentInitials}</div><span title={s.linkedParent} className="max-w-36 truncate text-xs font-semibold text-gray-700">{s.linkedParent}</span></div></div>
+                      : <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700"><WifiOff className="w-3 h-3" />Unlinked</span>}
                   </td>
                   <td className="px-4 py-3.5">
                     {s.adviser ? (
@@ -2688,9 +2931,9 @@ export default function StudentManagementPage() {
           onSaved={(sy) => { setSchoolYear(sy); setShowSchoolYearModal(false); }}
         />
       )}
-      {showClassControl && <ClassControlModal onClose={() => setShowClassControl(false)} />}
+      {showClassControl && <ClassControlModal grades={grades} onClose={() => setShowClassControl(false)} />}
       {showAttendanceNotificationSettings && <AttendanceNotificationSettingsModal onClose={() => setShowAttendanceNotificationSettings(false)} />}
-      {showAdd && <AddStudentModal grades={grades} onClose={() => setShowAdd(false)} onAdd={s => { setStudents(prev => prev.map(existing => existing.id === s.id ? s : existing)); setStudentRefreshKey(key => key + 1); setShowAdd(false); }} />}
+      {showAdd && <AddStudentModal grades={grades} gradesLoading={gradesLoading} gradesError={gradesError} onRetryGrades={() => setGradesRetryKey((key) => key + 1)} onClose={() => setShowAdd(false)} onAdd={s => { setStudents(prev => prev.map(existing => existing.id === s.id ? s : existing)); setStudentRefreshKey(key => key + 1); setShowAdd(false); }} />}
       {viewStudent && <ViewStudentModal student={viewStudent} onClose={() => setViewStudent(null)} onEdit={s => { setViewStudent(null); setEditStudent(s); }} />}
       {editStudent && <EditStudentModal grades={grades} student={editStudent} onClose={() => setEditStudent(null)} onSave={update => handleSaveStudentProfile(editStudent, update)} />}
       {deleteStudent && <DeleteStudentModal student={deleteStudent} onClose={() => setDeleteStudent(null)} onDeleted={handleScheduleStudentArchive} />}

@@ -68,6 +68,8 @@ interface UserRow {
   studentDetails?: EditableStudent[];
   firstName?: string; middleName?: string; lastName?: string; suffix?: string;
   phone?: string; employeeId?: string; relationship?: string; address?: string;
+  /** An ICT parent-account note; never a learner SF2 status remark. */
+  parentRemarks?: string;
   familyDetails?: FamilyDetails;
   sharedFamilyDetailsChanged?: boolean;
   deleteSchedule?: DeleteSchedule;
@@ -88,6 +90,10 @@ interface ApprovalRequest {
   status: ApprovalStatus;
   changes: { field: string; from: string; to: string }[];
   note?: string; reviewedAt?: string; reviewNote?: string;
+}
+
+function displayGuidanceLabel(value: string) {
+  return value === "Guidance Counselor" ? "Guidance" : value;
 }
 
 interface ParentStudentFilters {
@@ -1485,6 +1491,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     phone: user.phone || "",
     relationship: user.relationship || "",
     address: user.address || "",
+    parentRemarks: user.parentRemarks || "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -1541,6 +1548,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   if (form.phone !== (user.phone || "")) changes.push({ field: "Phone", from: user.phone || "—", to: form.phone });
   if (form.relationship !== (user.relationship || "")) changes.push({ field: "Relationship", from: user.relationship || "—", to: form.relationship });
   if (form.address !== (user.address || "")) changes.push({ field: "Address", from: user.address || "—", to: form.address });
+  if (form.parentRemarks !== (user.parentRemarks || "")) changes.push({ field: "Parent account remarks", from: user.parentRemarks || "—", to: form.parentRemarks || "—" });
   if (studentEditSignature(editableStudents) !== studentEditSignature(user.studentDetails ?? [])) {
     changes.push({ field: "Student records", from: "Current school record", to: "Updated" });
   }
@@ -1608,6 +1616,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
         phone: form.phone,
         relationship: form.relationship,
         address: form.address,
+        parentRemarks: form.parentRemarks,
         initials: `${form.firstName[0] || ""}${form.lastName[0] || ""}`.toUpperCase(),
         name: fullName,
         familyDetails,
@@ -1710,6 +1719,17 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                       <option value="Guardian">Guardian</option>
                     </select>
                     <p className="mt-1 text-[11px] text-gray-400">This chooses which current family record may claim the school-verified email and phone.</p>
+                  </div>
+                  <div>
+                    <FLabel>Remarks</FLabel>
+                    <textarea
+                      rows={3}
+                      value={form.parentRemarks}
+                      onChange={event => setForm(previous => ({ ...previous, parentRemarks: event.target.value }))}
+                      placeholder="Parent account note"
+                      className="w-full resize-y rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
+                    />
+                    <p className="mt-1 text-[11px] leading-4 text-gray-400">This note belongs only to the Parent account. It never changes a linked student&apos;s SF2 remarks or export totals.</p>
                   </div>
                 </>}
                 <div className="space-y-3 border-t border-gray-100 pt-4">
@@ -1926,7 +1946,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                           <p className="text-sm font-bold text-gray-800 truncate">{req.adviserName}</p>
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 border" style={{ color: m.color, background: m.bg, borderColor: m.border }}>{req.status}</span>
                         </div>
-                        <p className="text-[11px] text-gray-400 truncate">{req.classGrade}</p>
+                        <p className="text-[11px] text-gray-400 truncate">{displayGuidanceLabel(req.classGrade)}</p>
                         <p className="text-[11px] text-gray-500 mt-1">{req.changes.length} field{req.changes.length !== 1 ? "s" : ""} requested to change</p>
                       </div>
                     </div>
@@ -1955,7 +1975,7 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
                       <span className="flex min-w-0 items-center gap-1 break-all text-xs text-gray-400"><Mail className="w-3 h-3 shrink-0" />{selected.adviserEmail}</span>
-                      <span className="flex items-center gap-1 text-xs text-gray-400"><School className="w-3 h-3" />{selected.classGrade}</span>
+                      <span className="flex items-center gap-1 text-xs text-gray-400"><School className="w-3 h-3" />{displayGuidanceLabel(selected.classGrade)}</span>
                     </div>
                     <p className="text-[11px] text-gray-400 mt-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Requested on {selected.requestedAt}</p>
                   </div>

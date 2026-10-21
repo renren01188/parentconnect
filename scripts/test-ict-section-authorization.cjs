@@ -56,7 +56,7 @@ const addFlow = createUserPage.slice(
 );
 const deleteFlow = createUserPage.slice(
   createUserPage.indexOf("const requestDeleteSection"),
-  createUserPage.indexOf("const authorizeSectionChanges")
+  createUserPage.indexOf("const beginRenameSection")
 );
 assert.doesNotMatch(addFlow, /fetch\(/, "Adding a section must not request password authorization immediately.");
 assert.doesNotMatch(deleteFlow, /fetch\(/, "Deleting a section must remain staged until Done.");

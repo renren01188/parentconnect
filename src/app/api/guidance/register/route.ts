@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     if (emailCheckError) throw emailCheckError;
     if (emailExists && emailExists.length > 0) {
       return NextResponse.json(
-        { success: false, message: "A guidance counselor account with this email already exists." },
+        { success: false, message: "A Guidance account with this email already exists." },
         { status: 409 }
       );
     }
@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Guidance counselor account is pending activation. A temporary password has been sent to ${normalizedEmail}.`,
+      message: `Guidance account is pending activation. A temporary password has been sent to ${normalizedEmail}.`,
     });
   } catch (error: unknown) {
     console.error("POST /api/guidance/register error:", error);

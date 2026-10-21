@@ -507,7 +507,7 @@ export function BulkDeletionModal({
                       <div className="flex-1">
                         {["adviser", "guidance", "ict"].includes(item.target_type) ? (
                           <>
-                            <p className="text-sm font-bold text-slate-700">{item.target_type === "guidance" ? "Guidance Counselor" : item.target_type === "adviser" ? "Adviser" : "ICT Account"}: {item.target_name}</p>
+                            <p className="text-sm font-bold text-slate-700">{item.target_type === "guidance" ? "Guidance" : item.target_type === "adviser" ? "Adviser" : "ICT Account"}: {item.target_name}</p>
                             {item.target_email && <p className="text-xs text-slate-600">{item.target_email}</p>}
                           </>
                         ) : (
@@ -767,7 +767,7 @@ export function BulkDeletionModal({
                             : item.type === "parent"
                             ? "Parent / Guardian account"
                             : item.type === "guidance"
-                              ? "Guidance Counselor account"
+                              ? "Guidance account"
                               : "Adviser account"}
                         </p>
                         {(item.type === "adviser" || item.type === "guidance") && (

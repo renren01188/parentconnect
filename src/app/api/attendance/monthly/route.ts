@@ -46,6 +46,17 @@ type MonthlyAttendanceRow = {
   active_from: string;
 };
 
+type StudentRemarkRow = {
+  id: number;
+  student_db_id: number;
+  remark_type: "Dropped out" | "Transferred In" | "Transferred Out";
+  effectivity_date: string;
+  note: string;
+  school_name: string | null;
+};
+
+type RemarkSummary = Record<StudentRemarkRow["remark_type"], { male: number; female: number; total: number }>;
+
 function buildFullName(row: Pick<StudentRow, "first_name" | "middle_name" | "last_name" | "suffix">) {
   return [row.first_name, row.middle_name, row.last_name, row.suffix]
     .filter(Boolean)
@@ -208,6 +219,45 @@ export async function GET(req: NextRequest) {
     });
     const studentDbIds = eligibleStudents.map(({ student }) => student.id);
 
+    const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+    const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
+    const { data: remarkRows, error: remarkError } = studentDbIds.length > 0
+      ? await supabase
+        .from("student_remarks")
+        .select("id, student_db_id, remark_type, effectivity_date, note, school_name")
+        .in("student_db_id", studentDbIds)
+        .gte("effectivity_date", monthStart)
+        .lte("effectivity_date", monthEnd)
+        .order("effectivity_date", { ascending: true })
+        .order("id", { ascending: true })
+      : { data: [], error: null };
+    if (remarkError) throw remarkError;
+
+    const remarksByStudentId: Record<string, StudentRemarkRow[]> = {};
+    const studentByDbId = new Map(students.map((student) => [student.id, student]));
+    const countedStudents = new Map<StudentRemarkRow["remark_type"], Set<number>>([
+      ["Dropped out", new Set<number>()],
+      ["Transferred In", new Set<number>()],
+      ["Transferred Out", new Set<number>()],
+    ]);
+    const remarkSummary: RemarkSummary = {
+      "Dropped out": { male: 0, female: 0, total: 0 },
+      "Transferred In": { male: 0, female: 0, total: 0 },
+      "Transferred Out": { male: 0, female: 0, total: 0 },
+    };
+    for (const remark of (remarkRows ?? []) as StudentRemarkRow[]) {
+      const student = studentByDbId.get(remark.student_db_id);
+      if (!student) continue;
+      (remarksByStudentId[student.student_id] ??= []).push(remark);
+      const counted = countedStudents.get(remark.remark_type);
+      if (!counted || counted.has(student.id)) continue;
+      counted.add(student.id);
+      const gender = String(student.gender ?? "").trim().toLowerCase();
+      if (gender === "male" || gender === "m") remarkSummary[remark.remark_type].male += 1;
+      else remarkSummary[remark.remark_type].female += 1;
+      remarkSummary[remark.remark_type].total += 1;
+    }
+
     // Fetch logs only for students in the active section. This avoids a costly
     // attendance_logs -> students join over the whole monthly date range.
     const logs: LogRow[] = [];
@@ -308,6 +358,8 @@ export async function GET(req: NextRequest) {
       schoolDays,
       holidayDates,
       studentCount: eligibleStudents.length,
+      remarksByStudentId,
+      remarkSummary,
       schoolYearLabel: activeSY
         ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`
         : null,

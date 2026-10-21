@@ -40,7 +40,7 @@ export async function PATCH(
     if (!currentReport) return NextResponse.json({ success: false, message: "Escalated report not found." }, { status: 404 });
     const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
     if (assignedGuidanceId !== null && assignedGuidanceId !== guidance.id) {
-      return NextResponse.json({ success: false, message: "This report is assigned to another Guidance Counselor." }, { status: 403 });
+      return NextResponse.json({ success: false, message: "This report is assigned to another Guidance user." }, { status: 403 });
     }
     if (String(currentReport.status ?? "").toLowerCase() === "cancelled") {
       return NextResponse.json({ success: false, message: "This report has been cancelled by the Parent." }, { status: 409 });

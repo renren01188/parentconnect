@@ -293,7 +293,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     && (!Number.isFinite(parentSeenAtMs) || ticketAcceptedAtMs > parentSeenAtMs)
   );
   const unread = !isResolved && (hasUnreadStaffMessage || acceptedTicketIsUnread);
-  const guidanceName = visibleMessages.find((msg) => msg.sender_role === "guidance")?.sender_name || "Guidance Counselor";
+  const guidanceName = visibleMessages.find((msg) => msg.sender_role === "guidance")?.sender_name || "Guidance";
   const principalName = visibleMessages.find((msg) => msg.sender_role === "principal")?.sender_name || "Principal";
   const guidanceHasReplied = visibleMessages.some((msg) => msg.sender_role === "guidance");
   const hasParentReplyAfter = (timestamp?: string | null) => {
@@ -619,7 +619,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     ticketRejectionReason: ticket?.rejection_reason ?? null,
     replies: threadMessages.map((msg) => ({
       id: msg.id,
-      sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance Counselor" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
+      sender: msg.sender_role === "principal" ? "Principal" : msg.sender_role === "adviser" ? "Class Adviser" : msg.sender_role === "guidance" ? "Guidance" : msg.sender_role === "subject_teacher" ? "Subject Teacher" : row.parent_name,
       senderName: msg.sender_role === "parent" ? row.parent_name : (msg.sender_name || "Staff Member"),
       senderRole: msg.sender_role,
       message: msg.body ?? "",
@@ -776,7 +776,7 @@ export async function getGuidanceSession() {
     if (await isPasswordSessionRevoked({ role: "guidance", accountId: id, payload: verified.payload })) return null;
     return {
       id,
-      name: [data.first_name, data.middle_name, data.last_name, data.suffix].filter(Boolean).join(" ") || "Guidance Counselor",
+      name: [data.first_name, data.middle_name, data.last_name, data.suffix].filter(Boolean).join(" ") || "Guidance",
       email: String(data.email ?? ""),
     };
   } catch {

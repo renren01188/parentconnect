@@ -7,7 +7,7 @@ import {
   User, BookOpen, Monitor, Eye, EyeOff, ChevronDown,
   CheckCircle, Clock, ArrowLeft, Send, AlertTriangle,
   Info, Phone, Mail, GraduationCap, Repeat2,
-  Settings2, Sun, Moon, Plus, Trash2, X, ChevronRight,
+  Settings2, Sun, Moon, Plus, Trash2, X, ChevronRight, Pencil,
   Loader2,
 } from "lucide-react";
 import { StudentParentRegistration } from "@/components/student-parent-registration/StudentParentRegistration";
@@ -142,6 +142,10 @@ function formatCreatedAt(createdAt: string) {
   }).format(date);
 }
 
+function displayRecentlyCreatedRole(role: RecentlyCreatedUser["role"]) {
+  return role === "Guidance Counselor" ? "Guidance" : role;
+}
+
 function SummaryPanel({
   accountType,
   summaryRows,
@@ -157,7 +161,7 @@ function SummaryPanel({
 }) {
   const typeLabel: Record<NonNullable<AccountType>, string> = {
     adviser: "Class Adviser", ict: "ICT Admin", student: "Student & Parent",
-    succession: "Principal Succession", guidance: "Guidance Counselor",
+    succession: "Principal Succession", guidance: "Guidance",
   };
   const filled = summaryRows.filter(r => r.status === "Filled").length;
   const total = summaryRows.filter(r => r.status !== null).length;
@@ -196,7 +200,7 @@ function SummaryPanel({
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-gray-800 truncate">{user.name}</p>
                     {user.createdAt && <p className="text-[10px] text-gray-400">{formatCreatedAt(user.createdAt)}</p>}
-                    <span className={"text-[9px] font-bold px-1.5 py-0.5 rounded-full " + style.badge}>{user.role}</span>
+                    <span className={"text-[9px] font-bold px-1.5 py-0.5 rounded-full " + style.badge}>{displayRecentlyCreatedRole(user.role)}</span>
                   </div>
                 </div>
               );
@@ -210,13 +214,27 @@ function SummaryPanel({
 
 // ─── Manage Class Sessions Modal ──────────────────────────────────────────────
 
-type SectionEntry = { name: string; count: number; class_session: "Morning" | "Afternoon" | null };
-type PendingSectionAction = {
-  type: "add" | "delete";
-  grade: string;
-  sectionName: string;
-  classSession: ClassSessionTab;
+type SectionEntry = {
+  id: number | null;
+  name: string;
+  count: number;
+  class_session: "Morning" | "Afternoon" | null;
 };
+type PendingSectionAction =
+  | {
+    type: "add" | "delete";
+    grade: string;
+    sectionName: string;
+    classSession: ClassSessionTab;
+  }
+  | {
+    type: "rename";
+    grade: string;
+    sectionId: number;
+    sectionName: string;
+    newSectionName: string;
+    classSession: ClassSessionTab;
+  };
 
 function SectionAuthorizationModal({
   actions,
@@ -235,6 +253,7 @@ function SectionAuthorizationModal({
   const [authorizing, setAuthorizing] = useState(false);
   const additions = actions.filter((action) => action.type === "add");
   const deletions = actions.filter((action) => action.type === "delete");
+  const renames = actions.filter((action) => action.type === "rename");
   const changesLabel = actions.length === 1 ? "change" : "changes";
 
   const submit = async (event: React.FormEvent) => {
@@ -289,6 +308,9 @@ function SectionAuthorizationModal({
           {deletions.map((action) => (
             <p key={`delete-${action.grade}-${action.sectionName}`}><span className="font-bold text-red-600">Delete</span> {action.sectionName} from {action.grade} ({action.classSession})</p>
           ))}
+          {renames.map((action) => (
+            <p key={`rename-${action.sectionId}`}><span className="font-bold text-sky-700">Rename</span> {action.sectionName} to {action.newSectionName} in {action.grade} ({action.classSession})</p>
+          ))}
         </div>
 
         <label htmlFor="section-authorization-password" className="mb-1.5 block text-xs font-semibold text-gray-700">
@@ -336,6 +358,8 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
   const [newSectionName, setNewSectionName] = useState<Map<string, string>>(new Map());
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
   const [pendingSectionActions, setPendingSectionActions] = useState<PendingSectionAction[]>([]);
+  const [renamingSection, setRenamingSection] = useState<{ key: string; sectionId: number | null; name: string } | null>(null);
+  const [renameSectionName, setRenameSectionName] = useState("");
   const [showSectionAuthorization, setShowSectionAuthorization] = useState(false);
   const [savingSectionChanges, setSavingSectionChanges] = useState(false);
 
@@ -403,7 +427,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
           next.set(mapKey, sections.filter((section) => section.name.toLowerCase() !== formatted.toLowerCase()));
         }
       }
-      const list = [...(next.get(key) ?? []), { name: formatted, count: 0, class_session: activeTab }]
+      const list = [...(next.get(key) ?? []), { id: null, name: formatted, count: 0, class_session: activeTab }]
         .sort((a, b) => a.name.localeCompare(b.name));
       next.set(key, list);
       return next;
@@ -459,6 +483,127 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
     });
   };
 
+  const beginRenameSection = (key: string, section: SectionEntry) => {
+    setRenamingSection({ key, sectionId: section.id, name: section.name });
+    setRenameSectionName(section.name);
+    setErrors(prev => { const next = new Map(prev); next.delete(key); return next; });
+  };
+
+  const cancelRenameSection = () => {
+    setRenamingSection(null);
+    setRenameSectionName("");
+  };
+
+  const requestRenameSection = async (grade: string, section: SectionEntry) => {
+    const key = `${grade}__${activeTab}`;
+    const raw = renameSectionName.trim();
+    if (!raw) {
+      setErrors(prev => { const next = new Map(prev); next.set(key, "Enter a new section name."); return next; });
+      return;
+    }
+
+    const stripped = raw.replace(/\s+/g, "");
+    const formatted = stripped.charAt(0).toUpperCase() + stripped.slice(1).toLowerCase();
+    if (formatted === section.name) {
+      cancelRenameSection();
+      return;
+    }
+
+    const stagedDuplicate = pendingSectionActions.some((action) =>
+      action.grade === grade
+      && ((action.type === "add" && action.sectionName.toLowerCase() === formatted.toLowerCase())
+        || (action.type === "rename"
+          && action.sectionId !== section.id
+          && action.newSectionName.toLowerCase() === formatted.toLowerCase()))
+    );
+    if (stagedDuplicate) {
+      setErrors(prev => {
+        const next = new Map(prev);
+        next.set(key, `Section \"${formatted}\" already exists in ${grade}. Choose a different name.`);
+        return next;
+      });
+      return;
+    }
+
+    // The visible tab has only one session. Check the whole grade as well so
+    // a section in the other session cannot be given the same name.
+    try {
+      const res = await fetch(`/api/sections?grade=${encodeURIComponent(grade)}`, { cache: "no-store" });
+      const json = await res.json();
+      const duplicate = json.success && (json.sectionsWithCount ?? []).some((candidate: SectionEntry) =>
+        candidate.id !== section.id && candidate.name.toLowerCase() === formatted.toLowerCase()
+      );
+      if (duplicate) {
+        setErrors(prev => {
+          const next = new Map(prev);
+          next.set(key, `Section \"${formatted}\" already exists in ${grade}. Choose a different name.`);
+          return next;
+        });
+        return;
+      }
+    } catch {
+      // The final server-side check remains authoritative if this convenience
+      // validation cannot be completed.
+    }
+
+    const visibleDuplicate = (sectionsMap.get(key) ?? []).some((candidate) =>
+      (candidate.id !== section.id || candidate.name !== section.name)
+      && candidate.name.toLowerCase() === formatted.toLowerCase()
+    );
+    if (visibleDuplicate) {
+      setErrors(prev => {
+        const next = new Map(prev);
+        next.set(key, `Section \"${formatted}\" already exists in ${grade}. Choose a different name.`);
+        return next;
+      });
+      return;
+    }
+
+    setSectionsMap(prev => {
+      const next = new Map(prev);
+      next.set(key, (next.get(key) ?? []).map((candidate) =>
+        candidate.id === section.id && candidate.name === section.name
+          ? { ...candidate, name: formatted }
+          : candidate
+      ).sort((a, b) => a.name.localeCompare(b.name)));
+      return next;
+    });
+    setPendingSectionActions(prev => {
+      // Renaming a newly staged section only changes its pending add. No
+      // database record exists yet, so no record ID can (or should) change.
+      if (section.id === null) {
+        return prev.map((action) => action.type === "add"
+          && action.grade === grade
+          && action.sectionName === section.name
+          ? { ...action, sectionName: formatted }
+          : action);
+      }
+
+      const existingRename = prev.find((action): action is Extract<PendingSectionAction, { type: "rename" }> =>
+        action.type === "rename" && action.sectionId === section.id
+      );
+      const originalName = existingRename?.sectionName ?? section.name;
+      if (formatted === originalName) {
+        return prev.filter((action) => action.type !== "rename" || action.sectionId !== section.id);
+      }
+      if (existingRename) {
+        return prev.map((action) => action.type === "rename" && action.sectionId === section.id
+          ? { ...action, newSectionName: formatted }
+          : action);
+      }
+      return [...prev, {
+        type: "rename",
+        grade,
+        sectionId: section.id,
+        sectionName: section.name,
+        newSectionName: formatted,
+        classSession: activeTab,
+      }];
+    });
+    setErrors(prev => { const next = new Map(prev); next.delete(key); return next; });
+    cancelRenameSection();
+  };
+
   const authorizeSectionChanges = async (authorizationPassword: string): Promise<string | null> => {
     if (pendingSectionActions.length === 0) return "There are no section changes to save.";
 
@@ -473,6 +618,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
             name: action.sectionName,
             grade: action.grade,
             ...(action.type === "add" ? { class_session: action.classSession } : {}),
+            ...(action.type === "rename" ? { id: action.sectionId, new_name: action.newSectionName } : {}),
           })),
           authorizationPassword,
         }),
@@ -514,7 +660,7 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="min-w-0">
               <h2 className="text-sm font-bold text-gray-900">Manage Class Sessions</h2>
-              <p className="text-[11px] text-gray-400">Add or remove sections per grade level and session</p>
+              <p className="text-[11px] text-gray-400">Add, rename, or remove sections per grade level and session</p>
             </div>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">
@@ -589,24 +735,66 @@ function ManageSessionsModal({ onClose }: { onClose: () => void }) {
                       <div className="space-y-1.5">
                         {sections.map(sec => {
                           const hasStudents = sec.count > 0;
+                          const hasStagedRename = sec.id !== null && pendingSectionActions.some((action) =>
+                            action.type === "rename" && action.sectionId === sec.id
+                          );
+                          const isRenaming = renamingSection?.key === key
+                            && renamingSection.sectionId === sec.id
+                            && renamingSection.name === sec.name;
                           return (
-                            <div key={sec.name} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 group">
-                              <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: cfg.color }} />
-                                <span className="text-xs font-semibold text-gray-800">{sec.name}</span>
-                                <span className="text-[10px] text-gray-400">{sec.count} student{sec.count !== 1 ? "s" : ""}</span>
-                                {hasStudents && <span className="text-[10px] font-medium text-amber-700">Remove or reassign students first.</span>}
-                              </div>
-                              <button
-                                type="button"
-                                disabled={hasStudents}
-                                title={hasStudents ? "Remove or reassign the students before deleting this section." : "Delete section"}
-                                onClick={() => requestDeleteSection(grade, sec.name, sec.count)}
-                                className={`flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-lg transition ${hasStudents ? "cursor-not-allowed text-gray-400" : "opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 hover:text-red-700"}`}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                {hasStudents ? "Occupied" : "Delete"}
-                              </button>
+                            <div key={sec.id ?? sec.name} className="flex flex-col gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                              {isRenaming ? (
+                                <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row">
+                                  <input
+                                    autoFocus
+                                    value={renameSectionName}
+                                    onChange={(event) => {
+                                      setRenameSectionName(event.target.value);
+                                      setErrors(prev => { const next = new Map(prev); next.delete(key); return next; });
+                                    }}
+                                    onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void requestRenameSection(grade, sec); } }}
+                                    aria-label={`Rename ${sec.name}`}
+                                    className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
+                                  />
+                                  <div className="flex gap-1.5">
+                                    <button type="button" onClick={() => void requestRenameSection(grade, sec)} className="rounded-lg bg-[#274e13] px-2.5 py-1.5 text-[10px] font-bold text-white transition hover:bg-[#1e3d0f]">Save name</button>
+                                    <button type="button" onClick={cancelRenameSection} className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[10px] font-bold text-gray-600 transition hover:bg-white">Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: cfg.color }} />
+                                    <span className="truncate text-xs font-semibold text-gray-800">{sec.name}</span>
+                                    <span className="shrink-0 text-[10px] text-gray-400">{sec.count} student{sec.count !== 1 ? "s" : ""}</span>
+                                    {hasStudents && <span className="hidden text-[10px] font-medium text-amber-700 sm:inline">Remove or reassign students first.</span>}
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => beginRenameSection(key, sec)}
+                                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold text-sky-700 transition hover:bg-sky-50 hover:text-sky-800"
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                      Rename
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={hasStudents || hasStagedRename}
+                                      title={hasStudents
+                                        ? "Remove or reassign the students before deleting this section."
+                                        : hasStagedRename
+                                          ? "Save or revert the staged rename before deleting this section."
+                                          : "Delete section"}
+                                      onClick={() => requestDeleteSection(grade, sec.name, sec.count)}
+                                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-bold transition ${hasStudents || hasStagedRename ? "cursor-not-allowed text-gray-400" : "text-red-500 hover:bg-red-50 hover:text-red-700"}`}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      {hasStudents ? "Occupied" : hasStagedRename ? "Rename staged" : "Delete"}
+                                    </button>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           );
                         })}
@@ -1079,7 +1267,7 @@ function AdviserForm({ onDone, onSummaryChange }: {
   );
 }
 
-// ─── Guidance Counselor form (unchanged) ─────────────────────────────────────
+// ─── Guidance form ───────────────────────────────────────────────────────────
 
 function GuidanceCounselorForm({ onDone, onSummaryChange }: {
   onDone: () => void;
@@ -1103,7 +1291,7 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
     <div className="p-6 text-center">
       <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4"><CheckCircle className="w-6 h-6 text-teal-600" /></div>
       <h3 className="text-base font-bold text-gray-800 mb-1">Account Pending Activation!</h3>
-      <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as a Guidance Counselor.</p>
+      <p className="text-sm text-gray-500 mb-4"><strong>{displayName}</strong> has been registered as Guidance.</p>
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-left mb-5 text-xs text-blue-700 space-y-1">
         <p className="font-bold">What happens next?</p>
         <p>A temporary password is sent to <strong>{f.email}</strong></p>
@@ -1116,7 +1304,7 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
   if (step === "review") return (
     <div className="space-y-4 p-4 sm:p-6">
       <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-700">
-        <Info className="w-4 h-4 shrink-0 mt-0.5" /><p>Review the details below, then confirm to create this Guidance Counselor account.</p>
+        <Info className="w-4 h-4 shrink-0 mt-0.5" /><p>Review the details below, then confirm to create this Guidance account.</p>
       </div>
       <div className="bg-gray-50 rounded-xl border border-gray-100 p-4 space-y-2">
         {[["Full Name", displayName], ["Email", f.email], ["Phone", f.phone], ["Employee ID", f.employeeId]].map(([l, v]) => (
@@ -1147,7 +1335,7 @@ function GuidanceCounselorForm({ onDone, onSummaryChange }: {
               });
               const data = await res.json();
               if (data.success) setStep("sent");
-              else alert(data.message || "Failed to create guidance counselor account.");
+              else alert(data.message || "Failed to create Guidance account.");
             } catch {
               alert("Server error. Please try again.");
             } finally {
@@ -1558,7 +1746,7 @@ export default function CreateUserPage() {
   const typeLabel: Record<NonNullable<AccountType>, string> = {
     adviser: "Class Adviser Account", ict: "ICT Admin Account",
     student: "Register Student & Parent", succession: "Principal Succession",
-    guidance: "Guidance Counselor",
+    guidance: "Guidance",
   };
 
   return (
@@ -1623,7 +1811,7 @@ export default function CreateUserPage() {
               <RoleCard selected={accountType === "adviser"} onSelect={() => selectType("adviser")} icon={BookOpen} iconBg="bg-violet-50" iconColor="text-violet-600" title="Class Adviser" desc="Assigned teacher managing a class section. Can message parents and submit reports." tags={["Student roster", "RFID attendance", "Reports & messages"]} />
               <RoleCard selected={accountType === "ict"} onSelect={() => selectType("ict")} icon={Monitor} iconBg="bg-green-50" iconColor="text-[#274e13]" title="ICT Admin" desc="System administrator managing users, accounts, integrations, and audit logs." tags={["User management", "Student profiles & RFID", "Audit & announcements"]} />
               <RoleCard selected={accountType === "student"} onSelect={() => selectType("student")} icon={GraduationCap} iconBg="bg-sky-50" iconColor="text-sky-600" title="Register Student" desc="Enroll a student with RFID, class, and family verification records. Parents link their own account through Guardian Sign Up." tags={["Student details", "Class section & RFID", "Family verification"]} />
-              <RoleCard selected={accountType === "guidance"} onSelect={() => selectType("guidance")} icon={User} iconBg="bg-rose-50" iconColor="text-rose-600" title="Guidance Counselor" desc="School counselor managing student welfare, behavioral reports, and parent communication." tags={["Reports & concerns", "Announcements", "Parent communication"]} />
+              <RoleCard selected={accountType === "guidance"} onSelect={() => selectType("guidance")} icon={User} iconBg="bg-rose-50" iconColor="text-rose-600" title="Guidance" desc="Manages student welfare, behavioral reports, and parent communication." tags={["Reports & concerns", "Announcements", "Parent communication"]} />
               <RoleCard selected={accountType === "succession"} onSelect={() => selectType("succession")} icon={Repeat2} iconBg="bg-amber-50" iconColor="text-amber-600" title="Principal Succession" desc="Transfer Super Admin rights to an incoming principal. This action is irreversible and permanently logged." tags={["Reports oversight", "Attendance summary", "Audit & announcements"]} badge="Sensitive" />
             </div>
           </div>

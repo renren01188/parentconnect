@@ -11,6 +11,7 @@ import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import { normalizeStudentAge } from "@/lib/studentAge";
 
 export type StudentParentRegistrationProps = {
   variant?: "adviser" | "ict";
@@ -33,10 +34,12 @@ const STEPS = ["Student Info", "RFID & Section", "Verification Records", "Review
 const SUFFIX_OPTIONS = ["Jr.", "Sr.", "II", "III", "IV"] as const;
 const LEARNING_MODALITY_OPTIONS = ["Face-to-Face", "Modular"] as const;
 const RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
+const STUDENT_REMARK_OPTIONS = ["Dropped out", "Transferred In", "Transferred Out"] as const;
 
 const emptyForm = {
   firstName: "", middleName: "", lastName: "", suffix: "", studentId: "", gender: "",
-  birthDate: "", motherTongue: "", ipEthnicGroup: "", religion: "", religionOther: "", learningModality: "",
+  birthDate: "", age: "", motherTongue: "", ipEthnicGroup: "", religion: "", religionOther: "", learningModality: "",
+  remarkType: "", remarkDate: "", remarkNote: "", remarkSchoolName: "",
   grade: "", classSession: "", section: "", rfidCard: "",
   address: "", barangay: "", municipalityCity: "", province: "",
   fatherFirstName: "", fatherMiddleName: "", fatherLastName: "", fatherSuffix: "",
@@ -48,6 +51,14 @@ type FormData = typeof emptyForm;
 type FormUpdater = FormData | ((prev: FormData) => FormData);
 type ClassSession = "Morning" | "Afternoon";
 type SectionOption = { name: string; count: number; class_session?: ClassSession | null };
+
+function hasCompleteStudentRemark(student: FormData) {
+  if (!student.remarkType) return true;
+  if (!student.remarkDate) return false;
+  return student.remarkType === "Dropped out"
+    ? Boolean(student.remarkNote.trim())
+    : Boolean(student.remarkSchoolName.trim());
+}
 
 const capitalize    = (val: string) => val.toUpperCase();
 
@@ -439,12 +450,20 @@ export function StudentParentRegistration({
   const set = (field: keyof FormData, raw: string) => {
     // Suffixes are displayed by exact option value. Uppercasing "Jr." to
     // "JR." made the controlled select fall back to its "None" label.
+    const normalizedRaw = field === "age" ? raw.replace(/\D/g, "").slice(0, 3) : raw;
     const value = suffixFields.includes(field)
-      ? canonicalSuffix(raw)
-      : uppercaseFields.includes(field) ? capitalize(raw) : raw;
+      ? canonicalSuffix(normalizedRaw)
+      : uppercaseFields.includes(field) ? capitalize(normalizedRaw) : normalizedRaw;
     setForm(prev => field === "religion"
       ? { ...prev, religion: value, religionOther: value === "Others" ? prev.religionOther : "" }
-      : { ...prev, [field]: value });
+      : field === "remarkType"
+        ? {
+          ...prev,
+          remarkType: value,
+          remarkNote: value === "Dropped out" ? prev.remarkNote : "",
+          remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? prev.remarkSchoolName : "",
+        }
+        : { ...prev, [field]: value });
     setTouched(prev => ({ ...prev, [field]: true }));
     if (apiError) setApiError("");
   };
@@ -468,8 +487,17 @@ export function StudentParentRegistration({
     else if (duplicateStudentId)                   E.studentId = "This LRN is already used by another student in this registration.";
   }
   if (show("gender")   && !form.gender)            E.gender   = "Please select a gender.";
+  const ageValidation = normalizeStudentAge(form.age);
+  if (show("age") && ageValidation.error) E.age = ageValidation.error;
   if ((show("religion") || show("religionOther")) && form.religion === "Others" && !form.religionOther.trim()) {
     E.religionOther = "Specify the religion when Others is selected.";
+  }
+  if (form.remarkType && (show("remarkType") || show("remarkDate") || show("remarkNote") || show("remarkSchoolName"))) {
+    if (!form.remarkDate) E.remarkDate = "Transfer or dropout date is required.";
+    if (form.remarkType === "Dropped out" && !form.remarkNote.trim()) E.remarkNote = "Enter the reason for dropping out.";
+    if ((form.remarkType === "Transferred In" || form.remarkType === "Transferred Out") && !form.remarkSchoolName.trim()) {
+      E.remarkSchoolName = "Enter the school name.";
+    }
   }
   if (show("grade")    && !form.grade)             E.grade    = "Grade level is required.";
   if (show("classSession") && !form.classSession)  E.classSession = "Class session is required.";
@@ -525,8 +553,9 @@ export function StudentParentRegistration({
     E.guardianRelationshipOther = "Specify the guardian's relationship when Others is selected.";
   }
 
-  const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender
+  const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender && !E.age
     && form.firstName && form.middleName && form.lastName && form.studentId && form.gender && !E.religionOther
+    && !E.remarkDate && !E.remarkNote && !E.remarkSchoolName && hasCompleteStudentRemark(form)
     && !studentIdTaken && !studentIdChecking && !duplicateStudentId;
   const step1OK = !E.grade && !E.classSession && !E.section && !!(form.grade && form.classSession && form.section) && !rfidConflict
     && !pendingManualRfid.trim() && !duplicateRfid;
@@ -554,7 +583,9 @@ export function StudentParentRegistration({
       const incompleteIndex = students.findIndex(student =>
         !student.firstName.trim() || !student.middleName.trim() || !student.lastName.trim() ||
         !student.studentId.trim() || !/^\d{12}$/.test(student.studentId.trim()) || !student.gender
+        || !!normalizeStudentAge(student.age).error
         || (student.religion === "Others" && !student.religionOther.trim())
+        || !hasCompleteStudentRemark(student)
       );
       const duplicateIndex = students.findIndex((student, index) =>
         !!student.studentId.trim() && students.some((other, otherIndex) =>
@@ -622,7 +653,9 @@ export function StudentParentRegistration({
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
       !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      || !!normalizeStudentAge(s.age).error
       || (s.religion === "Others" && !s.religionOther.trim())
+      || !hasCompleteStudentRemark(s)
     );
     const invalidVerificationRecord = students.some(student => {
       const hasGuardian = recordHasAnyName(student, "Guardian");
@@ -664,7 +697,9 @@ export function StudentParentRegistration({
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
       !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
+      || !!normalizeStudentAge(s.age).error
       || (s.religion === "Others" && !s.religionOther.trim())
+      || !hasCompleteStudentRemark(s)
     );
     const invalidVerificationRecord = students.some(student => {
       const hasGuardian = recordHasAnyName(student, "Guardian");
@@ -978,6 +1013,9 @@ export function StudentParentRegistration({
                   </Field>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label="Birth Date"><input type="date" className={inputOk} value={form.birthDate} onChange={e => set("birthDate", e.target.value)} /></Field>
+                    <Field label="Age" error={E.age} hint="Optional · whole years (1–120)">
+                      <input type="text" inputMode="numeric" maxLength={3} className={E.age ? inputErr : inputOk} placeholder="e.g. 12" value={form.age} onChange={e => set("age", e.target.value)} onBlur={() => touch("age")} />
+                    </Field>
                     <Field label="Learning Modality">
                       <div className="relative">
                         <select className={`${inputOk} appearance-none pr-10`} value={form.learningModality} onChange={e => set("learningModality", e.target.value)}>
@@ -1014,6 +1052,36 @@ export function StudentParentRegistration({
                         onBlur={() => touch("religionOther")}
                       />
                     </Field>
+                  )}
+                  <Field label="Remarks" hint="Optional. Saved remarks appear in the monthly SF2 export.">
+                    <div className="relative">
+                      <select
+                        className={`${inputOk} appearance-none pr-10`}
+                        value={form.remarkType}
+                        onChange={e => set("remarkType", e.target.value)}
+                        onBlur={() => touch("remarkType")}
+                      >
+                        <option value="">No remark</option>
+                        {STUDENT_REMARK_OPTIONS.map(remark => <option key={remark} value={remark}>{remark}</option>)}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    </div>
+                  </Field>
+                  {form.remarkType && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field label={form.remarkType === "Dropped out" ? "Dropout Date" : "Transfer Date"} required error={E.remarkDate}>
+                        <input type="date" className={E.remarkDate ? inputErr : inputOk} value={form.remarkDate} onChange={e => set("remarkDate", e.target.value)} onBlur={() => touch("remarkDate")} />
+                      </Field>
+                      {form.remarkType === "Dropped out" ? (
+                        <Field label="Reason for Dropping Out" required error={E.remarkNote}>
+                          <input className={E.remarkNote ? inputErr : inputOk} value={form.remarkNote} onChange={e => set("remarkNote", e.target.value)} onBlur={() => touch("remarkNote")} placeholder="SF2 reason / legend detail" />
+                        </Field>
+                      ) : (
+                        <Field label={form.remarkType === "Transferred In" ? "School Transferred From" : "School Transferred To"} required error={E.remarkSchoolName}>
+                          <input className={E.remarkSchoolName ? inputErr : inputOk} value={form.remarkSchoolName} onChange={e => set("remarkSchoolName", e.target.value)} onBlur={() => touch("remarkSchoolName")} placeholder="Name of school" />
+                        </Field>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1282,8 +1350,11 @@ export function StudentParentRegistration({
                         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">{studentName(student, index)}</p>
                         <ReviewRow label="LRN" value={student.studentId} />
                         <ReviewRow label="Gender" value={student.gender} />
+                        <ReviewRow label="Age" value={student.age} />
                         <ReviewRow label="Mother Tongue" value={student.motherTongue} />
                         <ReviewRow label="Learning Modality" value={student.learningModality} />
+                        <ReviewRow label="Remark" value={student.remarkType || "None"} />
+                        {student.remarkType && <ReviewRow label="Remark detail" value={student.remarkType === "Dropped out" ? student.remarkNote : [student.remarkSchoolName, student.remarkDate].filter(Boolean).join(" · ")} />}
                         <ReviewRow label="Grade" value={student.grade} />
                         <ReviewRow label="Class Session" value={student.classSession ? `${student.classSession} Class` : ""} />
                         <ReviewRow label="Section" value={student.section} />

@@ -17,14 +17,17 @@ assert.match(route, /parentStudentFilters:\s*\{/);
 assert.match(route, /parentGrade/);
 assert.match(route, /parentSection/);
 assert.match(route, /parentLinkState/);
-assert.match(route, /isPreSignupParentRecord\(\[parent\.id\], parent\.password_set\)/);
+assert.match(route, /hasCompletedParentSignup\(\[parent\.id\], parent\.password_set, parent\.requires_account_setup\)/);
+assert.match(route, /requires_account_setup/);
 assert.match(route, /new Map<string, Set<number>>\(\)/);
 assert.match(route, /parentStudentLinkState: isLinked \? "Already Linked" : "Unlinked"|parentStudentLinkState,/);
 
 // Simulate the database relationship model. The same signed-up parent is
 // linked to two children and an unsigned parent has a relation to a third.
 // Counts remain student counts, every student appears once, and only the
-// parent with completed password setup makes a child "Already Linked".
+// parent with completed account setup makes a child "Already Linked". An
+// imported account can have password_set already true while setup is still
+// required, and must remain unlinked until that setup is completed.
 const students = [
   { studentId: "1001", grade: "Grade 1", section: "Gold" },
   { studentId: "1002", grade: "Grade 1", section: "Gold" },
@@ -32,17 +35,23 @@ const students = [
   { studentId: "2001", grade: "Grade 2", section: "Silver" },
 ];
 const parents = [
-  { id: 7, passwordSet: true },
-  { id: 8, passwordSet: false },
+  { id: 7, passwordSet: true, requiresAccountSetup: false },
+  { id: 8, passwordSet: false, requiresAccountSetup: false },
+  { id: 9, passwordSet: true, requiresAccountSetup: true },
 ];
 const links = [
   { parentId: 7, studentId: "1001" },
   { parentId: 7, studentId: "1002" },
   { parentId: 7, studentId: "1002" }, // duplicate link must not duplicate the student
   { parentId: 8, studentId: "1003" }, // pre-sign-up account is not linked
+  { parentId: 9, studentId: "1003" }, // imported account has not completed setup
 ];
 
-const signedUpParentIds = new Set(parents.filter((parent) => parent.passwordSet).map((parent) => parent.id));
+const signedUpParentIds = new Set(
+  parents
+    .filter((parent) => parent.passwordSet && !parent.requiresAccountSetup)
+    .map((parent) => parent.id),
+);
 const signedUpParentIdsByStudent = new Map();
 for (const link of links) {
   if (!signedUpParentIds.has(link.parentId)) continue;

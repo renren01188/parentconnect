@@ -90,7 +90,7 @@ export default function GuidanceLoginPage() {
             <div className="w-16 h-16 rounded-2xl bg-sky-600 flex items-center justify-center mb-4 shadow-lg shadow-sky-200">
               <HeartHandshake className="w-8 h-8 text-white" />
             </div>
-            <h2 className="text-2xl font-extrabold text-slate-800">Guidance Counselor</h2>
+            <h2 className="text-2xl font-extrabold text-slate-800">Guidance</h2>
             <p className="text-slate-500 text-sm text-center mt-1.5 max-w-xs">
               Review escalated student concerns, coordinate interventions, and monitor guidance reports.
             </p>
@@ -162,7 +162,7 @@ export default function GuidanceLoginPage() {
                   Logging in...
                 </span>
               ) : (
-                <>Log in as Guidance Counselor <ArrowRight className="w-4 h-4" /></>
+                <>Log in as Guidance <ArrowRight className="w-4 h-4" /></>
               )}
             </button>
           </form>

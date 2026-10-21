@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, displayGuidanceLabel, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { AUDIT_TIME_ZONE, auditManilaDate } from "@/lib/auditPresentation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
@@ -106,9 +106,9 @@ function resolveAction(raw: string): string {
 function toAuditEvent(row: AuditRealtimeRow): AuditEvent {
   const timestamp = new Date(row.created_at);
   return {
-    id: String(row.id), action: row.action ?? "", description: row.details ?? "",
-    targetUser: row.target_user ?? "", targetRole: row.target_role ?? "", targetEmail: row.target_email ?? "",
-    performedBy: row.performed_by ?? "", performedByRole: normalizeAuditRole(row.performed_by_role), module: row.module ?? "",
+    id: String(row.id), action: row.action ?? "", description: displayGuidanceLabel(row.details),
+    targetUser: displayGuidanceLabel(row.target_user), targetRole: normalizeAuditRole(row.target_role), targetEmail: row.target_email ?? "",
+    performedBy: displayGuidanceLabel(row.performed_by), performedByRole: normalizeAuditRole(row.performed_by_role), module: row.module ?? "",
     ipAddress: row.ip_address ?? "", browser: row.browser ?? "",
     timestamp: timestamp.toLocaleDateString("en-US", { timeZone: AUDIT_TIME_ZONE, month: "short", day: "numeric" }) + " · " + timestamp.toLocaleTimeString("en-US", { timeZone: AUDIT_TIME_ZONE, hour: "numeric", minute: "2-digit" }),
     timestampMs: timestamp.getTime(), changes: Array.isArray(row.changes) ? row.changes : [],

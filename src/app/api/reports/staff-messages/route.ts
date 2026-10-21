@@ -210,7 +210,7 @@ async function staffRecipients(current: NonNullable<Awaited<ReturnType<typeof cu
       id: `guidance:${row.id}`,
       type: "staff" as const,
       role: "Guidance",
-      name: fullName([row.first_name as string, row.middle_name as string | null, row.last_name as string, row.suffix as string | null]) || "Guidance Counselor",
+      name: fullName([row.first_name as string, row.middle_name as string | null, row.last_name as string, row.suffix as string | null]) || "Guidance",
       email: String(row.email ?? ""),
     })),
   ].filter((recipient) => !(recipient.id === `${current.type}:${current.id}`));

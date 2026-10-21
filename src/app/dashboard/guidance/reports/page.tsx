@@ -6,7 +6,7 @@ import {
     CheckCircle, Eye,
     ChevronRight, Paperclip, Send, MessageSquare,
     Search, TriangleAlert, Upload, FileDown,
-    User, X, Shield, TrendingUp, LoaderCircle, RefreshCw,
+    User, X, Shield, TrendingUp, LoaderCircle, RefreshCw, Star,
 } from "lucide-react";
 import {
     type Report, type ReportStatus,
@@ -69,6 +69,15 @@ function newestReportFirst(a: Report, b: Report) {
 }
 function newestGroupFirst(a: ParentGroup, b: ParentGroup) {
     return newestReportFirst(a.reports[0]!, b.reports[0]!);
+}
+function favoriteFirstReport(favoriteReportIds: ReadonlySet<number>) {
+    return (a: Report, b: Report) => {
+        const favoriteDifference = Number(favoriteReportIds.has(b.id)) - Number(favoriteReportIds.has(a.id));
+        return favoriteDifference || newestReportFirst(a, b);
+    };
+}
+function groupHasFavorite(group: ParentGroup, favoriteReportIds: ReadonlySet<number>) {
+    return group.reports.some((report) => favoriteReportIds.has(report.id));
 }
 function adminMessageActivityTime(message: AdminMessage) {
     const timestamp = Date.parse(message.latest_created_at ?? message.latest_sent_at ?? message.sent_at);
@@ -765,6 +774,8 @@ function ReportsPageContent() {
 
     // Local mutable copies of data
     const [reports, setReports] = useState<Report[]>([]);
+    const [favoriteReportIds, setFavoriteReportIds] = useState<Set<number>>(new Set());
+    const [favoriteSavingReportIds, setFavoriteSavingReportIds] = useState<Set<number>>(new Set());
     const [adminMsgs, setAdminMsgs] = useState<AdminMessage[]>([]);
     const [staffRecipients, setStaffRecipients] = useState<StaffRecipient[]>([]);
     const [parentRecipients, setParentRecipients] = useState<ParentRecipient[]>([]);
@@ -783,6 +794,8 @@ function ReportsPageContent() {
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
     const reportDetailRefreshQueuedRef = useRef<Set<number>>(new Set());
     const guidanceReportRequestVersionRef = useRef(0);
+    const favoriteRequestVersionRef = useRef(0);
+    const favoriteSaveInFlightRef = useRef<Set<number>>(new Set());
     const staffMessageRequestVersionRef = useRef(0);
     const preferredStaffConversationRef = useRef<string | null>(null);
 
@@ -829,6 +842,19 @@ function ReportsPageContent() {
             if (!current) return current;
             return groupByParent(nextReports).find((group) => group.parent_name === current.parent_name) ?? current;
         });
+    }, []);
+
+    const loadFavoriteReportIds = useCallback(async () => {
+        const requestVersion = ++favoriteRequestVersionRef.current;
+        const res = await fetch("/api/reports/guidance/favorites", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+        if (requestVersion !== favoriteRequestVersionRef.current) return;
+        if (!res.ok) throw new Error(data?.message || "Unable to load report favorites.");
+        setFavoriteReportIds(new Set(
+            (data?.reportIds ?? [])
+                .map((reportId: unknown) => Number(reportId))
+                .filter((reportId: number) => Number.isSafeInteger(reportId) && reportId > 0),
+        ));
     }, []);
 
     const loadReportDetail = useCallback(async (id: number) => {
@@ -1041,7 +1067,8 @@ function ReportsPageContent() {
     }
 
     useEffect(() => {
-        loadGuidanceReports().catch((error) => console.error("Unable to load guidance reports:", error));
+        Promise.all([loadGuidanceReports(), loadFavoriteReportIds()])
+            .catch((error) => console.error("Unable to load guidance reports:", error));
         refreshTickets("background").catch((error) => console.warn("Unable to load guidance tickets:", error));
         loadGuidanceStaffMessages().catch((error) => console.warn("Unable to load guidance staff messages:", error));
     }, []);
@@ -1081,9 +1108,11 @@ function ReportsPageContent() {
     }, [reports, adminMsgs, tickets, setUnreadCount, setEscalatedCount, setReportsUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
-    const parentGroups = groupByParent(reports).sort(newestGroupFirst);
+    const parentGroups = groupByParent(reports)
+        .sort((a, b) => Number(groupHasFavorite(b, favoriteReportIds)) - Number(groupHasFavorite(a, favoriteReportIds)) || newestGroupFirst(a, b))
+        .map((group) => ({ ...group, reports: [...group.reports].sort(favoriteFirstReport(favoriteReportIds)) }));
     const selectedParentReports = selectedParent
-        ? reports.filter((report) => report.parent_name === selectedParent.parent_name).sort(newestReportFirst)
+        ? reports.filter((report) => report.parent_name === selectedParent.parent_name).sort(favoriteFirstReport(favoriteReportIds))
         : [];
 
     const principalMsgs = adminMsgs;
@@ -1225,6 +1254,50 @@ function ReportsPageContent() {
             console.error("Unable to update guidance status:", error);
             await loadGuidanceReports().catch(() => null);
             return false;
+        }
+    }
+
+    async function toggleReportFavorite(reportId: number) {
+        if (favoriteSaveInFlightRef.current.has(reportId)) return;
+
+        const wasFavorite = favoriteReportIds.has(reportId);
+        const mutationVersion = ++favoriteRequestVersionRef.current;
+        favoriteSaveInFlightRef.current.add(reportId);
+        setFavoriteSavingReportIds((current) => new Set(current).add(reportId));
+        setFavoriteReportIds((current) => {
+            const next = new Set(current);
+            if (wasFavorite) next.delete(reportId);
+            else next.add(reportId);
+            return next;
+        });
+
+        try {
+            const res = await fetch("/api/reports/guidance/favorites", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reportId, favorite: !wasFavorite }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                throw new Error(data?.message || "Unable to save report favorite.");
+            }
+        } catch (error) {
+            console.error("Unable to save guidance report favorite:", error);
+            if (mutationVersion === favoriteRequestVersionRef.current) {
+                setFavoriteReportIds((current) => {
+                    const next = new Set(current);
+                    if (wasFavorite) next.add(reportId);
+                    else next.delete(reportId);
+                    return next;
+                });
+            }
+        } finally {
+            favoriteSaveInFlightRef.current.delete(reportId);
+            setFavoriteSavingReportIds((current) => {
+                const next = new Set(current);
+                next.delete(reportId);
+                return next;
+            });
         }
     }
 
@@ -1606,6 +1679,7 @@ function ReportsPageContent() {
                                 )}
                                 {filteredParentGroups.map(g => {
                                     const isActive = selectedParent?.parent_name === g.parent_name;
+                                    const hasFavorite = groupHasFavorite(g, favoriteReportIds);
                                     const allResolved = g.reports.every(r => r.status === "Resolved");
                                     const activeReports = g.reports.filter(r => r.status !== "Resolved");
                                     const principalEscalatedCount = activeReports.filter(r => principalEscalated[r.id]).length;
@@ -1629,6 +1703,7 @@ function ReportsPageContent() {
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between gap-1">
                                                         <p className="text-xs font-bold text-slate-800 truncate">{g.parent_name}</p>
+                                                        {hasFavorite && <Star className="w-3.5 h-3.5 shrink-0 text-amber-400 fill-current" aria-label="Contains favorited report" />}
                                                         {g.unread > 0 && <span className="text-[10px] font-extrabold bg-red-500 text-white rounded-full px-1.5 py-0.5 shrink-0">{g.unread}</span>}
                                                     </div>
                                                     <p className="text-[11px] text-slate-400 truncate">Student Name: {g.student_name}</p>
@@ -1750,25 +1825,40 @@ function ReportsPageContent() {
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
                                     {selectedParentReports.map(r => {
                                         const isActive = selectedReport?.id === r.id;
+                                        const isFavorite = favoriteReportIds.has(r.id);
+                                        const isSavingFavorite = favoriteSavingReportIds.has(r.id);
                                         const isEscalatedToPrincipal = principalEscalated[r.id];
                                         const isEscalated = guidanceEscalated[r.id] || isEscalatedToPrincipal;
                                         const isResolvedByPrincipal = principalEscalated[r.id] && r.status === "Resolved";
                                         return (
-                                            <button key={r.id} onClick={() => { selectReport(r); setViewStep("detail"); }}
-                                                className={`w-full text-left rounded-xl px-3 py-3 transition border ${isActive ? "bg-sky-50 border-sky-200" : isEscalated ? "bg-red-50 border-red-100" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
-                                                <div className="flex items-start justify-between gap-2 mb-1.5">
-                                                    <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : isEscalatedToPrincipal ? "Escalated" : r.status)}`}>
-                                                        {isResolvedByPrincipal ? "Resolved by Principal" : isEscalatedToPrincipal ? "Escalated to Principal" : r.escalatedToGuidance && r.status !== "Resolved" ? "Escalated to Guidance" : r.status}
-                                                    </span>
-                                                </div>
-                                                <div className="flex flex-wrap gap-1 mb-2">
-                                                    {r.categories.map(cat => (
-                                                        <span key={cat} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-semibold">{cat}</span>
-                                                    ))}
-                                                </div>
-                                                <p className="text-[10px] text-slate-400 mt-1.5">{r.submitted_at}</p>
-                                            </button>
+                                            <div key={r.id} className="relative">
+                                                <button onClick={() => { selectReport(r); setViewStep("detail"); }}
+                                                    className={`w-full text-left rounded-xl px-3 py-3 pr-11 transition border ${isActive ? "bg-sky-50 border-sky-200" : isEscalated ? "bg-red-50 border-red-100" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
+                                                    <div className="flex items-start justify-between gap-2 mb-1.5">
+                                                        <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : isEscalatedToPrincipal ? "Escalated" : r.status)}`}>
+                                                            {isResolvedByPrincipal ? "Resolved by Principal" : isEscalatedToPrincipal ? "Escalated to Principal" : r.escalatedToGuidance && r.status !== "Resolved" ? "Escalated to Guidance" : r.status}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-1 mb-2">
+                                                        {r.categories.map(cat => (
+                                                            <span key={cat} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-semibold">{cat}</span>
+                                                        ))}
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-400 mt-1.5">{r.submitted_at}</p>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-pressed={isFavorite}
+                                                    aria-label={isFavorite ? "Remove report from favorites" : "Add report to favorites"}
+                                                    title={isFavorite ? "Unfavorite report" : "Favorite report"}
+                                                    disabled={isSavingFavorite}
+                                                    onClick={() => { void toggleReportFavorite(r.id); }}
+                                                    className={`absolute right-2.5 bottom-2.5 rounded-lg p-1.5 transition focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:cursor-wait disabled:opacity-60 ${isFavorite ? "bg-amber-100 text-amber-500 hover:bg-amber-200" : "bg-white/90 text-slate-300 hover:bg-amber-50 hover:text-amber-400"}`}
+                                                >
+                                                    <Star className="w-4 h-4" fill={isFavorite ? "currentColor" : "none"} />
+                                                </button>
+                                            </div>
                                         );
                                     })}
                                 </div>

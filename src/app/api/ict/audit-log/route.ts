@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
-import { auditActionDatabaseValues, auditRoleDatabaseValues, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { auditActionDatabaseValues, auditRoleDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { parseAuditArchiveFilter } from "@/lib/auditArchive";
 import { auditManilaDateRange, formatAuditTimestamp } from "@/lib/auditPresentation";
 
@@ -121,11 +121,11 @@ export async function GET(req: NextRequest) {
       id:          String(row.id),
       action:      row.action             ?? "",
       // Use `details` column as the human-readable description
-      description: row.details            ?? "",
-      targetUser:  row.target_user        ?? "",
-      targetRole:  row.target_role        ?? "",
+      description: displayGuidanceLabel(row.details),
+      targetUser:  displayGuidanceLabel(row.target_user),
+      targetRole:  normalizeAuditRole(row.target_role),
       targetEmail: row.target_email       ?? "",
-      performedBy: row.performed_by       ?? "",
+      performedBy: displayGuidanceLabel(row.performed_by),
       performedByRole: normalizeAuditRole(row.performed_by_role),
       module:      row.module             ?? "",
       ipAddress:   row.ip_address         ?? "",

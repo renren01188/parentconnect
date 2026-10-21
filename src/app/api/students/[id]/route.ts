@@ -8,6 +8,7 @@ import {
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
 import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { normalizeStudentRemark } from "@/lib/studentRemarks";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -38,7 +39,7 @@ export async function GET(
       .select(`
         id, student_id, first_name, middle_name, last_name,
         suffix, gender, grade, section, rfid_card, created_at,
-        birth_date, mother_tongue, ip_ethnic_group, religion,
+        birth_date, age, mother_tongue, ip_ethnic_group, religion,
         house_street_sitio_purok, barangay, municipality_city, province, learning_modality
       `)
       .eq("id", id)
@@ -74,6 +75,13 @@ export async function GET(
       .eq("student_db_id", student.id)
       .order("id");
     if (familyError) throw familyError;
+    const { data: studentRemarks, error: studentRemarksError } = await supabase
+      .from("student_remarks")
+      .select("id, remark_type, effectivity_date, note, school_name, created_at, updated_at")
+      .eq("student_db_id", student.id)
+      .order("effectivity_date", { ascending: false })
+      .order("id", { ascending: false });
+    if (studentRemarksError) throw studentRemarksError;
     // Present legacy SF1 records in the same normalized form as new imports.
     // The migration in database/normalize_sf1_middle_names.sql persists this
     // cleanup when run, but guardian verification must work before then too.
@@ -128,6 +136,7 @@ export async function GET(
       password_set:       parent.password_set,
       parent_status:      parent.status,
       birth_date: student.birth_date,
+      age: student.age,
       mother_tongue: student.mother_tongue,
       ip_ethnic_group: student.ip_ethnic_group,
       religion: student.religion,
@@ -137,6 +146,8 @@ export async function GET(
       province: student.province,
       learning_modality: student.learning_modality,
       family_members: normalizedFamilyMembers,
+      remarks: studentRemarks ?? [],
+      latest_remark: studentRemarks?.[0] ?? null,
     };
 
     return NextResponse.json({ success: true, data });
@@ -178,6 +189,7 @@ export async function PATCH(
       relationship, contactNumber, email,
       address, // ← new
       familyMembers,
+      remark,
     } = body;
 
     if ((grade && grade !== adviser.grade) || (section && !adviserSections.includes(section))) {
@@ -216,6 +228,18 @@ export async function PATCH(
       );
     }
 
+    const normalizedRemark = remark === undefined || remark === null
+      ? { value: null, error: null }
+      : normalizeStudentRemark({
+        type: remark?.remarkType,
+        date: remark?.remarkDate,
+        note: remark?.remarkNote,
+        schoolName: remark?.remarkSchoolName,
+      });
+    if (normalizedRemark.error) {
+      return NextResponse.json({ success: false, message: normalizedRemark.error }, { status: 400 });
+    }
+
     const { error: studentUpdateError } = await supabase
       .from("students")
       .update({
@@ -230,6 +254,53 @@ export async function PATCH(
       })
       .eq("id", id);
     if (studentUpdateError) throw studentUpdateError;
+
+    let savedRemark: Record<string, unknown> | null = null;
+    if (normalizedRemark.value) {
+      const remarkId = Number(remark?.id);
+      if (Number.isSafeInteger(remarkId) && remarkId > 0) {
+        const { data: existingRemark, error: existingRemarkError } = await supabase
+          .from("student_remarks")
+          .select("id")
+          .eq("id", remarkId)
+          .eq("student_db_id", Number(existing.id))
+          .maybeSingle();
+        if (existingRemarkError) throw existingRemarkError;
+        if (!existingRemark) {
+          return NextResponse.json({ success: false, message: "Student remark not found." }, { status: 404 });
+        }
+        const { data, error } = await supabase
+          .from("student_remarks")
+          .update({
+            remark_type: normalizedRemark.value.remarkType,
+            effectivity_date: normalizedRemark.value.effectivityDate,
+            note: normalizedRemark.value.note,
+            school_name: normalizedRemark.value.schoolName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", remarkId)
+          .select("id, remark_type, effectivity_date, note, school_name, created_at, updated_at")
+          .single();
+        if (error) throw error;
+        savedRemark = data;
+      } else {
+        const { data, error } = await supabase
+          .from("student_remarks")
+          .upsert({
+            student_db_id: Number(existing.id),
+            remark_type: normalizedRemark.value.remarkType,
+            effectivity_date: normalizedRemark.value.effectivityDate,
+            note: normalizedRemark.value.note,
+            school_name: normalizedRemark.value.schoolName,
+            created_by_adviser_id: adviser.id,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "student_db_id,remark_type,effectivity_date" })
+          .select("id, remark_type, effectivity_date, note, school_name, created_at, updated_at")
+          .single();
+        if (error) throw error;
+        savedRemark = data;
+      }
+    }
 
     const newStudentId = studentId || currentStudentId;
 
@@ -315,7 +386,7 @@ export async function PATCH(
     await reconcileParentStudentLinks({ studentDbId: Number(existing.id) });
     await publishStudentRealtimeInvalidation({ studentDbId: Number(existing.id) });
 
-    return NextResponse.json({ success: true, message: "Student updated successfully." });
+    return NextResponse.json({ success: true, message: "Student updated successfully.", remark: savedRemark });
 
   } catch (error: unknown) {
     console.error("PATCH /api/students/[id] error:", error);

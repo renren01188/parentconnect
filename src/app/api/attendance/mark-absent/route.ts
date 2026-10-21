@@ -17,13 +17,18 @@ export async function POST(req: NextRequest) {
     }
     const body = await req.json();
     const sessionType = body.session_type as "Morning" | "Afternoon" | undefined;
+    const grade = typeof body.grade === "string" ? body.grade.trim() : "";
     if (sessionType !== "Morning" && sessionType !== "Afternoon") {
       return NextResponse.json({ success: false, message: "session_type must be Morning or Afternoon." }, { status: 400 });
+    }
+    if (!grade) {
+      return NextResponse.json({ success: false, message: "grade is required to mark absences for a class session." }, { status: 400 });
     }
 
     const response = await markAutomaticAbsences({
       sessionType,
       sessionDate: body.session_date ?? getSchoolClock().date,
+      scope: { grade, sections: [] },
     });
     if (response.affectedStudentDbIds.length) {
       after(() => Promise.all(

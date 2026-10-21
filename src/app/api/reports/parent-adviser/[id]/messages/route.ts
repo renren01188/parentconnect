@@ -125,7 +125,7 @@ export async function POST(
       // Block adviser from sending messages once the report has been escalated to Guidance.
       if (report.escalated_to_guidance) {
         return NextResponse.json(
-          { success: false, message: "This report has been escalated to the Guidance Counselor. You can no longer send messages in this conversation." },
+          { success: false, message: "This report has been escalated to Guidance. You can no longer send messages in this conversation." },
           { status: 403 }
         );
       }
@@ -173,14 +173,14 @@ export async function POST(
         );
       }
 
-      // An accepted ticket belongs to one Guidance Counselor. Legacy
+      // An accepted ticket belongs to one Guidance user. Legacy
       // escalations without an accepted assignment retain the established
       // active-Guidance fallback, but an assigned conversation must not be
       // writable by another counselor.
       const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
       if (assignedGuidanceId !== null && assignedGuidanceId !== guidance.id) {
         return NextResponse.json(
-          { success: false, message: "This report is assigned to another Guidance Counselor." },
+          { success: false, message: "This report is assigned to another Guidance user." },
           { status: 403 },
         );
       }

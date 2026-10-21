@@ -486,9 +486,51 @@ export async function POST(req: NextRequest) {
         message: "Selected records are scheduled for deletion in 30 days. Scheduled parent accounts receive an in-app notification.",
       });
     }
+    // Student Profiles deliberately never receives Parent contact details.
+    // Resolve the optional student-deletion notification address here, from
+    // the protected relationship records, instead of trusting a browser
+    // supplied email address. Support the canonical link table and the
+    // direct legacy relation while the latter is still present.
+    let resolvedTargetEmail = targetType === "student" ? null : (typeof targetEmail === "string" ? targetEmail : null);
+    if (ict && targetType === "student") {
+      const { data: student, error: studentError } = await supabase
+        .from("students")
+        .select("id, student_id, archive_status")
+        .eq("id", Number(targetId))
+        .maybeSingle();
+      if (studentError) throw studentError;
+      if (!student || !isActiveArchivableRecord(student)) {
+        return NextResponse.json({ success: false, message: "This student record is unavailable for deletion." }, { status: 404 });
+      }
+
+      const studentId = String(student.student_id ?? "").trim();
+      if (studentId) {
+        const [linkResult, directParentResult] = await Promise.all([
+          supabase
+            .from("parent_student_links")
+            .select("parents!inner(email)")
+            .eq("student_id", studentId),
+          supabase
+            .from("parents")
+            .select("email")
+            .eq("student_id", studentId),
+        ]);
+        if (linkResult.error) throw linkResult.error;
+        if (directParentResult.error) throw directParentResult.error;
+        const linkedEmails = (linkResult.data ?? []).flatMap((link) => {
+          const parent = link.parents as unknown as { email?: string | null } | { email?: string | null }[] | null;
+          return Array.isArray(parent) ? parent : parent ? [parent] : [];
+        }).map((parent) => parent.email);
+        const directEmails = (directParentResult.data ?? []).map((parent) => parent.email);
+        resolvedTargetEmail = [...linkedEmails, ...directEmails]
+          .map((email) => typeof email === "string" ? email.trim() : "")
+          .find(Boolean) ?? null;
+      }
+    }
+
     const status = "Scheduled";
     const scheduledAt = ict ? new Date(Date.now() + THIRTY_DAYS).toISOString() : null;
-    const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetType === "parent" ? null : targetEmail || null, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
+    const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetType === "parent" ? null : resolvedTargetEmail, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
     if (error) throw error;
     if (ict) await suspendDeletionTarget(data);
     if (ict && ["adviser", "guidance", "ict"].includes(targetType) && targetEmail && scheduledAt) {

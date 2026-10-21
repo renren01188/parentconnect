@@ -32,6 +32,8 @@ import {
 } from "@/lib/attendanceRate.cjs";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 import { markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
+import { normalizeStudentRemark } from "@/lib/studentRemarks";
+import { normalizeStudentAge } from "@/lib/studentAge";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
@@ -79,6 +81,7 @@ type RosterStudent = {
 type SessionSchedule = {
   session_date: string;
   session_type: string;
+  grade?: string | null;
   scheduled_start: string;
   scheduled_end: string;
 };
@@ -210,16 +213,28 @@ async function getCurrentSchoolYear() {
   return data;
 }
 
-async function getSchedulesForDates(dates: string[]) {
+async function getSchedulesForDates(dates: string[], grade: string) {
   const schedules: SessionSchedule[] = [];
   // Keep each URL-sized PostgREST `in` filter comfortably small.
   for (let start = 0; start < dates.length; start += 100) {
     const { data, error } = await supabase
       .from("class_sessions")
-      .select("session_date, session_type, scheduled_start, scheduled_end")
+      .select("session_date, session_type, grade, scheduled_start, scheduled_end")
+      .eq("grade", grade)
       .in("session_date", dates.slice(start, start + 100));
     if (error) throw error;
     schedules.push(...((data ?? []) as SessionSchedule[]));
+
+    const gradeKeys = new Set((data ?? []).map((schedule) => `${schedule.session_date}|${schedule.session_type}`));
+    const { data: legacy, error: legacyError } = await supabase
+      .from("class_sessions")
+      .select("session_date, session_type, grade, scheduled_start, scheduled_end")
+      .is("grade", null)
+      .in("session_date", dates.slice(start, start + 100));
+    if (legacyError) throw legacyError;
+    schedules.push(...((legacy ?? []).filter((schedule) =>
+      !gradeKeys.has(`${schedule.session_date}|${schedule.session_type}`)
+    ) as SessionSchedule[]));
   }
   return schedules;
 }
@@ -242,8 +257,9 @@ export async function POST(req: NextRequest) {
 
     const {
       firstName, middleName, lastName, suffix,
-      studentId, gender, grade, section, classSession, rfidCard,
+      studentId, gender, grade, section, classSession, rfidCard, age,
       birthDate, motherTongue, ipEthnicGroup, religion, religionSelection, religionOther, learningModality,
+      remarkType, remarkDate, remarkNote, remarkSchoolName,
       address, barangay, municipalityCity, province,
       fatherFirstName, fatherMiddleName, fatherLastName, fatherSuffix,
       motherFirstName, motherMiddleName, motherLastName, motherSuffix,
@@ -267,6 +283,16 @@ export async function POST(req: NextRequest) {
       }
     } else if (resolvedReligion) {
       return NextResponse.json({ success: false, message: "Select a religion before submitting." }, { status: 400 });
+    }
+
+    const normalizedRemark = normalizeStudentRemark({
+      type: remarkType,
+      date: remarkDate,
+      note: remarkNote,
+      schoolName: remarkSchoolName,
+    });
+    if (normalizedRemark.error) {
+      return NextResponse.json({ success: false, message: normalizedRemark.error }, { status: 400 });
     }
 
     const adviserSections = adviser?.sections?.length
@@ -310,6 +336,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, message: "LRN must contain exactly 12 digits." },
         { status: 400 }
+      );
+    }
+
+    const normalizedAge = normalizeStudentAge(age);
+    if (normalizedAge.error) {
+      return NextResponse.json(
+        { success: false, message: normalizedAge.error },
+        { status: 400 },
       );
     }
 
@@ -388,6 +422,7 @@ export async function POST(req: NextRequest) {
       class_session: resolvedClassSession,
       rfid_card: normalizedRfid,
       birth_date: birthDate || null,
+      age: normalizedAge.value,
       mother_tongue: motherTongue || null,
       ip_ethnic_group: ipEthnicGroup || null,
       religion: resolvedReligion || null,
@@ -411,6 +446,24 @@ export async function POST(req: NextRequest) {
         // Guardian Sign Up flow, so remove this just-created row on failure.
         await supabase.from("students").delete().eq("id", createdStudent.id);
         throw familyError;
+      }
+    }
+
+    if (normalizedRemark.value) {
+      const { error: remarkError } = await supabase.from("student_remarks").insert({
+        student_db_id: createdStudent.id,
+        remark_type: normalizedRemark.value.remarkType,
+        effectivity_date: normalizedRemark.value.effectivityDate,
+        note: normalizedRemark.value.note,
+        school_name: normalizedRemark.value.schoolName,
+        created_by_adviser_id: adviser?.id ?? null,
+      });
+      if (remarkError) {
+        // The remark is part of initial registration. Do not leave a student
+        // registered as transferred in without the required SF2 history.
+        await supabase.from("student_family_members").delete().eq("student_db_id", createdStudent.id);
+        await supabase.from("students").delete().eq("id", createdStudent.id);
+        throw remarkError;
       }
     }
 
@@ -605,7 +658,7 @@ export async function GET(req: NextRequest) {
       : [];
     const scheduledDates = Array.from(new Set([today, ...attendanceLogs.map((log) => log.attendance_date)]));
     const schedules = scheduledDates.length > 0
-      ? await getSchedulesForDates(scheduledDates)
+      ? await getSchedulesForDates(scheduledDates, adviser.grade ?? "")
       : [];
     const scheduledSessionKeys = new Set(
       schedules.map((session) => `${session.session_date}|${session.session_type}`)

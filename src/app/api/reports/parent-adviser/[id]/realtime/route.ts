@@ -105,7 +105,7 @@ export async function POST(
       }
       const assignedGuidanceId = await acceptedGuidanceRecipientForReport(reportId);
       if (assignedGuidanceId !== null && assignedGuidanceId !== currentGuidanceId) {
-        return NextResponse.json({ success: false, message: "This report is assigned to another Guidance Counselor." }, { status: 403 });
+        return NextResponse.json({ success: false, message: "This report is assigned to another Guidance user." }, { status: 403 });
       }
     }
 

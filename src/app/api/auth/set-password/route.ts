@@ -6,6 +6,7 @@ import { jwtVerify } from "jose";
 import { sendParentRegistrationConfirmation } from "@/lib/mailer";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import {
   TEMPORARY_PASSWORD_EXPIRED_MESSAGE,
@@ -151,6 +152,11 @@ export async function POST(req: NextRequest) {
         { status: 409 },
       );
     }
+
+    // The ICT Parents & Students directory derives its link status from the
+    // completed parent-account state. Notify open ICT dashboards as soon as a
+    // normal guardian registration reaches that state.
+    await publishAccountRealtimeInvalidation([{ role: "parent", id: Number(activatedParent.id) }]);
 
     try {
       if (typeof parent.email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parent.email)) {

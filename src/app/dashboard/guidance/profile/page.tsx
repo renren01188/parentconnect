@@ -97,6 +97,7 @@ export default function ProfilePage() {
 
   const fullName = getGuidanceFullName(profile);
   const initials = getGuidanceInitials(profile);
+  const displayRole = profile.role === "Guidance Counselor" ? "Guidance" : profile.role;
 
   const canSendApproval = useMemo(() => {
     return Boolean(
@@ -263,7 +264,7 @@ export default function ProfilePage() {
             <div className="avatar-large overflow-hidden">{initials}</div>
             <div className="profile-info">
               <div className="profile-name">{fullName}</div>
-              <div className="profile-role">{profile.role} · {profile.school}</div>
+              <div className="profile-role">{displayRole} · {profile.school}</div>
               <span className="badge badge-green">{profile.status}</span>
             </div>
             <button className="hero-settings" onClick={() => openSettings("profile")} aria-label="Open profile settings">
@@ -292,7 +293,7 @@ export default function ProfilePage() {
               <Field label="Active Email" value={profile.email} icon={Mail} />
               <Field label="Active Contact Number" value={profile.contactNumber} icon={Phone} />
               <Field label="Employee ID" value={profile.employeeId} icon={CreditCard} />
-              <Field label="Position" value={profile.role} icon={ShieldCheck} />
+              <Field label="Position" value={displayRole} icon={ShieldCheck} />
             </div>
           </div>
 

@@ -1,13 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getActiveIct } from "@/lib/apiAuthorization";
+import { hasCompletedParentSignup } from "@/lib/parentRegistrationState";
 
 // Student/RFID values are shared with the adviser dashboard. Never serve a
 // previously fetched list after an assignment, replacement, or removal.
 export const dynamic = "force-dynamic";
 const noStoreHeaders = { "Cache-Control": "no-store, max-age=0" };
 
-// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All
+type ParentAccountLink = {
+  id: number;
+  parent_first_name?: string | null;
+  parent_middle_name?: string | null;
+  parent_last_name?: string | null;
+  parent_suffix?: string | null;
+  password_set?: unknown;
+  requires_account_setup?: unknown;
+  archive_status?: string | null;
+};
+
+type DisplayParentLink = { id: number; name: string };
+
+function parentAccountIsVisible(parent: ParentAccountLink) {
+  const archiveStatus = String(parent.archive_status ?? "").trim().toLowerCase();
+  return archiveStatus !== "archived" && archiveStatus !== "deleted";
+}
+
+function parentAccountName(parent: ParentAccountLink) {
+  return [
+    parent.parent_first_name,
+    parent.parent_middle_name,
+    parent.parent_last_name,
+    parent.parent_suffix,
+  ].filter(Boolean).join(" ").trim() || "Parent / Guardian";
+}
+
+function completedParentLink(parent: ParentAccountLink): DisplayParentLink | null {
+  const id = Number(parent.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  if (!parentAccountIsVisible(parent)) return null;
+  if (!hasCompletedParentSignup([id], parent.password_set, parent.requires_account_setup)) return null;
+  return { id, name: parentAccountName(parent) };
+}
+
+// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All&parentLinkStatus=Unlinked
 export async function GET(req: NextRequest) {
   try {
     const ict = await getActiveIct();
@@ -18,6 +54,31 @@ export async function GET(req: NextRequest) {
     const section = searchParams.get("section") || "";
     const search = searchParams.get("search") || "";
     const rfidStatus = searchParams.get("rfidStatus") || "All";
+    const parentLinkStatus = searchParams.get("parentLinkStatus") || "All";
+    const purpose = searchParams.get("purpose") || "";
+
+    // The Register New RFID modal only displays the learner identity and
+    // current card. Keep it on the same authorized ICT source, but skip the
+    // parent/adviser/remark enrichment that the full Student Profiles table
+    // requires. One grade-level read is cached in the modal and filtered by
+    // section in the browser.
+    if (purpose === "rfid-registration") {
+      if (!grade) {
+        return NextResponse.json(
+          { success: false, message: "Select a grade before loading students." },
+          { status: 400 },
+        );
+      }
+      const { data, error } = await supabase
+        .from("students")
+        .select("id, first_name, middle_name, last_name, suffix, student_id, gender, grade, section, rfid_card")
+        .eq("archive_status", "active")
+        .eq("grade", grade)
+        .order("last_name", { ascending: true })
+        .order("first_name", { ascending: true });
+      if (error) throw error;
+      return NextResponse.json({ success: true, data: data ?? [], total: (data ?? []).length }, { headers: noStoreHeaders });
+    }
 
     // ── 1. Fetch students ──────────────────────────────────────
     let query = supabase
@@ -33,7 +94,7 @@ export async function GET(req: NextRequest) {
     if (rfidStatus === "Registered") query = query.not("rfid_card", "is", null);
     if (rfidStatus === "Unregistered") query = query.is("rfid_card", null);
 
-    const { data: students, error, count } = await query.order("last_name", { ascending: true });
+    const { data: students, error } = await query.order("last_name", { ascending: true });
     if (error) {
       console.error("Students query error:", JSON.stringify(error, null, 2));
       throw error;
@@ -43,41 +104,58 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: [], total: 0 }, { headers: noStoreHeaders });
     }
 
-    // ── 2. Fetch parents via parent_student_links ──────────────
-    const studentIds = students.map((s: any) => s.student_id);
-
-    const { data: links, error: parentError } = await supabase
-      .from("parent_student_links")
-      .select(`
-    student_id,
-    relationship,
-    parents!inner (
-      id,
-      parent_first_name,
-      parent_last_name,
-      email,
-      contact_number
-    )
-  `)
-      .in("student_id", studentIds);
-
-    if (parentError) {
-      console.error("Parents query error:", JSON.stringify(parentError, null, 2));
+    // Student status remarks live in their own dated SF2 table. Fetch the
+    // latest saved event for each learner so ICT profile editing reads the
+    // same source of truth as Adviser details and monthly exports.
+    const latestRemarkByStudentDbId = new Map<number, any>();
+    const studentDbIds = students.map((student: any) => Number(student.id)).filter(Number.isSafeInteger);
+    for (let offset = 0; offset < studentDbIds.length; offset += 500) {
+      const ids = studentDbIds.slice(offset, offset + 500);
+      const { data: remarks, error: remarkError } = await supabase
+        .from("student_remarks")
+        .select("id, student_db_id, remark_type, effectivity_date, note, school_name")
+        .in("student_db_id", ids)
+        .order("effectivity_date", { ascending: false })
+        .order("id", { ascending: false });
+      if (remarkError) throw remarkError;
+      for (const remark of remarks ?? []) {
+        if (!latestRemarkByStudentDbId.has(Number(remark.student_db_id))) {
+          latestRemarkByStudentDbId.set(Number(remark.student_db_id), remark);
+        }
+      }
     }
 
-    const parentMap = new Map<string, any>();
-    for (const link of links ?? []) {
-      if (!parentMap.has(link.student_id)) {
-        const p = link.parents as any;
-        parentMap.set(link.student_id, {
-          student_id: link.student_id,
-          parent_first_name: p.parent_first_name,
-          parent_last_name: p.parent_last_name,
-          email: p.email,
-          contact_number: p.contact_number,
-          relationship: link.relationship,
-        });
-      }
+    // ── 2. Fetch parents via parent_student_links ──────────────
+    const studentIds = students.map((s: any) => s.student_id);
+    const parentColumns = "id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, requires_account_setup, archive_status";
+    const [linksResult, directParentsResult] = await Promise.all([
+      supabase
+        .from("parent_student_links")
+        .select("student_id, parents!inner(id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, requires_account_setup, archive_status)")
+        .in("student_id", studentIds),
+      supabase
+        .from("parents")
+        .select(parentColumns)
+        .in("student_id", studentIds),
+    ]);
+    if (linksResult.error) throw linksResult.error;
+    if (directParentsResult.error) throw directParentsResult.error;
+
+    const parentLinksByStudentId = new Map<string, Map<number, DisplayParentLink>>();
+    const addParentLink = (studentId: unknown, parent: ParentAccountLink | null | undefined) => {
+      const normalizedStudentId = String(studentId ?? "").trim();
+      const completedLink = parent ? completedParentLink(parent) : null;
+      if (!normalizedStudentId || !completedLink) return;
+      const linksForStudent = parentLinksByStudentId.get(normalizedStudentId) ?? new Map<number, DisplayParentLink>();
+      linksForStudent.set(completedLink.id, completedLink);
+      parentLinksByStudentId.set(normalizedStudentId, linksForStudent);
+    };
+    for (const link of linksResult.data ?? []) {
+      const parents = link.parents as unknown as ParentAccountLink | ParentAccountLink[] | null;
+      addParentLink(link.student_id, Array.isArray(parents) ? parents[0] : parents);
+    }
+    for (const parent of directParentsResult.data ?? []) {
+      addParentLink(parent.student_id, parent as ParentAccountLink);
     }
 
     // ── 3. Fetch advisers by grade+section ─────────────────────
@@ -100,13 +178,23 @@ export async function GET(req: NextRequest) {
     }
 
     // ── 4. Enrich and return ───────────────────────────────────
-    const enriched = students.map((s: any) => ({
-      ...s,
-      parents: parentMap.get(s.student_id) ?? null,
-      adviser_name: adviserMap.get(`${s.grade}-${s.section}`) ?? "",
-    }));
+    const enriched = students.map((s: any) => {
+      const linkedParents = [...(parentLinksByStudentId.get(String(s.student_id).trim())?.values() ?? [])]
+        .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+      const studentParentLinkStatus = linkedParents.length > 0 ? "Already Linked" : "Unlinked";
+      return {
+        ...s,
+        parent_link_status: studentParentLinkStatus,
+        linked_parent_names: linkedParents.map((parent) => parent.name),
+        adviser_name: adviserMap.get(`${s.grade}-${s.section}`) ?? "",
+        latest_remark: latestRemarkByStudentDbId.get(Number(s.id)) ?? null,
+      };
+    });
+    const filtered = parentLinkStatus === "Already Linked" || parentLinkStatus === "Unlinked"
+      ? enriched.filter((student) => student.parent_link_status === parentLinkStatus)
+      : enriched;
 
-    return NextResponse.json({ success: true, data: enriched, total: count ?? 0 }, { headers: noStoreHeaders });
+    return NextResponse.json({ success: true, data: filtered, total: filtered.length }, { headers: noStoreHeaders });
 
   } catch (error: unknown) {
     console.error("GET /api/ict/students error:", error);

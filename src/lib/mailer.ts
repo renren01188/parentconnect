@@ -476,7 +476,7 @@ export async function sendGuidanceTempPasswordEmail({
         <div style="background:white;border-radius:12px;padding:24px;margin-bottom:16px;border:1px solid #e2e8f0;">
           <p style="color:#374151;font-size:15px;margin:0 0 12px;">Hello, <strong>${guidanceName}</strong>,</p>
           <p style="color:#6b7280;font-size:14px;margin:0 0 16px;line-height:1.6;">
-            Your Guidance Counselor account has been created. Use the credentials below to log in.
+            Your Guidance account has been created. Use the credentials below to log in.
             You will be asked to create a permanent password on your first login.
           </p>
           <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:20px;margin:16px 0;">
@@ -792,7 +792,7 @@ export async function sendNewGuidanceTicketEmail({
           <p style="color:#e0f2fe;margin:6px 0 0;font-size:13px;">ParentConnect</p>
         </div>
         <div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">
-          <p>Hello, <strong>${guidanceName || "Guidance Counselor"}</strong>,</p>
+          <p>Hello, <strong>${guidanceName || "Guidance"}</strong>,</p>
           <p><strong>${parentName || "A parent"}</strong> submitted a ticket for <strong>${studentName || "a student"}</strong>.</p>
           <p><strong>Report subject:</strong> ${subject || "Not specified"}<br />
           <strong>Concern:</strong> ${concern}</p>
@@ -1070,7 +1070,7 @@ export async function sendGuidanceEscalationEmail({
   subject?: string | null;
   concern?: string | null;
 }) {
-  const safeGuidanceName = guidanceName || "Guidance Counselor";
+  const safeGuidanceName = guidanceName || "Guidance";
   const safeAdviserName = adviserName || "An adviser";
   const safeStudentName = studentName || "a student";
   const safeSubject = subject || "Escalated Concern";
@@ -1119,7 +1119,7 @@ export async function sendGuidancePrincipalEscalationEmail({
   concern?: string | null;
 }) {
   const safePrincipalName = principalName || "Principal";
-  const safeGuidanceName = guidanceName || "Guidance Counselor";
+  const safeGuidanceName = guidanceName || "Guidance";
   const safeStudentName = studentName || "a student";
   const safeSubject = subject || "Escalated Report";
   await transporter.sendMail({
@@ -1167,7 +1167,7 @@ export async function sendGuidanceMessageEmail({
   hasAttachments?: boolean;
 }) {
   const safeRecipientName = recipientName || recipientRole || "there";
-  const safeGuidanceName = guidanceName || "Guidance Counselor";
+  const safeGuidanceName = guidanceName || "Guidance";
   const safeSubject = subject || "Guidance Message";
   await transporter.sendMail({
     from: process.env.SMTP_FROM,

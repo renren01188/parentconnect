@@ -493,7 +493,7 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                                                         ? `Principal - ${selectedRecipient.email}`
                                                         : selectedRecipient.type === "staff"
                                                             ? selectedRecipient.role === "Guidance"
-                                                                ? `Guidance Counselors - ${selectedRecipient.email}`
+                                                                ? `Guidance - ${selectedRecipient.email}`
                                                                 : `School Adviser - ${selectedRecipient.email}`
                                                             : `Parent: ${selectedRecipient.actualParentName || selectedRecipient.name}`}
                                                 </p>
@@ -521,9 +521,9 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                                             </button>
                                         ))}
 
-                                        <div className="px-3 py-2 bg-slate-50 border-t border-b border-slate-100"><p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Guidance Counselors</p></div>
+                                        <div className="px-3 py-2 bg-slate-50 border-t border-b border-slate-100"><p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Guidance</p></div>
                                         {!loadingRecipients && guidanceRecipients.length === 0 && (
-                                            <p className="px-3.5 py-3 text-xs font-semibold text-slate-400">No active guidance counselor found.</p>
+                                            <p className="px-3.5 py-3 text-xs font-semibold text-slate-400">No active Guidance account found.</p>
                                         )}
                                         {guidanceRecipients.map(r => (
                                             <button key={r.id} type="button" onMouseDown={e => { e.preventDefault(); setRecipientId(r.id); setRecipientOpen(false); }}
@@ -531,7 +531,7 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                                                 <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-sky-500">
                                                     <HeartHandshake className="w-4 h-4 text-white" />
                                                 </div>
-                                                <div className="min-w-0 flex-1"><p className="text-sm font-semibold text-slate-800 truncate">{r.name}</p><p className="text-xs text-slate-400 truncate">Guidance Counselors - {r.email}</p></div>
+                                                <div className="min-w-0 flex-1"><p className="text-sm font-semibold text-slate-800 truncate">{r.name}</p><p className="text-xs text-slate-400 truncate">Guidance - {r.email}</p></div>
                                                 {recipientId === r.id && <CheckCircle className="w-4 h-4 text-sky-500 ml-auto shrink-0" />}
                                             </button>
                                         ))}
@@ -1939,7 +1939,7 @@ function ReportsPageContent() {
                                         {isGuidanceEsc && (
                                             <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-red-50 rounded-xl border border-red-200">
                                                 <TriangleAlert className="w-4 h-4 text-red-600 shrink-0" />
-                                                <p className="text-xs font-bold text-red-700">This report has been escalated to the Guidance Counselor.</p>
+                                                <p className="text-xs font-bold text-red-700">This report has been escalated to Guidance.</p>
                                             </div>
                                         )}
                                         {isPrincipalEsc && (
@@ -2044,7 +2044,7 @@ function ReportsPageContent() {
                                                 </div>
                                                 <div>
                                                     <p className="text-xs font-bold text-slate-600">{isResolved ? "Conversation resolved" : isPrincipalEsc ? "Conversation handed over to Principal" : "Conversation handed over to Guidance"}</p>
-                                                    <p className="text-[11px] text-slate-400 mt-0.5">{isResolved ? "This concern has been resolved. No further messages can be sent." : isPrincipalEsc ? "This report has been escalated. Only the Principal and Parent can continue this conversation." : "This report has been escalated. Only the Guidance Counselor and Parent can continue this conversation."}</p>
+                                                    <p className="text-[11px] text-slate-400 mt-0.5">{isResolved ? "This concern has been resolved. No further messages can be sent." : isPrincipalEsc ? "This report has been escalated. Only the Principal and Parent can continue this conversation." : "This report has been escalated. Only Guidance and the Parent can continue this conversation."}</p>
                                                 </div>
                                             </div>
                                         ) : (
@@ -2497,7 +2497,7 @@ function ReportsPageContent() {
                                 </div>
                                 <p className="text-base font-extrabold text-slate-900">Escalated to Guidance</p>
                                 <p className="text-sm text-slate-500 leading-relaxed">
-                                    This report has been escalated to the Guidance Counselor. Thank you!
+                                    This report has been escalated to Guidance. Thank you!
                                 </p>
                                 <button
                                     onClick={() => { setEscalateTarget(null); setEscalateSuccess(false); }}
@@ -2511,7 +2511,7 @@ function ReportsPageContent() {
                                 <div className="px-6 py-5 border-b border-slate-100">
                                     <h2 className="text-lg font-extrabold text-slate-900">Escalate to Guidance?</h2>
                                     <p className="text-sm text-slate-400 mt-1">
-                                        Are you sure you want to escalate this report to the Guidance Counselor?
+                                        Are you sure you want to escalate this report to Guidance?
                                     </p>
                                 </div>
                                 <div className="flex flex-col-reverse gap-2 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:gap-3 sm:px-6">

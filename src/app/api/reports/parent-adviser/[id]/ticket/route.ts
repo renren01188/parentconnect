@@ -92,7 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
 
     // A counselor is assigned only when the ticket is accepted, so a new
-    // pending ticket is sent to every active Guidance counselor. Delivery is
+    // pending ticket is sent to every active Guidance account. Delivery is
     // non-blocking: SMTP failure never rolls back a created ticket.
     const { data: counselors, error: counselorsError } = await supabase
       .from("guidance_counselors")

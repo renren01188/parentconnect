@@ -1130,7 +1130,7 @@ async function sendUnifiedStaffMessage({
     recipient.middle_name,
     recipient.last_name,
     recipient.suffix,
-  ]) || (recipientType === "guidance" ? "Guidance Counselor" : "Adviser");
+  ]) || (recipientType === "guidance" ? "Guidance" : "Adviser");
   const recipientEmail = String(recipient.email ?? "").trim();
 
   if (!recipientEmail) {

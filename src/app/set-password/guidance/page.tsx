@@ -83,14 +83,14 @@ export default function GuidanceSetPasswordPage() {
       icon={HeartHandshake}
       portalLabel="Guidance Office"
       sidebarTitle={<>Almost there!<br />Set your password.</>}
-      sidebarDescription="You've been registered as a Guidance Counselor. Create a permanent password to secure your account and access your dashboard."
+      sidebarDescription="You've been registered as Guidance. Create a permanent password to secure your account and access your dashboard."
       steps={[
         { step: "1", label: "Account created by ICT", done: true },
         { step: "2", label: "Login with temporary password", done: true },
         { step: "3", label: "Set permanent password", done: false },
         { step: "4", label: "Access your dashboard", done: false },
       ]}
-      headerDescription="Welcome! Set a permanent password to secure your Guidance Counselor account."
+      headerDescription="Welcome! Set a permanent password to secure your Guidance account."
       temporaryPasswordMessage="You logged in with a temporary password. Create a new permanent password before accessing your dashboard."
       password={newPwd}
       confirmPassword={confirmPwd}

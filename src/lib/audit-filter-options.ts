@@ -73,6 +73,12 @@ export function normalizeAuditRole(value: string | null | undefined): string {
   return AUDIT_ROLE_OPTIONS.find((option) => option.databaseValues.some((databaseValue) => databaseValue.toLowerCase() === normalized.toLowerCase()))?.label ?? normalized;
 }
 
+/** Formats legacy audit text at the display boundary without changing stored
+ * audit records, role values, or authorization behavior. */
+export function displayGuidanceLabel(value: string | null | undefined): string {
+  return String(value ?? "").replace(/\bGuidance\s+Counselor\b/gi, "Guidance");
+}
+
 export function normalizeAuditAction(value: string | null | undefined): string {
   const normalized = String(value ?? "").trim();
   return AUDIT_ACTION_OPTIONS.find((option) => option.databaseValues.some((databaseValue) => databaseValue.toLowerCase() === normalized.toLowerCase()))?.label ?? normalized;

@@ -278,13 +278,28 @@ export async function POST(req: NextRequest) {
     if (sectionAssignmentError) throw sectionAssignmentError;
     const sessionType = (sectionAssignment?.class_session || student.class_session || "Morning") as "Morning" | "Afternoon";
 
-    const { data: session, error: sessionError } = await supabase
+    const { data: savedSession, error: sessionError } = await supabase
       .from("class_sessions")
-      .select("scheduled_start, scheduled_end, late_after, absent_after")
+      .select("id, scheduled_start, scheduled_end, late_after, absent_after")
       .eq("session_date", attendanceDate)
+      .eq("grade", student.grade)
       .eq("session_type", sessionType)
       .maybeSingle();
     if (sessionError) throw sessionError;
+    let session = savedSession;
+    if (!session) {
+      // Preserve the previously configured school-wide schedule until ICT
+      // saves this student's grade-specific setting.
+      const legacySession = await supabase
+        .from("class_sessions")
+        .select("id, scheduled_start, scheduled_end, late_after, absent_after")
+        .eq("session_date", attendanceDate)
+        .is("grade", null)
+        .eq("session_type", sessionType)
+        .maybeSingle();
+      if (legacySession.error) throw legacySession.error;
+      session = legacySession.data;
+    }
     if (!session) {
       return NextResponse.json(
         { success: false, message: "ICT has not saved a class schedule for this session." },
@@ -455,6 +470,7 @@ export async function POST(req: NextRequest) {
       .insert({
         student_db_id:   student.id,
         student_id:      student.student_id,
+        class_session_id: session.id,
         attendance_date: attendanceDate,
         time_logged:     timeLogged,
         type:            body.type,

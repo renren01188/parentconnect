@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, displayGuidanceLabel, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { AUDIT_TIME_ZONE, auditManilaDate } from "@/lib/auditPresentation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
@@ -124,11 +124,11 @@ function toAuditEvent(row: AuditRealtimeRow): AuditEvent {
   return {
     id: String(row.id),
     action: row.action ?? "",
-    description: row.details ?? "",
-    targetUser: row.target_user ?? "",
-    targetRole: row.target_role ?? "",
+    description: displayGuidanceLabel(row.details),
+    targetUser: displayGuidanceLabel(row.target_user),
+    targetRole: normalizeAuditRole(row.target_role),
     targetEmail: row.target_email ?? "",
-    performedBy: row.performed_by ?? "",
+    performedBy: displayGuidanceLabel(row.performed_by),
     performedByRole: normalizeAuditRole(row.performed_by_role),
     module: row.module ?? "",
     ipAddress: row.ip_address ?? "",

@@ -12,6 +12,7 @@ import {
   toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
 import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
+import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
 
 
 // ─── Color Palette ────────────────────────────────────────────────
@@ -30,6 +31,17 @@ const URGENT_RED = "#ef4444";
 const WARNING_AMBER = "#f59e0b";
 
 // ─── Types ────────────────────────────────────────────────────────
+type StudentRemark = {
+  id: number;
+  student_db_id: number;
+  remark_type: "Dropped out" | "Transferred In" | "Transferred Out";
+  effectivity_date: string;
+  note: string;
+  school_name: string | null;
+};
+
+type RemarkSummary = Record<StudentRemark["remark_type"], { male: number; female: number; total: number }>;
+
 interface StudentRecord {
   id: number;
   student_id: string;
@@ -43,6 +55,7 @@ interface StudentRecord {
   dailyAbsences?: Record<number, boolean>;
   dailyExcused?: Record<number, boolean>;
   active_from: string;
+  remarks?: StudentRemark[];
 }
 
 interface Section {
@@ -56,6 +69,34 @@ interface GradeLevel {
   grade: string;
   label: string;
   sections: Section[];
+}
+
+function emptyRemarkSummary(): RemarkSummary {
+  return {
+    "Dropped out": { male: 0, female: 0, total: 0 },
+    "Transferred In": { male: 0, female: 0, total: 0 },
+    "Transferred Out": { male: 0, female: 0, total: 0 },
+  };
+}
+
+function calculateRemarkSummary(students: StudentRecord[]): RemarkSummary {
+  const summary = emptyRemarkSummary();
+  const counted = new Map<StudentRemark["remark_type"], Set<number>>([
+    ["Dropped out", new Set<number>()],
+    ["Transferred In", new Set<number>()],
+    ["Transferred Out", new Set<number>()],
+  ]);
+  for (const student of students) {
+    for (const remark of student.remarks ?? []) {
+      const seen = counted.get(remark.remark_type);
+      if (!seen || seen.has(student.id)) continue;
+      seen.add(student.id);
+      if (String(student.gender ?? "").trim().toUpperCase() === "M") summary[remark.remark_type].male += 1;
+      else summary[remark.remark_type].female += 1;
+      summary[remark.remark_type].total += 1;
+    }
+  }
+  return summary;
 }
 
 const MONTHS = [
@@ -184,6 +225,16 @@ function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, res
 
 function clearCellPreserveFormat(ws: ExcelJS.Worksheet, ref: string) {
   ws.getCell(ref).value = null;
+}
+
+// Keep the official template's borders, fills, alignment and emphasis while
+// applying the requested 9-point type to every populated export sheet.
+function setWorksheetFontSize(ws: ExcelJS.Worksheet, size: number) {
+  ws.eachRow({ includeEmpty: false }, (row) => {
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      cell.font = { ...cell.font, size };
+    });
+  });
 }
 
 function copyWorksheetToWorkbook(
@@ -373,10 +424,8 @@ function populateSF2Worksheet(
   const summaryStartRow = combinedRow + 1;
   const totalRowDelta = (maleStudents.length - MAX_MALE_ROWS) + (femaleStudents.length - MAX_FEMALE_ROWS);
 
-  setCellValue(ws, "F3", 107966);
   setCellValue(ws, "M3", schoolYearLabel ?? `${year} - ${year + 1}`);
   setCellValue(ws, "AA3", month.toUpperCase());
-  setCellValue(ws, "F4", "Santiago Elementary School");
   setCellValue(ws, "AA4", gradeLabel);
   setCellValue(ws, "AM4", section.name.toUpperCase());
 
@@ -406,6 +455,12 @@ function populateSF2Worksheet(
       const row = startRow + idx;
       setCellValue(ws, `A${row}`, idx + 1);
       setCellValue(ws, `C${row}`, st.name);
+      setCellValue(ws, `AQ${row}`, (st.remarks ?? []).map(formatStudentRemarkForSf2).join("\n"));
+      ws.getCell(`AQ${row}`).alignment = {
+        ...ws.getCell(`AQ${row}`).alignment,
+        vertical: "top",
+        wrapText: true,
+      };
 
       for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
         clearCellPreserveFormat(ws, col0ToRef(col0, row));
@@ -505,6 +560,16 @@ function populateSF2Worksheet(
   setCellFormula(ws, `AS${attendancePctRow}`, `IF(AS${registeredRow}=0,0,AS${dailyAttendanceRow}/AS${registeredRow})`);
   setCellFormula(ws, `AT${attendancePctRow}`, `IF(AT${registeredRow}=0,0,AT${dailyAttendanceRow}/AT${registeredRow})`);
 
+  const remarkSummary = calculateRemarkSummary(section.students);
+  const setRemarkSummary = (row: number, summary: { male: number; female: number; total: number }) => {
+    setCellValue(ws, `AR${row}`, summary.male);
+    setCellValue(ws, `AS${row}`, summary.female);
+    setCellFormula(ws, `AT${row}`, `AR${row}+AS${row}`, summary.total);
+  };
+  setRemarkSummary(summaryStartRow + 16, remarkSummary["Dropped out"]);
+  setRemarkSummary(summaryStartRow + 18, remarkSummary["Transferred Out"]);
+  setRemarkSummary(summaryStartRow + 20, remarkSummary["Transferred In"]);
+
   const detailSheetName = `Attendance Detail ${section.name}`
     .replace(/[:\\/?*\[\]]/g, "")
     .slice(0, 31) || "Attendance Detail";
@@ -534,6 +599,8 @@ function populateSF2Worksheet(
   }
   detailWs.columns = [{ width: 16 }, { width: 32 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 16 }];
   detailWs.views = [{ state: "frozen", ySplit: 4 }];
+  setWorksheetFontSize(ws, 9);
+  setWorksheetFontSize(detailWs, 9);
 }
 
 async function exportSF2(

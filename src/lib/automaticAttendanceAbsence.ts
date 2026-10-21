@@ -17,6 +17,7 @@ type StudentRow = {
 type ExistingLogRow = { student_db_id: number };
 
 type SessionSchedule = {
+  id: number;
   scheduled_start: string;
   scheduled_end: string;
   late_after: string | null;
@@ -72,7 +73,8 @@ function isStudentInScope(student: StudentRow, scope?: AutomaticAbsenceScope) {
   if (!scope) return true;
   const grade = assignmentPart(scope.grade);
   const sections = new Set(scope.sections.map(assignmentPart).filter(Boolean));
-  return assignmentPart(student.grade) === grade && sections.has(assignmentPart(student.section));
+  return assignmentPart(student.grade) === grade
+    && (sections.size === 0 || sections.has(assignmentPart(student.section)));
 }
 
 /** Session end is the attendance deadline; RFID availability does not affect it. */
@@ -112,12 +114,14 @@ export function studentsMissingSessionAttendance<T extends Pick<StudentRow, "id"
 async function getOrCreateSessionSnapshot(
   sessionDate: string,
   sessionType: SessionType,
+  grade: string,
 ): Promise<SessionSchedule | null> {
   const { data: existing, error: existingError } = await supabase
     .from("class_sessions")
-    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .select("id, scheduled_start, scheduled_end, late_after, absent_after")
     .eq("session_date", sessionDate)
     .eq("session_type", sessionType)
+    .eq("grade", grade)
     .maybeSingle();
   if (existingError) throw existingError;
   if (existing) return existing as SessionSchedule;
@@ -126,33 +130,51 @@ async function getOrCreateSessionSnapshot(
   // daily snapshot even if the class-session browser UI was never opened.
   const { data: latest, error: latestError } = await supabase
     .from("class_sessions")
-    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .select("id, scheduled_start, scheduled_end, late_after, absent_after")
     .eq("session_type", sessionType)
+    .eq("grade", grade)
     .lt("session_date", sessionDate)
     .order("session_date", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (latestError) throw latestError;
-  if (!latest) return null;
+  const savedSchedule = latest ?? await (async () => {
+    // A legacy row is used only while this grade has no saved schedule of
+    // its own. New grade snapshots are always written independently.
+    const { data: legacy, error: legacyError } = await supabase
+      .from("class_sessions")
+      .select("id, scheduled_start, scheduled_end, late_after, absent_after")
+      .is("grade", null)
+      .eq("session_type", sessionType)
+      .lte("session_date", sessionDate)
+      .order("session_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (legacyError) throw legacyError;
+    return legacy;
+  })();
+  if (!savedSchedule) return null;
 
   const { error: snapshotError } = await supabase
     .from("class_sessions")
     .upsert({
       session_date: sessionDate,
+      grade,
       session_type: sessionType,
-      scheduled_start: latest.scheduled_start,
-      scheduled_end: latest.scheduled_end,
-      late_after: latest.late_after ?? latest.scheduled_start,
-      absent_after: latest.absent_after ?? latest.scheduled_end,
+      scheduled_start: savedSchedule.scheduled_start,
+      scheduled_end: savedSchedule.scheduled_end,
+      late_after: savedSchedule.late_after ?? savedSchedule.scheduled_start,
+      absent_after: savedSchedule.absent_after ?? savedSchedule.scheduled_end,
       status: "Not Started",
-    }, { onConflict: "session_date,session_type", ignoreDuplicates: true });
+    }, { onConflict: "session_date,session_type,grade", ignoreDuplicates: true });
   if (snapshotError) throw snapshotError;
 
   const { data: snapshot, error: snapshotReadError } = await supabase
     .from("class_sessions")
-    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .select("id, scheduled_start, scheduled_end, late_after, absent_after")
     .eq("session_date", sessionDate)
     .eq("session_type", sessionType)
+    .eq("grade", grade)
     .maybeSingle();
   if (snapshotReadError) throw snapshotReadError;
   return snapshot as SessionSchedule | null;
@@ -170,6 +192,11 @@ export async function markAutomaticAbsences(input: {
 }): Promise<AutomaticAbsenceResult> {
   const schoolClock = getSchoolClock();
   const sessionDate = input.sessionDate ?? schoolClock.date;
+  const grade = input.scope?.grade?.trim() ?? "";
+
+  if (!grade) {
+    return result(false, 400, "A grade level is required to process automatic absences.");
+  }
 
   // Automatic absence is a real-time process. Do not backfill a prior date
   // using the current clock; historical corrections must remain explicit.
@@ -204,7 +231,7 @@ export async function markAutomaticAbsences(input: {
     return result(false, 409, "Absent marking is unavailable on school holidays.");
   }
 
-  const session = await getOrCreateSessionSnapshot(sessionDate, input.sessionType);
+  const session = await getOrCreateSessionSnapshot(sessionDate, input.sessionType, grade);
   if (!session) return result(false, 409, "ICT has not saved this class schedule.");
 
   if (!hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)) {
@@ -276,6 +303,7 @@ export async function markAutomaticAbsences(input: {
     .map((student) => ({
       student_db_id: student.id,
       student_id: student.student_id,
+      class_session_id: session.id,
       attendance_date: sessionDate,
       time_logged: schoolClock.time,
       type: "Time In",
@@ -323,11 +351,11 @@ export async function markAutomaticAbsences(input: {
       performedByRole: "System",
       module: "Attendance",
       targetType: "Class Session",
-      targetId: `${sessionDate}:${input.sessionType}`,
-      targetUser: `${input.sessionType} session`,
+      targetId: `${sessionDate}:${grade}:${input.sessionType}`,
+      targetUser: `${grade} ${input.sessionType} session`,
       targetRole: "Class Session",
       newStatus: "Absent",
-      details: `Auto-marked ${marked} student(s) absent after the ${input.sessionType} class session ended.`,
+      details: `Auto-marked ${marked} student(s) absent after the ${grade} ${input.sessionType} class session ended.`,
     });
   }
 
@@ -371,18 +399,35 @@ export async function processDueAutomaticAbsences() {
   if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
   if ((holidays?.length ?? 0) > 0) return { schoolDate: schoolClock.date, processedSessions: [] };
 
-  const sessionSnapshots = await Promise.all(
-    (["Morning", "Afternoon"] as const).map(async (sessionType) => ({
-      sessionType,
-      session: await getOrCreateSessionSnapshot(schoolClock.date, sessionType),
-    })),
-  );
-  const dueTypes = sessionSnapshots
-    .filter(({ session }) => !!session && hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end))
-    .map(({ sessionType }) => sessionType);
+  const { data: activeStudents, error: activeStudentsError } = await supabase
+    .from("students")
+    .select("grade, section, archive_status")
+    .not("grade", "is", null)
+    .not("section", "is", null);
+  if (activeStudentsError) throw activeStudentsError;
+
+  const sectionsByGrade = new Map<string, Set<string>>();
+  for (const student of activeStudents ?? []) {
+    const archiveStatus = String(student.archive_status ?? "").trim().toLowerCase();
+    const grade = String(student.grade ?? "").trim();
+    const section = String(student.section ?? "").trim();
+    if (!grade || !section || archiveStatus === "archived" || archiveStatus === "deleted") continue;
+    const sections = sectionsByGrade.get(grade) ?? new Set<string>();
+    sections.add(section);
+    sectionsByGrade.set(grade, sections);
+  }
+
   const processedSessions: AutomaticAbsenceResult[] = [];
-  for (const sessionType of dueTypes) {
-    processedSessions.push(await markAutomaticAbsences({ sessionType, sessionDate: schoolClock.date }));
+  for (const [grade, sections] of sectionsByGrade) {
+    for (const sessionType of ["Morning", "Afternoon"] as const) {
+      const session = await getOrCreateSessionSnapshot(schoolClock.date, sessionType, grade);
+      if (!session || !hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end)) continue;
+      processedSessions.push(await markAutomaticAbsences({
+        sessionType,
+        sessionDate: schoolClock.date,
+        scope: { grade, sections: [...sections] },
+      }));
+    }
   }
   return { schoolDate: schoolClock.date, processedSessions };
 }

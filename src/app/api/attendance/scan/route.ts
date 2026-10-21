@@ -43,14 +43,58 @@ const RFID_TIME_OUT_MIN_DELAY_SECONDS = Math.max(
   ),
 );
 
+async function ensureGradeSessionSnapshot(
+  sessionDate: string,
+  grade: string,
+  session: {
+    session_type: ClassSessionType;
+    scheduled_start: string;
+    scheduled_end: string;
+    late_after: string | null;
+    absent_after: string | null;
+  },
+) {
+  // A reader may submit before the dashboard has loaded today's session. Make
+  // the attendance log point to a grade-specific daily snapshot, rather than
+  // to a prior date or the legacy school-wide row used as a fallback.
+  const { error: upsertError } = await supabase
+    .from("class_sessions")
+    .upsert({
+      session_date: sessionDate,
+      grade,
+      session_type: session.session_type,
+      scheduled_start: session.scheduled_start,
+      scheduled_end: session.scheduled_end,
+      late_after: session.late_after ?? session.scheduled_start,
+      absent_after: session.absent_after ?? session.scheduled_end,
+      status: "Not Started",
+    }, { onConflict: "session_date,session_type,grade", ignoreDuplicates: true });
+  if (upsertError) throw upsertError;
+
+  const { data: snapshot, error: snapshotError } = await supabase
+    .from("class_sessions")
+    .select("id")
+    .eq("session_date", sessionDate)
+    .eq("session_type", session.session_type)
+    .eq("grade", grade)
+    .maybeSingle();
+  if (snapshotError) throw snapshotError;
+  if (!snapshot) throw new Error("Could not create the grade-level class session snapshot.");
+  return snapshot.id as number;
+}
+
 /**
  * Determines availability and Present/Late from the saved ICT schedule.  A
  * scanner cannot be opened merely because somebody previously clicked Start.
  */
-async function getScheduledSessionStatus(today: string, currentMinutes: number): Promise<
-  | { status: "On Time" | "Late"; sessionType: ClassSessionType }
+async function getScheduledSessionStatus(today: string, currentMinutes: number, grade: string): Promise<
+  | { status: "On Time" | "Late"; sessionType: ClassSessionType; classSessionId: number }
   | { unavailable: true; message: string }
 > {
+  if (!grade) {
+    return { unavailable: true, message: "Attendance scanning is unavailable because the adviser has no assigned grade level." };
+  }
+
   type SavedSession = {
     session_type: ClassSessionType;
     scheduled_start: string;
@@ -64,10 +108,23 @@ async function getScheduledSessionStatus(today: string, currentMinutes: number):
     .from("class_sessions")
     .select("session_type, scheduled_start, scheduled_end, late_after, absent_after, status")
     .eq("session_date", today)
+    .eq("grade", grade)
     .order("scheduled_start", { ascending: true });
   if (dailySessionsError) throw dailySessionsError;
 
   const sessions = [...((dailySessions ?? []) as SavedSession[])];
+  const { data: legacyDailySessions, error: legacyDailySessionsError } = await supabase
+    .from("class_sessions")
+    .select("session_type, scheduled_start, scheduled_end, late_after, absent_after, status")
+    .eq("session_date", today)
+    .is("grade", null)
+    .order("scheduled_start", { ascending: true });
+  if (legacyDailySessionsError) throw legacyDailySessionsError;
+  for (const legacySession of (legacyDailySessions ?? []) as SavedSession[]) {
+    if (!sessions.some((session) => session.session_type === legacySession.session_type)) {
+      sessions.push(legacySession);
+    }
+  }
   // The dashboard normally snapshots the saved schedule for today. Retaining
   // this fallback keeps the server-side gate correct if a hardware reader
   // submits before the dashboard has refreshed today's session row.
@@ -76,12 +133,29 @@ async function getScheduledSessionStatus(today: string, currentMinutes: number):
     const { data: latest, error: latestError } = await supabase
       .from("class_sessions")
       .select("session_type, scheduled_start, scheduled_end, late_after, absent_after")
+      .eq("grade", grade)
       .eq("session_type", sessionType)
       .lt("session_date", today)
       .order("session_date", { ascending: false })
       .limit(1);
     if (latestError) throw latestError;
-    if (latest?.[0]) sessions.push(latest[0] as SavedSession);
+    if (latest?.[0]) {
+      sessions.push(latest[0] as SavedSession);
+      continue;
+    }
+
+    // Schedules saved before grade-level support remain a fallback until ICT
+    // saves a dedicated schedule for this student's grade.
+    const { data: legacy, error: legacyError } = await supabase
+      .from("class_sessions")
+      .select("session_type, scheduled_start, scheduled_end, late_after, absent_after")
+      .is("grade", null)
+      .eq("session_type", sessionType)
+      .lt("session_date", today)
+      .order("session_date", { ascending: false })
+      .limit(1);
+    if (legacyError) throw legacyError;
+    if (legacy?.[0]) sessions.push(legacy[0] as SavedSession);
   }
 
   const activeSession = sessions.find((session) =>
@@ -103,9 +177,11 @@ async function getScheduledSessionStatus(today: string, currentMinutes: number):
     };
   }
 
+  const classSessionId = await ensureGradeSessionSnapshot(today, grade, activeSession);
   return {
     status: currentMinutes <= timeToMinutes(activeSession.late_after ?? activeSession.scheduled_start) ? "On Time" : "Late",
     sessionType: activeSession.session_type as ClassSessionType,
+    classSessionId,
   };
 }
 
@@ -234,7 +310,7 @@ export async function POST(req: NextRequest) {
 
     // This is deliberately before RFID/student lookup. A scan at or after the
     // cutoff always reports the schedule state and never creates a new log.
-    const sessionStatus = await getScheduledSessionStatus(today, schoolClock.minutes);
+    const sessionStatus = await getScheduledSessionStatus(today, schoolClock.minutes, adviser?.grade?.trim() ?? "");
     if ("unavailable" in sessionStatus) {
       return NextResponse.json(
         { success: false, message: sessionStatus.message },
@@ -302,7 +378,7 @@ export async function POST(req: NextRequest) {
     const attendanceDate = today;
     const timeLogged = schoolClock.time;
 
-    const { status, sessionType } = sessionStatus;
+    const { status, sessionType, classSessionId } = sessionStatus;
 
     const { data: sectionAssignment, error: sectionAssignmentError } = await supabase
       .from("sections")
@@ -405,6 +481,7 @@ export async function POST(req: NextRequest) {
       .insert({
         student_db_id: student.id,
         student_id: student.student_id,
+        class_session_id: classSessionId,
         attendance_date: attendanceDate,
         time_logged: timeLogged,
         type: nextType,

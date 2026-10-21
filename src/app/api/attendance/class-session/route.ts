@@ -37,14 +37,6 @@ function validateSchedule(
     return `${sessionType} class end time must be later than its start time.`;
   }
 
-  if (sessionType === "Morning" && start >= timeToMinutes("12:00")) {
-    return "Morning class must start before 12:00 PM.";
-  }
-
-  if (sessionType === "Afternoon" && start < timeToMinutes("12:00")) {
-    return "Afternoon class must start at or after 12:00 PM.";
-  }
-
   return null;
 }
 
@@ -67,6 +59,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 async function ensureSessionRow(
   sessionDate: string,
+  grade: string,
   sessionType: "Morning" | "Afternoon",
   scheduledStart: string,
   scheduledEnd: string,
@@ -77,6 +70,7 @@ async function ensureSessionRow(
     .from("class_sessions")
     .select("session_date")
     .eq("session_date", sessionDate)
+    .eq("grade", grade)
     .eq("session_type", sessionType)
     .limit(1);
 
@@ -89,15 +83,56 @@ async function ensureSessionRow(
     .from("class_sessions")
     .upsert({
       session_date: sessionDate,
+      grade,
       session_type: sessionType,
       scheduled_start: scheduledStart,
       scheduled_end: scheduledEnd,
       late_after: lateAfter,
       absent_after: absentAfter,
       status: "Not Started",
-    }, { onConflict: "session_date,session_type", ignoreDuplicates: true });
+    }, { onConflict: "session_date,session_type,grade", ignoreDuplicates: true });
 
   if (insertError) throw insertError;
+}
+
+type SavedSchedule = {
+  scheduled_start: string;
+  scheduled_end: string;
+  late_after: string | null;
+  absent_after: string | null;
+};
+
+async function getLatestSchedule(grade: string, sessionType: "Morning" | "Afternoon", beforeDate: string) {
+  const { data: gradeSchedule, error: gradeScheduleError } = await supabase
+    .from("class_sessions")
+    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .eq("grade", grade)
+    .eq("session_type", sessionType)
+    .lt("session_date", beforeDate)
+    .order("session_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (gradeScheduleError) throw gradeScheduleError;
+  if (gradeSchedule) return gradeSchedule as SavedSchedule;
+
+  // Schedules saved before grade-level support remain a safe fallback until
+  // ICT saves this grade's own schedule. New grade-specific saves never
+  // overwrite these legacy rows.
+  const { data: legacySchedule, error: legacyScheduleError } = await supabase
+    .from("class_sessions")
+    .select("scheduled_start, scheduled_end, late_after, absent_after")
+    .is("grade", null)
+    .eq("session_type", sessionType)
+    .lte("session_date", beforeDate)
+    .order("session_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (legacyScheduleError) throw legacyScheduleError;
+  return legacySchedule as SavedSchedule | null;
+}
+
+function requestedGrade(req: NextRequest) {
+  return req.nextUrl.searchParams.get("grade")?.trim() ?? "";
 }
 
 // A daily row is a snapshot of the schedule ICT saved.  Its visible state is
@@ -134,11 +169,24 @@ async function isSchoolHoliday(schoolYearId: number, date: string) {
  * Returns today's Morning and Afternoon session rows.
  * If rows don't exist yet, creates "Not Started" defaults.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const [adviser, ict] = await Promise.all([getAdviserFromToken(), getIctFromToken()]);
     if (!adviser && !ict) {
       return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
+    }
+
+    const requested = requestedGrade(req);
+    const adviserGrade = adviser?.grade?.trim() ?? "";
+    if (adviser && !adviserGrade) {
+      return NextResponse.json({ success: false, message: "Your adviser account has no assigned grade level." }, { status: 409 });
+    }
+    if (adviser && requested && requested !== adviserGrade) {
+      return NextResponse.json({ success: false, message: "You can view only the schedule for your assigned grade level." }, { status: 403 });
+    }
+    const grade = adviserGrade || requested;
+    if (!grade) {
+      return NextResponse.json({ success: false, message: "Choose a grade level to view its class schedule." }, { status: 400 });
     }
 
     const today = getToday();
@@ -153,6 +201,7 @@ export async function GET() {
     if (!activeSY) {
       return NextResponse.json({
         success: true,
+        grade,
         sessions: [],
         availability: {
           available: false,
@@ -167,7 +216,7 @@ export async function GET() {
       activeSY.end_date,
     );
     if (!schoolYearAvailability.available) {
-      return NextResponse.json({ success: true, sessions: [], availability: schoolYearAvailability });
+      return NextResponse.json({ success: true, grade, sessions: [], availability: schoolYearAvailability });
     }
 
     if (!isScheduledAttendanceDate(
@@ -178,6 +227,7 @@ export async function GET() {
     )) {
       return NextResponse.json({
         success: true,
+        grade,
         sessions: [],
         availability: {
           available: false,
@@ -188,6 +238,7 @@ export async function GET() {
     if (await isSchoolHoliday(activeSY.id, today)) {
       return NextResponse.json({
         success: true,
+        grade,
         sessions: [],
         availability: {
           available: false,
@@ -199,15 +250,7 @@ export async function GET() {
     // Upsert today's rows using the latest saved schedule
     // so ICT does not need to set the same times every day.
     for (const sessionType of ["Morning", "Afternoon"] as const) {
-      const { data: latest } = await supabase
-        .from("class_sessions")
-        .select("scheduled_start, scheduled_end, late_after, absent_after")
-        .eq("session_type", sessionType)
-        .lt("session_date", today)
-        .order("session_date", { ascending: false })
-        .limit(1);
-
-      const savedSchedule = latest?.[0];
+      const savedSchedule = await getLatestSchedule(grade, sessionType, today);
       // Attendance stays unavailable until ICT has actually saved this
       // session. Never invent a second set of adviser-facing times.
       if (!savedSchedule) continue;
@@ -217,6 +260,7 @@ export async function GET() {
       const absentAfter = savedSchedule.absent_after ?? scheduledEnd;
       await ensureSessionRow(
         today,
+        grade,
         sessionType,
         scheduledStart,
         scheduledEnd,
@@ -229,6 +273,7 @@ export async function GET() {
       .from("class_sessions")
       .select("*")
       .eq("session_date", today)
+      .eq("grade", grade)
       .order("session_type", { ascending: true });
 
     if (error) throw error;
@@ -237,6 +282,7 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
+      grade,
     // Saved ICT times are authoritative. A persisted Ended state may shorten
     // the window when ICT deliberately closes a session early.
       sessions,
@@ -259,6 +305,7 @@ export async function GET() {
 /**
  * POST /api/attendance/class-session
  * Body: {
+ *   grade: string,
  *   session_type: "Morning" | "Afternoon",
  *   action: "start" | "end",
  *   scheduled_start?: "HH:MM",
@@ -276,7 +323,8 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { session_type, action, scheduled_start, scheduled_end, late_after, absent_after } = body as {
+    const { grade: rawGrade, session_type, action, scheduled_start, scheduled_end, late_after, absent_after } = body as {
+      grade?: string;
       session_type: "Morning" | "Afternoon";
       action?: "start" | "end" | "save";
       scheduled_start?: string;
@@ -285,6 +333,13 @@ export async function POST(req: NextRequest) {
       absent_after?: string;
     };
 
+    const grade = typeof rawGrade === "string" ? rawGrade.trim() : "";
+    if (!grade) {
+      return NextResponse.json(
+        { success: false, message: "Choose a grade level before saving a class schedule." },
+        { status: 400 }
+      );
+    }
     if (session_type !== "Morning" && session_type !== "Afternoon") {
       return NextResponse.json(
         { success: false, message: "session_type must be Morning or Afternoon." },
@@ -373,6 +428,7 @@ export async function POST(req: NextRequest) {
 
     await ensureSessionRow(
       today,
+      grade,
       session_type,
       start,
       end,
@@ -392,6 +448,7 @@ export async function POST(req: NextRequest) {
           absent_after: absentAfter,
         })
         .eq("session_date", today)
+        .eq("grade", grade)
         .eq("session_type", session_type);
 
       if (scheduleUpdateError) throw scheduleUpdateError;
@@ -413,13 +470,14 @@ export async function POST(req: NextRequest) {
       .from("class_sessions")
       .update(updates)
       .eq("session_date", today)
+      .eq("grade", grade)
       .eq("session_type", session_type)
       .select()
       .single();
 
     if (error) throw error;
 
-    await logAudit({ action: "Class Session Updated", performedById: ict.id, performedBy: [ict.first_name, ict.middle_name, ict.last_name, ict.suffix].filter(Boolean).join(" ") || "ICT Admin", performedByRole: "ICT Admin", module: "Class Session Control", targetType: "Class Session", targetId: data.id, targetUser: `${session_type} session`, targetRole: "Class Session", previousStatus: action === "end" ? "Active" : undefined, newStatus: String(data.status), details: `${action === "start" ? "Started" : action === "end" ? "Ended" : "Updated schedule for"} the ${session_type} class session on ${today}.` });
+    await logAudit({ action: "Class Session Updated", performedById: ict.id, performedBy: [ict.first_name, ict.middle_name, ict.last_name, ict.suffix].filter(Boolean).join(" ") || "ICT Admin", performedByRole: "ICT Admin", module: "Class Session Control", targetType: "Class Session", targetId: data.id, targetUser: `${grade} ${session_type} session`, targetRole: "Class Session", previousStatus: action === "end" ? "Active" : undefined, newStatus: String(data.status), details: `${action === "start" ? "Started" : action === "end" ? "Ended" : "Updated schedule for"} the ${grade} ${session_type} class session on ${today}.` });
     // Staff consume class-session changes from their dashboard scope, while
     // every linked Parent attendance/dashboard view already refreshes on the
     // narrower attendance scope. The Broadcast contains no schedule data.

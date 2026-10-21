@@ -781,8 +781,8 @@ export async function GET() {
           category: "Guidance" as const,
           unread,
           tab: ["All", ...(unread ? ["Unread" as const] : []), "Guidance" as const],
-          teacherName: "Guidance Counselor",
-          senderName: "Guidance Counselor",
+          teacherName: "Guidance",
+          senderName: "Guidance",
           senderRole: "Guidance" as const,
           createdAt: acceptedAt,
         };

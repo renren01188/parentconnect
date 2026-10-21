@@ -12,7 +12,7 @@ import {
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
 import { logAudit } from "@/lib/audit";
-import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import { hasCompletedParentSignup, isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import { processDueScheduledDeletions } from "@/lib/processScheduledDeletions";
 import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
 import {
@@ -112,6 +112,8 @@ type UserRow = {
   employeeId?: string;
   relationship?: string;
   address?: string;
+  /** ICT-only parent-account note. Never used for student SF2 remarks. */
+  parentRemarks?: string;
   familyDetails?: FamilyDetails;
   sharedFamilyDetailsChanged?: boolean;
 };
@@ -409,7 +411,7 @@ export async function GET(request: NextRequest) {
         .order("last_name", { ascending: true }),
       supabase
         .from("parents")
-        .select("id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, status, password_set, archive_status")
+        .select("id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, parent_remarks, status, password_set, requires_account_setup, archive_status")
         .order("parent_last_name", { ascending: true }),
       supabase
         .from("parent_student_links")
@@ -599,6 +601,7 @@ export async function GET(request: NextRequest) {
         phone: parent.contact_number ?? "",
         relationship: parent.relationship ?? "",
         address: parent.address ?? "",
+        parentRemarks: parent.parent_remarks ?? "",
         familyDetails,
       };
     });
@@ -641,14 +644,16 @@ export async function GET(request: NextRequest) {
       });
 
     // Parents & Students is intentionally student-centred. A parent who has
-    // not completed password setup is a pre-sign-up record, so it must not
-    // make a student appear "Already Linked". Build this from the visible
-    // student roster and use sets at every relationship boundary: one signed
-    // up parent linked to multiple students is valid, but never duplicates a
+    // has not completed account setup is not a signed-up parent account, so
+    // it must not make a student appear "Already Linked". Imported accounts
+    // may already have password_set = 1 while their owner/setup step remains
+    // unfinished; check both states. Build this from the visible student
+    // roster and use sets at every relationship boundary: one signed-up
+    // parent linked to multiple students is valid, but never duplicates a
     // student in the directory or its counts.
     const signedUpParentsById = new Map<number, (typeof visibleParents)[number]>();
     for (const parent of visibleParents) {
-      if (!isPreSignupParentRecord([parent.id], parent.password_set)) {
+      if (hasCompletedParentSignup([parent.id], parent.password_set, parent.requires_account_setup)) {
         signedUpParentsById.set(Number(parent.id), parent);
       }
     }
@@ -734,6 +739,7 @@ export async function GET(request: NextRequest) {
           phone: primaryParent?.contact_number ?? family[0]?.contact_number ?? "",
           relationship: primaryParent?.relationship ?? "",
           address: primaryParent?.address ?? "",
+          parentRemarks: primaryParent?.parent_remarks ?? "",
           familyDetails: primaryParent ? familyDetailsForParent(family, primaryParent) : familyDetailsFromMembers(family),
         };
       })
@@ -1221,6 +1227,9 @@ export async function PATCH(req: NextRequest) {
               contact_number: normalizedParentPhone,
               relationship: user.relationship?.trim() || "Guardian",
               address: user.address?.trim() || "",
+              ...(typeof user.parentRemarks === "string"
+                ? { parent_remarks: user.parentRemarks.trim() || null }
+                : {}),
               status: toDbStatus(user.status),
               ...parentPasswordPatch,
             })

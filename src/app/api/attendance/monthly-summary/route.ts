@@ -12,6 +12,15 @@ type LogRow = {
     status: string | null;
 };
 
+type StudentRemarkRow = {
+    id: number;
+    student_db_id: number;
+    remark_type: "Dropped out" | "Transferred In" | "Transferred Out";
+    effectivity_date: string;
+    note: string;
+    school_name: string | null;
+};
+
 type AttendanceStatus = "Present" | "On Time" | "Late" | "Absent" | "Excused";
 
 function toAttendanceStatus(status: string | null): AttendanceStatus | null {
@@ -221,6 +230,36 @@ export async function GET(req: NextRequest) {
         });
 
         // ── 4. Fetch attendance logs for the month (only valid days) ─────────────
+        // Remarks are dated SF2 events, not a current student-status field.
+        // Read the selected month from the same source as the Adviser export
+        // and page through it so larger school-wide reports remain complete.
+        const remarks: StudentRemarkRow[] = [];
+        const remarkPeriodStart = monthDate(year, month, 1);
+        const remarkPeriodEnd = monthEndDate(year, month);
+        for (let from = 0; ; from += pageSize) {
+            const { data: remarkRows, error: remarkError } = await supabase
+                .from("student_remarks")
+                .select("id, student_db_id, remark_type, effectivity_date, note, school_name")
+                .gte("effectivity_date", remarkPeriodStart)
+                .lte("effectivity_date", remarkPeriodEnd)
+                .order("effectivity_date", { ascending: true })
+                .order("id", { ascending: true })
+                .range(from, from + pageSize - 1);
+            if (remarkError) throw remarkError;
+            const page = (remarkRows ?? []) as StudentRemarkRow[];
+            remarks.push(...page);
+            if (page.length < pageSize) break;
+        }
+        const visibleStudentIds = new Set(students.map((student) => student.id));
+        const remarksByStudentDbId = new Map<number, StudentRemarkRow[]>();
+        for (const remark of remarks) {
+            if (!visibleStudentIds.has(remark.student_db_id)) continue;
+            remarksByStudentDbId.set(
+                remark.student_db_id,
+                [...(remarksByStudentDbId.get(remark.student_db_id) ?? []), remark],
+            );
+        }
+
         const logs: LogRow[] = [];
         if (validDays.length > 0) {
             // PostgREST caps a response at the project's max row limit (1,000
@@ -281,6 +320,7 @@ export async function GET(req: NextRequest) {
             excused: number;
             dailyStatuses: Record<number, AttendanceStatus>;
             active_from: string;
+            remarks: StudentRemarkRow[];
             dailyAbsences: Record<number, boolean>;  // day-of-month → true if absent
             dailyExcused: Record<number, boolean>;   // day-of-month → true if excused
         };
@@ -328,6 +368,7 @@ export async function GET(req: NextRequest) {
                 dailyExcused,
                 dailyStatuses,
                 active_from: s.active_from,
+                remarks: remarksByStudentDbId.get(s.id) ?? [],
             };
         });
 

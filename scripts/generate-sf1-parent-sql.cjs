@@ -86,6 +86,14 @@ function findColumn(sheet, range, names) {
   return null;
 }
 
+function normalizeParentContactNumber(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (/^09\d{9}$/.test(digits)) return digits;
+  if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
+  return null;
+}
+
 function readRows(inputPath) {
   const workbook = XLSX.readFile(inputPath, { cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -123,7 +131,7 @@ function readRows(inputPath) {
         { role: "Mother", ...mother, relationship: "Mother" },
         { role: "Guardian", ...guardian, relationship: text(value(row, 40)) || "Guardian" },
       ].filter((member) => member.firstName && member.lastName),
-      accountContactNumber: value(row, 41).replace(/\D/g, ""),
+      accountContactNumber: normalizeParentContactNumber(value(row, 41)),
       accountEmail: emailColumn === null ? null : text(value(row, emailColumn))?.toLowerCase() ?? null,
     });
   }
@@ -140,11 +148,11 @@ function readRows(inputPath) {
     if (!row.family.length) errors.push(`${row.lrn}: No complete Father, Mother, or Guardian name was found.`);
     if (!/^[MF]$/.test(row.gender)) errors.push(`${row.lrn}: Gender must be M or F.`);
     const hasValidEmail = row.accountEmail === null || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.accountEmail);
-    const hasValidContact = row.accountContactNumber.length === 11;
+    const hasValidContact = row.accountContactNumber === null || row.accountContactNumber.length === 11;
     if (!hasValidEmail) errors.push(`${row.lrn}: ActiveEmail is invalid.`);
-    if (!hasValidContact) errors.push(`${row.lrn}: Parent contact number must have 11 digits.`);
+    if (!hasValidContact) errors.push(`${row.lrn}: Parent contact number must be a valid Philippine mobile number.`);
 
-    if (hasValidContact && hasValidEmail && row.accountEmail) {
+    if (row.accountContactNumber && hasValidContact && hasValidEmail && row.accountEmail) {
       const existingEmailForContact = contactEmails.get(row.accountContactNumber);
       if (existingEmailForContact && existingEmailForContact !== row.accountEmail) {
         errors.push(`${row.lrn}: Contact number ${row.accountContactNumber} is assigned to more than one ActiveEmail.`);
@@ -182,6 +190,8 @@ function createSql({ rows, grade, section, session, password, sourceName }) {
 -- Parent accounts are active immediately, but stay unassigned until the first
 -- mobile-number or email sign-in selects a verified Father, Mother, or
 -- Guardian role.
+-- A student with neither identifier is still imported with their family
+-- records, but does not receive an unreachable Parent account.
 
 BEGIN;
 
@@ -236,13 +246,13 @@ BEGIN
     v_student_suffix := nullif(btrim(v_row->'student'->>'suffix'), '');
     v_gender := upper(btrim(v_row->>'gender'));
     v_parent_email := nullif(lower(btrim(v_row->>'accountEmail')), '');
-    v_parent_contact_number := regexp_replace(coalesce(v_row->>'accountContactNumber', ''), '[^0-9]', '', 'g');
+    v_parent_contact_number := nullif(regexp_replace(coalesce(v_row->>'accountContactNumber', ''), '[^0-9]', '', 'g'), '');
 
     IF v_lrn !~ '^[0-9]{12}$'
       OR v_student_first_name = '' OR v_student_last_name = ''
       OR v_gender NOT IN ('M', 'F')
       OR (v_parent_email IS NOT NULL AND v_parent_email !~ '^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$')
-      OR length(v_parent_contact_number) <> 11
+      OR (v_parent_contact_number IS NOT NULL AND length(v_parent_contact_number) <> 11)
       OR jsonb_array_length(coalesce(v_row->'family', '[]'::jsonb)) = 0 THEN
       RAISE EXCEPTION 'Invalid SF1 data for LRN %.', v_lrn;
     END IF;
@@ -277,84 +287,90 @@ BEGIN
       RETURNING * INTO v_student;
     END IF;
 
-    SELECT count(*)::integer, min(id)
-    INTO v_parent_matches, v_parent_id
-    FROM public.parents
-    WHERE login_contact_number = public.normalize_parent_login_contact_number(v_parent_contact_number);
+    v_parent_id := NULL;
+    v_parent_matches := 0;
+    v_email_matches := 0;
 
-    IF v_parent_matches > 1 THEN
-      RAISE EXCEPTION 'Contact number % already belongs to multiple Parent records.', v_parent_contact_number;
-    END IF;
-
-    IF v_parent_email IS NOT NULL THEN
-      SELECT count(*)::integer
-      INTO v_email_matches
+    IF v_parent_contact_number IS NOT NULL OR v_parent_email IS NOT NULL THEN
+      SELECT count(*)::integer, min(id)
+      INTO v_parent_matches, v_parent_id
       FROM public.parents
-      WHERE lower(btrim(email)) = v_parent_email
-        AND id IS DISTINCT FROM v_parent_id;
-      IF v_email_matches > 0 THEN
-        RAISE EXCEPTION 'ActiveEmail % already belongs to another Parent record.', v_parent_email;
+      WHERE login_contact_number = public.normalize_parent_login_contact_number(v_parent_contact_number);
+
+      IF v_parent_matches > 1 THEN
+        RAISE EXCEPTION 'Contact number % already belongs to multiple Parent records.', v_parent_contact_number;
       END IF;
+
+      IF v_parent_email IS NOT NULL THEN
+        SELECT count(*)::integer
+        INTO v_email_matches
+        FROM public.parents
+        WHERE lower(btrim(email)) = v_parent_email
+          AND id IS DISTINCT FROM v_parent_id;
+        IF v_email_matches > 0 THEN
+          RAISE EXCEPTION 'ActiveEmail % already belongs to another Parent record.', v_parent_email;
+        END IF;
+      END IF;
+
+      IF v_parent_matches = 1 THEN
+        SELECT * INTO v_parent FROM public.parents WHERE id = v_parent_id;
+        IF v_parent.archive_status = 'archived'
+          OR v_parent.account_owner_role IS NOT NULL
+          OR v_parent.relationship IS NOT NULL
+          OR v_parent.parent_first_name IS DISTINCT FROM 'Parent'
+          OR v_parent.parent_last_name IS DISTINCT FROM 'Account Owner'
+          OR regexp_replace(coalesce(v_parent.contact_number, ''), '[^0-9]', '', 'g') <> v_parent_contact_number THEN
+          RAISE EXCEPTION 'Contact number % belongs to an existing Parent account and cannot be replaced by this import.', v_parent_contact_number;
+        END IF;
+
+        IF v_parent.email IS NOT NULL AND v_parent_email IS NOT NULL
+          AND lower(btrim(v_parent.email)) <> v_parent_email THEN
+          RAISE EXCEPTION 'The existing Parent account for contact number % has a different email address.', v_parent_contact_number;
+        END IF;
+
+        IF v_parent.email IS NULL AND v_parent_email IS NOT NULL THEN
+          UPDATE public.parents
+          SET email = v_parent_email
+          WHERE id = v_parent_id;
+        END IF;
+
+        -- A repeated run may complete a prior, unregistered placeholder record.
+        IF lower(coalesce(v_parent.password_set::text, '0')) NOT IN ('1', 'true') THEN
+          UPDATE public.parents
+          SET password = extensions.crypt(v_initial_password, extensions.gen_salt('bf', 12)),
+              password_set = 1,
+              temp_password = NULL,
+              temporary_password_expires_at = NULL,
+              status = 'active',
+              attendance_email_notifications = false,
+              attendance_sms_notifications = true,
+              attendance_notification_preference = 'SMS',
+              requires_account_setup = true,
+              account_setup_completed_at = NULL
+          WHERE id = v_parent_id;
+        END IF;
+      ELSE
+        INSERT INTO public.parents (
+          student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix,
+          relationship, contact_number, email, password, temp_password,
+          temporary_password_expires_at, password_set, status, archive_status,
+          attendance_email_notifications, attendance_sms_notifications,
+          attendance_notification_preference, account_owner_role,
+          requires_account_setup, account_setup_completed_at
+        ) VALUES (
+          v_lrn, 'Parent', NULL, 'Account Owner', NULL,
+          NULL, v_parent_contact_number, v_parent_email,
+          extensions.crypt(v_initial_password, extensions.gen_salt('bf', 12)), NULL,
+          NULL, 1, 'active', 'active', false, true, 'SMS', NULL,
+          true, NULL
+        )
+        RETURNING id INTO v_parent_id;
+      END IF;
+
+      INSERT INTO public.parent_student_links (parent_id, student_id, relationship)
+      VALUES (v_parent_id, v_lrn, NULL)
+      ON CONFLICT (parent_id, student_id) DO NOTHING;
     END IF;
-
-    IF v_parent_matches = 1 THEN
-      SELECT * INTO v_parent FROM public.parents WHERE id = v_parent_id;
-      IF v_parent.archive_status = 'archived'
-        OR v_parent.account_owner_role IS NOT NULL
-        OR v_parent.relationship IS NOT NULL
-        OR v_parent.parent_first_name IS DISTINCT FROM 'Parent'
-        OR v_parent.parent_last_name IS DISTINCT FROM 'Account Owner'
-        OR regexp_replace(coalesce(v_parent.contact_number, ''), '[^0-9]', '', 'g') <> v_parent_contact_number THEN
-        RAISE EXCEPTION 'Contact number % belongs to an existing Parent account and cannot be replaced by this import.', v_parent_contact_number;
-      END IF;
-
-      IF v_parent.email IS NOT NULL AND v_parent_email IS NOT NULL
-        AND lower(btrim(v_parent.email)) <> v_parent_email THEN
-        RAISE EXCEPTION 'The existing Parent account for contact number % has a different email address.', v_parent_contact_number;
-      END IF;
-
-      IF v_parent.email IS NULL AND v_parent_email IS NOT NULL THEN
-        UPDATE public.parents
-        SET email = v_parent_email
-        WHERE id = v_parent_id;
-      END IF;
-
-      -- A repeated run may complete a prior, unregistered placeholder record.
-      IF lower(coalesce(v_parent.password_set::text, '0')) NOT IN ('1', 'true') THEN
-        UPDATE public.parents
-        SET password = extensions.crypt(v_initial_password, extensions.gen_salt('bf', 12)),
-            password_set = 1,
-            temp_password = NULL,
-            temporary_password_expires_at = NULL,
-            status = 'active',
-            attendance_email_notifications = false,
-            attendance_sms_notifications = true,
-            attendance_notification_preference = 'SMS',
-            requires_account_setup = true,
-            account_setup_completed_at = NULL
-        WHERE id = v_parent_id;
-      END IF;
-    ELSE
-      INSERT INTO public.parents (
-        student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix,
-        relationship, contact_number, email, password, temp_password,
-        temporary_password_expires_at, password_set, status, archive_status,
-        attendance_email_notifications, attendance_sms_notifications,
-        attendance_notification_preference, account_owner_role,
-        requires_account_setup, account_setup_completed_at
-      ) VALUES (
-        v_lrn, 'Parent', NULL, 'Account Owner', NULL,
-        NULL, v_parent_contact_number, v_parent_email,
-        extensions.crypt(v_initial_password, extensions.gen_salt('bf', 12)), NULL,
-        NULL, 1, 'active', 'active', false, true, 'SMS', NULL,
-        true, NULL
-      )
-      RETURNING id INTO v_parent_id;
-    END IF;
-
-    INSERT INTO public.parent_student_links (parent_id, student_id, relationship)
-    VALUES (v_parent_id, v_lrn, NULL)
-    ON CONFLICT (parent_id, student_id) DO NOTHING;
 
     FOR v_family_member IN SELECT value FROM jsonb_array_elements(v_row->'family')
     LOOP

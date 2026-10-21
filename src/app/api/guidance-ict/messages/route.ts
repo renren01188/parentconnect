@@ -218,7 +218,7 @@ async function recipientsFor(session: Session): Promise<Recipient[]> {
             row.middle_name as string | null,
             row.last_name as string | null,
             row.suffix as string | null,
-        ]) || "Guidance Counselor",
+        ]) || "Guidance",
         email: String(row.email ?? ""),
     }));
 }

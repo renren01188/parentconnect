@@ -43,12 +43,25 @@ async function authorizeIctSectionChange(authorizationPassword: unknown) {
   return { ict };
 }
 
-type SectionChange = {
-  type: "add" | "delete";
-  name: string;
-  grade: string;
-  class_session?: "Morning" | "Afternoon";
-};
+type SectionChange =
+  | {
+    type: "add";
+    name: string;
+    grade: string;
+    class_session: "Morning" | "Afternoon";
+  }
+  | {
+    type: "delete";
+    name: string;
+    grade: string;
+  }
+  | {
+    type: "rename";
+    id: number;
+    name: string;
+    new_name: string;
+    grade: string;
+  };
 
 type StudentSectionRecord = {
   id: number;
@@ -82,6 +95,28 @@ function occupiedSectionRaceResponse(name: string) {
       success: false,
       code: "SECTION_IN_USE",
       message: `Cannot delete \"${name}\" because students were assigned while the deletion was being processed. Remove or reassign them first.`,
+    },
+    { status: 409 }
+  );
+}
+
+function duplicateSectionNameResponse(name: string, grade: string) {
+  return NextResponse.json(
+    {
+      success: false,
+      code: "SECTION_NAME_EXISTS",
+      message: `Section \"${name}\" already exists in ${grade}. Choose a different name.`,
+    },
+    { status: 409 }
+  );
+}
+
+function sectionNotFoundResponse() {
+  return NextResponse.json(
+    {
+      success: false,
+      code: "SECTION_NOT_FOUND",
+      message: "This section was changed by another user. Reload the list and try again.",
     },
     { status: 409 }
   );
@@ -130,7 +165,7 @@ function normalizeSectionChanges(actions: unknown): SectionChange[] | null {
   for (const action of actions) {
     if (!action || typeof action !== "object") return null;
     const candidate = action as Record<string, unknown>;
-    if ((candidate.type !== "add" && candidate.type !== "delete")
+    if ((candidate.type !== "add" && candidate.type !== "delete" && candidate.type !== "rename")
       || typeof candidate.name !== "string"
       || typeof candidate.grade !== "string"
       || !candidate.name.trim()
@@ -140,20 +175,34 @@ function normalizeSectionChanges(actions: unknown): SectionChange[] | null {
 
     const name = candidate.name.trim();
     const grade = candidate.grade.trim();
-    const target = `${grade.toLowerCase()}__${name.toLowerCase()}`;
+    const target = candidate.type === "rename"
+      ? `${grade.toLowerCase()}__id_${candidate.id}`
+      : `${grade.toLowerCase()}__${name.toLowerCase()}`;
     // The client collapses a staged add/delete reversal. Reject any malformed
     // request that attempts to mutate the same section twice in one batch.
     if (targets.has(target)) return null;
     targets.add(target);
 
-    changes.push({
-      type: candidate.type,
-      name,
-      grade,
-      ...(candidate.type === "add"
-        ? { class_session: candidate.class_session === "Afternoon" ? "Afternoon" : "Morning" }
-        : {}),
-    });
+    if (candidate.type === "rename") {
+      if (!Number.isInteger(candidate.id)
+        || (candidate.id as number) <= 0
+        || typeof candidate.new_name !== "string"
+        || !candidate.new_name.trim()) {
+        return null;
+      }
+      const newName = candidate.new_name.trim();
+      if (name === newName) return null;
+      changes.push({ type: "rename", id: candidate.id as number, name, new_name: newName, grade });
+    } else if (candidate.type === "add") {
+      changes.push({
+        type: "add",
+        name,
+        grade,
+        class_session: candidate.class_session === "Afternoon" ? "Afternoon" : "Morning",
+      });
+    } else {
+      changes.push({ type: "delete", name, grade });
+    }
   }
 
   return changes;
@@ -168,7 +217,31 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const grade = searchParams.get("grade") || "";
+    const purpose = searchParams.get("purpose") || "";
     const classSessionFilter = searchParams.get("classSession") || "";
+
+    // RFID registration only needs the canonical section names for one grade.
+    // Do not make its selector wait for the student-count and adviser-merge
+    // queries used by the Class Session Control screen.
+    if (purpose === "rfid-registration") {
+      if (!grade) {
+        return NextResponse.json(
+          { success: false, message: "Select a grade before loading sections." },
+          { status: 400 },
+        );
+      }
+      const { data, error } = await supabase
+        .from("sections")
+        .select("name")
+        .eq("grade", grade)
+        .order("name", { ascending: true });
+      if (error) throw error;
+
+      return NextResponse.json({
+        success: true,
+        sections: [...new Set((data ?? []).map((section) => String(section.name ?? "").trim()).filter(Boolean))],
+      });
+    }
     // Only apply session filter for Morning or Afternoon — Mixed/empty means show all
     const shouldFilterBySession = classSessionFilter === "Morning" || classSessionFilter === "Afternoon";
 
@@ -185,7 +258,7 @@ export async function GET(req: NextRequest) {
     if (grade) adviserQuery = adviserQuery.eq("grade", grade);
 
     // Get sections table (filter by class_session when requested)
-    let sectionsTableQuery = supabase.from("sections").select("name, class_session");
+    let sectionsTableQuery = supabase.from("sections").select("id, name, class_session");
     if (grade) sectionsTableQuery = sectionsTableQuery.eq("grade", grade);
     if (shouldFilterBySession) sectionsTableQuery = sectionsTableQuery.eq("class_session", classSessionFilter);
 
@@ -231,7 +304,15 @@ export async function GET(req: NextRequest) {
 
     const sections = Array.from(allSections)
       .sort()
-      .map(name => ({ name, count: countMap.get(name) ?? 0, class_session: sessionMap.get(name) ?? null }));
+      .map(name => {
+        const record = (sectionsTableRows ?? []).find((row) => row.name === name);
+        return {
+          id: record?.id ?? null,
+          name,
+          count: countMap.get(name) ?? 0,
+          class_session: sessionMap.get(name) ?? null,
+        };
+      });
 
     return NextResponse.json({
       success: true,
@@ -345,13 +426,38 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    const deletions = changes.filter((change) => change.type === "delete");
+    const deletions = changes.filter((change) => change.type === "delete") as Extract<SectionChange, { type: "delete" }>[];
     for (const change of deletions) {
       const inUseResponse = await ensureSectionCanBeDeleted(change.name, change.grade);
       if (inUseResponse) return inUseResponse;
     }
 
-    const additions = changes.filter((change) => change.type === "add");
+    const renames = changes.filter((change): change is Extract<SectionChange, { type: "rename" }> => change.type === "rename");
+    if (renames.length > 0) {
+      // This RPC updates existing sections rows (never inserts copies), keeps
+      // their IDs, and updates all non-FK section labels in one database
+      // transaction. The students foreign key cascades with each row rename.
+      const { error } = await supabase.rpc("rename_sections", {
+        p_renames: renames.map((change) => ({
+          id: change.id,
+          grade: change.grade,
+          old_name: change.name,
+          new_name: change.new_name,
+        })),
+      });
+      if (error) {
+        if (error.code === "23505" || /SECTION_NAME_EXISTS|already exists/i.test(error.message ?? "")) {
+          const conflictingRename = renames.find((change) => error.message.includes(change.new_name)) ?? renames[0];
+          return duplicateSectionNameResponse(conflictingRename.new_name, conflictingRename.grade);
+        }
+        if (error.code === "P0002" || /SECTION_NOT_FOUND|changed by another user/i.test(error.message ?? "")) {
+          return sectionNotFoundResponse();
+        }
+        throw error;
+      }
+    }
+
+    const additions = changes.filter((change): change is Extract<SectionChange, { type: "add" }> => change.type === "add");
     if (additions.length > 0) {
       const { error } = await supabase
         .from("sections")

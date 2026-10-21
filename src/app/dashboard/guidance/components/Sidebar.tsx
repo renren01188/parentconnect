@@ -88,7 +88,7 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
     return () => window.removeEventListener("guidance-dashboard-guide-target", handleGuideTarget);
   }, []);
 
-  const profileName = profile ? getGuidanceFullName(profile) : "Guidance Counselor";
+  const profileName = profile ? getGuidanceFullName(profile) : "Guidance";
   const profileInitials = profile ? getGuidanceInitials(profile) : "GC";
   const isActive = (href: string) => href === "/dashboard/guidance" ? pathname === href : pathname.startsWith(href);
   const closeMenu = () => setMobileOpen(false);

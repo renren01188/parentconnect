@@ -44,7 +44,7 @@ export interface Report {
   categories: string[];
   /** Computed concern level 0–100 */
   concernLevel: number;
-  /** True when adviser has escalated to guidance counselor */
+  /** True when adviser has escalated to Guidance */
   escalatedToGuidance?: boolean;
   /** True when Guidance escalated the concern onward to Principal */
   escalatedToPrincipal?: boolean;

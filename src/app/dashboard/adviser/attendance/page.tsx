@@ -10,6 +10,7 @@ import {
     toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
 import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
+import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
@@ -17,7 +18,7 @@ import {
     CreditCard, UserPlus, History, Check,
     ChevronDown, IdCard, ChevronLeft, ChevronRight,
     Calendar, AlertCircle, X, Printer, FileText,
-    CalendarDays, Paperclip, PlayCircle, Pencil,
+    CalendarDays, Paperclip, PlayCircle, Pencil, Search,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -113,11 +114,32 @@ type MonthlyAttendanceRow = {
     active_from: string;
 };
 
+type MonthlyStudentRemark = {
+    id: number;
+    student_db_id: number;
+    remark_type: "Dropped out" | "Transferred In" | "Transferred Out";
+    effectivity_date: string;
+    note: string;
+    school_name: string | null;
+};
+
+type MonthlyRemarkSummary = Record<MonthlyStudentRemark["remark_type"], { male: number; female: number; total: number }>;
+type RemarkActionStudent = {
+    id: number;
+    student_id: string;
+    first_name: string;
+    middle_name: string | null;
+    last_name: string;
+    suffix: string | null;
+};
+
 type MonthlyAttendanceData = {
     rows: MonthlyAttendanceRow[];
     schoolDays: string[];
     holidayDates: string[];
     studentCount: number;
+    remarksByStudentId: Record<string, MonthlyStudentRemark[]>;
+    remarkSummary: MonthlyRemarkSummary;
     schoolYearLabel: string | null;
 };
 
@@ -184,6 +206,13 @@ function getInitials(name: string) {
 function buildFullName(student: Student) {
     return [student.first_name, student.middle_name, student.last_name, student.suffix]
         .filter(Boolean).join(" ");
+}
+
+function formatRemarkStudentName(student: RemarkActionStudent) {
+    const givenNames = [student.first_name, student.middle_name, student.suffix]
+        .filter(Boolean)
+        .join(" ");
+    return [student.last_name, givenNames].filter(Boolean).join(", ");
 }
 
 function toLocalDateString(date: Date) {
@@ -548,6 +577,17 @@ function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, res
     ws.getCell(ref).value = { formula, result };
 }
 
+// The monthly export is printed as an official form. Keep the template's
+// borders, fills, alignment, colors, and bold/italic styling, but make every
+// populated export cell consistently use the requested 9-point type.
+function setWorksheetFontSize(ws: ExcelJS.Worksheet, size: number) {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+        row.eachCell({ includeEmpty: false }, (cell) => {
+            cell.font = { ...cell.font, size };
+        });
+    });
+}
+
 function getSchoolDayPlacementsForMonth(month: number, year: number) {
     const dates = weekdayExportDatesForMonth(year, month);
     if (dates.length > SF2_DAY_SLOTS.length) {
@@ -585,6 +625,12 @@ async function exportMonthlySF2(
     holidayDates: string[] = [],
     schoolDayDates: string[] = [],
     schoolYearLabel: string | null = null,
+    remarksByStudentId: Record<string, MonthlyStudentRemark[]> = {},
+    remarkSummary: MonthlyRemarkSummary = {
+        "Dropped out": { male: 0, female: 0, total: 0 },
+        "Transferred In": { male: 0, female: 0, total: 0 },
+        "Transferred Out": { male: 0, female: 0, total: 0 },
+    },
 ) {
     // Keep the large spreadsheet library out of the normal attendance page.
     // It is loaded only after the user explicitly requests an SF2 export.
@@ -609,10 +655,10 @@ async function exportMonthlySF2(
     const gradeLabel = gradePart || "";
     const sectionName = sectionPartRaw || sectionLabel;
 
-    setCellValue(ws, "F3", 107966);
     setCellValue(ws, "M3", schoolYearLabel ?? `${year} - ${year + 1}`);
     setCellValue(ws, "AA3", monthName.toUpperCase());
-    setCellValue(ws, "F4", "Santiago Elementary School");
+    // The official School ID and School Name remain in the supplied SF2
+    // template. They are not reintroduced as client-side sample constants.
     setCellValue(ws, "AA4", gradeLabel);
     setCellValue(ws, "AM4", sectionName.toUpperCase());
 
@@ -650,6 +696,7 @@ async function exportMonthlySF2(
             name: sample.full_name,
             gender: inferredGender as "M" | "F",
             activeFrom: sample.active_from,
+            remarks: remarksByStudentId[sample.student_id] ?? [],
             days,
         };
     }).sort((a, b) => a.name.localeCompare(b.name));
@@ -680,6 +727,13 @@ async function exportMonthlySF2(
             const row = startRow + idx;
             setCellValue(ws, `A${row}`, idx + 1);
             setCellValue(ws, `C${row}`, student.name);
+            setCellValue(ws, `AQ${row}`, student.remarks.map(formatStudentRemarkForSf2).join("\n"));
+            ws.getCell(`AQ${row}`).alignment = {
+                ...ws.getCell(`AQ${row}`).alignment,
+                vertical: "top",
+                wrapText: true,
+                shrinkToFit: true,
+            };
 
             for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
                 clearCellPreserveFormat(ws, col0ToRef(col0, row));
@@ -795,6 +849,15 @@ async function exportMonthlySF2(
     setCellFormula(ws, `AS${attendanceRateRow}`, `IF(AS${attendanceRow}=0,0,AS${totalPresentRow}/AS${attendanceRow})`);
     setCellFormula(ws, `AT${attendanceRateRow}`, `IF(AT${attendanceRow}=0,0,AT${totalPresentRow}/AT${attendanceRow})`);
 
+    const setRemarkSummary = (row: number, summary: { male: number; female: number; total: number }) => {
+        setCellValue(ws, `AR${row}`, summary.male);
+        setCellValue(ws, `AS${row}`, summary.female);
+        setCellFormula(ws, `AT${row}`, `AR${row}+AS${row}`, summary.total);
+    };
+    setRemarkSummary(summaryStartRow + 16, remarkSummary["Dropped out"]);
+    setRemarkSummary(summaryStartRow + 18, remarkSummary["Transferred Out"]);
+    setRemarkSummary(summaryStartRow + 20, remarkSummary["Transferred In"]);
+
     [74, 80].forEach((templateRow) => {
         const expandedRow = templateRow + maleRowDelta + femaleRowDelta;
         clearCellPreserveFormat(ws, `AN${expandedRow}`);
@@ -835,6 +898,9 @@ async function exportMonthlySF2(
         { width: 16 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 42 },
     ];
     detailWs.views = [{ state: "frozen", ySplit: 4 }];
+
+    setWorksheetFontSize(ws, 9);
+    setWorksheetFontSize(detailWs, 9);
 
     const out = await workbook.xlsx.writeBuffer();
     const safeSection = sectionName.replace(/[^a-z0-9]+/gi, "_");
@@ -1002,9 +1068,108 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
     const [holidayDates, setHolidayDates] = useState<string[]>([]);
     const [configuredHolidayDates, setConfiguredHolidayDates] = useState<string[]>([]);
     const [availableHolidayDates, setAvailableHolidayDates] = useState<string[]>([]);
+    const [showRemarkAction, setShowRemarkAction] = useState(false);
+    const [remarkStudents, setRemarkStudents] = useState<RemarkActionStudent[]>([]);
+    const [remarkStudentIdsWithSavedRemarks, setRemarkStudentIdsWithSavedRemarks] = useState<number[]>([]);
+    const [loadingRemarkStudents, setLoadingRemarkStudents] = useState(false);
+    const [savingRemark, setSavingRemark] = useState(false);
+    const [remarkStudentDbId, setRemarkStudentDbId] = useState("");
+    const [remarkStudentSearch, setRemarkStudentSearch] = useState("");
+    const [isRemarkStudentPickerOpen, setIsRemarkStudentPickerOpen] = useState(false);
+    const [remarkType, setRemarkType] = useState<"" | MonthlyStudentRemark["remark_type"]>("");
+    const [remarkDate, setRemarkDate] = useState("");
+    const [remarkNote, setRemarkNote] = useState("");
+    const [remarkSchoolName, setRemarkSchoolName] = useState("");
 
     // Build selectable years (current year and 2 previous)
     const years = [now.getFullYear(), now.getFullYear() - 1, now.getFullYear() - 2];
+    const selectedMonthStart = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`;
+    const selectedMonthEnd = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-${String(new Date(selectedYear, selectedMonth, 0).getDate()).padStart(2, "0")}`;
+    const normalizedRemarkStudentSearch = remarkStudentSearch.trim().toLocaleLowerCase();
+    const filteredRemarkStudents = remarkStudents
+        .filter(student => {
+            const isSelected = String(student.id) === remarkStudentDbId;
+            return isSelected || !normalizedRemarkStudentSearch || formatRemarkStudentName(student).toLocaleLowerCase().includes(normalizedRemarkStudentSearch);
+        })
+        .sort((a, b) => formatRemarkStudentName(a).localeCompare(formatRemarkStudentName(b)));
+    const selectedRemarkStudent = remarkStudents.find(student => String(student.id) === remarkStudentDbId) ?? null;
+    const selectedRemarkStudentHasSavedRemark = selectedRemarkStudent
+        ? remarkStudentIdsWithSavedRemarks.includes(selectedRemarkStudent.id)
+        : false;
+
+    async function openRemarkAction() {
+        setError("");
+        setRemarkDate("");
+        setRemarkStudentSearch("");
+        setIsRemarkStudentPickerOpen(false);
+        setShowRemarkAction(current => !current);
+        if (showRemarkAction) return;
+        setLoadingRemarkStudents(true);
+        try {
+            const sectionParam = activeSection ? `?section=${encodeURIComponent(activeSection)}` : "";
+            const response = await fetch(`/api/students/remarks${sectionParam}`, { cache: "no-store" });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.message || "Unable to load students.");
+            setRemarkStudents(Array.isArray(data.students) ? data.students : []);
+            const savedRemarkStudentIds: number[] = Array.isArray(data.remarks)
+                ? (data.remarks as Array<{ student_db_id?: unknown }>)
+                    .map((remark) => Number(remark.student_db_id))
+                    .filter(Number.isSafeInteger)
+                : [];
+            setRemarkStudentIdsWithSavedRemarks([...new Set(savedRemarkStudentIds)]);
+        } catch (remarkError) {
+            setError(remarkError instanceof Error ? remarkError.message : "Unable to load students for remarks.");
+        } finally {
+            setLoadingRemarkStudents(false);
+        }
+    }
+
+    async function saveRemark() {
+        if (!remarkStudentDbId || !remarkType || !remarkDate) {
+            setError("Select a student, a remark, and the effectivity date.");
+            return;
+        }
+        if (selectedRemarkStudentHasSavedRemark) {
+            setError("This student already has a saved remark. Edit it from View Actions on the Students page.");
+            return;
+        }
+        if (!remarkDate.startsWith(`${selectedYear}-${String(selectedMonth).padStart(2, "0")}-`)) {
+            setError("The remark date must be in the selected export month.");
+            return;
+        }
+        if (remarkType === "Dropped out" && !remarkNote.trim()) {
+            setError("Enter the reason for dropping out.");
+            return;
+        }
+        if (remarkType !== "Dropped out" && !remarkSchoolName.trim()) {
+            setError("Enter the school name for this transfer.");
+            return;
+        }
+        setSavingRemark(true); setError("");
+        try {
+            const response = await fetch("/api/students/remarks", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    studentDbId: Number(remarkStudentDbId),
+                    remarkType,
+                    remarkDate,
+                    remarkNote,
+                    remarkSchoolName,
+                    exportMonth: selectedMonth,
+                    exportYear: selectedYear,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.message || "Unable to save the student remark.");
+            setRemarkStudentDbId(""); setRemarkStudentSearch(""); setIsRemarkStudentPickerOpen(false); setRemarkType(""); setRemarkNote(""); setRemarkSchoolName("");
+            setShowRemarkAction(false); setPreview(null);
+        } catch (remarkError) {
+            setError(remarkError instanceof Error ? remarkError.message : "Unable to save the student remark.");
+        } finally {
+            setSavingRemark(false);
+        }
+    }
     async function fetchMonthlyData(): Promise<MonthlyAttendanceData | null> {
         setIsLoading(true); setError("");
         try {
@@ -1017,6 +1182,14 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                     schoolDays: Array.isArray(data.schoolDays) ? data.schoolDays as string[] : [],
                     holidayDates: Array.isArray(data.holidayDates) ? data.holidayDates as string[] : [],
                     studentCount: Number(data.studentCount ?? 0),
+                    remarksByStudentId: data.remarksByStudentId && typeof data.remarksByStudentId === "object"
+                        ? data.remarksByStudentId as Record<string, MonthlyStudentRemark[]> : {},
+                    remarkSummary: data.remarkSummary && typeof data.remarkSummary === "object"
+                        ? data.remarkSummary as MonthlyRemarkSummary : {
+                            "Dropped out": { male: 0, female: 0, total: 0 },
+                            "Transferred In": { male: 0, female: 0, total: 0 },
+                            "Transferred Out": { male: 0, female: 0, total: 0 },
+                        },
                     schoolYearLabel: typeof data.schoolYearLabel === "string" ? data.schoolYearLabel : null,
                 };
                 setAvailableHolidayDates(monthlyData.schoolDays);
@@ -1091,6 +1264,8 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             Array.from(new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates])).sort(),
             monthlyData.schoolDays,
             monthlyData.schoolYearLabel,
+            monthlyData.remarksByStudentId,
+            monthlyData.remarkSummary,
         );
     }
 
@@ -1141,7 +1316,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                             <div className="relative">
                                 <select
                                     value={selectedMonth}
-                                    onChange={e => { setSelectedMonth(Number(e.target.value)); setPreview(null); setError(""); setHolidayDates([]); }}
+                                    onChange={e => { setSelectedMonth(Number(e.target.value)); setRemarkDate(""); setPreview(null); setError(""); setHolidayDates([]); }}
                                     className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition">
                                     {MONTH_NAMES.map((name, i) => (
                                         <option key={i + 1} value={i + 1}>{name}</option>
@@ -1155,7 +1330,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                             <div className="relative">
                                 <select
                                     value={selectedYear}
-                                    onChange={e => { setSelectedYear(Number(e.target.value)); setPreview(null); setError(""); setHolidayDates([]); }}
+                                    onChange={e => { setSelectedYear(Number(e.target.value)); setRemarkDate(""); setPreview(null); setError(""); setHolidayDates([]); }}
                                     className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition">
                                     {years.map(y => <option key={y} value={y}>{y}</option>)}
                                 </select>
@@ -1172,6 +1347,93 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                             <p className="text-[11px] text-amber-600 mt-1 flex items-center justify-center gap-1">
                                 <AlertCircle className="w-3 h-3" /> This month is in the future
                             </p>
+                        )}
+                    </div>
+
+                    <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-xs font-bold text-blue-800">Student Remarks</p>
+                                <p className="mt-0.5 text-[11px] leading-relaxed text-blue-700">Save a dropout or transfer for the selected month. It is written to the student record, the SF2 Remarks column, and the M/F/Total summary.</p>
+                            </div>
+                            <button type="button" onClick={() => void openRemarkAction()} disabled={loadingRemarkStudents || savingRemark}
+                                className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
+                                <Pencil className="h-3.5 w-3.5" /> Remarks
+                            </button>
+                        </div>
+                        {showRemarkAction && (
+                            <div className="mt-4 grid grid-cols-1 gap-3 border-t border-blue-200 pt-4">
+                                <div className="text-xs font-semibold text-slate-600">
+                                    <span>Student</span>
+                                    <div className="relative mt-1.5">
+                                        <button type="button" onClick={() => setIsRemarkStudentPickerOpen(open => !open)} disabled={loadingRemarkStudents || savingRemark}
+                                            className="flex h-10 w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 text-left text-sm font-normal text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
+                                            <span className={selectedRemarkStudent ? "truncate" : "text-slate-400"}>
+                                                {loadingRemarkStudents ? "Loading students…" : selectedRemarkStudent ? formatRemarkStudentName(selectedRemarkStudent) : "Select student"}
+                                            </span>
+                                            <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                                        </button>
+                                        {isRemarkStudentPickerOpen && (
+                                            <div className="absolute z-40 mt-2 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                                                <div className="border-b border-slate-100 p-2">
+                                                    <div className="relative">
+                                                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                                        <input autoFocus value={remarkStudentSearch} onChange={event => setRemarkStudentSearch(event.target.value)} disabled={savingRemark}
+                                                            placeholder="Search by student name..."
+                                                            className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm font-normal text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                                    </div>
+                                                </div>
+                                                <div className="max-h-48 overflow-y-auto py-1">
+                                                    {filteredRemarkStudents.length === 0 ? (
+                                                        <p className="px-3 py-2 text-sm font-normal text-slate-400">No students match that name</p>
+                                                    ) : filteredRemarkStudents.map(student => (
+                                                        <button key={student.id} type="button" onClick={() => { setRemarkStudentDbId(String(student.id)); setRemarkStudentSearch(""); setRemarkType(""); setRemarkDate(""); setRemarkNote(""); setRemarkSchoolName(""); setIsRemarkStudentPickerOpen(false); }}
+                                                            className={`flex w-full px-3 py-2 text-left text-sm font-normal transition-colors hover:bg-emerald-50 ${String(student.id) === remarkStudentDbId ? "bg-emerald-50 text-emerald-700" : "text-slate-700"}`}>
+                                                            {formatRemarkStudentName(student)}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                {selectedRemarkStudentHasSavedRemark ? (
+                                    <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-800">
+                                        This student already has a saved remark. To change it, use <strong>View Actions</strong> on <strong>Students</strong>.
+                                    </div>
+                                ) : <>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                        <label className="text-xs font-semibold text-slate-600">Remark type
+                                            <select value={remarkType} onChange={event => { setRemarkType(event.target.value as typeof remarkType); setRemarkNote(""); setRemarkSchoolName(""); }} disabled={savingRemark}
+                                                className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
+                                                <option value="">Select remark</option>
+                                                <option value="Dropped out">Dropped out</option>
+                                                <option value="Transferred In">Transferred In</option>
+                                                <option value="Transferred Out">Transferred Out</option>
+                                            </select>
+                                        </label>
+                                        <label className="text-xs font-semibold text-slate-600">Effectivity date
+                                            <input type="date" value={remarkDate} min={selectedMonthStart} max={selectedMonthEnd} onChange={event => setRemarkDate(event.target.value)} disabled={savingRemark}
+                                                className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                        </label>
+                                    </div>
+                                    {remarkType === "Dropped out" ? (
+                                        <label className="text-xs font-semibold text-slate-600">Reason for dropping out (required SF2 note)
+                                            <input value={remarkNote} onChange={event => setRemarkNote(event.target.value)} disabled={savingRemark} placeholder="Reason / legend detail"
+                                                className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                        </label>
+                                    ) : remarkType ? (
+                                        <label className="text-xs font-semibold text-slate-600">{remarkType === "Transferred In" ? "School transferred from" : "School transferred to"} (required SF2 note)
+                                            <input value={remarkSchoolName} onChange={event => setRemarkSchoolName(event.target.value)} disabled={savingRemark} placeholder="Name of school"
+                                                className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                        </label>
+                                    ) : null}
+                                    <button type="button" onClick={() => void saveRemark()} disabled={savingRemark || loadingRemarkStudents}
+                                        className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                        {savingRemark ? "Saving…" : "Save Remark"}
+                                    </button>
+                                </>}
+                            </div>
                         )}
                     </div>
 
@@ -1693,6 +1955,15 @@ export default function AdviserAttendancePage() {
     // ── Monthly export modal ──
     const [showMonthlyExport, setShowMonthlyExport] = useState(false);
     const [showExcuseApproval, setShowExcuseApproval] = useState(false);
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("openMonthlyExport") !== "1") return;
+        setShowMonthlyExport(true);
+        params.delete("openMonthlyExport");
+        const query = params.toString();
+        window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    }, []);
 
     // ── Class session ──
     const [classSession, setClassSession] = useState<ClassSessionInfo | null>(null);

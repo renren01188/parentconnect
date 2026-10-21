@@ -53,6 +53,17 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const STUDENT_REMARK_OPTIONS = ["Dropped out", "Transferred In", "Transferred Out"] as const;
+type StudentRemark = {
+  id: number;
+  remark_type: string;
+  effectivity_date: string;
+  note: string;
+  school_name: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 interface StudentData {
   id: number;
   student_id: string;
@@ -77,6 +88,7 @@ interface StudentData {
   password_set: number;
   parent_status: string;
   birth_date?: string | null;
+  age?: number | null;
   mother_tongue?: string | null;
   ip_ethnic_group?: string | null;
   religion?: string | null;
@@ -86,6 +98,8 @@ interface StudentData {
   province?: string | null;
   learning_modality?: string | null;
   family_members?: { role: string; first_name: string | null; middle_name: string | null; last_name: string | null; relationship: string | null; contact_number: string | null }[];
+  remarks?: StudentRemark[];
+  latest_remark?: StudentRemark | null;
 }
 
 type FamilyMemberForm = {
@@ -98,6 +112,7 @@ type StudentForm = {
   grade: string; section: string;
   parentFirstName: string; parentMiddleName: string; parentLastName: string; parentSuffix: string;
   relationship: string; contactNumber: string; email: string; address: string;
+  remarkId: number | null; remarkType: string; remarkDate: string; remarkNote: string; remarkSchoolName: string;
   familyMembers: FamilyMemberForm[];
 };
 const blankFamilyMembers = (): FamilyMemberForm[] => [
@@ -220,6 +235,7 @@ export default function StudentViewPage() {
     parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
     relationship: "", contactNumber: "", email: "",
     address: "",   // ← new
+    remarkId: null, remarkType: "", remarkDate: "", remarkNote: "", remarkSchoolName: "",
     familyMembers: blankFamilyMembers(),
   });
   const [originalGrade,   setOriginalGrade]   = useState("");
@@ -256,6 +272,11 @@ export default function StudentViewPage() {
           contactNumber:   d.contact_number      || "",
           email:           d.parent_email        || "",
           address:         d.parent_address      || "",  // ← new
+          remarkId:        d.latest_remark?.id ?? null,
+          remarkType:      d.latest_remark?.remark_type ?? "",
+          remarkDate:      d.latest_remark?.effectivity_date ?? "",
+          remarkNote:      d.latest_remark?.note ?? "",
+          remarkSchoolName:d.latest_remark?.school_name ?? "",
         };
         setForm({ ...f, familyMembers: familyFormFrom(d.family_members) });
         setOriginalGrade(d.grade   || "");
@@ -319,6 +340,11 @@ export default function StudentViewPage() {
   if (touched.studentId       && !form.studentId.trim())       E.studentId       = "Student ID is required.";
   if (touched.grade           && !form.grade)                  E.grade           = "Grade is required.";
   if (touched.section         && !form.section.trim())         E.section         = "Section is required.";
+  if (form.remarkType && touched.remarkDate && !form.remarkDate) E.remarkDate = "Transfer or dropout date is required.";
+  if (form.remarkType === "Dropped out" && touched.remarkNote && !form.remarkNote.trim()) E.remarkNote = "Enter the reason for dropping out.";
+  if ((form.remarkType === "Transferred In" || form.remarkType === "Transferred Out") && touched.remarkSchoolName && !form.remarkSchoolName.trim()) {
+    E.remarkSchoolName = "Enter the school name.";
+  }
   if (parentAccountLinked && touched.parentFirstName && !form.parentFirstName.trim()) E.parentFirstName = "First name is required.";
   if (parentAccountLinked && touched.parentLastName  && !form.parentLastName.trim())  E.parentLastName  = "Last name is required.";
   if (parentAccountLinked && touched.relationship    && !form.relationship)           E.relationship    = "Relationship is required.";
@@ -342,6 +368,7 @@ export default function StudentViewPage() {
     setTouched({
       firstName: true, lastName: true, gender: true, studentId: true,
       grade: true, section: true,
+      remarkDate: true, remarkNote: true, remarkSchoolName: true,
       ...(parentAccountLinked ? {
         parentFirstName: true, parentLastName: true,
         relationship: true, contactNumber: true, email: true,
@@ -355,10 +382,20 @@ export default function StudentViewPage() {
     setSaving(true); setSaveError("");
     try {
       const res  = await fetch(`/api/students/${id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          ...form,
+          remark: form.remarkType ? {
+            id: form.remarkId,
+            remarkType: form.remarkType,
+            remarkDate: form.remarkDate,
+            remarkNote: form.remarkNote,
+            remarkSchoolName: form.remarkSchoolName,
+          } : null,
+        }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.message || "Failed to save.");
+      const savedRemark = (json.remark ?? null) as StudentRemark | null;
       setStudent(prev => prev ? {
         ...prev,
         first_name: form.firstName, middle_name: form.middleName,
@@ -380,7 +417,12 @@ export default function StudentViewPage() {
             ? form.contactNumber || null
             : prev.family_members?.find(current => current.role === member.role)?.contact_number || null,
         })),
+        remarks: savedRemark
+          ? [savedRemark, ...(prev.remarks ?? []).filter(current => current.id !== savedRemark.id)]
+          : prev.remarks,
+        latest_remark: savedRemark ?? prev.latest_remark,
       } : prev);
+      if (savedRemark) setForm(current => ({ ...current, remarkId: savedRemark.id }));
       setOriginalGrade(form.grade);
       setOriginalSection(form.section);
       setSaveSuccess(true); setEditing(false); setTouched({}); setShowConfirm(false);
@@ -409,6 +451,11 @@ export default function StudentViewPage() {
       contactNumber:    student.contact_number     || "",
       email:            student.parent_email       || "",
       address:          student.parent_address     || "",  // ← new
+      remarkId:         student.latest_remark?.id ?? null,
+      remarkType:       student.latest_remark?.remark_type ?? "",
+      remarkDate:       student.latest_remark?.effectivity_date ?? "",
+      remarkNote:       student.latest_remark?.note ?? "",
+      remarkSchoolName: student.latest_remark?.school_name ?? "",
       familyMembers: familyFormFrom(student.family_members),
     });
     setTouched({}); setSaveError(""); setEditing(false);
@@ -554,6 +601,38 @@ export default function StudentViewPage() {
                         onBlur={() => setTouched(p => ({ ...p, studentId: true }))} placeholder="e.g. 20261234" inputMode="numeric" />
                     </Field>
                   </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">SF2 Remarks</p>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field label="Remark">
+                        <select className={inputOk} value={form.remarkType}
+                          onChange={e => { set("remarkType", e.target.value); setTouched(p => ({ ...p, remarkDate: false, remarkNote: false, remarkSchoolName: false })); }}>
+                          <option value="">No new remark</option>
+                          {STUDENT_REMARK_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      </Field>
+                      {form.remarkType && (
+                        <Field label={form.remarkType === "Dropped out" ? "Dropout Date" : "Transfer Date"} required error={E.remarkDate}>
+                          <input type="date" className={E.remarkDate ? inputErr : inputOk} value={form.remarkDate}
+                            onChange={e => set("remarkDate", e.target.value)} onBlur={() => setTouched(p => ({ ...p, remarkDate: true }))} />
+                        </Field>
+                      )}
+                      {form.remarkType === "Dropped out" && (
+                        <Field label="Reason for Dropping Out" required error={E.remarkNote}>
+                          <input className={E.remarkNote ? inputErr : inputOk} value={form.remarkNote}
+                            onChange={e => set("remarkNote", e.target.value)} onBlur={() => setTouched(p => ({ ...p, remarkNote: true }))}
+                            placeholder="SF2 reason / legend detail" />
+                        </Field>
+                      )}
+                      {(form.remarkType === "Transferred In" || form.remarkType === "Transferred Out") && (
+                        <Field label={form.remarkType === "Transferred In" ? "School Transferred From" : "School Transferred To"} required error={E.remarkSchoolName}>
+                          <input className={E.remarkSchoolName ? inputErr : inputOk} value={form.remarkSchoolName}
+                            onChange={e => set("remarkSchoolName", e.target.value)} onBlur={() => setTouched(p => ({ ...p, remarkSchoolName: true }))}
+                            placeholder="Name of school" />
+                        </Field>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -568,10 +647,16 @@ export default function StudentViewPage() {
                     <ReviewRow label="Gender"     value={student.gender} />
                     <ReviewRow label="RFID Card"  value={student.rfid_card || "Not assigned"} />
                     <ReviewRow label="Birth Date" value={student.birth_date || "â€”"} />
-                    <ReviewRow label="Age" value={getStudentAge(student.birth_date)} />
+                    <ReviewRow label="Age" value={student.age == null ? getStudentAge(student.birth_date) : String(student.age)} />
                     <ReviewRow label="Mother Tongue" value={student.mother_tongue || "â€”"} />
                     <ReviewRow label="IP / Ethnic Group" value={student.ip_ethnic_group || "—"} />
                     <ReviewRow label="Religion" value={student.religion || "â€”"} />
+                    <ReviewRow label="Remark" value={student.latest_remark?.remark_type || "None"} />
+                    {student.latest_remark && <>
+                      <ReviewRow label="Remark Date" value={student.latest_remark.effectivity_date} />
+                      <ReviewRow label={student.latest_remark.remark_type === "Dropped out" ? "Dropout Reason" : "Remark Note"} value={student.latest_remark.note} />
+                      {student.latest_remark.remark_type !== "Dropped out" && <ReviewRow label="School" value={student.latest_remark.school_name || "—"} />}
+                    </>}
                     <ReviewRow label="Learning Modality" value={student.learning_modality || "â€”"} />
                     <ReviewRow label="Address" value={[student.house_street_sitio_purok, student.barangay, student.municipality_city, student.province].filter(Boolean).join(", ") || "â€”"} />
                     <ReviewRow label="Father / Mother / Guardian" value={(student.family_members ?? []).map(member => `${member.role}: ${[member.last_name, member.first_name, member.middle_name].filter(Boolean).join(", ")}${member.relationship ? ` (${member.relationship})` : ""}${member.contact_number ? ` · ${member.contact_number}` : ""}`).join(" | ") || "â€”"} />

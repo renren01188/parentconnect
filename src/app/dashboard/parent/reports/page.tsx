@@ -693,8 +693,8 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
                 <>
                   <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 800, color: "#0f172a" }}>Terms of Agreement</h3>
                     <p style={{ margin: "0 0 10px" }}>Legacy terms content removed.</p>
-                    <p style={{ margin: "0 0 10px" }}>By submitting this report, you understand that it will first be reviewed by your Class Adviser and may be escalated through the school’s reporting process: Adviser, Guidance Counselor, then Principal.</p>
-                    <p style={{ margin: "0 0 10px" }}>If you select “Yes,” you consent to higher authorities viewing the previous conversation history between you and the Class Adviser and between you and the Guidance Counselor when the report reaches them. This helps them understand the full context of your concern.</p>
+                    <p style={{ margin: "0 0 10px" }}>By submitting this report, you understand that it will first be reviewed by your Class Adviser and may be escalated through the school’s reporting process: Adviser, Guidance, then Principal.</p>
+                    <p style={{ margin: "0 0 10px" }}>If you select “Yes,” you consent to higher authorities viewing the previous conversation history between you and the Class Adviser and Guidance when the report reaches them. This helps them understand the full context of your concern.</p>
                     <p style={{ margin: 0 }}>If you select “No,” higher authorities will not be shown those previous conversations after escalation. They may still view the report details and messages addressed to them. You may choose either option before accepting these Terms of Agreement.</p>
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
@@ -1740,7 +1740,7 @@ function ParentReportsPageContent() {
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: "10px 14px" }}>
                       <AlertTriangle style={{ width: 15, height: 15, color: "#be123c", flexShrink: 0, marginTop: 1 }} />
                       <p style={{ fontSize: 12, color: "#9f1239", fontWeight: 600, margin: 0 }}>
-                        This concern has been escalated to the <strong>Guidance Counselor</strong>. You will be contacted shortly for a follow-up.
+                        This concern has been escalated to <strong>Guidance</strong>. You will be contacted shortly for a follow-up.
                       </p>
                     </div>
                   )}
