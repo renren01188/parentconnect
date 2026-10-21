@@ -8,6 +8,7 @@ import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/
 import { logAudit } from "@/lib/audit";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { isParentAccountOwnerRole } from "@/lib/parentAccountOwner";
+import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 function validEmail(value: unknown) {
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     const { data: parent, error: parentError } = await supabase
       .from("parents")
-      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, account_owner_role, requires_account_setup, status, archive_status")
+      .select("id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, account_owner_role, requires_account_setup, status, archive_status")
       .eq("id", parentId)
       .maybeSingle();
     if (parentError) throw parentError;
@@ -73,6 +74,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: "Enter a valid email address, or leave the field blank." }, { status: 400 });
     }
     const email = savedEmail ?? suppliedEmail ?? null;
+    const savedContactNumber = normalizeParentLoginContactNumber(parent.contact_number);
+    // Imported accounts that began with an email but no mobile number must
+    // provide one before setup is complete. Phone-only accounts retain their
+    // existing email-optional setup flow.
+    const contactNumberRequired = savedEmail !== null && savedContactNumber === null;
+    const suppliedContactNumber = normalizeParentLoginContactNumber(body?.contactNumber);
+    if (contactNumberRequired && !suppliedContactNumber) {
+      return NextResponse.json({ success: false, message: "Enter a valid Philippine mobile number, such as 09171234567." }, { status: 400 });
+    }
 
     if (!savedEmail && suppliedEmail) {
       const { data: conflicts, error: conflictError } = await supabase
@@ -87,6 +97,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (contactNumberRequired) {
+      const { data: conflicts, error: conflictError } = await supabase
+        .from("parents")
+        .select("id")
+        .eq("login_contact_number", suppliedContactNumber)
+        .neq("id", parentId)
+        .limit(1);
+      if (conflictError) throw conflictError;
+      if ((conflicts ?? []).length > 0) {
+        return NextResponse.json({ success: false, message: "This mobile number is already in use." }, { status: 409 });
+      }
+    }
+
     const password = await bcrypt.hash(newPassword, 12);
     const update = {
       password,
@@ -97,6 +120,7 @@ export async function POST(request: NextRequest) {
       requires_account_setup: false,
       account_setup_completed_at: new Date().toISOString(),
       ...(savedEmail || !suppliedEmail ? {} : { email: suppliedEmail }),
+      ...(contactNumberRequired ? { contact_number: suppliedContactNumber } : {}),
     };
     const { error: updateError } = await supabase
       .from("parents")

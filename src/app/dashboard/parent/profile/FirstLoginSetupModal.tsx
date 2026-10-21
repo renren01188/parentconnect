@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle, Lock, Mail, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle, Lock, Mail, Phone, ShieldCheck } from "lucide-react";
 
 type Props = {
   currentEmail: string;
+  currentContactNumber: string;
   onCompleted: () => Promise<void> | void;
 };
 
@@ -12,9 +13,19 @@ function hasEmail(value: string) {
   return /^\S+@\S+\.\S+$/.test(value.trim());
 }
 
-export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Props) {
+function hasMobileNumber(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return /^09\d{9}$/.test(digits)
+    || /^9\d{9}$/.test(digits)
+    || /^639\d{9}$/.test(digits);
+}
+
+export default function FirstLoginSetupModal({ currentEmail, currentContactNumber, onCompleted }: Props) {
   const emailAlreadySaved = hasEmail(currentEmail);
+  const contactNumberAlreadySaved = hasMobileNumber(currentContactNumber);
+  const contactNumberRequired = emailAlreadySaved && !contactNumberAlreadySaved;
   const [email, setEmail] = useState(currentEmail);
+  const [contactNumber, setContactNumber] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -28,6 +39,10 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
     const enteredEmail = email.trim();
     if (!emailAlreadySaved && enteredEmail && !hasEmail(enteredEmail)) {
       setError("Enter a valid email address, or leave the field blank.");
+      return;
+    }
+    if (contactNumberRequired && !hasMobileNumber(contactNumber)) {
+      setError("Enter a valid Philippine mobile number, such as 09171234567.");
       return;
     }
     if (newPassword.length < 8 || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
@@ -46,6 +61,7 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...(emailAlreadySaved ? {} : { email: enteredEmail }),
+          ...(contactNumberRequired ? { contactNumber } : {}),
           newPassword,
           confirmPassword,
         }),
@@ -85,7 +101,9 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
 
         <form onSubmit={(event) => { void submit(event); }} className="space-y-4 px-5 py-5 sm:px-6">
           <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm leading-5 text-blue-800">
-            Please complete your account setup by changing your password before continuing to your dashboard.
+            {contactNumberRequired
+              ? "Add your mobile number and change your password before continuing to your dashboard."
+              : "Please complete your account setup by changing your password before continuing to your dashboard."}
           </div>
 
           <label className="block">
@@ -102,10 +120,41 @@ export default function FirstLoginSetupModal({ currentEmail, onCompleted }: Prop
             />
             <p className="mt-1.5 text-xs leading-5 text-slate-500">
               {emailAlreadySaved
-                ? "Your existing email is already saved. You only need to change your password."
+                ? contactNumberRequired
+                  ? "Your existing email is already saved. Add a mobile number for SMS notifications and verification codes."
+                  : "Your existing email is already saved. You only need to change your password."
                 : "Optional: If you do not have an email address, you may leave this field blank."}
             </p>
           </label>
+
+          {contactNumberAlreadySaved ? (
+            <label className="block">
+              <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Phone className="h-3.5 w-3.5" /> Mobile Number</span>
+              <input
+                type="tel"
+                autoComplete="tel"
+                value={currentContactNumber}
+                readOnly
+                className="w-full cursor-default rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none"
+              />
+              <p className="mt-1.5 text-xs leading-5 text-slate-500">Your existing mobile number is already saved for SMS notifications and verification codes.</p>
+            </label>
+          ) : contactNumberRequired ? (
+            <label className="block">
+              <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Phone className="h-3.5 w-3.5" /> Mobile Number *</span>
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                value={contactNumber}
+                onChange={(event) => setContactNumber(event.target.value.replace(/\D/g, "").slice(0, 12))}
+                placeholder="09171234567"
+                disabled={saving}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              />
+              <p className="mt-1.5 text-xs leading-5 text-slate-500">Required for SMS attendance notifications and verification codes.</p>
+            </label>
+          ) : null}
 
           <label className="block">
             <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600"><Lock className="h-3.5 w-3.5" /> New Password *</span>

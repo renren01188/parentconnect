@@ -885,6 +885,7 @@ export default function ProfilePage() {
             {requiresAccountSetup && (
                 <FirstLoginSetupModal
                     currentEmail={profile.email}
+                    currentContactNumber={profile.phone}
                     onCompleted={finishRequiredAccountSetup}
                 />
             )}

@@ -650,6 +650,9 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
   const [loadingSession, setLoadingSession] = useState(true);
   const [apiError, setApiError] = useState("");
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
+  const loadedGradeRef = useRef<string | null>(null);
+  const dirtySessionsRef = useRef(new Set<ClassSession>());
+  const scheduleScrollRef = useRef<HTMLDivElement>(null);
 
   // Another ICT session may start, end, or reschedule a class while this
   // control panel is open. Keep this open modal in sync without polling.
@@ -662,22 +665,30 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
   }, [grades]);
 
   // Load today's sessions on mount and after an authorized class-session
-  // invalidation. The Broadcast itself contains no schedule data.
+  // invalidation. A background refresh must never replace an unsaved card.
   useEffect(() => {
+    let cancelled = false;
     async function fetchSessions() {
       if (!selectedGrade) {
+        loadedGradeRef.current = null;
+        dirtySessionsRef.current.clear();
         setMorning(emptyClassControl("Morning"));
         setAfternoon(emptyClassControl("Afternoon"));
         setLoadingSession(false);
         return;
       }
-      setLoadingSession(true);
+      const gradeChanged = loadedGradeRef.current !== selectedGrade;
+      if (gradeChanged) {
+        dirtySessionsRef.current.clear();
+        setLoadingSession(true);
+        setMorning(emptyClassControl("Morning"));
+        setAfternoon(emptyClassControl("Afternoon"));
+      }
       setApiError("");
-      setMorning(emptyClassControl("Morning"));
-      setAfternoon(emptyClassControl("Afternoon"));
       try {
         const res = await fetch(`/api/attendance/class-session?grade=${encodeURIComponent(selectedGrade)}`, { cache: "no-store" });
         const data = await res.json();
+        if (cancelled) return;
         if (data.success && data.sessions) {
           for (const s of data.sessions) {
             const ctrl: ClassControl = {
@@ -694,25 +705,49 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
               lateAfter: (s.late_after as string)?.slice(0, 5) ?? "",
               absentAfter: (s.absent_after as string)?.slice(0, 5) ?? "",
             };
-            if (s.session_type === "Morning") setMorning(ctrl);
-            else setAfternoon(ctrl);
+            if (s.session_type === "Morning" && !dirtySessionsRef.current.has("Morning")) setMorning(ctrl);
+            else if (s.session_type === "Afternoon" && !dirtySessionsRef.current.has("Afternoon")) setAfternoon(ctrl);
           }
+          loadedGradeRef.current = selectedGrade;
         } else {
           setApiError(data.message ?? "Could not load this grade's class schedule.");
         }
       } catch (e) {
+        if (cancelled) return;
         console.error("Failed to load class sessions:", e);
         setApiError("Could not load this grade's class schedule.");
       } finally {
-        setLoadingSession(false);
+        if (!cancelled && gradeChanged) setLoadingSession(false);
       }
     }
-    fetchSessions();
+    void fetchSessions();
+    return () => { cancelled = true; };
   }, [selectedGrade, sessionRefreshKey]);
 
   function handleAction(session: ClassSession, action: "start" | "end") {
     setApiError("");
     setConfirm({ session, action });
+  }
+
+  function updateScheduleTime(
+    session: ClassSession,
+    field: "scheduledStart" | "scheduledEnd" | "lateAfter" | "absentAfter",
+    value: string,
+  ) {
+    const scrollTop = scheduleScrollRef.current?.scrollTop;
+    dirtySessionsRef.current.add(session);
+    const update = (current: ClassControl): ClassControl => ({ ...current, [field]: value });
+    if (session === "Morning") setMorning(update);
+    else setAfternoon(update);
+
+    // The chooser is rendered in a portal. Restore the modal's own scroll
+    // offset after its state update so choosing an afternoon time cannot jump
+    // the user back to the top of this long modal.
+    window.requestAnimationFrame(() => {
+      if (scrollTop !== undefined && scheduleScrollRef.current) {
+        scheduleScrollRef.current.scrollTop = scrollTop;
+      }
+    });
   }
 
   async function saveSchedule(ctrl: ClassControl) {
@@ -751,6 +786,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
         absentAfter: (data.session?.absent_after as string)?.slice(0, 5) ?? prev.absentAfter,
       });
 
+      dirtySessionsRef.current.delete(ctrl.session);
       if (ctrl.session === "Morning") { setMorning(updater); setMorningSaved(true); setTimeout(() => setMorningSaved(false), 10000); }
       else { setAfternoon(updater); setAfternoonSaved(true); setTimeout(() => setAfternoonSaved(false), 10000); }
     } catch (e) {
@@ -797,6 +833,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
           ? { ...prev, status: "Active", startTime: time, endTime: null }
           : { ...prev, status: "Ended", endTime: time };
 
+      dirtySessionsRef.current.delete(confirm.session);
       if (confirm.session === "Morning") setMorning(updater);
       else setAfternoon(updater);
 
@@ -809,16 +846,9 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
     }
   }
 
-  function SessionCard({ ctrl, icon: Icon, gradient }: { ctrl: ClassControl; icon: React.ElementType; gradient: string }) {
+  function renderSessionCard(ctrl: ClassControl, Icon: React.ElementType, gradient: string) {
     const isActive = ctrl.status === "Active";
     const isEnded = ctrl.status === "Ended";
-    const updateScheduleTime = (
-      field: "scheduledStart" | "scheduledEnd" | "lateAfter" | "absentAfter",
-      value: string,
-    ) => {
-      if (ctrl.session === "Morning") setMorning((current) => ({ ...current, [field]: value }));
-      else setAfternoon((current) => ({ ...current, [field]: value }));
-    };
 
     return (
       <div className={`rounded-2xl border-2 p-4 transition-all sm:p-5 ${isActive ? "border-[#274e13] bg-[#274e13]/5" : isEnded ? "border-gray-200 bg-gray-50" : "border-gray-200 bg-white"}`}>
@@ -850,7 +880,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
             <ScheduleTimePicker
               value={ctrl.scheduledStart}
               disabled={loading}
-              onChange={(value) => updateScheduleTime("scheduledStart", value)}
+              onChange={(value) => updateScheduleTime(ctrl.session, "scheduledStart", value)}
               label="Scheduled Start"
               className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
             />
@@ -860,7 +890,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
             <ScheduleTimePicker
               value={ctrl.scheduledEnd}
               disabled={loading}
-              onChange={(value) => updateScheduleTime("scheduledEnd", value)}
+              onChange={(value) => updateScheduleTime(ctrl.session, "scheduledEnd", value)}
               label="Scheduled End"
               className="px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] disabled:opacity-50 disabled:bg-gray-50 transition"
             />
@@ -870,11 +900,11 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
         <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Late After</label>
-            <ScheduleTimePicker value={ctrl.lateAfter} disabled={loading} onChange={(value) => updateScheduleTime("lateAfter", value)} label="Late After" className="px-3 py-2 text-sm border border-amber-200 rounded-xl bg-amber-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:opacity-50" />
+            <ScheduleTimePicker value={ctrl.lateAfter} disabled={loading} onChange={(value) => updateScheduleTime(ctrl.session, "lateAfter", value)} label="Late After" className="px-3 py-2 text-sm border border-amber-200 rounded-xl bg-amber-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Absent After</label>
-            <ScheduleTimePicker value={ctrl.absentAfter} disabled={loading} onChange={(value) => updateScheduleTime("absentAfter", value)} label="Absent After" className="px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-50" />
+            <ScheduleTimePicker value={ctrl.absentAfter} disabled={loading} onChange={(value) => updateScheduleTime(ctrl.session, "absentAfter", value)} label="Absent After" className="px-3 py-2 text-sm border border-red-200 rounded-xl bg-red-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-50" />
           </div>
         </div>
         <p className="-mt-1 mb-3 text-[10px] text-gray-400">Each field accepts any valid time. Scans after Late After are Late; students without a Time In are automatically marked Absent at Absent After.</p>
@@ -948,7 +978,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
               </div>
               <button onClick={onClose} aria-label="Close class session control" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
             </div>
-            <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
+            <div ref={scheduleScrollRef} className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
                 <Info className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-700">Each grade has its own schedule. RFID scanning opens automatically during that grade&apos;s saved class time and closes after the scheduled end.</p>
@@ -981,8 +1011,8 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
                       <p className="text-xs font-semibold text-red-700">{apiError}</p>
                     </div>
                   )}
-                  <SessionCard ctrl={morning} icon={Sun} gradient="bg-gradient-to-br from-amber-400 to-orange-500" />
-                  <SessionCard ctrl={afternoon} icon={Moon} gradient="bg-gradient-to-br from-[#274e13] to-[#3a6b1e]" />
+                  {renderSessionCard(morning, Sun, "bg-gradient-to-br from-amber-400 to-orange-500")}
+                  {renderSessionCard(afternoon, Moon, "bg-gradient-to-br from-[#274e13] to-[#3a6b1e]")}
                 </>
               )}
             </div>

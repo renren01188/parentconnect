@@ -29,4 +29,18 @@ assert.doesNotMatch(picker, /document\.addEventListener\("pointerdown"/);
 
 assert.equal((page.match(/<ScheduleTimePicker/g) ?? []).length, 4);
 
+const controlStart = page.indexOf("function ClassControlModal");
+const controlEnd = page.indexOf("// â”€â”€â”€ Audit Trail Modal", controlStart);
+const control = page.slice(controlStart, controlEnd);
+
+// A save emits a dashboard invalidation. The modal must merge that response
+// without clearing the other session's unsaved picker values or scroll offset.
+assert.match(control, /const dirtySessionsRef = useRef\(new Set<ClassSession>\(\)\)/);
+assert.match(control, /if \(gradeChanged\) \{[\s\S]*?setMorning\(emptyClassControl\("Morning"\)\)[\s\S]*?setAfternoon\(emptyClassControl\("Afternoon"\)\)/);
+assert.match(control, /!dirtySessionsRef\.current\.has\("Morning"\)/);
+assert.match(control, /!dirtySessionsRef\.current\.has\("Afternoon"\)/);
+assert.match(control, /scheduleScrollRef\.current\.scrollTop = scrollTop/);
+assert.match(control, /function renderSessionCard/);
+assert.doesNotMatch(control, /<SessionCard/);
+
 console.log("class session time picker checks passed");
