@@ -1936,10 +1936,13 @@ export default function AdviserAttendancePage() {
     const [todayLogPage, setTodayLogPage] = useState(1);
 
     const [showRegisterRfid, setShowRegisterRfid] = useState(false);
-    const [rfidStudentId, setRfidStudentId] = useState("");
+    const [rfidStudentDbId, setRfidStudentDbId] = useState<number | null>(null);
+    const [rfidStudentSearch, setRfidStudentSearch] = useState("");
     const [newRfidValue, setNewRfidValue] = useState("");
+    const [newRfidScanBuffer, setNewRfidScanBuffer] = useState("");
     const [rfidMessage, setRfidMessage] = useState("Waiting for new RFID card tap...");
     const [isSavingRfid, setIsSavingRfid] = useState(false);
+    const [showRfidReplacementConfirmation, setShowRfidReplacementConfirmation] = useState(false);
 
     const [showHistory, setShowHistory] = useState(false);
     const [historyDate, setHistoryDate] = useState(toLocalDateString(new Date()));
@@ -1978,6 +1981,7 @@ export default function AdviserAttendancePage() {
     const newRfidInputRef = useRef<HTMLInputElement | null>(null);
     const scanValueRef = useRef("");
     const scanInFlightRef = useRef(false);
+    const rfidSaveInFlightRef = useRef(false);
 
     // A school-wide session can be active while this adviser's section belongs
     // to the other session. Scanning must be enabled only for matching sections.
@@ -1990,6 +1994,19 @@ export default function AdviserAttendancePage() {
     const isScanningOpen = Boolean(
         classSession && selectedSectionSession === classSession.session_type
     );
+    const normalizedRfidStudentSearch = rfidStudentSearch.trim().toLocaleLowerCase();
+    const filteredRfidStudents = students.filter((student) => {
+        if (!normalizedRfidStudentSearch) return true;
+        return [
+            buildFullName(student),
+            student.student_id,
+            student.grade,
+            student.section,
+        ].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalizedRfidStudentSearch);
+    });
+    const selectedRfidStudent = rfidStudentDbId === null
+        ? undefined
+        : students.find((student) => student.id === rfidStudentDbId);
 
     function focusScanner() { inputRef.current?.focus(); }
     function focusNewRfidScanner() { newRfidInputRef.current?.focus(); }
@@ -2297,27 +2314,79 @@ export default function AdviserAttendancePage() {
         }
     }
 
-    async function handleRegisterNewRfid() {
-        if (!rfidStudentId || !newRfidValue.trim() || isSavingRfid) return;
+    function captureNewRfid(inputValue: string) {
+        const value = resolveRfidScanValue(inputValue, newRfidScanBuffer);
+        if (!value || isSavingRfid) return;
+        setNewRfidValue(value);
+        setNewRfidScanBuffer("");
+        setRfidMessage(
+            value === newRfidValue
+                ? "The same RFID was scanned again. One card is ready to save."
+                : "RFID captured. Review the UID, then save it.",
+        );
+    }
+
+    function requestRfidSave() {
+        if (!selectedRfidStudent || !newRfidValue.trim() || rfidSaveInFlightRef.current) return;
+        const existingRfid = resolveRfidScanValue(selectedRfidStudent.rfid_card, "");
+        const nextRfid = resolveRfidScanValue(newRfidValue, "");
+        if (existingRfid && existingRfid !== nextRfid) {
+            setShowRfidReplacementConfirmation(true);
+            return;
+        }
+        void handleRegisterNewRfid(false);
+    }
+
+    async function handleRegisterNewRfid(replacing: boolean) {
+        if (!selectedRfidStudent || !newRfidValue.trim() || rfidSaveInFlightRef.current) return;
+        const cardToSave = resolveRfidScanValue(newRfidValue, "");
+        if (!cardToSave) return;
+        rfidSaveInFlightRef.current = true;
         try {
             setIsSavingRfid(true);
-            setRfidMessage("Saving new RFID card...");
+            setShowRfidReplacementConfirmation(false);
+            setRfidMessage(replacing ? "Replacing RFID card..." : "Saving new RFID card...");
             const res = await fetch("/api/students/register-rfid", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ student_id: rfidStudentId, rfid_card: newRfidValue.trim() }),
+                body: JSON.stringify({
+                    student_id: selectedRfidStudent.student_id,
+                    student_db_id: selectedRfidStudent.id,
+                    rfid_card: cardToSave,
+                    replace_existing: replacing,
+                }),
             });
             const data = await res.json();
             if (data.success) {
-                setRfidMessage("New RFID successfully assigned");
-                setRfidStudentId(""); setNewRfidValue("");
-                await loadStudents();
+                const savedRfid = resolveRfidScanValue(data.student?.rfid_card, cardToSave);
+                setStudents((currentStudents) => currentStudents.map((student) =>
+                    student.id === selectedRfidStudent.id
+                        ? { ...student, rfid_card: savedRfid }
+                        : student,
+                ));
+                setNewRfidValue("");
+                setNewRfidScanBuffer("");
+                setRfidMessage(data.message || (replacing ? "RFID successfully replaced." : "New RFID successfully assigned."));
+                // Update the server-backed roster too, while keeping the modal and
+                // reader ready for the next card immediately.
+                void loadStudents();
+                window.setTimeout(focusNewRfidScanner, 0);
             } else {
-                setRfidMessage(data.message || "Failed to register RFID");
+                if (data.requires_replacement_confirmation && data.current_rfid) {
+                    setStudents((currentStudents) => currentStudents.map((student) =>
+                        student.id === selectedRfidStudent.id
+                            ? { ...student, rfid_card: resolveRfidScanValue(data.current_rfid, "") }
+                            : student,
+                    ));
+                }
+                setRfidMessage(data.message || "Failed to register RFID.");
+                window.setTimeout(focusNewRfidScanner, 0);
             }
         } catch (error) {
             console.error("RFID register failed:", error);
-            setRfidMessage("Failed to connect to server");
+            setRfidMessage("Failed to connect to server.");
+            window.setTimeout(focusNewRfidScanner, 0);
         } finally {
+            rfidSaveInFlightRef.current = false;
             setIsSavingRfid(false);
         }
     }
@@ -2514,7 +2583,16 @@ export default function AdviserAttendancePage() {
                     <h3 className="text-sm font-bold text-slate-800">Register RFID</h3>
                     <p className="mt-1 text-xs text-slate-400">Assign a new RFID card to a student</p>
                     <button
-                        onClick={() => { setShowRegisterRfid(true); setRfidMessage("Waiting for new RFID card tap..."); setTimeout(() => focusNewRfidScanner(), 100); }}
+                        onClick={() => {
+                            setRfidStudentDbId(null);
+                            setRfidStudentSearch("");
+                            setNewRfidValue("");
+                            setNewRfidScanBuffer("");
+                            setShowRfidReplacementConfirmation(false);
+                            setRfidMessage("Search for a student, then tap a new RFID card.");
+                            setShowRegisterRfid(true);
+                            setTimeout(() => focusNewRfidScanner(), 100);
+                        }}
                         className="mt-auto min-h-11 w-full rounded-xl bg-emerald-500 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-600">
                         Register Card
                     </button>
@@ -3029,32 +3107,88 @@ export default function AdviserAttendancePage() {
                             </button>
                         </div>
                         <div className="p-4 sm:p-6">
-                            <label className="mb-1.5 block text-xs font-semibold text-slate-600">Student</label>
+                            <label htmlFor="rfid-student-search" className="mb-1.5 block text-xs font-semibold text-slate-600">Student</label>
                             <div className="relative">
-                                <select value={rfidStudentId} onChange={e => setRfidStudentId(e.target.value)}
-                                    className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition">
-                                    <option value="">{isLoadingStudents ? "Loading students..." : "Select student..."}</option>
-                                    {students.map(s => <option key={s.student_id} value={s.student_id}>{buildFullName(s)}</option>)}
-                                </select>
-                                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                <input
+                                    id="rfid-student-search"
+                                    value={rfidStudentSearch}
+                                    onChange={(event) => setRfidStudentSearch(event.target.value)}
+                                    disabled={isSavingRfid}
+                                    placeholder="Search name or student ID..."
+                                    className="h-11 w-full rounded-xl border border-slate-200 bg-white py-2 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                                />
                             </div>
+                            <div className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1" role="listbox" aria-label="Students">
+                                {isLoadingStudents ? (
+                                    <p className="px-3 py-3 text-xs text-slate-500">Loading students...</p>
+                                ) : filteredRfidStudents.length === 0 ? (
+                                    <p className="px-3 py-3 text-xs text-slate-500">No student matches that search.</p>
+                                ) : filteredRfidStudents.map((student) => {
+                                    const isSelected = selectedRfidStudent?.id === student.id;
+                                    return (
+                                        <button
+                                            key={student.id}
+                                            type="button"
+                                            role="option"
+                                            aria-selected={isSelected}
+                                            disabled={isSavingRfid}
+                                            onClick={() => {
+                                                setRfidStudentDbId(student.id);
+                                                setRfidStudentSearch("");
+                                                setNewRfidValue("");
+                                                setNewRfidScanBuffer("");
+                                                setShowRfidReplacementConfirmation(false);
+                                                setRfidMessage(student.rfid_card
+                                                    ? "This student already has an RFID. Scan a new card to replace it."
+                                                    : "Student selected. Tap a new RFID card.");
+                                                window.setTimeout(focusNewRfidScanner, 0);
+                                            }}
+                                            className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed ${isSelected ? "bg-emerald-50 text-emerald-900" : "text-slate-700 hover:bg-slate-50"}`}
+                                        >
+                                            <span className="min-w-0">
+                                                <span className="block truncate text-sm font-semibold">{buildFullName(student)}</span>
+                                                <span className="block truncate text-xs text-slate-400">{student.student_id}</span>
+                                            </span>
+                                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${student.rfid_card ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}`}>
+                                                {student.rfid_card ? "RFID registered" : "No RFID"}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {selectedRfidStudent && (
+                                <div className={`mt-2.5 rounded-xl px-3 py-2.5 text-xs ${selectedRfidStudent.rfid_card ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>
+                                    <span className="font-bold">{buildFullName(selectedRfidStudent)}</span>{" "}
+                                    {selectedRfidStudent.rfid_card
+                                        ? <>already has RFID: <span className="font-mono font-bold">{selectedRfidStudent.rfid_card}</span>. Save a different card only to replace it.</>
+                                        : "does not have an RFID registered yet."}
+                                </div>
+                            )}
                             <div className="mt-5">
                                 <label className="mb-1.5 block text-xs font-semibold text-slate-600">New RFID Card</label>
-                                <input ref={newRfidInputRef} value={newRfidValue}
+                                <input ref={newRfidInputRef} value={newRfidScanBuffer}
                                     onChange={e => {
+                                        if (isSavingRfid) return;
                                         const cleaned = e.target.value.replace(/\r|\n/g, "").trim();
+                                        setNewRfidScanBuffer(cleaned);
                                         setNewRfidValue(cleaned);
-                                        setRfidMessage(cleaned ? "RFID captured. Review the UID, then click Save New RFID." : "Waiting for new RFID card tap...");
+                                        setRfidMessage(cleaned ? "RFID captured. Press Enter or save when ready." : "Waiting for new RFID card tap...");
                                     }}
-                                    onKeyDown={e => { if (e.key === "Enter") e.preventDefault(); }}
+                                    onKeyDown={e => {
+                                        if (e.key !== "Enter") return;
+                                        e.preventDefault();
+                                        captureNewRfid(e.currentTarget.value);
+                                    }}
+                                    disabled={isSavingRfid}
                                     className="absolute opacity-0 pointer-events-none" />
-                                <button onClick={focusNewRfidScanner}
-                                    className="flex h-36 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors">
+                                <button type="button" onClick={focusNewRfidScanner} disabled={isSavingRfid}
+                                    className="flex h-36 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
                                     <CreditCard className="mb-2 h-8 w-8" />
                                     <span className="text-sm font-bold">Tap New RFID Card</span>
-                                    <span className="mt-1 text-xs text-emerald-500">Click here, then scan the replacement card</span>
+                                    <span className="mt-1 text-xs text-emerald-500">Click here, then scan the card</span>
                                 </button>
-                                <p className="mt-2.5 text-xs text-slate-500">{rfidMessage}</p>
+                                <p className="mt-2.5 text-xs text-slate-500" aria-live="polite">{rfidMessage}</p>
                                 {newRfidValue && (
                                     <div className="mt-2.5 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
                                         New RFID UID: <span className="font-bold text-slate-800">{newRfidValue}</span>
@@ -3062,17 +3196,40 @@ export default function AdviserAttendancePage() {
                                 )}
                             </div>
                             <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                                <button onClick={() => setShowRegisterRfid(false)}
-                                    className="min-h-11 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 sm:w-auto">
+                                <button type="button" onClick={() => setShowRegisterRfid(false)} disabled={isSavingRfid}
+                                    className="min-h-11 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto">
                                     Cancel
                                 </button>
-                                <button onClick={handleRegisterNewRfid} disabled={!rfidStudentId || !newRfidValue.trim() || isSavingRfid}
+                                <button type="button" onClick={requestRfidSave} disabled={!selectedRfidStudent || !newRfidValue.trim() || isSavingRfid}
                                     className="min-h-11 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-60 sm:w-auto">
-                                    {isSavingRfid ? "Saving..." : "Save New RFID"}
+                                    {isSavingRfid
+                                        ? "Saving..."
+                                        : selectedRfidStudent?.rfid_card ? "Replace RFID" : "Save New RFID"}
                                 </button>
                             </div>
                         </div>
                     </div>
+                    {showRfidReplacementConfirmation && selectedRfidStudent && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-labelledby="replace-rfid-title">
+                            <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
+                                <h4 id="replace-rfid-title" className="text-base font-extrabold text-slate-800">Replace registered RFID?</h4>
+                                <p className="mt-2 text-sm leading-6 text-slate-600">
+                                    {buildFullName(selectedRfidStudent)} already has <span className="font-mono font-bold">{selectedRfidStudent.rfid_card}</span> registered. Replace it with <span className="font-mono font-bold">{newRfidValue}</span>?
+                                </p>
+                                <p className="mt-2 text-xs text-amber-700">The previous RFID will no longer be assigned to this student.</p>
+                                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                                    <button type="button" onClick={() => { setShowRfidReplacementConfirmation(false); window.setTimeout(focusNewRfidScanner, 0); }}
+                                        className="min-h-11 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">
+                                        Cancel
+                                    </button>
+                                    <button type="button" onClick={() => void handleRegisterNewRfid(true)}
+                                        className="min-h-11 rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-amber-600">
+                                        Confirm replacement
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 

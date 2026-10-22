@@ -173,20 +173,27 @@ async function isSchoolHoliday(schoolYearId: number, date: string) {
  */
 export async function GET(req: NextRequest) {
   try {
-    const [adviser, ict] = await Promise.all([getAdviserFromToken(), getIctFromToken()]);
-    if (!adviser && !ict) {
+    // An ICT user can share a browser with a previously signed-in Adviser.
+    // Prefer the ICT session in that case: ICT manages all grade schedules,
+    // while an Adviser remains limited to their own grade.
+    const ict = await getIctFromToken();
+    const adviser = ict ? null : await getAdviserFromToken();
+    if (!ict && !adviser) {
       return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
     }
 
     const requested = requestedGrade(req);
-    const adviserGrade = adviser?.grade?.trim() ?? "";
-    if (adviser && !adviserGrade) {
-      return NextResponse.json({ success: false, message: "Your adviser account has no assigned grade level." }, { status: 409 });
+    let grade = requested;
+    if (!ict) {
+      const adviserGrade = adviser?.grade?.trim() ?? "";
+      if (!adviserGrade) {
+        return NextResponse.json({ success: false, message: "Your adviser account has no assigned grade level." }, { status: 409 });
+      }
+      if (requested && requested !== adviserGrade) {
+        return NextResponse.json({ success: false, message: "You can view only the schedule for your assigned grade level." }, { status: 403 });
+      }
+      grade = adviserGrade;
     }
-    if (adviser && requested && requested !== adviserGrade) {
-      return NextResponse.json({ success: false, message: "You can view only the schedule for your assigned grade level." }, { status: 403 });
-    }
-    const grade = adviserGrade || requested;
     if (!grade) {
       return NextResponse.json({ success: false, message: "Choose a grade level to view its class schedule." }, { status: 400 });
     }

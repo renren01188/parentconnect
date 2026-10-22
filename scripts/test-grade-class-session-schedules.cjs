@@ -28,9 +28,13 @@ assert.match(migration, /class_sessions_grade_date_type_idx/);
 assert.doesNotMatch(migration, /DELETE FROM public\.class_sessions/);
 assert.doesNotMatch(migration, /UPDATE public\.class_sessions\s+SET grade/);
 
-// The API authorizes advisers to their own grade, requires ICT to select a
-// grade, and reads/writes only that grade's saved snapshots.
+// ICT manages whichever grade it selects, even if a stale Adviser cookie is
+// present in the same browser. Advisers remain limited to their own grade.
+// Reads and writes continue to use only the selected grade's snapshots.
 assert.match(classSessionApi, /function requestedGrade/);
+assert.match(classSessionApi, /const ict = await getIctFromToken\(\);[\s\S]*?const adviser = ict \? null : await getAdviserFromToken\(\);/);
+assert.match(classSessionApi, /let grade = requested;[\s\S]*?if \(!ict\) \{[\s\S]*?You can view only the schedule for your assigned grade level/);
+assert.doesNotMatch(classSessionApi, /const grade = adviserGrade \|\| requested/);
 assert.match(classSessionApi, /You can view only the schedule for your assigned grade level/);
 assert.match(classSessionApi, /Choose a grade level to view its class schedule/);
 assert.match(classSessionApi, /\.eq\("grade", grade\)/);

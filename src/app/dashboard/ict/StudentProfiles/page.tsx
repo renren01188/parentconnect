@@ -973,7 +973,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
                 </div>
                 <div>
                   <h2 className="font-bold text-gray-900">Class Session Control</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Manage grade-level morning and afternoon attendance windows</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Manage school-wide, grade-level morning and afternoon attendance windows</p>
                 </div>
               </div>
               <button onClick={onClose} aria-label="Close class session control" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100"><X className="w-4 h-4" /></button>
@@ -981,7 +981,7 @@ function ClassControlModal({ onClose, grades }: { onClose: () => void; grades: s
             <div ref={scheduleScrollRef} className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
               <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
                 <Info className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-blue-700">Each grade has its own schedule. RFID scanning opens automatically during that grade&apos;s saved class time and closes after the scheduled end.</p>
+                <p className="text-xs text-blue-700">Choose any grade level. Each grade has its own schedule, and RFID scanning opens automatically during that grade&apos;s saved class time and closes after the scheduled end.</p>
               </div>
               <div>
                 <label htmlFor="class-control-grade" className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">Grade Level</label>

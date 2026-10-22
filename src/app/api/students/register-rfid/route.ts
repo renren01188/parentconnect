@@ -9,6 +9,7 @@ type Body = {
   student_id: string;
   student_db_id?: number;
   rfid_card:  string;
+  replace_existing?: boolean;
 };
 
 export const dynamic = "force-dynamic";
@@ -59,6 +60,31 @@ export async function POST(req: NextRequest) {
     }
 
     const targetStudent = students[0];
+    const currentRfid = normalizeRfidCard(targetStudent.rfid_card);
+
+    // A repeated submit for a card already on this learner is a successful
+    // no-op. This makes a double click or duplicate reader event idempotent
+    // and, importantly, avoids a second audit entry.
+    if (currentRfid === normalizedRfid) {
+      return NextResponse.json({
+        success: true,
+        message: "RFID card is already assigned to this student.",
+        student: { id: targetStudent.id, student_id: targetStudent.student_id, rfid_card: normalizedRfid },
+      }, { headers: noStoreHeaders });
+    }
+
+    // The attendance registration modal always declares whether the Adviser
+    // has confirmed a replacement. Keep that confirmation meaningful even if
+    // the roster changed between opening the modal and saving. Older RFID
+    // management clients omit this flag and retain their existing behavior.
+    if (currentRfid && body.replace_existing === false) {
+      return NextResponse.json({
+        success: false,
+        requires_replacement_confirmation: true,
+        current_rfid: currentRfid,
+        message: "This student already has an RFID. Confirm Replace RFID before saving a different card.",
+      }, { status: 409 });
+    }
 
     // 2. Check if RFID is already assigned to anyone (case-insensitive, global across all advisers)
     const { data: rfidOwners, error: rfidError } = await supabase
@@ -72,6 +98,10 @@ export async function POST(req: NextRequest) {
     if (rfidOwners && rfidOwners.length > 0) {
       const owner = rfidOwners[0];
 
+      // Another identical request may have won the write between this
+      // request's target read and ownership check. Treat it as the same
+      // successful no-op rather than reporting the learner's own card as a
+      // conflict.
       if (owner.id === targetStudent.id) {
         return NextResponse.json({
           success: true,
@@ -99,26 +129,62 @@ export async function POST(req: NextRequest) {
     // Use the primary key resolved above, not the public LRN. This keeps the
     // write tied to the same record that passed the adviser/section check and
     // prevents a duplicate legacy LRN from being changed accidentally.
-    const { data: updatedStudent, error: updateError } = await supabase
+    // Require the value read above to still be present. Two simultaneous
+    // requests for the same student can therefore produce one write and one
+    // harmless, verified no-op instead of two audit records.
+    let updateQuery = supabase
       .from("students")
       .update({ rfid_card: normalizedRfid })
-      .eq("id", targetStudent.id)
-      .select("id, student_id, rfid_card")
-      .single();
+      .eq("id", targetStudent.id);
+    updateQuery = targetStudent.rfid_card === null
+      ? updateQuery.is("rfid_card", null)
+      : updateQuery.eq("rfid_card", targetStudent.rfid_card);
+    const { data: updatedRows, error: updateError } = await updateQuery
+      .select("id, student_id, rfid_card");
 
+    if (updateError?.code === "23505") {
+      return NextResponse.json(
+        { success: false, message: "This RFID card was assigned to another student. Enter or scan a different card." },
+        { status: 409 },
+      );
+    }
     if (updateError) throw updateError;
+
+    const updatedStudent = updatedRows?.[0];
+    if (!updatedStudent) {
+      const { data: currentStudent, error: currentStudentError } = await supabase
+        .from("students")
+        .select("id, student_id, rfid_card")
+        .eq("id", targetStudent.id)
+        .maybeSingle();
+      if (currentStudentError) throw currentStudentError;
+
+      if (currentStudent && normalizeRfidCard(currentStudent.rfid_card) === normalizedRfid) {
+        return NextResponse.json({
+          success: true,
+          message: "RFID card is already assigned to this student.",
+          student: { id: currentStudent.id, student_id: currentStudent.student_id, rfid_card: normalizedRfid },
+        }, { headers: noStoreHeaders });
+      }
+
+      return NextResponse.json(
+        { success: false, message: "The student's RFID changed while saving. Review the current card and try again." },
+        { status: 409 },
+      );
+    }
 
     // Do not claim success unless the database returned the card that was
     // actually written. Both tap and manual entry use this same endpoint.
     if (!updatedStudent || updatedStudent.rfid_card !== normalizedRfid) {
       throw new Error("RFID assignment could not be verified.");
     }
-    await logAudit({ action: "RFID Assigned", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: `${targetStudent.first_name} ${targetStudent.last_name}`, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, newStatus: "Assigned", module: "RFID", details: `Assigned RFID to ${targetStudent.first_name} ${targetStudent.last_name} (${updatedStudent.student_id}).` });
+    const isReplacement = Boolean(currentRfid);
+    await logAudit({ action: isReplacement ? "RFID Replaced" : "RFID Assigned", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: `${targetStudent.first_name} ${targetStudent.last_name}`, targetRole: "Student", targetType: "RFID Card", targetId: updatedStudent.id, relatedStudentId: updatedStudent.student_id, previousStatus: isReplacement ? "Assigned" : undefined, newStatus: "Assigned", module: "RFID", details: `${isReplacement ? "Replaced" : "Assigned"} RFID for ${targetStudent.first_name} ${targetStudent.last_name} (${updatedStudent.student_id}).` });
     await publishStudentRealtimeInvalidation({ studentDbId: updatedStudent.id });
 
     return NextResponse.json({
       success: true,
-      message: `RFID card assigned successfully to ${targetStudent.first_name} ${targetStudent.last_name}.`,
+      message: `RFID card ${isReplacement ? "replaced" : "assigned"} successfully for ${targetStudent.first_name} ${targetStudent.last_name}.`,
       student: updatedStudent,
     }, { headers: noStoreHeaders });
 
