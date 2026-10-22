@@ -16,8 +16,8 @@ function expectedMessageType(message, attendanceType) {
   if (typeof message !== "string") return "other";
   const isTimeIn = attendanceType === "Time In";
   const expected = isTimeIn
-    ? /^PConnect: Good Morning! .+ scanned their RFID tag upon entering the classroom on .+, at .+\.$/
-    : /^PConnect: Good Afternoon! .+ scanned their RFID tag upon leaving the classroom on .+, at .+\.$/;
+    ? /^PConnect: Good Day! .+ scanned their RFID tag upon entering the classroom on .+, at .+\.$/
+    : /^PConnect: Good Day! .+ scanned their RFID tag upon leaving the classroom on .+, at .+\.$/;
   return expected.test(message) ? "current" : /^PConnect:\s*Your child,/i.test(message) ? "legacy" : "other";
 }
 

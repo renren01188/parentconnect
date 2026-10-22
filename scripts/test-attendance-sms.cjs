@@ -55,11 +55,11 @@ const timeOutMessage = smsQueue.buildAttendanceSmsMessage({
 
 assert.equal(
   timeInMessage,
-  "PConnect: Good Morning! DAVID DAVID DAVID scanned their RFID tag upon entering the classroom on October 19, 2026, at 7:05 AM.",
+  "PConnect: Good Day! DAVID DAVID DAVID scanned their RFID tag upon entering the classroom on October 19, 2026, at 7:05 AM.",
 );
 assert.equal(
   timeOutMessage,
-  "PConnect: Good Afternoon! DAVID DAVID DAVID scanned their RFID tag upon leaving the classroom on October 19, 2026, at 4:37 PM.",
+  "PConnect: Good Day! DAVID DAVID DAVID scanned their RFID tag upon leaving the classroom on October 19, 2026, at 4:37 PM.",
 );
 
 // Execute the real Semaphore request builder with a mocked network request.
@@ -124,7 +124,7 @@ const unismsStatusSource = fs.readFileSync(
 );
 const scanSource = fs.readFileSync(path.join(root, "src/app/api/attendance/scan/route.ts"), "utf8");
 const normalizedJobsMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261020090000_normalize_attendance_sms_jobs.sql"),
+  path.join(root, "supabase/migrations/20261022120000_update_attendance_sms_good_day_greeting.sql"),
   "utf8",
 );
 assert.doesNotMatch(queueSource, /recorded attendance at Santiago Elementary School/i);
@@ -135,12 +135,15 @@ for (const source of [queueSource, workerSource, unismsStatusSource]) {
 }
 assert.match(queueSource, /\.update\(\{ message \}\)[\s\S]*?\.eq\("status", "pending"\)/);
 assert.match(queueSource, /onConflict: "attendance_log_id,parent_id"/);
-assert.match(workerSource, /sendSms\(\{ recipient: job\.recipient_phone, message: job\.message, queueId: job\.id \}\)/);
+assert.match(
+  workerSource,
+  /sendSms\(\{\s*recipient: job\.recipient_phone,\s*message: job\.message,\s*queueId: job\.id,\s*semaphoreRoute: configuredAttendanceSmsRoute\(\),?\s*\}\)/,
+);
 assert.doesNotMatch(scanSource, /PConnect:\s*Your child/i);
 assert.match(scanSource, /enqueueAttendanceSms\(input\)[\s\S]*processAttendanceSmsJobs\(\{ attendanceLogId: input\.attendanceLogId/);
 assert.match(normalizedJobsMigration, /sms_job\.status = 'pending'/);
-assert.match(normalizedJobsMigration, /PConnect: Good Morning!/);
-assert.match(normalizedJobsMigration, /PConnect: Good Afternoon!/);
+assert.match(normalizedJobsMigration, /PConnect: Good Day!/);
+assert.doesNotMatch(normalizedJobsMigration, /PConnect: Good (Morning|Afternoon)!/);
 assert.match(normalizedJobsMigration, /attendance_sms_jobs_template_guard/);
 
 console.log("RFID Time In/Out SMS templates and Semaphore payload checks passed.");

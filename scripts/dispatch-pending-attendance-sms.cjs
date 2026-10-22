@@ -44,10 +44,10 @@ function messageFor({ type, date, time, student }) {
   const on = dateLabel(date);
   const at = timeLabel(time);
   if (type === "Time In") {
-    return `PConnect: Good Morning! ${name} scanned their RFID tag upon entering the classroom on ${on}, at ${at}.`;
+    return `PConnect: Good Day! ${name} scanned their RFID tag upon entering the classroom on ${on}, at ${at}.`;
   }
   if (type === "Time Out") {
-    return `PConnect: Good Afternoon! ${name} scanned their RFID tag upon leaving the classroom on ${on}, at ${at}.`;
+    return `PConnect: Good Day! ${name} scanned their RFID tag upon leaving the classroom on ${on}, at ${at}.`;
   }
   throw new Error("Only Time In and Time Out attendance jobs can be dispatched.");
 }

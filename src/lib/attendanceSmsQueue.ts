@@ -56,14 +56,12 @@ export function buildAttendanceSmsMessage(input: Pick<AttendanceSmsInput, "stude
   const date = formatAttendanceSmsDate(input.attendanceDate);
   const time = formatAttendanceSmsTime(input.timeLogged);
 
-  // The greeting describes the attendance event, rather than the device's
-  // clock. This keeps a late Time In and an early Time Out consistent with
-  // the parent-facing templates approved for RFID attendance.
+  // Both attendance events use one neutral, parent-facing greeting.
   if (input.attendanceType === "Time Out") {
-    return `PConnect: Good Afternoon! ${input.studentName} scanned their RFID tag upon leaving the classroom on ${date}, at ${time}.`;
+    return `PConnect: Good Day! ${input.studentName} scanned their RFID tag upon leaving the classroom on ${date}, at ${time}.`;
   }
 
-  return `PConnect: Good Morning! ${input.studentName} scanned their RFID tag upon entering the classroom on ${date}, at ${time}.`;
+  return `PConnect: Good Day! ${input.studentName} scanned their RFID tag upon entering the classroom on ${date}, at ${time}.`;
 }
 
 function registeredParents(rows: ParentContact[]) {
