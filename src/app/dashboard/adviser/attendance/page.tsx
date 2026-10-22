@@ -179,7 +179,7 @@ interface AdviserInfo {
 type RfidScannerMode = "default" | "rapid";
 type RapidTapResult = {
     id: string;
-    outcome: "recorded" | "duplicate" | "failed";
+    outcome: "recorded" | "duplicate" | "out-of-section" | "failed";
     message: string;
 };
 
@@ -2033,6 +2033,19 @@ export default function AdviserAttendancePage() {
             student.section,
         ].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalizedRfidStudentSearch);
     });
+    // Keep the new-registration list derived from the same roster state used
+    // by attendance. A completed assignment therefore moves a learner out of
+    // "No RFID" immediately, without waiting for a page reload or Realtime.
+    const rfidStudentGroups = [
+        {
+            label: "No RFID",
+            students: filteredRfidStudents.filter((student) => !resolveRfidScanValue(student.rfid_card, "")),
+        },
+        {
+            label: "RFID registered — choose only to replace",
+            students: filteredRfidStudents.filter((student) => Boolean(resolveRfidScanValue(student.rfid_card, ""))),
+        },
+    ].filter((group) => group.students.length > 0);
     const selectedRfidStudent = rfidStudentDbId === null
         ? undefined
         : students.find((student) => student.id === rfidStudentDbId);
@@ -2216,6 +2229,7 @@ export default function AdviserAttendancePage() {
                 success?: boolean;
                 duplicate?: boolean;
                 alreadyRecorded?: boolean;
+                outOfSection?: boolean;
                 message?: string;
                 log?: AttendanceLog;
             };
@@ -2268,6 +2282,23 @@ export default function AdviserAttendancePage() {
                     setScanMessage(`⚠ ${message}`);
                 }
                 void loadTodayLogs(savingItem.section);
+                return;
+            }
+
+            // An RFID assigned to a learner in another section is a completed
+            // rejection, not a save failure. Drop it from the durable queue so
+            // it cannot surface as "needs review" or be retried later.
+            if (data.outOfSection) {
+                try {
+                    await removeRapidTapQueueItem(savingItem.id);
+                } catch (storageError) {
+                    console.error("Could not remove out-of-section Rapid Tap scan:", storageError);
+                }
+                replaceRapidTapQueue(rapidTapQueueRef.current.filter((item) => item.id !== savingItem.id));
+                const message = data.message || "This student is not in your assigned section. No attendance was recorded.";
+                addRapidTapResult({ id: savingItem.id, outcome: "out-of-section", message: `⚠ ${message}` });
+                setRapidTapComplete(false);
+                setScanMessage(`⚠ ${message} Ready for the next RFID tap.`);
                 return;
             }
 
@@ -2730,14 +2761,27 @@ export default function AdviserAttendancePage() {
             const data = await res.json();
             if (data.success) {
                 const savedRfid = resolveRfidScanValue(data.student?.rfid_card, cardToSave);
+                const alreadyAssigned = data.already_assigned === true;
                 setStudents((currentStudents) => currentStudents.map((student) =>
                     student.id === selectedRfidStudent.id
                         ? { ...student, rfid_card: savedRfid }
                         : student,
                 ));
+                // Do not leave a newly registered learner selected: that
+                // would immediately turn the success state into the modal's
+                // "already has RFID" replacement prompt. Clearing it also
+                // prevents an RFID reader's repeated Enter from creating a
+                // second save attempt; the API remains the final idempotency
+                // guard for retries and concurrent requests.
+                setRfidStudentDbId(null);
+                setRfidStudentSearch("");
                 setNewRfidValue("");
                 setNewRfidScanBuffer("");
-                setRfidMessage(data.message || (replacing ? "RFID successfully replaced." : "New RFID successfully assigned."));
+                setRfidMessage(
+                    alreadyAssigned
+                        ? `RFID ${savedRfid} was already assigned to this student. No duplicate assignment was created.`
+                        : data.message || (replacing ? "RFID successfully replaced." : "New RFID successfully assigned."),
+                );
                 // Update the server-backed roster too, while keeping the modal and
                 // reader ready for the next card immediately.
                 void loadStudents();
@@ -2798,13 +2842,15 @@ export default function AdviserAttendancePage() {
         if (event.scope === "dashboard") void loadClassSession();
     });
 
-    // Keep the screen aligned with ICT's configured start/end times even when
-    // the Adviser leaves this page open while a session changes state.
+    // Targeted dashboard invalidations refresh this immediately after an ICT
+    // schedule change. This is only a visible-tab recovery check: polling at
+    // 15 seconds generated tens of thousands of class-session reads per day
+    // for a few advisers and was not needed for RFID server-side validation.
     useEffect(() => {
         const refreshWhenVisible = () => {
             if (document.visibilityState === "visible") void loadClassSession(true);
         };
-        const timer = window.setInterval(refreshWhenVisible, 15_000);
+        const timer = window.setInterval(refreshWhenVisible, 300_000);
         document.addEventListener("visibilitychange", refreshWhenVisible);
         return () => {
             window.clearInterval(timer);
@@ -3253,7 +3299,7 @@ export default function AdviserAttendancePage() {
                                     {rapidTapResults.length > 0 && (
                                         <div className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                                             {rapidTapResults.map((result) => (
-                                                <p key={result.id} className={`text-xs ${result.outcome === "recorded" ? "text-emerald-700" : result.outcome === "duplicate" ? "text-amber-700" : "text-red-600"}`}>
+                                                <p key={result.id} className={`text-xs ${result.outcome === "recorded" ? "text-emerald-700" : result.outcome === "duplicate" || result.outcome === "out-of-section" ? "text-amber-700" : "text-red-600"}`}>
                                                     {result.message}
                                                 </p>
                                             ))}
@@ -3566,40 +3612,46 @@ export default function AdviserAttendancePage() {
                             <div className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1" role="listbox" aria-label="Students">
                                 {isLoadingStudents ? (
                                     <p className="px-3 py-3 text-xs text-slate-500">Loading students...</p>
-                                ) : filteredRfidStudents.length === 0 ? (
+                                ) : rfidStudentGroups.length === 0 ? (
                                     <p className="px-3 py-3 text-xs text-slate-500">No student matches that search.</p>
-                                ) : filteredRfidStudents.map((student) => {
-                                    const isSelected = selectedRfidStudent?.id === student.id;
-                                    return (
-                                        <button
-                                            key={student.id}
-                                            type="button"
-                                            role="option"
-                                            aria-selected={isSelected}
-                                            disabled={isSavingRfid}
-                                            onClick={() => {
-                                                setRfidStudentDbId(student.id);
-                                                setRfidStudentSearch("");
-                                                setNewRfidValue("");
-                                                setNewRfidScanBuffer("");
-                                                setShowRfidReplacementConfirmation(false);
-                                                setRfidMessage(student.rfid_card
-                                                    ? "This student already has an RFID. Scan a new card to replace it."
-                                                    : "Student selected. Tap a new RFID card.");
-                                                window.setTimeout(focusNewRfidScanner, 0);
-                                            }}
-                                            className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed ${isSelected ? "bg-emerald-50 text-emerald-900" : "text-slate-700 hover:bg-slate-50"}`}
-                                        >
-                                            <span className="min-w-0">
-                                                <span className="block truncate text-sm font-semibold">{buildFullName(student)}</span>
-                                                <span className="block truncate text-xs text-slate-400">{student.student_id}</span>
-                                            </span>
-                                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${student.rfid_card ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}`}>
-                                                {student.rfid_card ? "RFID registered" : "No RFID"}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
+                                ) : rfidStudentGroups.map((group) => (
+                                    <div key={group.label} className="py-1">
+                                        <p className="px-3 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">{group.label}</p>
+                                        {group.students.map((student) => {
+                                            const isSelected = selectedRfidStudent?.id === student.id;
+                                            const studentHasRfid = Boolean(resolveRfidScanValue(student.rfid_card, ""));
+                                            return (
+                                                <button
+                                                    key={student.id}
+                                                    type="button"
+                                                    role="option"
+                                                    aria-selected={isSelected}
+                                                    disabled={isSavingRfid}
+                                                    onClick={() => {
+                                                        setRfidStudentDbId(student.id);
+                                                        setRfidStudentSearch("");
+                                                        setNewRfidValue("");
+                                                        setNewRfidScanBuffer("");
+                                                        setShowRfidReplacementConfirmation(false);
+                                                        setRfidMessage(studentHasRfid
+                                                            ? "This student already has an RFID. Scan a new card to replace it."
+                                                            : "Student selected. Tap a new RFID card.");
+                                                        window.setTimeout(focusNewRfidScanner, 0);
+                                                    }}
+                                                    className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed ${isSelected ? "bg-emerald-50 text-emerald-900" : "text-slate-700 hover:bg-slate-50"}`}
+                                                >
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate text-sm font-semibold">{buildFullName(student)}</span>
+                                                        <span className="block truncate text-xs text-slate-400">{student.student_id}</span>
+                                                    </span>
+                                                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${studentHasRfid ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}`}>
+                                                        {studentHasRfid ? "RFID registered" : "No RFID"}
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
                             </div>
                             {selectedRfidStudent && (
                                 <div className={`mt-2.5 rounded-xl px-3 py-2.5 text-xs ${selectedRfidStudent.rfid_card ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>

@@ -481,9 +481,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
+          // Rapid Tap must discard this completed rejection instead of putting
+          // it in its processing-failure review queue. The lookup above is
+          // constrained to this adviser's active section, and this return is
+          // still before any attendance or notification side effects.
+          outOfSection: Boolean(anyStudent && anyStudent.length > 0),
           message:
             anyStudent && anyStudent.length > 0
-              ? "This student does not belong to your selected section."
+              ? "This student is not in your assigned section. No attendance was recorded."
               : "RFID card is not registered.",
         },
         { status: 404 }

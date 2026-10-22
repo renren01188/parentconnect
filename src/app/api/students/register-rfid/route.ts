@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
     if (currentRfid === normalizedRfid) {
       return NextResponse.json({
         success: true,
+        already_assigned: true,
         message: "RFID card is already assigned to this student.",
         student: { id: targetStudent.id, student_id: targetStudent.student_id, rfid_card: normalizedRfid },
       }, { headers: noStoreHeaders });
@@ -105,6 +106,7 @@ export async function POST(req: NextRequest) {
       if (owner.id === targetStudent.id) {
         return NextResponse.json({
           success: true,
+          already_assigned: true,
           message: "RFID card is already assigned to this student.",
           student: { id: targetStudent.id, student_id: targetStudent.student_id, rfid_card: normalizedRfid },
         }, { headers: noStoreHeaders });
@@ -162,6 +164,7 @@ export async function POST(req: NextRequest) {
       if (currentStudent && normalizeRfidCard(currentStudent.rfid_card) === normalizedRfid) {
         return NextResponse.json({
           success: true,
+          already_assigned: true,
           message: "RFID card is already assigned to this student.",
           student: { id: currentStudent.id, student_id: currentStudent.student_id, rfid_card: normalizedRfid },
         }, { headers: noStoreHeaders });
@@ -184,6 +187,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      already_assigned: false,
       message: `RFID card ${isReplacement ? "replaced" : "assigned"} successfully for ${targetStudent.first_name} ${targetStudent.last_name}.`,
       student: updatedStudent,
     }, { headers: noStoreHeaders });

@@ -19,7 +19,7 @@ import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getActiveIct } from "@/lib/apiAuthorization";
 import {
-  publishAttendanceRealtimeInvalidation,
+  publishAttendanceRealtimeInvalidations,
   publishStudentRealtimeInvalidation,
 } from "@/lib/realtimeInvalidation";
 import {
@@ -600,11 +600,9 @@ export async function GET(req: NextRequest) {
           scope: { grade: adviser.grade ?? "", sections: [activeSection] },
         });
         if (absenceResult.affectedStudentDbIds.length) {
-          after(() => Promise.all(
-            absenceResult.affectedStudentDbIds.map((studentDbId) =>
-              publishAttendanceRealtimeInvalidation({ studentDbId }),
-            ),
-          ).then(() => undefined));
+          after(() => publishAttendanceRealtimeInvalidations(
+            absenceResult.affectedStudentDbIds.map((studentDbId) => ({ studentDbId })),
+          ));
         }
       } catch (absenceError) {
         // The scheduled endpoint remains the primary processor. A transient

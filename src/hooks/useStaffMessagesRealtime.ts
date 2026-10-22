@@ -94,12 +94,12 @@ export function useStaffMessagesRealtime(
     };
     // Broadcast remains the normal immediate delivery path. If a browser,
     // extension, or missing public key prevents its WebSocket from joining,
-    // recover the protected server snapshot every two seconds while visible.
-    // This is intentionally active only in that degraded state, never as the
-    // steady-state messaging transport.
+    // recover the protected server snapshot every 30 seconds while visible.
+    // Status changes already trigger an immediate refresh, so this remains a
+    // bounded degraded-state safeguard rather than a request storm.
     const fallbackRefresh = window.setInterval(
       refreshWhenVisible,
-      connectionStatus === "SUBSCRIBED" ? 300_000 : 2_000,
+      connectionStatus === "SUBSCRIBED" ? 300_000 : 30_000,
     );
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {

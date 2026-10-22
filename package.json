@@ -26,6 +26,7 @@
     "test:adviser-manual-attendance-edit": "node scripts/test-adviser-manual-attendance-edit.cjs",
     "test:school-calendar-schedule": "node scripts/test-school-calendar-schedule.cjs",
     "test:rfid-attendance": "node scripts/test-rfid-attendance.cjs",
+    "test:adviser-rfid-registration": "node scripts/test-adviser-rfid-registration.cjs",
     "test:ict-rfid-registration-modal": "node scripts/test-ict-rfid-registration-modal.cjs",
     "test:rfid-student-profiles-realtime": "node scripts/test-rfid-student-profiles-realtime.cjs",
     "test:parent-enrollment": "node scripts/test-parent-enrollment.cjs",

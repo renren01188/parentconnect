@@ -84,6 +84,11 @@ type AttendanceStudent = {
   section: string | null;
 };
 
+export type AttendanceRealtimeTarget = {
+  studentDbId?: number | null;
+  studentId?: string | null;
+};
+
 function assignedToStudent(adviser: { grade?: string | null; section?: string | null; sections?: unknown }, student: AttendanceStudent) {
   if (!student.grade || !student.section || adviser.grade !== student.grade) return false;
   const sections = Array.isArray(adviser.sections)
@@ -131,47 +136,54 @@ export async function adviserRecipientsForClass(grade: string | null | undefined
 }
 
 /**
- * Resolves only accounts that can legitimately be affected by an attendance
- * change: the child's linked parents, the assigned adviser(s), and active
- * principals.  The emitted event contains no student, attendance, or excuse
- * data; each recipient still loads their own protected endpoint.
+ * Resolves only accounts allowed to see an attendance update.  A bulk absence
+ * correction must not repeat these five database lookups for every student:
+ * it resolves the whole batch, then sends one data-free Broadcast instead.
  */
-export async function attendanceRecipientsForStudent(input: { studentDbId?: number | null; studentId?: string | null }) {
-  let studentQuery = supabase
-    .from("students")
-    .select("id, student_id, grade, section")
-    .limit(1);
+export async function attendanceRecipientsForStudents(inputs: AttendanceRealtimeTarget[]) {
+  const studentDbIds = [...new Set(inputs
+    .map((input) => Number(input.studentDbId))
+    .filter((id) => Number.isSafeInteger(id) && id > 0))];
+  const studentIds = [...new Set(inputs
+    .map((input) => typeof input.studentId === "string" ? input.studentId.trim() : "")
+    .filter(Boolean))];
+  if (!studentDbIds.length && !studentIds.length) return [] as RealtimeRecipient[];
 
-  if (Number.isSafeInteger(Number(input.studentDbId)) && Number(input.studentDbId) > 0) {
-    studentQuery = studentQuery.eq("id", Number(input.studentDbId));
-  } else if (typeof input.studentId === "string" && input.studentId.trim()) {
-    studentQuery = studentQuery.eq("student_id", input.studentId.trim());
-  } else {
-    return [] as RealtimeRecipient[];
+  const studentReads = await Promise.all([
+    studentDbIds.length
+      ? supabase.from("students").select("id, student_id, grade, section").in("id", studentDbIds)
+      : Promise.resolve({ data: [], error: null }),
+    studentIds.length
+      ? supabase.from("students").select("id, student_id, grade, section").in("student_id", studentIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const result of studentReads) {
+    if (result.error) console.warn("Unable to resolve attendance Realtime recipients:", result.error.message);
   }
 
-  const { data: row, error: studentError } = await studentQuery.maybeSingle();
-  if (studentError || !row) {
-    if (studentError) console.warn("Unable to resolve attendance Realtime recipients:", studentError.message);
-    return [] as RealtimeRecipient[];
-  }
-  const student: AttendanceStudent = {
-    id: Number(row.id),
-    student_id: String(row.student_id ?? ""),
-    grade: row.grade ?? null,
-    section: row.section ?? null,
-  };
-  if (!Number.isSafeInteger(student.id) || student.id <= 0 || !student.student_id) return [];
+  const students = Array.from(new Map(
+    studentReads.flatMap((result) => result.data ?? [])
+      .map((row) => ({
+        id: Number(row.id),
+        student_id: String(row.student_id ?? ""),
+        grade: row.grade ?? null,
+        section: row.section ?? null,
+      }))
+      .filter((student): student is AttendanceStudent => (
+        Number.isSafeInteger(student.id) && student.id > 0 && Boolean(student.student_id)
+      ))
+      .map((student) => [student.id, student]),
+  ).values());
+  if (!students.length) return [] as RealtimeRecipient[];
 
-  // Do not read every adviser on each RFID tap. Grade is mandatory for an
-  // assigned class, then the existing section-array check narrows it further.
-  let adviserQuery = supabase.from("advisers").select("id, grade, section, sections");
-  if (student.grade) adviserQuery = adviserQuery.eq("grade", student.grade);
-
+  const resolvedStudentIds = students.map((student) => student.student_id);
+  const grades = [...new Set(students.map((student) => student.grade).filter((grade): grade is string => Boolean(grade)))];
   const [directParents, linkedParents, advisers, principals] = await Promise.all([
-    supabase.from("parents").select("id").eq("student_id", student.student_id),
-    supabase.from("parent_student_links").select("parent_id").eq("student_id", student.student_id),
-    adviserQuery,
+    supabase.from("parents").select("id").in("student_id", resolvedStudentIds),
+    supabase.from("parent_student_links").select("parent_id").in("student_id", resolvedStudentIds),
+    grades.length
+      ? supabase.from("advisers").select("id, grade, section, sections").in("grade", grades)
+      : Promise.resolve({ data: [], error: null }),
     supabase.from("principals").select("id").eq("status", "active").eq("is_active", true).neq("archive_status", "archived"),
   ]);
 
@@ -179,18 +191,25 @@ export async function attendanceRecipientsForStudent(input: { studentDbId?: numb
     ...(directParents.data ?? []).map((parent) => ({ role: "parent" as const, id: Number(parent.id) })),
     ...(linkedParents.data ?? []).map((link) => ({ role: "parent" as const, id: Number(link.parent_id) })),
     ...(advisers.data ?? [])
-      .filter((adviser) => assignedToStudent(adviser, student))
+      .filter((adviser) => students.some((student) => assignedToStudent(adviser, student)))
       .map((adviser) => ({ role: "adviser" as const, id: Number(adviser.id) })),
     ...(principals.data ?? []).map((principal) => ({ role: "principal" as const, id: Number(principal.id) })),
   ];
-
   return recipients.filter((recipient) => Number.isSafeInteger(recipient.id) && recipient.id > 0);
 }
 
+export async function attendanceRecipientsForStudent(input: AttendanceRealtimeTarget) {
+  return attendanceRecipientsForStudents([input]);
+}
+
+/** Publishes one protected attendance refresh for a group of changed students. */
+export async function publishAttendanceRealtimeInvalidations(inputs: AttendanceRealtimeTarget[]) {
+  await publishRealtimeInvalidation(await attendanceRecipientsForStudents(inputs), "attendance");
+}
+
 /** Publishes a protected attendance/excuse-letter refresh for one student. */
-export async function publishAttendanceRealtimeInvalidation(input: { studentDbId?: number | null; studentId?: string | null }) {
-  const recipients = await attendanceRecipientsForStudent(input);
-  await publishRealtimeInvalidation(recipients, "attendance");
+export async function publishAttendanceRealtimeInvalidation(input: AttendanceRealtimeTarget) {
+  await publishAttendanceRealtimeInvalidations([input]);
 }
 
 /**
@@ -213,26 +232,11 @@ export async function publishStudentRealtimeInvalidation(input: { studentDbId?: 
  * event so a dashboard refreshes once rather than once for every student.
  */
 export async function studentRealtimeRecipientsForStudents(inputs: Array<{ studentDbId?: number | null; studentId?: string | null }>) {
-  const uniqueInputs = Array.from(new Map(
-    inputs
-      .filter((input) => (
-        (Number.isSafeInteger(Number(input.studentDbId)) && Number(input.studentDbId) > 0)
-        || Boolean(input.studentId?.trim())
-      ))
-      .map((input) => [
-        Number.isSafeInteger(Number(input.studentDbId)) && Number(input.studentDbId) > 0
-          ? `id:${Number(input.studentDbId)}`
-          : `lrn:${input.studentId!.trim()}`,
-        input,
-      ]),
-  ).values());
-  if (!uniqueInputs.length) return [] as RealtimeRecipient[];
-
   const [studentRecipientGroups, ictRecipients] = await Promise.all([
-    Promise.all(uniqueInputs.map((input) => attendanceRecipientsForStudent(input))),
+    attendanceRecipientsForStudents(inputs),
     recipientsForRoles(["ict"]),
   ]);
-  return [...studentRecipientGroups.flat(), ...ictRecipients];
+  return [...studentRecipientGroups, ...ictRecipients];
 }
 
 export async function publishStudentsRealtimeInvalidation(inputs: Array<{ studentDbId?: number | null; studentId?: string | null }>) {

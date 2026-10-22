@@ -268,9 +268,25 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Upsert today's rows using the latest saved schedule
-    // so ICT does not need to set the same times every day.
+    // Read today's grade-scoped snapshots first. In the usual case they
+    // already exist, so do not repeatedly look through schedule history or
+    // perform idempotent upserts on every adviser refresh.
+    const { data: currentSessions, error: currentSessionsError } = await supabase
+      .from("class_sessions")
+      .select("*")
+      .eq("session_date", today)
+      .eq("grade", grade)
+      .order("session_type", { ascending: true });
+    if (currentSessionsError) throw currentSessionsError;
+
+    const existingSessionTypes = new Set((currentSessions ?? []).map((session) => session.session_type));
+    let createdSnapshot = false;
+
+    // Create only missing daily rows from the latest saved schedule. This
+    // preserves the no-RFID-dependency fallback without turning routine
+    // attendance refreshes into repeated historical schedule lookups.
     for (const sessionType of ["Morning", "Afternoon"] as const) {
+      if (existingSessionTypes.has(sessionType)) continue;
       const savedSchedule = await getLatestSchedule(grade, sessionType, today);
       // Attendance stays unavailable until ICT has actually saved this
       // session. Never invent a second set of adviser-facing times.
@@ -288,18 +304,20 @@ export async function GET(req: NextRequest) {
         lateAfter,
         absentAfter
       );
+      createdSnapshot = true;
     }
 
-    const { data, error } = await supabase
-      .from("class_sessions")
-      .select("*")
-      .eq("session_date", today)
-      .eq("grade", grade)
-      .order("session_type", { ascending: true });
+    const data = createdSnapshot
+      ? (await supabase
+        .from("class_sessions")
+        .select("*")
+        .eq("session_date", today)
+        .eq("grade", grade)
+        .order("session_type", { ascending: true }))
+      : { data: currentSessions, error: null };
+    if (data.error) throw data.error;
 
-    if (error) throw error;
-
-    const sessions = (data ?? []).map((session) => ({ ...session, status: getScheduleStatus(session) }));
+    const sessions = (data.data ?? []).map((session) => ({ ...session, status: getScheduleStatus(session) }));
 
     return NextResponse.json({
       success: true,

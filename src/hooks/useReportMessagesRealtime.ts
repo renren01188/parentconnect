@@ -270,15 +270,16 @@ export function useReportMessagesRealtime(
 
   // Broadcast is the normal immediate-delivery path. If first-login session
   // propagation or a browser extension delays the socket join, reconcile the
-  // already-authorized snapshot every two seconds while visible. Once joined,
-  // keep the original quiet suspended-browser safeguard instead.
+  // already-authorized snapshot every 30 seconds while visible. Connection
+  // status changes still request an immediate recovery, so this is a bounded
+  // outage safeguard rather than a request storm when Realtime is unhealthy.
   useEffect(() => {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     const fallbackTimer = window.setInterval(
       refreshWhenVisible,
-      connectionStatus === "SUBSCRIBED" ? 300_000 : 2_000,
+      connectionStatus === "SUBSCRIBED" ? 300_000 : 30_000,
     );
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {

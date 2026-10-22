@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
-import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishAttendanceRealtimeInvalidations } from "@/lib/realtimeInvalidation";
 
 type AttendanceStatus = "On Time" | "Late" | "Absent" | "Excused";
 
@@ -297,8 +297,8 @@ export async function PATCH(req: NextRequest) {
       });
     }));
 
-    after(() => Promise.all(
-      verifiedRows.map((row) => publishAttendanceRealtimeInvalidation({ studentDbId: row.student_db_id })),
+    after(() => publishAttendanceRealtimeInvalidations(
+      verifiedRows.map((row) => ({ studentDbId: row.student_db_id })),
     ));
     return NextResponse.json({ success: true, updated_count: verifiedRows.length, status: newStatus });
   } catch (error) {

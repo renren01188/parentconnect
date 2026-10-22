@@ -30,7 +30,9 @@ export async function GET() {
           for (const row of data ?? []) { latestId = Number(row.id); send("audit-log", row); }
         } catch (error) { send("error", { message: error instanceof Error ? error.message : "Audit stream failed." }); }
       };
-      timer = setInterval(checkForNewLogs, 1_000);
+      // Older browser bundles can still reach this endpoint during a rolling
+      // deployment. New audit pages use the protected Broadcast instead.
+      timer = setInterval(checkForNewLogs, 15_000);
       controller.enqueue(encoder.encode(": connected\n\n"));
     },
     cancel() { if (timer) clearInterval(timer); },

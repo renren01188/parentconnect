@@ -80,6 +80,6 @@ assert.match(scanRoute, /ICT-configured class schedule has ended/);
 assert.match(classSessionRoute, /availability: schoolYearAvailability/);
 assert.match(classSessionRoute, /no active school year is configured/);
 assert.match(adviserPage, /data\.availability\?\.message/);
-assert.match(adviserPage, /window\.setInterval\(refreshWhenVisible, 15_000\)/);
+assert.match(adviserPage, /window\.setInterval\(refreshWhenVisible, 300_000\)/);
 
 console.log("Attendance scanner school-year and class-session schedule checks passed.");

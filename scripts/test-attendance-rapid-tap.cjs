@@ -22,6 +22,9 @@ assert.match(adviserPage, /Finish or retry the Rapid Tap queue before switching 
 assert.match(adviserPage, /scan_id: savingItem\.id/);
 assert.match(adviserPage, /scan_date: savingItem\.scanDate/);
 assert.match(adviserPage, /session_type: savingItem\.sessionType/);
+assert.match(adviserPage, /outOfSection\?: boolean/);
+assert.match(adviserPage, /if \(data\.outOfSection\)[\s\S]*?removeRapidTapQueueItem\(savingItem\.id\)[\s\S]*?setScanMessage\(`⚠ \$\{message\} Ready for the next RFID tap\.\`\)/);
+assert.match(adviserPage, /outcome: "out-of-section"/);
 
 assert.match(queueStorage, /indexedDB\.open/);
 assert.match(queueStorage, /queueOrder/);
@@ -34,6 +37,8 @@ assert.match(scanRoute, /scan_request_id: scanRequestId \|\| null/);
 assert.match(scanRoute, /requestedScanDate && requestedScanDate !== today/);
 assert.match(scanRoute, /requestedSessionType && requestedSessionType !== sessionType/);
 assert.match(scanRoute, /attendanceSuccessPayload\(recorded\.log, recorded\.student, true\)/);
+assert.match(scanRoute, /outOfSection: Boolean\(anyStudent && anyStudent\.length > 0\)/);
+assert.match(scanRoute, /This student is not in your assigned section\. No attendance was recorded\./);
 
 assert.match(migration, /ADD COLUMN IF NOT EXISTS scan_request_id text/);
 assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS attendance_logs_scan_request_id_unique/);

@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { processDueAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
-import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishAttendanceRealtimeInvalidations } from "@/lib/realtimeInvalidation";
 
 async function processAbsences(req: NextRequest) {
   const expected = process.env.CRON_SECRET;
@@ -12,9 +12,9 @@ async function processAbsences(req: NextRequest) {
     const processed = await processDueAutomaticAbsences();
     const affectedStudentDbIds = processed.processedSessions.flatMap((session) => session.affectedStudentDbIds);
     if (affectedStudentDbIds.length) {
-      after(() => Promise.all(
-        [...new Set(affectedStudentDbIds)].map((studentDbId) => publishAttendanceRealtimeInvalidation({ studentDbId })),
-      ).then(() => undefined));
+      after(() => publishAttendanceRealtimeInvalidations(
+        [...new Set(affectedStudentDbIds)].map((studentDbId) => ({ studentDbId })),
+      ));
     }
     return NextResponse.json({ success: true, ...processed });
   } catch (error) {

@@ -7,7 +7,11 @@
     },
     {
       "path": "/api/attendance/process-absences",
-      "schedule": "* * * * *"
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/process-attendance-sms",
+      "schedule": "*/1 * * * *"
     }
   ]
 }

@@ -24,6 +24,14 @@ type SessionSchedule = {
   absent_after: string | null;
 };
 
+type AutomaticAbsenceWork = {
+  // processDueAutomaticAbsences has already validated the school day and
+  // fetched this grade's active roster once. Reusing those immutable inputs
+  // prevents one full students-table read for every grade/session pair.
+  students: StudentRow[];
+  session: SessionSchedule;
+};
+
 export type AutomaticAbsenceScope = {
   grade: string;
   sections: string[];
@@ -188,11 +196,20 @@ async function getOrCreateSessionSnapshot(
  * Absent After cutoff has arrived. It is deliberately idempotent so a cron
  * retry, a duplicate invocation, or an ICT action can never overwrite a scan.
  */
-export async function markAutomaticAbsences(input: {
+type MarkAutomaticAbsencesInput = {
   sessionType: SessionType;
   sessionDate?: string;
   scope?: AutomaticAbsenceScope;
-}): Promise<AutomaticAbsenceResult> {
+};
+
+export async function markAutomaticAbsences(input: MarkAutomaticAbsencesInput): Promise<AutomaticAbsenceResult> {
+  return markAutomaticAbsencesForValidatedScope(input);
+}
+
+async function markAutomaticAbsencesForValidatedScope(
+  input: MarkAutomaticAbsencesInput,
+  work?: AutomaticAbsenceWork,
+): Promise<AutomaticAbsenceResult> {
   const schoolClock = getSchoolClock();
   const sessionDate = input.sessionDate ?? schoolClock.date;
   const grade = input.scope?.grade?.trim() ?? "";
@@ -207,34 +224,36 @@ export async function markAutomaticAbsences(input: {
     return result(false, 400, "Automatic absence can be processed only for the current school date.");
   }
 
-  const { data: activeSY, error: schoolYearError } = await supabase
-    .from("school_year_config")
-    .select("id, start_date, end_date, attendance_weekdays")
-    .eq("is_active", true)
-    .limit(1)
-    .maybeSingle();
-  if (schoolYearError) throw schoolYearError;
-  if (!activeSY) return result(false, 409, "No active school year configured. Absent marking skipped.");
-  if (sessionDate < activeSY.start_date || sessionDate > activeSY.end_date) {
-    return result(false, 409, "Date is outside the active school year. Absent marking skipped.");
-  }
-  if (!isScheduledAttendanceDate(sessionDate, activeSY.start_date, activeSY.end_date, activeSY.attendance_weekdays)) {
-    return result(false, 409, "Absent marking is unavailable because this is not a selected class day.");
+  if (!work) {
+    const { data: activeSY, error: schoolYearError } = await supabase
+      .from("school_year_config")
+      .select("id, start_date, end_date, attendance_weekdays")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (schoolYearError) throw schoolYearError;
+    if (!activeSY) return result(false, 409, "No active school year configured. Absent marking skipped.");
+    if (sessionDate < activeSY.start_date || sessionDate > activeSY.end_date) {
+      return result(false, 409, "Date is outside the active school year. Absent marking skipped.");
+    }
+    if (!isScheduledAttendanceDate(sessionDate, activeSY.start_date, activeSY.end_date, activeSY.attendance_weekdays)) {
+      return result(false, 409, "Absent marking is unavailable because this is not a selected class day.");
+    }
+
+    const { data: holidayRows, error: holidayError } = await supabase
+      .from("school_holidays")
+      .select("id")
+      .eq("school_year_config_id", activeSY.id)
+      .eq("holiday_date", sessionDate)
+      .limit(1);
+    // The holiday feature remains optional for older deployments.
+    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+    if ((holidayRows?.length ?? 0) > 0) {
+      return result(false, 409, "Absent marking is unavailable on school holidays.");
+    }
   }
 
-  const { data: holidayRows, error: holidayError } = await supabase
-    .from("school_holidays")
-    .select("id")
-    .eq("school_year_config_id", activeSY.id)
-    .eq("holiday_date", sessionDate)
-    .limit(1);
-  // The holiday feature remains optional for older deployments.
-  if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
-  if ((holidayRows?.length ?? 0) > 0) {
-    return result(false, 409, "Absent marking is unavailable on school holidays.");
-  }
-
-  const session = await getOrCreateSessionSnapshot(sessionDate, input.sessionType, grade);
+  const session = work?.session ?? await getOrCreateSessionSnapshot(sessionDate, input.sessionType, grade);
   if (!session) return result(false, 409, "ICT has not saved this class schedule.");
 
   const absenceDeadline = session.absent_after ?? session.scheduled_end;
@@ -242,15 +261,24 @@ export async function markAutomaticAbsences(input: {
     return result(false, 409, "Students can be marked absent only after ICT's configured Absent After time.");
   }
 
-  const { data: students, error: studentsError } = await supabase
-    .from("students")
-    .select("id, student_id, grade, section, created_at, archive_status")
-    .not("grade", "is", null)
-    .not("section", "is", null);
-  if (studentsError) throw studentsError;
-  if (!students?.length) return result(true, 200, "No active students found.");
+  let students: StudentRow[];
+  if (work) {
+    students = work.students;
+  } else {
+    let studentsQuery = supabase
+      .from("students")
+      .select("id, student_id, grade, section, created_at, archive_status")
+      .eq("grade", grade)
+      .not("section", "is", null);
+    const scopedSections = [...new Set(input.scope?.sections.map((section) => section.trim()).filter(Boolean) ?? [])];
+    if (scopedSections.length) studentsQuery = studentsQuery.in("section", scopedSections);
+    const { data, error: studentsError } = await studentsQuery;
+    if (studentsError) throw studentsError;
+    students = (data ?? []) as StudentRow[];
+  }
+  if (!students.length) return result(true, 200, "No active students found.");
 
-  const activeStudents = (students as StudentRow[]).filter((student) => {
+  const activeStudents = students.filter((student) => {
     const archiveStatus = String(student.archive_status ?? "").trim().toLowerCase();
     return archiveStatus !== "archived" && archiveStatus !== "deleted" && isStudentInScope(student, input.scope);
   });
@@ -405,13 +433,14 @@ export async function processDueAutomaticAbsences() {
 
   const { data: activeStudents, error: activeStudentsError } = await supabase
     .from("students")
-    .select("grade, section, archive_status")
+    .select("id, student_id, grade, section, created_at, archive_status")
     .not("grade", "is", null)
     .not("section", "is", null);
   if (activeStudentsError) throw activeStudentsError;
 
+  const activeRoster = (activeStudents ?? []) as StudentRow[];
   const sectionsByGrade = new Map<string, Set<string>>();
-  for (const student of activeStudents ?? []) {
+  for (const student of activeRoster) {
     const archiveStatus = String(student.archive_status ?? "").trim().toLowerCase();
     const grade = String(student.grade ?? "").trim();
     const section = String(student.section ?? "").trim();
@@ -423,14 +452,18 @@ export async function processDueAutomaticAbsences() {
 
   const processedSessions: AutomaticAbsenceResult[] = [];
   for (const [grade, sections] of sectionsByGrade) {
+    const activeStudentsForGrade = activeRoster.filter((student) =>
+      assignmentPart(student.grade) === assignmentPart(grade)
+      && sections.has(String(student.section ?? "").trim()),
+    );
     for (const sessionType of ["Morning", "Afternoon"] as const) {
       const session = await getOrCreateSessionSnapshot(schoolClock.date, sessionType, grade);
       if (!session || !hasReachedSessionEnd(schoolClock.minutes, session.absent_after ?? session.scheduled_end)) continue;
-      processedSessions.push(await markAutomaticAbsences({
+      processedSessions.push(await markAutomaticAbsencesForValidatedScope({
         sessionType,
         sessionDate: schoolClock.date,
         scope: { grade, sections: [...sections] },
-      }));
+      }, { students: activeStudentsForGrade, session }));
     }
   }
   return { schoolDate: schoolClock.date, processedSessions };

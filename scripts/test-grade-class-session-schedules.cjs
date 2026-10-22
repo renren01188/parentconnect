@@ -55,7 +55,7 @@ assert.match(ictProfiles, /Grade Level/);
 assert.match(ictProfiles, /class-session\?grade=\$\{encodeURIComponent\(selectedGrade\)\}/);
 assert.match(ictProfiles, /grade: selectedGrade/);
 assert.match(adviserAttendance, /event\.scope === "dashboard"\) void loadClassSession\(\)/);
-assert.match(adviserAttendance, /window\.setInterval\(refreshWhenVisible, 15_000\)/);
+assert.match(adviserAttendance, /window\.setInterval\(refreshWhenVisible, 300_000\)/);
 
 // Server-side attendance checks use the student's/adviser's grade as well,
 // so browser state cannot apply another grade's class window.

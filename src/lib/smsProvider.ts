@@ -17,6 +17,20 @@ export type SmsSendResult = {
   };
 };
 
+export type SemaphoreMessageState = "queued" | "pending" | "sent" | "failed" | "refunded" | "unknown";
+
+export type SemaphoreMessageStatus = {
+  providerMessageId: string;
+  providerStatus: string;
+  state: SemaphoreMessageState;
+  // Deliberately restricted to non-PII fields. Semaphore's complete message
+  // payload includes the recipient number and SMS body.
+  response: {
+    provider_status: string;
+    provider_message_id: string;
+  };
+};
+
 export class SmsProviderError extends Error {
   constructor(
     message: string,
@@ -136,6 +150,68 @@ function semaphoreDetails(body: unknown) {
   };
 }
 
+function semaphoreMessageState(status: string): SemaphoreMessageState {
+  switch (status.trim().toLowerCase()) {
+    case "queued": return "queued";
+    case "pending": return "pending";
+    case "sent":
+    case "success": return "sent";
+    case "failed": return "failed";
+    case "refunded": return "refunded";
+    default: return "unknown";
+  }
+}
+
+/**
+ * Reconciles an already-accepted Semaphore message by its provider-issued ID.
+ * Semaphore documents this as GET /api/v4/messages/{id}; it is intentionally
+ * separate from sending so no recovery path needs to create another SMS.
+ */
+export async function getSemaphoreMessageStatus(providerMessageId: string): Promise<SemaphoreMessageStatus> {
+  if (configuredProvider() !== "semaphore") {
+    throw new SmsProviderError("Semaphore message reconciliation is unavailable because Semaphore is not the active SMS provider.", false);
+  }
+
+  const apiKey = process.env.SEMAPHORE_API_KEY;
+  const id = providerMessageId.trim();
+  if (!apiKey) throw new SmsProviderError("SEMAPHORE_API_KEY is not configured.", false);
+  if (!id) throw new SmsProviderError("Semaphore message reconciliation requires a provider message ID.", false);
+
+  let response: Response;
+  try {
+    const params = new URLSearchParams({ apikey: apiKey });
+    response = await fetch(`https://api.semaphore.co/api/v4/messages/${encodeURIComponent(id)}?${params}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(SMS_PROVIDER_TIMEOUT_MS),
+    });
+  } catch {
+    // A status lookup failure is not proof that the original SMS failed.
+    throw new SmsProviderError("Semaphore message status could not be checked.", true, undefined, true);
+  }
+
+  const body = await readResponse(response);
+  if (!response.ok) {
+    throw new SmsProviderError(
+      `Semaphore rejected the message-status check (${response.status}).`,
+      response.status === 408 || response.status === 429 || response.status >= 500,
+      { http_status: response.status },
+      true,
+    );
+  }
+
+  const details = semaphoreDetails(body);
+  return {
+    providerMessageId: details.providerMessageId || id,
+    providerStatus: details.providerStatus,
+    state: semaphoreMessageState(details.providerStatus),
+    response: {
+      provider_status: details.providerStatus,
+      provider_message_id: details.providerMessageId || id,
+    },
+  };
+}
+
 function unismsDetails(body: unknown) {
   const row = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const message = row.message && typeof row.message === "object" ? row.message as Record<string, unknown> : row;
@@ -149,11 +225,16 @@ export async function sendSms({
   recipient,
   message,
   queueId,
+  idempotencyKey,
   semaphoreRoute = "regular",
 }: {
   recipient: string;
   message: string;
   queueId: string;
+  // Semaphore's v4 API has no documented idempotency parameter. This key is
+  // enforced by the attendance queue before this function is reached; UniSMS
+  // also receives it as non-sensitive metadata for traceability.
+  idempotencyKey?: string;
   semaphoreRoute?: SemaphoreSmsRoute;
 }): Promise<SmsSendResult> {
   const provider = configuredProvider();
@@ -186,7 +267,10 @@ export async function sendSms({
           recipient: e164(recipient),
           content: message,
           sender_id: senderId,
-          metadata: { attendance_sms_job_id: queueId },
+          metadata: {
+            attendance_sms_job_id: queueId,
+            ...(idempotencyKey ? { attendance_sms_idempotency_key: idempotencyKey } : {}),
+          },
         }),
         signal: AbortSignal.timeout(SMS_PROVIDER_TIMEOUT_MS),
       });
@@ -202,13 +286,6 @@ export async function sendSms({
   const body = await readResponse(response);
   if (!response.ok) throw errorForResponse(provider, response, body);
   const details = provider === "semaphore" ? semaphoreDetails(body) : unismsDetails(body);
-  if (/fail|reject|invalid|error/i.test(details.providerStatus)) {
-    throw new SmsProviderError(
-      `${provider} did not accept the SMS (${details.providerStatus}).`,
-      false,
-      { provider_code: details.providerStatus.slice(0, 100) },
-    );
-  }
   return {
     provider,
     providerRoute: provider === "semaphore" ? semaphoreRoute : null,

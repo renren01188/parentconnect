@@ -9,8 +9,7 @@ import {
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, displayGuidanceLabel, isSecurityAuditAction, matchesAuditActionFilter, matchesAuditRoleFilter, normalizeAuditAction, normalizeAuditRole } from "@/lib/audit-filter-options";
-import { AUDIT_TIME_ZONE, auditManilaDate } from "@/lib/auditPresentation";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -34,22 +33,6 @@ interface AuditEvent {
   // Extra
   changes: unknown[];
 }
-
-type AuditRealtimeRow = {
-  id: number;
-  action?: string | null;
-  details?: string | null;
-  target_user?: string | null;
-  target_role?: string | null;
-  target_email?: string | null;
-  performed_by?: string | null;
-  performed_by_role?: string | null;
-  module?: string | null;
-  ip_address?: string | null;
-  browser?: string | null;
-  created_at: string;
-  changes?: unknown;
-};
 
 // ─── Constants ────────────────────────────────────────────────
 const PRIMARY = "#274e13";
@@ -117,26 +100,6 @@ function resolveAction(raw: string): string {
   const first = raw.split(/[_\s]/)[0];
   const cap   = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
   return ACTION_META[cap] ? cap : raw;
-}
-
-function toAuditEvent(row: AuditRealtimeRow): AuditEvent {
-  const timestamp = new Date(row.created_at);
-  return {
-    id: String(row.id),
-    action: row.action ?? "",
-    description: displayGuidanceLabel(row.details),
-    targetUser: displayGuidanceLabel(row.target_user),
-    targetRole: normalizeAuditRole(row.target_role),
-    targetEmail: row.target_email ?? "",
-    performedBy: displayGuidanceLabel(row.performed_by),
-    performedByRole: normalizeAuditRole(row.performed_by_role),
-    module: row.module ?? "",
-    ipAddress: row.ip_address ?? "",
-    browser: row.browser ?? "",
-    timestamp: timestamp.toLocaleDateString("en-US", { timeZone: AUDIT_TIME_ZONE, month: "short", day: "numeric" }) + " · " + timestamp.toLocaleTimeString("en-US", { timeZone: AUDIT_TIME_ZONE, hour: "numeric", minute: "2-digit" }),
-    timestampMs: timestamp.getTime(),
-    changes: Array.isArray(row.changes) ? row.changes : [],
-  };
 }
 
 // ─── Action Badge ─────────────────────────────────────────────
@@ -310,7 +273,6 @@ export default function AuditTrailPage() {
   const [loading,      setLoading]     = useState(true);
   const [error,        setError]       = useState<string | null>(null);
   const [refreshKey,   setRefreshKey]  = useState(0);
-  const liveStateRef = useRef({ query: "", actionFilter: "", roleFilter: "", dateFilter: "", archiveFilter: "active" as "active" | "archived", page: 1, perPage: 8 });
 
   // ── Debounce search ──
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -353,51 +315,9 @@ export default function AuditTrailPage() {
     fetchEvents();
   }, [fetchEvents]);
 
-  // The existing SSE stream covers same-instance inserts. A protected
-  // Broadcast also covers writes made by another deployed instance.
   useSessionInvalidation((event) => {
     if (!event.scope || event.scope === "audit") return fetchEvents({ background: true });
   });
-
-  useEffect(() => {
-    liveStateRef.current = { query, actionFilter, roleFilter, dateFilter, archiveFilter, page, perPage };
-  }, [actionFilter, archiveFilter, dateFilter, page, perPage, query, roleFilter]);
-
-  // Receive newly created logs from the authenticated server stream. No page
-  // or list reload occurs, preserving filters, scroll position and UI state.
-  useEffect(() => {
-    const stream = new EventSource("/api/ict/audit-log/stream");
-    const handleNewAuditLog = (message: MessageEvent<string>) => {
-        const event = toAuditEvent(JSON.parse(message.data) as AuditRealtimeRow);
-        const current = liveStateRef.current;
-        const searchText = `${event.performedBy} ${event.description} ${event.action}`.toLowerCase();
-        const matchesFilters =
-          current.archiveFilter === "active" &&
-          (!current.query || searchText.includes(current.query.toLowerCase())) &&
-          matchesAuditActionFilter(event.action, current.actionFilter) &&
-          matchesAuditRoleFilter(event.performedByRole, current.roleFilter) &&
-          (!current.dateFilter || auditManilaDate(event.timestampMs) === current.dateFilter);
-        if (current.archiveFilter === "active" &&
-            (!current.dateFilter || auditManilaDate(event.timestampMs) === current.dateFilter) &&
-            isSecurityAuditAction(event.action)) {
-          setSecurityTotal((value) => value + 1);
-        }
-        if (!matchesFilters) return;
-
-        setTotal((current) => current + 1);
-        // A new record belongs at the top of chronological page one. Other
-        // pages remain untouched, preserving the user's current position.
-        if (current.page === 1) {
-          setEvents((items) => [event, ...items.filter((item) => item.id !== event.id)].slice(0, current.perPage));
-        }
-    };
-    stream.addEventListener("audit-log", handleNewAuditLog as EventListener);
-
-    return () => {
-      stream.removeEventListener("audit-log", handleNewAuditLog as EventListener);
-      stream.close();
-    };
-  }, []);
 
   // Debounced query reset page
   function handleSearch(val: string) {

@@ -23,6 +23,15 @@ export type AttendanceSmsInput = {
   attendanceType: "Time In" | "Time Out";
 };
 
+/**
+ * This key identifies one intended notification, not one HTTP request. It is
+ * unique per attendance event and parent, so repeated scans, worker overlap,
+ * and recovery attempts all share one durable delivery record.
+ */
+export function attendanceSmsIdempotencyKey(attendanceLogId: number, parentId: number) {
+  return `attendance-sms:v1:attendance-log:${attendanceLogId}:parent:${parentId}`;
+}
+
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -79,8 +88,8 @@ function registeredParents(rows: ParentContact[]) {
 /**
  * Writes only to Supabase. It never contacts an SMS provider, so callers can
  * await it after saving attendance without making RFID/manual attendance wait
- * for external delivery. One job per attendance_logs.id makes retries and
- * repeated requests idempotent.
+ * for external delivery. One job per attendance event and parent makes retries
+ * and repeated requests idempotent.
  */
 export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
   if (!await isAttendanceSmsEnabled()) {
@@ -118,11 +127,12 @@ export async function enqueueAttendanceSms(input: AttendanceSmsInput) {
         parent_id: parent.parentId,
         recipient_phone: parent.phone,
         recipient_key: `attendance-log:${input.attendanceLogId}:parent:${parent.parentId}`,
+        idempotency_key: attendanceSmsIdempotencyKey(input.attendanceLogId, parent.parentId),
         message,
         status: "pending",
         available_at: new Date().toISOString(),
         last_error: null,
-      })), { onConflict: "attendance_log_id,parent_id", ignoreDuplicates: true });
+      })), { onConflict: "idempotency_key", ignoreDuplicates: true });
     if (error) throw error;
 
     // Some older deployments create the pending job from a database trigger

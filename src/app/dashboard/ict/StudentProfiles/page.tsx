@@ -117,6 +117,21 @@ type AttendanceNotificationSettings = {
   smsCreditsCheckError: string | null;
 };
 
+type AttendanceSmsJob = {
+  id: string;
+  attendance_log_id: number;
+  status: string;
+  attempts: number;
+  provider: string | null;
+  provider_message_id: string | null;
+  provider_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  reconciliation_required_at: string | null;
+  retry_eligible_at: string | null;
+};
+
 // ─── Constants ──────────────────────────────────────────────────
 const SUFFIXES = ["None", "Jr.", "Sr.", "II", "III", "IV"];
 const PER_PAGE = 8;
@@ -520,6 +535,8 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [checkingCredits, setCheckingCredits] = useState(false);
+  const [smsJobs, setSmsJobs] = useState<AttendanceSmsJob[]>([]);
+  const [loadingSmsJobs, setLoadingSmsJobs] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -545,6 +562,22 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
   }, []);
 
   useEffect(() => { void loadSettings(); }, [loadSettings]);
+
+  const loadSmsJobs = useCallback(async () => {
+    setLoadingSmsJobs(true);
+    try {
+      const res = await fetch("/api/ict/attendance-sms-jobs", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not load attendance SMS jobs.");
+      setSmsJobs(Array.isArray(data.jobs) ? data.jobs as AttendanceSmsJob[] : []);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load attendance SMS jobs.");
+    } finally {
+      setLoadingSmsJobs(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadSmsJobs(); }, [loadSmsJobs]);
 
   // Attendance settings are shared by all ICT sessions. Re-read the server
   // snapshot when another administrator saves settings or checks credits.
@@ -607,6 +640,10 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
     { value: "both", label: "Both SMS and Email", description: "Send both channels for each RFID attendance event." },
     { value: "none", label: "Neither", description: "Record attendance normally without sending parent notifications." },
   ];
+  const attentionSmsJobs = smsJobs.filter((job) => (
+    ["pending", "processing", "failed", "reconciliation_required", "retry_eligible"].includes(job.status)
+    || (job.status === "sent" && ["queued", "pending"].includes((job.provider_status || "").toLowerCase()))
+  ));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
@@ -626,6 +663,19 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-sm font-bold text-gray-800">Semaphore SMS credits</p>{unableToCheckCredits ? <p className="mt-1 text-sm font-semibold text-amber-700">Unable to check credits</p> : <p className="mt-1 text-2xl font-black text-[#274e13]">{settings?.smsCreditBalance?.toLocaleString()} <span className="text-sm font-semibold">credits</span></p>}<p className="mt-1 text-xs text-gray-500">{settings?.smsCreditsCheckedAt ? `Last checked ${new Date(settings.smsCreditsCheckedAt).toLocaleString()}` : "Not checked yet"}</p></div><button type="button" onClick={checkCredits} disabled={checkingCredits} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${checkingCredits ? "animate-spin" : ""}`} />{checkingCredits ? "Checking…" : "Check credits"}</button></div>
               <div className="mt-4 max-w-xs"><label className="mb-1.5 block text-xs font-semibold text-gray-600">Low-credit warning threshold</label><div className="flex items-center gap-2"><input type="number" min="0" step="1" value={threshold} onChange={event => setThreshold(event.target.value)} className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" /><span className="text-xs text-gray-500">credits</span></div></div>
               {lowCredit && <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />SMS credits are at or below the configured warning threshold.</div>}
+            </section>
+            <section className="rounded-xl border border-gray-200 bg-white p-4" aria-label="Attendance SMS delivery queue">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div><p className="text-sm font-bold text-gray-800">SMS delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">The queue automatically sends attendance messages and retries only provider-confirmed Failed or Refunded messages. Queued and Pending messages are never resent.</p></div>
+                <button type="button" onClick={() => { void loadSmsJobs(); }} disabled={loadingSmsJobs} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${loadingSmsJobs ? "animate-spin" : ""}`} />{loadingSmsJobs ? "Refreshing…" : "Refresh queue"}</button>
+              </div>
+              {loadingSmsJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : attentionSmsJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">No recent SMS jobs need review.</p> : <div className="mt-4 space-y-2">{attentionSmsJobs.map(job => {
+                const retryEligible = job.status === "retry_eligible";
+                const review = job.status === "reconciliation_required";
+                return <div key={job.id} className={`rounded-lg border p-3 ${review ? "border-amber-200 bg-amber-50" : retryEligible ? "border-emerald-200 bg-emerald-50" : "border-gray-200 bg-gray-50"}`}>
+                  <div className="min-w-0"><p className="text-xs font-bold text-gray-800">Attendance #{job.attendance_log_id} · {job.status.replace(/_/g, " ")}</p><p className="mt-1 text-[11px] text-gray-600">Semaphore: {job.provider_status || "not requested"} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
+                </div>;
+              })}</div>}
             </section>
             {error && <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
             {notice && <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-semibold text-emerald-700"><CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />{notice}</div>}

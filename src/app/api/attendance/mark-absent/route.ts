@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { getIctFromToken } from "@/lib/getIctFromToken";
-import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishAttendanceRealtimeInvalidations } from "@/lib/realtimeInvalidation";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 import { markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 
@@ -31,9 +31,9 @@ export async function POST(req: NextRequest) {
       scope: { grade, sections: [] },
     });
     if (response.affectedStudentDbIds.length) {
-      after(() => Promise.all(
-        response.affectedStudentDbIds.map((studentDbId) => publishAttendanceRealtimeInvalidation({ studentDbId })),
-      ).then(() => undefined));
+      after(() => publishAttendanceRealtimeInvalidations(
+        response.affectedStudentDbIds.map((studentDbId) => ({ studentDbId })),
+      ));
     }
     return NextResponse.json(response, { status: response.status });
   } catch (error) {

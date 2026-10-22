@@ -154,6 +154,8 @@ assert.match(processor, /hasReachedSessionEnd\(schoolClock\.minutes, absenceDead
 assert.doesNotMatch(processor, /schoolClock\.minutes < timeToMinutes\(cutoff\)/);
 assert.match(processor, /scope\?: AutomaticAbsenceScope/);
 assert.match(processor, /isStudentInScope/);
+assert.match(processor, /processDueAutomaticAbsences[\s\S]*?activeStudentsForGrade/, "The scheduled worker must reuse its one roster read across due sessions.");
+assert.match(processor, /\.eq\("grade", grade\)/, "An adviser-scope fallback must query only its grade instead of scanning every student.");
 assert.match(processor, /excuse_letters/);
 assert.match(processor, /\.eq\("type", "Time In"\)/, "Only a missing Time In may be automatically marked absent.");
 assert.match(processor, /status: "Absent"/);
@@ -174,8 +176,8 @@ assert.match(studentPage, /\["students", "accounts", "attendance", "dashboard"\]
 assert.match(cronRoute, /CRON_SECRET/);
 assert.match(cronRoute, /processDueAutomaticAbsences/);
 assert.ok(
-  vercel.crons.some((cron) => cron.path === "/api/attendance/process-absences" && cron.schedule === "* * * * *"),
-  "A minute scheduler must invoke automatic absence processing.",
+  vercel.crons.some((cron) => cron.path === "/api/attendance/process-absences" && cron.schedule === "*/5 * * * *"),
+  "A five-minute scheduler must invoke automatic absence processing without continuously saturating the database.",
 );
 assert.match(monthlyExportRoute, /timeIn\?\.status === "Absent" \|\| isExcused/, "Exports must count Excused records with Absences while retaining their Excused detail status.");
 assert.match(manualRoute, /Time Out requires a recorded On Time or Late Time In/);
