@@ -21,6 +21,12 @@ assert.match(route, /stats: \{ total: summary\.length/, "History totals must inc
 
 assert.match(page, /historyRequestRef\.current\?\.abort\(\)/, "Changing dates must cancel the prior History request.");
 assert.match(page, /historyRequestRef\.current !== controller/, "A stale History response must not replace the selected date's data.");
+assert.match(page, /const \[historyDate, setHistoryDate\] = useState\(""\)/, "History must wait for an Adviser to select a date.");
+assert.match(page, /if \(!date\) \{[\s\S]*?setHistorySummary\(\[\]\);[\s\S]*?setHistoryStats\(null\);/, "Clearing the selected History date must clear its saved records.");
+assert.match(page, /Select an attendance date to view its saved records and any corrections\./, "History must not show records before a date is selected.");
+assert.match(page, /if \(editAttendanceDate === toLocalDateString\(new Date\(\)\)\) await loadTodayLogs\(\);/, "Editing a past date must not refresh it into Today's Log.");
+assert.match(page, /if \(showHistory && historyDate === editAttendanceDate\) await loadHistory\(historyDate\);/, "A saved edit must refresh the currently selected matching History date.");
+assert.match(page, /setHistoryDate\(date\);[\s\S]*?void loadHistory\(date\);/, "Selecting a History date must load the saved attendance for that date.");
 
 assert.match(migration, /student_grade_snapshot text/);
 assert.match(migration, /student_section_snapshot text/);

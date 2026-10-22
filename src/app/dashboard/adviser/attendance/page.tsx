@@ -1928,6 +1928,7 @@ export default function AdviserAttendancePage() {
     const [rapidTapResults, setRapidTapResults] = useState<RapidTapResult[]>([]);
     const [rapidTapStorageReady, setRapidTapStorageReady] = useState(false);
     const [rapidTapComplete, setRapidTapComplete] = useState(false);
+    const [applyingRapidTapId, setApplyingRapidTapId] = useState<string | null>(null);
     const [logs, setLogs] = useState<AttendanceLog[]>([]);
     const [lastScanned, setLastScanned] = useState<AttendanceLog | null>(null);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -1967,7 +1968,10 @@ export default function AdviserAttendancePage() {
     const [showRfidReplacementConfirmation, setShowRfidReplacementConfirmation] = useState(false);
 
     const [showHistory, setShowHistory] = useState(false);
-    const [historyDate, setHistoryDate] = useState(toLocalDateString(new Date()));
+    // History is intentionally date-driven. Opening the panel does not
+    // silently show a different day's records; the Adviser chooses the date
+    // they want to review.
+    const [historyDate, setHistoryDate] = useState("");
     const [historySummary, setHistorySummary] = useState<HistorySummaryRow[]>([]);
     const [historyStats, setHistoryStats] = useState<HistoryStats | null>(null);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -2055,6 +2059,7 @@ export default function AdviserAttendancePage() {
     const rapidTapPendingCount = rapidTapQueue.filter((item) => item.status !== "failed").length;
     const rapidTapFailedCount = rapidTapQueue.filter((item) => item.status === "failed").length;
     const rapidTapManualReviewCount = rapidTapQueue.filter((item) => item.status === "failed" && item.requiresManualReview).length;
+    const rapidTapManualReviewItems = rapidTapQueue.filter((item) => item.status === "failed" && item.requiresManualReview);
     const rapidTapRetryableFailedCount = rapidTapFailedCount - rapidTapManualReviewCount;
     // Only a scan still eligible for automatic processing should prevent an
     // Adviser from changing scanner modes or closing the browser.
@@ -2070,6 +2075,14 @@ export default function AdviserAttendancePage() {
     const addRapidTapResult = useCallback((result: RapidTapResult) => {
         setRapidTapResults((current) => [result, ...current].slice(0, 4));
     }, []);
+
+    const rapidTapItemLabel = (item: RapidTapQueueItem) => {
+        const student = students.find((candidate) =>
+            resolveRfidScanValue(candidate.rfid_card, "") === item.rfidCard
+            && candidate.section === item.section,
+        );
+        return student ? buildFullName(student) : `Queued RFID ${item.rfidCard}`;
+    };
 
     function focusScanner() { inputRef.current?.focus(); }
     function clearScannerInput() {
@@ -2125,6 +2138,16 @@ export default function AdviserAttendancePage() {
 
     async function loadHistory(date: string, section?: string) {
         historyRequestRef.current?.abort();
+        if (!date) {
+            historyRequestRef.current = null;
+            setHistorySummary([]);
+            setHistoryStats(null);
+            setHistoryError("");
+            setHistoryIsHoliday(false);
+            setIsLoadingHistory(false);
+            setHistoryPage(1);
+            return;
+        }
         const controller = new AbortController();
         historyRequestRef.current = controller;
         setIsLoadingHistory(true); setHistoryError(""); setHistoryIsHoliday(false); setHistoryPage(1);
@@ -2432,16 +2455,91 @@ export default function AdviserAttendancePage() {
         setScanMessage(`Retrying ${changedItems.length} Rapid Tap scan${changedItems.length === 1 ? "" : "s"}...`);
     }, [replaceRapidTapQueue]);
 
-    const dismissManualReviewRapidTapScans = useCallback(() => {
-        const reviewedItems = rapidTapQueueRef.current.filter((item) => item.status === "failed" && item.requiresManualReview);
-        if (reviewedItems.length === 0) return;
-        void Promise.all(reviewedItems.map((item) => removeRapidTapQueueItem(item.id)))
-            .then(() => {
-                replaceRapidTapQueue(rapidTapQueueRef.current.filter((item) => !item.requiresManualReview));
+    const removeManualReviewRapidTapScan = useCallback(async (item: RapidTapQueueItem) => {
+        if (!item.requiresManualReview || applyingRapidTapId) return;
+        try {
+            await removeRapidTapQueueItem(item.id);
+            const remaining = replaceRapidTapQueue(rapidTapQueueRef.current.filter((current) => current.id !== item.id));
+            // A result belongs to its queued item. Removing that item must not
+            // leave its old red warning visible as though it still needs work.
+            setRapidTapResults((current) => current.filter((result) => result.id !== item.id));
+            const remainingReviews = remaining.filter((current) => current.status === "failed" && current.requiresManualReview).length;
+            if (remainingReviews > 0) {
+                setScanMessage(`${remainingReviews} Rapid Tap scan${remainingReviews === 1 ? "" : "s"} still needs review.`);
+            } else if (remaining.length > 0) {
+                setScanMessage(`${remaining.length} Rapid Tap queue item${remaining.length === 1 ? "" : "s"} remains.`);
+            } else {
                 setScanMessage("Reviewed Rapid Tap scan removed from this browser. No attendance record was changed.");
-            })
-            .catch((storageError) => console.error("Could not remove reviewed Rapid Tap scans:", storageError));
-    }, [replaceRapidTapQueue]);
+            }
+        } catch (storageError) {
+            console.error("Could not remove reviewed Rapid Tap scan:", storageError);
+            setScanMessage("Could not remove this Rapid Tap item from this browser. Please try again.");
+        }
+    }, [applyingRapidTapId, replaceRapidTapQueue]);
+
+    const applyManualReviewRapidTapScan = useCallback(async (item: RapidTapQueueItem) => {
+        if (!item.requiresManualReview || applyingRapidTapId) return;
+        setApplyingRapidTapId(item.id);
+        setScanMessage("Applying queued Rapid Tap through authorised attendance correction...");
+        try {
+            const response = await fetch("/api/attendance/rapid-tap-correction", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    rfid_card: item.rfidCard,
+                    section: item.section,
+                    scan_id: item.id,
+                    scan_date: item.scanDate,
+                    session_type: item.sessionType,
+                }),
+            });
+            const data = await response.json() as {
+                success?: boolean;
+                message?: string;
+                log?: AttendanceLog;
+            };
+            const appliedLog = data.log;
+            if (!response.ok || !data.success || !appliedLog) {
+                const message = data.message || "This Rapid Tap item could not be applied. Review the attendance record and try again.";
+                const failedItem = { ...item, lastError: message };
+                await saveRapidTapQueueItem(failedItem);
+                replaceRapidTapQueue(rapidTapQueueRef.current.map((current) => current.id === item.id ? failedItem : current));
+                const failedResult: RapidTapResult = { id: item.id, outcome: "failed", message };
+                setRapidTapResults((current) => [failedResult, ...current.filter((result) => result.id !== item.id)].slice(0, 4));
+                setScanMessage(message);
+                return;
+            }
+
+            await removeRapidTapQueueItem(item.id);
+            const remaining = replaceRapidTapQueue(rapidTapQueueRef.current.filter((current) => current.id !== item.id));
+            setLastScanned(appliedLog);
+            setLogs((current) => current.some((log) => log.id === appliedLog.id)
+                ? current.map((log) => log.id === appliedLog.id ? appliedLog : log)
+                : [appliedLog, ...current]);
+            setTodayLogPage(1);
+            const appliedResult: RapidTapResult = {
+                id: item.id,
+                outcome: "recorded",
+                message: `✓ ${appliedLog.full_name} applied as ${appliedLog.status} through authorised attendance correction.`,
+            };
+            setRapidTapResults((current) => [appliedResult, ...current.filter((result) => result.id !== item.id)].slice(0, 4));
+            const remainingReviews = remaining.filter((current) => current.status === "failed" && current.requiresManualReview).length;
+            setScanMessage(remainingReviews > 0
+                ? `Queued Rapid Tap applied. ${remainingReviews} scan${remainingReviews === 1 ? "" : "s"} still needs review.`
+                : remaining.length > 0
+                    ? "Queued Rapid Tap applied. Other queue items remain."
+                    : "Queued Rapid Tap applied as an authorised attendance correction. No parent SMS was sent.");
+            void loadTodayLogs(item.section);
+        } catch (error) {
+            console.error("Could not apply queued Rapid Tap scan:", error);
+            const message = "Could not apply this Rapid Tap item. The queued scan remains available for review.";
+            const failedResult: RapidTapResult = { id: item.id, outcome: "failed", message };
+            setRapidTapResults((current) => [failedResult, ...current.filter((result) => result.id !== item.id)].slice(0, 4));
+            setScanMessage(message);
+        } finally {
+            setApplyingRapidTapId(null);
+        }
+    }, [applyingRapidTapId, loadTodayLogs, replaceRapidTapQueue]);
 
     // Restore this Adviser's unfinished Rapid Tap queue after a refresh or an
     // accidental close. A record left in "saving" is reset to queued: the
@@ -2530,11 +2628,14 @@ export default function AdviserAttendancePage() {
     }, [hasRapidTapUnsynced]);
 
     function changeHistoryDate(offset: number) {
+        if (!historyDate) return;
         const [y, m, d] = historyDate.split("-").map(Number);
         const next = new Date(y, m - 1, d + offset);
         const nextStr = toLocalDateString(next);
         setHistoryDate(nextStr);
-        loadHistory(nextStr);
+        setHistorySearch("");
+        setHistoryFilter("All");
+        void loadHistory(nextStr);
     }
 
     async function handleScan(inputValue?: string) {
@@ -2856,7 +2957,7 @@ export default function AdviserAttendancePage() {
     // authorization and does not reset an open attendance screen.
     const scheduleAttendanceRefresh = useDebouncedRealtimeRefresh(async () => {
         await loadTodayLogs();
-        if (showHistory) await loadHistory(historyDate);
+        if (showHistory && historyDate) await loadHistory(historyDate);
     });
     const scheduleStudentsRefresh = useDebouncedRealtimeRefresh(() => loadStudents());
     useSessionInvalidation((event) => {
@@ -3015,7 +3116,7 @@ export default function AdviserAttendancePage() {
                                 setManualStatus("On Time");
                                 loadStudents(sec);
                                 loadTodayLogs(sec);
-                                if (showHistory) loadHistory(historyDate, sec);
+                                if (showHistory && historyDate) void loadHistory(historyDate, sec);
                             }}
                             className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-all ${(activeSection || adviser.sections[0]) === sec
                                 ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
@@ -3086,7 +3187,14 @@ export default function AdviserAttendancePage() {
                     <h3 className="text-sm font-bold">History</h3>
                     <p className="mt-1 text-xs opacity-80">View past attendance records</p>
                     <button
-                        onClick={() => { setActiveTopAction("history"); setShowHistory(true); loadHistory(historyDate); }}
+                        onClick={() => {
+                            setActiveTopAction("history");
+                            setShowHistory(true);
+                            // Reload only a date the Adviser has already
+                            // chosen. A newly opened History panel stays
+                            // blank until a date is selected.
+                            if (historyDate) void loadHistory(historyDate);
+                        }}
                         className={`mt-auto min-h-11 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${activeTopAction === "history" ? "bg-white text-emerald-600" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
                         {activeTopAction === "history" ? "Viewing History" : "View History"}
                     </button>
@@ -3103,27 +3211,39 @@ export default function AdviserAttendancePage() {
                             <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-lg">{sectionLabel}</span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                            <button onClick={() => changeHistoryDate(-1)}
-                                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">
+                            <button onClick={() => changeHistoryDate(-1)} disabled={!historyDate}
+                                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
                                 <ChevronLeft className="w-4 h-4 text-slate-500" />
                             </button>
                             <div className="relative flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
                                 <Calendar className="w-4 h-4 text-emerald-500" />
                                 <input type="date" value={historyDate} max={todayStr}
-                                    onChange={e => { setHistoryDate(e.target.value); loadHistory(e.target.value); }}
+                                    onChange={e => {
+                                        const date = e.target.value;
+                                        setHistoryDate(date);
+                                        setHistorySearch("");
+                                        setHistoryFilter("All");
+                                        void loadHistory(date);
+                                    }}
                                     className="text-sm font-semibold text-slate-700 bg-transparent outline-none cursor-pointer" />
                             </div>
-                            <button onClick={() => changeHistoryDate(1)} disabled={historyDate >= todayStr}
+                            <button onClick={() => changeHistoryDate(1)} disabled={!historyDate || historyDate >= todayStr}
                                 className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                 <ChevronRight className="w-4 h-4 text-slate-500" />
                             </button>
-                            <button onClick={() => loadHistory(historyDate)}
-                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-colors">
+                            <button onClick={() => void loadHistory(historyDate)} disabled={!historyDate}
+                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40">
                                 {isLoadingHistory ? "Loading…" : "Refresh"}
                             </button>
                         </div>
                     </div>
 
+                    {!historyDate ? (
+                        <div className="px-5 py-10 text-center text-sm text-slate-500">
+                            Select an attendance date to view its saved records and any corrections.
+                        </div>
+                    ) : (
+                    <>
                     <div className={`flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-5 ${historyIsHoliday ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"}`}>
                         <div className="flex items-center gap-2">
                             <p className={`text-sm font-bold ${historyIsHoliday ? "text-amber-700" : "text-emerald-700"}`}>
@@ -3261,6 +3381,8 @@ export default function AdviserAttendancePage() {
                         )}
                         </>
                     )}
+                    </>
+                    )}
                 </div>
             )}
 
@@ -3322,10 +3444,10 @@ export default function AdviserAttendancePage() {
                                             <p className="mt-1">
                                                 {isScanningOpen
                                                     ? "Please do not close this tab or switch to another browser while attendance records are still being processed in the queue."
-                                                    : "The class session is closed. The system is only checking whether each scan was already saved; it cannot create new off-schedule attendance."}
+                                                    : "The class session is closed. The system is only checking whether each scan was already saved; use Apply only for an authorised manual correction."}
                                             </p>
                                             {rapidTapManualReviewCount > 0 && (
-                                                <p className="mt-1 font-medium">Record these scans through the authorised manual attendance process before removing them from this browser.</p>
+                                                <p className="mt-1 font-medium">Apply a reviewed scan only when you confirm it belongs to this student and session. Applying records an audited manual Time In correction and does not send a parent SMS.</p>
                                             )}
                                             {rapidTapRetryableFailedCount > 0 && (
                                                 <button type="button" onClick={retryFailedRapidTapScans}
@@ -3334,10 +3456,29 @@ export default function AdviserAttendancePage() {
                                                 </button>
                                             )}
                                             {rapidTapManualReviewCount > 0 && (
-                                                <button type="button" onClick={dismissManualReviewRapidTapScans}
-                                                    className="ml-2 mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
-                                                    Remove {rapidTapManualReviewCount} Reviewed Scan{rapidTapManualReviewCount === 1 ? "" : "s"}
-                                                </button>
+                                                <div className="mt-3 space-y-2">
+                                                    {rapidTapManualReviewItems.map((item) => {
+                                                        const applying = applyingRapidTapId === item.id;
+                                                        return (
+                                                            <div key={item.id} className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-white/80 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                                <div className="min-w-0">
+                                                                    <p className="truncate font-bold text-amber-900">{rapidTapItemLabel(item)}</p>
+                                                                    <p className="truncate text-[11px] text-amber-800">{item.section} · {item.sessionType} · {item.lastError || "Needs attendance review"}</p>
+                                                                </div>
+                                                                <div className="flex shrink-0 gap-2">
+                                                                    <button type="button" onClick={() => void applyManualReviewRapidTapScan(item)} disabled={applyingRapidTapId !== null}
+                                                                        className="rounded-lg border border-emerald-300 bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                                                        {applying ? "Applying..." : "Apply"}
+                                                                    </button>
+                                                                    <button type="button" onClick={() => void removeManualReviewRapidTapScan(item)} disabled={applyingRapidTapId !== null}
+                                                                        className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60">
+                                                                        Remove
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
                                             )}
                                         </div>
                                     ) : rapidTapComplete ? (

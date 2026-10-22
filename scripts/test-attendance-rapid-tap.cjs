@@ -8,6 +8,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
 const scanRoute = read("src/app/api/attendance/scan/route.ts");
+const correctionRoute = read("src/app/api/attendance/rapid-tap-correction/route.ts");
 const queueStorage = read("src/lib/attendanceRapidTapQueue.ts");
 const migration = read("supabase/migrations/20261022103000_add_attendance_scan_request_id.sql");
 
@@ -26,7 +27,12 @@ assert.match(adviserPage, /reconcile_only: !isScanningOpen/);
 assert.match(adviserPage, /needsManualReview\?: boolean/);
 assert.match(adviserPage, /Confirming \$\{rapidTapPendingCount\} interrupted scan/);
 assert.match(adviserPage, /requiresManualReview: true/);
-assert.match(adviserPage, /Remove \{rapidTapManualReviewCount\} Reviewed Scan/);
+assert.match(adviserPage, /applyManualReviewRapidTapScan/);
+assert.match(adviserPage, /removeManualReviewRapidTapScan/);
+assert.match(adviserPage, /\/api\/attendance\/rapid-tap-correction/);
+assert.match(adviserPage, /setRapidTapResults\(\(current\) => current\.filter\(\(result\) => result\.id !== item\.id\)\)/, "Removing an item must clear its stale queue result.");
+assert.match(adviserPage, /"Apply"/);
+assert.match(adviserPage, />\s*Remove\s*</);
 assert.match(adviserPage, /outOfSection\?: boolean/);
 assert.match(adviserPage, /if \(data\.outOfSection\)[\s\S]*?removeRapidTapQueueItem\(savingItem\.id\)[\s\S]*?setScanMessage\(`⚠ \$\{message\} Ready for the next RFID tap\.\`\)/);
 assert.match(adviserPage, /outcome: "out-of-section"/);
@@ -46,6 +52,15 @@ assert.match(scanRoute, /requestedSessionType && requestedSessionType !== sessio
 assert.match(scanRoute, /attendanceSuccessPayload\(recorded\.log, recorded\.student, true\)/);
 assert.match(scanRoute, /outOfSection: Boolean\(anyStudent && anyStudent\.length > 0\)/);
 assert.match(scanRoute, /This student is not in your assigned section\. No attendance was recorded\./);
+
+assert.match(correctionRoute, /getAdviserFromToken/);
+assert.match(correctionRoute, /getScheduledStudentLrns/);
+assert.match(correctionRoute, /scanDate !== schoolClock\.date/);
+assert.match(correctionRoute, /assignedSession !== sessionType/);
+assert.match(correctionRoute, /scan_request_id", scanId/);
+assert.match(correctionRoute, /existingTimeIn && !\(existingTimeIn\.status === "Absent" && existingTimeIn\.via === "Auto"\)/);
+assert.match(correctionRoute, /Rapid Tap Attendance Corrected/);
+assert.match(correctionRoute, /SMS skipped: Rapid Tap attendance was applied as an adviser correction\./);
 
 assert.match(migration, /ADD COLUMN IF NOT EXISTS scan_request_id text/);
 assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS attendance_logs_scan_request_id_unique/);
