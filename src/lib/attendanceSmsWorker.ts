@@ -29,6 +29,7 @@ export const DEFAULT_ATTENDANCE_SMS_CONCURRENCY = 4;
 const MAX_ATTENDANCE_SMS_BATCH_SIZE = 20;
 const MAX_ATTENDANCE_SMS_CONCURRENCY = 4;
 const MAX_SMS_ATTEMPTS = 5;
+const MAX_AUTOMATIC_RECONCILIATION_ATTEMPTS = 3;
 const PROCESSING_STALE_AFTER_MS = 10 * 60_000;
 const ATTENDANCE_SMS_DISPATCH_LEASE_SECONDS = 120;
 const UNKNOWN_PROCESSING_ERROR = "SMS provider outcome is unknown after a worker interruption. It was not resent; reconcile it with Semaphore before any retry.";
@@ -426,6 +427,17 @@ async function processJob(job: SmsJob): Promise<JobOutcome> {
 
 async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome> {
   if (job.provider !== "semaphore" || !job.provider_message_id) return "not_applicable";
+
+  // Unknown provider outcomes get a few automatic checks, then await ICT
+  // review. Rechecking forever creates provider/API and database load without
+  // making an indeterminate delivery safer to retry.
+  if (
+    job.status === "reconciliation_required" &&
+    job.reconciliation_attempts >= MAX_AUTOMATIC_RECONCILIATION_ATTEMPTS
+  ) {
+    return "review";
+  }
+
   const reconciledAt = new Date().toISOString();
   try {
     const result = await getSemaphoreMessageStatus(job.provider_message_id);
@@ -491,6 +503,7 @@ async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome
         provider_response: result.response,
         reconciled_at: reconciledAt,
         reconciliation_required_at: reconciledAt,
+        reconciliation_attempts: job.reconciliation_attempts + 1,
         last_error: "Semaphore returned an unrecognized message status. Review this job before any retry.",
       })
       .eq("id", job.id)
@@ -552,7 +565,7 @@ async function reconcileAttendanceSmsJobBatch(options?: { batchSize?: number; at
     .select(jobColumns)
     .eq("provider", "semaphore")
     .not("provider_message_id", "is", null)
-    .in("status", ["sent", "failed", "reconciliation_required", "retry_eligible"])
+    .in("status", ["reconciliation_required", "retry_eligible"])
     .order("updated_at", { ascending: true })
     .limit(batchSize);
   if (options?.attendanceLogId !== undefined) query = query.eq("attendance_log_id", options.attendanceLogId);

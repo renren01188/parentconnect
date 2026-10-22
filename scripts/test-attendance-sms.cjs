@@ -174,6 +174,12 @@ assert.match(workerSource, /getSemaphoreMessageStatus/);
 assert.match(workerSource, /provider_requested_at/);
 assert.match(workerSource, /Queued, Pending, Sent,[\s\S]*unknown outcomes never enter this list and can never be resent/);
 assert.match(workerSource, /automatic_retry_started/);
+assert.match(workerSource, /MAX_AUTOMATIC_RECONCILIATION_ATTEMPTS = 3/);
+assert.match(workerSource, /\.in\("status", \["reconciliation_required", "retry_eligible"\]\)/);
+assert.doesNotMatch(
+  workerSource,
+  /\.in\("status", \["sent", "failed", "reconciliation_required", "retry_eligible"\]\)/,
+);
 assert.doesNotMatch(workerSource, /export async function retryEligibleAttendanceSmsJob/);
 assert.match(recoveryScript, /Direct SMS recovery dispatch is retired/);
 assert.match(vercelConfig, /process-attendance-sms/);
