@@ -22,6 +22,11 @@ assert.match(adviserPage, /Finish or retry the Rapid Tap queue before switching 
 assert.match(adviserPage, /scan_id: savingItem\.id/);
 assert.match(adviserPage, /scan_date: savingItem\.scanDate/);
 assert.match(adviserPage, /session_type: savingItem\.sessionType/);
+assert.match(adviserPage, /reconcile_only: !isScanningOpen/);
+assert.match(adviserPage, /needsManualReview\?: boolean/);
+assert.match(adviserPage, /Confirming \$\{rapidTapPendingCount\} interrupted scan/);
+assert.match(adviserPage, /requiresManualReview: true/);
+assert.match(adviserPage, /Remove \{rapidTapManualReviewCount\} Reviewed Scan/);
 assert.match(adviserPage, /outOfSection\?: boolean/);
 assert.match(adviserPage, /if \(data\.outOfSection\)[\s\S]*?removeRapidTapQueueItem\(savingItem\.id\)[\s\S]*?setScanMessage\(`⚠ \$\{message\} Ready for the next RFID tap\.\`\)/);
 assert.match(adviserPage, /outcome: "out-of-section"/);
@@ -32,7 +37,9 @@ assert.match(queueStorage, /scope/);
 assert.match(queueStorage, /transaction\.oncomplete/);
 
 assert.match(scanRoute, /scan_id\?: string/);
+assert.match(scanRoute, /reconcile_only\?: boolean/);
 assert.match(scanRoute, /getRecordedRapidTapScan/);
+assert.match(scanRoute, /if \(reconcileOnly\)[\s\S]*needsManualReview: true/);
 assert.match(scanRoute, /scan_request_id: scanRequestId \|\| null/);
 assert.match(scanRoute, /requestedScanDate && requestedScanDate !== today/);
 assert.match(scanRoute, /requestedSessionType && requestedSessionType !== sessionType/);

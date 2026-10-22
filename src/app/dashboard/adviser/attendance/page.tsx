@@ -2054,7 +2054,12 @@ export default function AdviserAttendancePage() {
         : "";
     const rapidTapPendingCount = rapidTapQueue.filter((item) => item.status !== "failed").length;
     const rapidTapFailedCount = rapidTapQueue.filter((item) => item.status === "failed").length;
-    const hasRapidTapUnsynced = rapidTapQueue.length > 0;
+    const rapidTapManualReviewCount = rapidTapQueue.filter((item) => item.status === "failed" && item.requiresManualReview).length;
+    const rapidTapRetryableFailedCount = rapidTapFailedCount - rapidTapManualReviewCount;
+    // Only a scan still eligible for automatic processing should prevent an
+    // Adviser from changing scanner modes or closing the browser.
+    const hasRapidTapUnsynced = rapidTapPendingCount > 0;
+    const hasRapidTapQueueItems = rapidTapQueue.length > 0;
 
     const replaceRapidTapQueue = useCallback((next: RapidTapQueueItem[]) => {
         rapidTapQueueRef.current = next;
@@ -2183,7 +2188,6 @@ export default function AdviserAttendancePage() {
             rapidTapProcessingRef.current
             || rfidScannerMode !== "rapid"
             || !rapidTapStorageReady
-            || !isScanningOpen
         ) return;
 
         const nextItem = rapidTapQueueRef.current
@@ -2219,6 +2223,10 @@ export default function AdviserAttendancePage() {
                         scan_id: savingItem.id,
                         scan_date: savingItem.scanDate,
                         session_type: savingItem.sessionType,
+                        // After the schedule closes, this asks the server only
+                        // whether a prior request committed. It cannot record
+                        // a new attendance event outside the session.
+                        reconcile_only: !isScanningOpen,
                     }),
                     signal: controller.signal,
                 });
@@ -2230,6 +2238,7 @@ export default function AdviserAttendancePage() {
                 duplicate?: boolean;
                 alreadyRecorded?: boolean;
                 outOfSection?: boolean;
+                needsManualReview?: boolean;
                 message?: string;
                 log?: AttendanceLog;
             };
@@ -2302,11 +2311,30 @@ export default function AdviserAttendancePage() {
                 return;
             }
 
+            // The session has closed and this idempotency key was not found.
+            // Keep the original scan visible for authorised manual correction,
+            // but never retry it into a later attendance window.
+            if (data.needsManualReview) {
+                const failedItem: RapidTapQueueItem = {
+                    ...savingItem,
+                    status: "failed",
+                    requiresManualReview: true,
+                    lastError: data.message || "This Rapid Tap scan needs manual attendance correction.",
+                };
+                await saveRapidTapQueueItem(failedItem);
+                replaceRapidTapQueue(rapidTapQueueRef.current.map((item) => item.id === failedItem.id ? failedItem : item));
+                addRapidTapResult({ id: failedItem.id, outcome: "failed", message: failedItem.lastError ?? "This Rapid Tap scan needs manual attendance correction." });
+                setRapidTapComplete(false);
+                setScanMessage(failedItem.lastError ?? "This Rapid Tap scan needs manual attendance correction.");
+                return;
+            }
+
             const retryable = response.status >= 500 || response.status === 408 || response.status === 429;
             if (!retryable) {
                 const failedItem: RapidTapQueueItem = {
                     ...savingItem,
                     status: "failed",
+                    requiresManualReview: false,
                     lastError: data.message || "This scan needs review before it can be recorded.",
                 };
                 await saveRapidTapQueueItem(failedItem);
@@ -2389,12 +2417,12 @@ export default function AdviserAttendancePage() {
     }, [activeSection, adviser, classSession?.session_type, rapidTapScope, replaceRapidTapQueue]);
 
     const retryFailedRapidTapScans = useCallback(() => {
-        const retryItems = rapidTapQueueRef.current.map((item) => item.status === "failed"
+        const retryItems = rapidTapQueueRef.current.map((item) => item.status === "failed" && !item.requiresManualReview
             ? { ...item, status: "queued" as const, nextAttemptAt: null, lastError: null }
             : item,
         );
         const changedItems = retryItems.filter((item) => rapidTapQueueRef.current.some((current) =>
-            current.id === item.id && current.status === "failed" && item.status === "queued",
+            current.id === item.id && current.status === "failed" && !current.requiresManualReview && item.status === "queued",
         ));
         if (changedItems.length === 0) return;
         void Promise.all(changedItems.map((item) => saveRapidTapQueueItem(item)))
@@ -2402,6 +2430,17 @@ export default function AdviserAttendancePage() {
         replaceRapidTapQueue(retryItems);
         setRapidTapComplete(false);
         setScanMessage(`Retrying ${changedItems.length} Rapid Tap scan${changedItems.length === 1 ? "" : "s"}...`);
+    }, [replaceRapidTapQueue]);
+
+    const dismissManualReviewRapidTapScans = useCallback(() => {
+        const reviewedItems = rapidTapQueueRef.current.filter((item) => item.status === "failed" && item.requiresManualReview);
+        if (reviewedItems.length === 0) return;
+        void Promise.all(reviewedItems.map((item) => removeRapidTapQueueItem(item.id)))
+            .then(() => {
+                replaceRapidTapQueue(rapidTapQueueRef.current.filter((item) => !item.requiresManualReview));
+                setScanMessage("Reviewed Rapid Tap scan removed from this browser. No attendance record was changed.");
+            })
+            .catch((storageError) => console.error("Could not remove reviewed Rapid Tap scans:", storageError));
     }, [replaceRapidTapQueue]);
 
     // Restore this Adviser's unfinished Rapid Tap queue after a refresh or an
@@ -2456,7 +2495,6 @@ export default function AdviserAttendancePage() {
         if (
             rfidScannerMode !== "rapid"
             || !rapidTapStorageReady
-            || !isScanningOpen
             || rapidTapProcessingRef.current
         ) return undefined;
         const nextItem = rapidTapQueue
@@ -3272,18 +3310,33 @@ export default function AdviserAttendancePage() {
                             </div>
                             {rfidScannerMode === "rapid" && (
                                 <div className="mb-4 w-full space-y-3" aria-live="polite">
-                                    {hasRapidTapUnsynced ? (
+                                    {hasRapidTapQueueItems ? (
                                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left text-xs leading-5 text-amber-800">
                                             <p className="font-bold">
                                                 {rapidTapPendingCount > 0
-                                                    ? `Processing attendance: ${rapidTapPendingCount} pending`
+                                                    ? isScanningOpen
+                                                        ? `Processing attendance: ${rapidTapPendingCount} pending`
+                                                        : `Confirming ${rapidTapPendingCount} interrupted scan${rapidTapPendingCount === 1 ? "" : "s"}`
                                                     : `${rapidTapFailedCount} scan${rapidTapFailedCount === 1 ? "" : "s"} needs review`}
                                             </p>
-                                            <p className="mt-1">Please do not close this tab or switch to another browser while attendance records are still being processed in the queue.</p>
-                                            {rapidTapFailedCount > 0 && (
+                                            <p className="mt-1">
+                                                {isScanningOpen
+                                                    ? "Please do not close this tab or switch to another browser while attendance records are still being processed in the queue."
+                                                    : "The class session is closed. The system is only checking whether each scan was already saved; it cannot create new off-schedule attendance."}
+                                            </p>
+                                            {rapidTapManualReviewCount > 0 && (
+                                                <p className="mt-1 font-medium">Record these scans through the authorised manual attendance process before removing them from this browser.</p>
+                                            )}
+                                            {rapidTapRetryableFailedCount > 0 && (
                                                 <button type="button" onClick={retryFailedRapidTapScans}
                                                     className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
-                                                    Retry {rapidTapFailedCount} Failed Scan{rapidTapFailedCount === 1 ? "" : "s"}
+                                                    Retry {rapidTapRetryableFailedCount} Failed Scan{rapidTapRetryableFailedCount === 1 ? "" : "s"}
+                                                </button>
+                                            )}
+                                            {rapidTapManualReviewCount > 0 && (
+                                                <button type="button" onClick={dismissManualReviewRapidTapScans}
+                                                    className="ml-2 mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                                                    Remove {rapidTapManualReviewCount} Reviewed Scan{rapidTapManualReviewCount === 1 ? "" : "s"}
                                                 </button>
                                             )}
                                         </div>
@@ -3776,6 +3829,49 @@ export default function AdviserAttendancePage() {
                                 </button>
                             </div>
 
+                            {editableAttendanceRecords.length > 0 && (
+                                <>
+                                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                                        <span className="text-xs text-slate-500">
+                                            {editableAttendanceLogIds.length} editable record{editableAttendanceLogIds.length === 1 ? "" : "s"}
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <button type="button"
+                                                onClick={() => setSelectedEditLogIds(editableAttendanceLogIds)}
+                                                disabled={isLoadingEditableAttendance || editableAttendanceLogIds.length === 0 || allEditableAttendanceSelected}
+                                                className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                                Check all
+                                            </button>
+                                            <button type="button"
+                                                onClick={() => setSelectedEditLogIds([])}
+                                                disabled={isLoadingEditableAttendance || selectedEditLogIds.length === 0}
+                                                className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                                Uncheck all
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                                        <p className="text-sm font-bold text-slate-700">Apply to selected students ({selectedEditLogIds.length})</p>
+                                        <div className="mt-3 grid grid-cols-2 gap-3">
+                                            {(["Present", "Absent"] as const).map((status) => (
+                                                <button key={status} type="button" onClick={() => setEditAttendanceStatus(status)}
+                                                    className={`h-10 rounded-xl border text-sm font-bold transition-all ${editAttendanceStatus === status
+                                                        ? status === "Present" ? "border-emerald-500 bg-emerald-500 text-white" : "border-red-500 bg-red-500 text-white"
+                                                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                                                    {status}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="mt-2 text-xs text-slate-500">Present is saved as On Time. This editor updates only existing Time In records and keeps Excused records protected.</p>
+                                        <p className="mt-2 text-xs font-medium text-emerald-800">Corrections do not send a new parent SMS. Any pending SMS for an edited record is skipped.</p>
+                                    </div>
+                                </>
+                            )}
+                            {editAttendanceMessage && editableAttendanceRecords.length > 0 && (
+                                <p className="mt-3 text-sm text-red-600">{editAttendanceMessage}</p>
+                            )}
+
                             <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
                                 <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-500 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
                                     <span aria-hidden="true" />
@@ -3809,45 +3905,6 @@ export default function AdviserAttendancePage() {
                                         </label>
                                     );
                                 })}
-                            </div>
-                            {editableAttendanceRecords.length > 0 && (
-                                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                                    <span className="text-xs text-slate-500">
-                                        {editableAttendanceLogIds.length} editable record{editableAttendanceLogIds.length === 1 ? "" : "s"}
-                                    </span>
-                                    <div className="flex items-center gap-2">
-                                        <button type="button"
-                                            onClick={() => setSelectedEditLogIds(editableAttendanceLogIds)}
-                                            disabled={isLoadingEditableAttendance || editableAttendanceLogIds.length === 0 || allEditableAttendanceSelected}
-                                            className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
-                                            Check all
-                                        </button>
-                                        <button type="button"
-                                            onClick={() => setSelectedEditLogIds([])}
-                                            disabled={isLoadingEditableAttendance || selectedEditLogIds.length === 0}
-                                            className="min-h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                                            Uncheck all
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                            {editAttendanceMessage && editableAttendanceRecords.length > 0 && (
-                                <p className="mt-3 text-sm text-red-600">{editAttendanceMessage}</p>
-                            )}
-
-                            <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
-                                <p className="text-sm font-bold text-slate-700">Apply to selected students ({selectedEditLogIds.length})</p>
-                                <div className="mt-3 grid grid-cols-2 gap-3">
-                                    {(["Present", "Absent"] as const).map((status) => (
-                                        <button key={status} type="button" onClick={() => setEditAttendanceStatus(status)}
-                                            className={`h-10 rounded-xl border text-sm font-bold transition-all ${editAttendanceStatus === status
-                                                ? status === "Present" ? "border-emerald-500 bg-emerald-500 text-white" : "border-red-500 bg-red-500 text-white"
-                                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                                            {status}
-                                        </button>
-                                    ))}
-                                </div>
-                                <p className="mt-2 text-xs text-slate-500">Present is saved as On Time. This editor updates only existing Time In records and keeps Excused records protected.</p>
                             </div>
                         </div>
                         <div className="flex flex-col-reverse gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:justify-end sm:px-6">

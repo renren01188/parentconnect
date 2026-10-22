@@ -25,6 +25,8 @@ type ScanBody = {
   scan_id?: string;
   scan_date?: string;
   session_type?: ClassSessionType;
+  // This recovery mode may return an existing scan only; it never writes.
+  reconcile_only?: boolean;
 };
 
 type StudentNameFields = {
@@ -339,6 +341,10 @@ export async function POST(req: NextRequest) {
     if (scanRequestId && !isValidScanRequestId(scanRequestId)) {
       return NextResponse.json({ success: false, message: "scan_id is invalid" }, { status: 400 });
     }
+    const reconcileOnly = body.reconcile_only === true;
+    if (reconcileOnly && !scanRequestId) {
+      return NextResponse.json({ success: false, message: "scan_id is required when reconciling a Rapid Tap scan" }, { status: 400 });
+    }
     const requestedScanDate = typeof body.scan_date === "string" ? body.scan_date.trim() : "";
     if (requestedScanDate && !isDateOnly(requestedScanDate)) {
       return NextResponse.json({ success: false, message: "scan_date is invalid" }, { status: 400 });
@@ -372,6 +378,20 @@ export async function POST(req: NextRequest) {
       if (recorded) {
         return NextResponse.json(attendanceSuccessPayload(recorded.log, recorded.student, true));
       }
+    }
+
+    // Once the session is closed, the browser can only ask whether its
+    // idempotent scan was already committed. It must never create a new
+    // attendance log outside the authorised class window.
+    if (reconcileOnly) {
+      return NextResponse.json(
+        {
+          success: false,
+          needsManualReview: true,
+          message: "This Rapid Tap scan was not recorded before the class session closed. Use the authorised manual attendance correction process.",
+        },
+        { status: 409 },
+      );
     }
 
     // ── School year guard ────────────────────────────────────────────

@@ -19,6 +19,9 @@ export type RapidTapQueueItem = {
   attempts: number;
   nextAttemptAt: number | null;
   lastError: string | null;
+  // After a session closes, a scan may be reconciled safely but must not be
+  // written into a later session. Retain an unsaved scan for manual review.
+  requiresManualReview?: boolean;
 };
 
 const DATABASE_NAME = "parentconnect-attendance-rapid-tap";
