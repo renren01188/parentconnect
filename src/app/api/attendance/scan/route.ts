@@ -21,6 +21,11 @@ import {
 type ScanBody = {
   rfid_card: string;
   section?: string;
+  // Rapid Tap supplies these fields. They are safety guards only: the server
+  // continues to determine the real attendance time and session availability.
+  scan_id?: string;
+  scan_date?: string;
+  session_type?: ClassSessionType;
 };
 
 type StudentNameFields = {
@@ -32,6 +37,23 @@ type StudentNameFields = {
 
 type ClassSessionType = "Morning" | "Afternoon";
 type AttendanceType = "Time In" | "Time Out";
+type AttendanceLogResponseRow = {
+  id: number;
+  student_db_id: number;
+  student_id: string;
+  attendance_date: string;
+  time_logged: string;
+  type: AttendanceType;
+  session_type: ClassSessionType;
+  status: "On Time" | "Late" | "Absent" | "Excused" | "Present";
+  via: "RFID" | "Manual" | "Auto";
+};
+type AttendanceResponseStudent = StudentNameFields & {
+  id: number;
+  student_id: string;
+  grade: string;
+  section: string;
+};
 // A second RFID tap becomes Time Out only after this minimum period. This
 // protects against a late student's accidental double tap being recorded as
 // departure. The setting cannot be lower than one hour.
@@ -196,6 +218,72 @@ function buildFullName(student: StudentNameFields) {
     .join(" ");
 }
 
+function isValidScanRequestId(value: string) {
+  // crypto.randomUUID() is used by the dashboard. Keep this permissive enough
+  // for a future scanner integration while rejecting arbitrary large payloads.
+  return /^[A-Za-z0-9_-]{16,128}$/.test(value);
+}
+
+function isDateOnly(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function attendanceSuccessPayload(
+  log: AttendanceLogResponseRow,
+  student: AttendanceResponseStudent,
+  replayed = false,
+) {
+  return {
+    success: true,
+    replayed,
+    message: replayed ? "Attendance was already recorded from this Rapid Tap scan." : "Attendance recorded successfully",
+    log: {
+      id: log.id,
+      student_db_id: student.id,
+      student_id: student.student_id,
+      full_name: buildFullName(student),
+      grade: student.grade,
+      section: student.section,
+      attendance_date: log.attendance_date,
+      time_logged: log.time_logged,
+      type: log.type,
+      session_type: log.session_type,
+      status: log.status,
+      via: log.via,
+    },
+  };
+}
+
+async function getRecordedRapidTapScan(input: {
+  scanRequestId: string;
+  grade: string | null | undefined;
+  section: string;
+}) {
+  const { data: log, error: logError } = await supabase
+    .from("attendance_logs")
+    .select("id, student_db_id, student_id, attendance_date, time_logged, type, session_type, status, via")
+    .eq("scan_request_id", input.scanRequestId)
+    .maybeSingle();
+  if (logError) throw logError;
+  if (!log?.student_db_id) return null;
+
+  let studentQuery = supabase
+    .from("students")
+    .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section")
+    .eq("id", log.student_db_id)
+    .eq("archive_status", "active");
+  if (input.grade) studentQuery = studentQuery.eq("grade", input.grade);
+  if (input.section) studentQuery = studentQuery.eq("section", input.section);
+  const { data: student, error: studentError } = await studentQuery.maybeSingle();
+  if (studentError) throw studentError;
+  if (!student) return null;
+
+  return {
+    log: log as AttendanceLogResponseRow,
+    student: student as AttendanceResponseStudent,
+  };
+}
+
 function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAttendanceSms>[0]) {
   // RFID scanning records attendance first. Queueing and providers are deferred
   // so notification failures can never turn a saved attendance event into a
@@ -249,11 +337,59 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const scanRequestId = typeof body.scan_id === "string" ? body.scan_id.trim() : "";
+    if (scanRequestId && !isValidScanRequestId(scanRequestId)) {
+      return NextResponse.json({ success: false, message: "scan_id is invalid" }, { status: 400 });
+    }
+    const requestedScanDate = typeof body.scan_date === "string" ? body.scan_date.trim() : "";
+    if (requestedScanDate && !isDateOnly(requestedScanDate)) {
+      return NextResponse.json({ success: false, message: "scan_date is invalid" }, { status: 400 });
+    }
+    const requestedSessionType = body.session_type;
+    if (requestedSessionType && requestedSessionType !== "Morning" && requestedSessionType !== "Afternoon") {
+      return NextResponse.json({ success: false, message: "session_type is invalid" }, { status: 400 });
+    }
+
+    const adviserSections: string[] =
+      adviser.sections?.length
+        ? adviser.sections
+        : adviser.section
+          ? [adviser.section]
+          : [];
+    const requestedSection = body.section?.trim() || "";
+    const activeSection =
+      requestedSection && adviserSections.includes(requestedSection)
+        ? requestedSection
+        : adviserSections[0] ?? adviser.section ?? "";
+
+    // A request can have committed after the browser timed out. Return that
+    // exact event before applying today's schedule guards, so a safe retry
+    // never becomes a second attendance write or another notification.
+    if (scanRequestId) {
+      const recorded = await getRecordedRapidTapScan({
+        scanRequestId,
+        grade: adviser.grade,
+        section: activeSection,
+      });
+      if (recorded) {
+        return NextResponse.json(attendanceSuccessPayload(recorded.log, recorded.student, true));
+      }
+    }
+
     // ── School year guard ────────────────────────────────────────────
     // Use one Manila clock for every guard and the saved attendance timestamp.
     // A browser or server running in another timezone must not extend a class.
     const schoolClock = getSchoolClock();
     const today = schoolClock.date;
+    if (requestedScanDate && requestedScanDate !== today) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "This Rapid Tap scan was captured on a different day and needs attendance review before it can be recorded.",
+        },
+        { status: 409 },
+      );
+    }
     const { data: activeSY } = await supabase
       .from("school_year_config")
       .select("id, start_date, end_date, attendance_weekdays")
@@ -318,19 +454,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const adviserSections: string[] =
-      adviser?.sections?.length
-        ? adviser.sections
-        : adviser?.section
-          ? [adviser.section]
-          : [];
-
-    const requestedSection = body.section?.trim() || "";
-    const activeSection =
-      requestedSection && adviserSections.includes(requestedSection)
-        ? requestedSection
-        : adviserSections[0] ?? adviser?.section ?? "";
-
     let query = supabase
       .from("students")
       .select(
@@ -379,6 +502,19 @@ export async function POST(req: NextRequest) {
     const timeLogged = schoolClock.time;
 
     const { status, sessionType, classSessionId } = sessionStatus;
+
+    // Do not allow a delayed Rapid Tap item captured during Morning Class to
+    // be recorded later as an Afternoon event merely because the queue caught
+    // up after the schedule changed.
+    if (requestedSessionType && requestedSessionType !== sessionType) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `This Rapid Tap scan was captured for the ${requestedSessionType} Class, but ${sessionType} Class is currently active. It needs attendance review.`,
+        },
+        { status: 409 },
+      );
+    }
 
     const { data: sectionAssignment, error: sectionAssignmentError } = await supabase
       .from("sections")
@@ -489,6 +625,7 @@ export async function POST(req: NextRequest) {
         status: logStatus,
         via: "RFID",
         remark: null,
+        scan_request_id: scanRequestId || null,
       })
       .select()
       .single();
@@ -498,6 +635,16 @@ export async function POST(req: NextRequest) {
       // Do not turn a racing duplicate request into a retry that records a
       // Time Out immediately after a successful Time In.
       if (insertError.code === "23505") {
+        if (scanRequestId) {
+          const recorded = await getRecordedRapidTapScan({
+            scanRequestId,
+            grade: adviser.grade,
+            section: activeSection,
+          });
+          if (recorded) {
+            return NextResponse.json(attendanceSuccessPayload(recorded.log, recorded.student, true));
+          }
+        }
         return NextResponse.json(
           { success: false, duplicate: true, alreadyRecorded: true, message: "This attendance event was already recorded." },
           { status: 409 },
@@ -522,24 +669,10 @@ export async function POST(req: NextRequest) {
       attendanceType: nextType,
     });
 
-    return NextResponse.json({
-      success: true,
-      message: "Attendance recorded successfully",
-      log: {
-        id: log.id,
-        student_db_id: student.id,
-        student_id: student.student_id,
-        full_name: buildFullName(student),
-        grade: student.grade,
-        section: student.section,
-        attendance_date: attendanceDate,
-        time_logged: timeLogged,
-        type: nextType,
-        session_type: sessionType,
-        status: logStatus,
-        via: "RFID",
-      },
-    });
+    return NextResponse.json(attendanceSuccessPayload(
+      log as AttendanceLogResponseRow,
+      student as AttendanceResponseStudent,
+    ));
   } catch (err) {
     console.error("[scan] unexpected error:", err);
     return NextResponse.json(

@@ -173,29 +173,41 @@ async function isSchoolHoliday(schoolYearId: number, date: string) {
  */
 export async function GET(req: NextRequest) {
   try {
-    // An ICT user can share a browser with a previously signed-in Adviser.
-    // Prefer the ICT session in that case: ICT manages all grade schedules,
-    // while an Adviser remains limited to their own grade.
-    const ict = await getIctFromToken();
-    const adviser = ict ? null : await getAdviserFromToken();
+    // The Adviser scanner deliberately omits `grade`: its grade must always
+    // come from the authenticated Adviser record. ICT Class Session Control
+    // always supplies an explicit grade. This distinction also handles a
+    // shared browser that still has a cookie for the other role.
+    const [adviser, ict] = await Promise.all([getAdviserFromToken(), getIctFromToken()]);
     if (!ict && !adviser) {
       return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
     }
 
     const requested = requestedGrade(req);
-    let grade = requested;
-    if (!ict) {
-      const adviserGrade = adviser?.grade?.trim() ?? "";
+    const adviserGrade = adviser?.grade?.trim() ?? "";
+    let grade: string;
+
+    if (!requested) {
+      // This is the Adviser attendance request. Do not let an unrelated ICT
+      // cookie turn it into a grade-less ICT request and a 400 response.
+      if (!adviserGrade) {
+        if (adviser) {
+          return NextResponse.json({ success: false, message: "Your adviser account has no assigned grade level." }, { status: 409 });
+        }
+        return NextResponse.json({ success: false, message: "Choose a grade level to view its class schedule." }, { status: 400 });
+      }
+      grade = adviserGrade;
+    } else if (ict) {
+      // ICT manages the explicitly selected grade school-wide.
+      grade = requested;
+    } else {
+      // An Adviser cannot request another grade by adding a query parameter.
       if (!adviserGrade) {
         return NextResponse.json({ success: false, message: "Your adviser account has no assigned grade level." }, { status: 409 });
       }
-      if (requested && requested !== adviserGrade) {
+      if (requested !== adviserGrade) {
         return NextResponse.json({ success: false, message: "You can view only the schedule for your assigned grade level." }, { status: 403 });
       }
       grade = adviserGrade;
-    }
-    if (!grade) {
-      return NextResponse.json({ success: false, message: "Choose a grade level to view its class schedule." }, { status: 400 });
     }
 
     const today = getToday();

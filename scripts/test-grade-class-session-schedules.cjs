@@ -28,13 +28,15 @@ assert.match(migration, /class_sessions_grade_date_type_idx/);
 assert.doesNotMatch(migration, /DELETE FROM public\.class_sessions/);
 assert.doesNotMatch(migration, /UPDATE public\.class_sessions\s+SET grade/);
 
-// ICT manages whichever grade it selects, even if a stale Adviser cookie is
-// present in the same browser. Advisers remain limited to their own grade.
-// Reads and writes continue to use only the selected grade's snapshots.
+// ICT manages whichever grade it explicitly selects, even if a stale Adviser
+// cookie is present in the same browser. The Adviser scanner has no grade
+// query parameter and must keep using the Adviser's own grade. Reads and
+// writes continue to use only the selected grade's snapshots.
 assert.match(classSessionApi, /function requestedGrade/);
-assert.match(classSessionApi, /const ict = await getIctFromToken\(\);[\s\S]*?const adviser = ict \? null : await getAdviserFromToken\(\);/);
-assert.match(classSessionApi, /let grade = requested;[\s\S]*?if \(!ict\) \{[\s\S]*?You can view only the schedule for your assigned grade level/);
-assert.doesNotMatch(classSessionApi, /const grade = adviserGrade \|\| requested/);
+assert.match(classSessionApi, /Promise\.all\(\[getAdviserFromToken\(\), getIctFromToken\(\)\]\)/);
+assert.match(classSessionApi, /if \(!requested\) \{[\s\S]*?grade = adviserGrade/);
+assert.match(classSessionApi, /else if \(ict\) \{[\s\S]*?grade = requested/);
+assert.match(classSessionApi, /requested !== adviserGrade[\s\S]*?You can view only the schedule for your assigned grade level/);
 assert.match(classSessionApi, /You can view only the schedule for your assigned grade level/);
 assert.match(classSessionApi, /Choose a grade level to view its class schedule/);
 assert.match(classSessionApi, /\.eq\("grade", grade\)/);

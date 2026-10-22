@@ -13,6 +13,12 @@ import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import {
+    loadRapidTapQueue,
+    removeRapidTapQueueItem,
+    saveRapidTapQueueItem,
+    type RapidTapQueueItem,
+} from "@/lib/attendanceRapidTapQueue";
 import AdviserAttendanceGuide from "../components/AdviserAttendanceGuide";
 import {
     CreditCard, UserPlus, History, Check,
@@ -163,11 +169,22 @@ type ExcuseRequest = {
 };
 
 interface AdviserInfo {
+    id: number;
     section: string | null;
     sections: string[];
     grade: string | null;
     full_name: string;
 }
+
+type RfidScannerMode = "default" | "rapid";
+type RapidTapResult = {
+    id: string;
+    outcome: "recorded" | "duplicate" | "failed";
+    message: string;
+};
+
+const RAPID_TAP_REQUEST_TIMEOUT_MS = 15_000;
+const RAPID_TAP_MAX_RETRY_DELAY_MS = 30_000;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function formatTime(value: string | null) {
@@ -1906,6 +1923,11 @@ export default function AdviserAttendancePage() {
     const [scanValue, setScanValue] = useState("");
     const [activeTopAction, setActiveTopAction] = useState<"history" | null>(null);
     const [scanMessage, setScanMessage] = useState("Waiting for RFID card tap...");
+    const [rfidScannerMode, setRfidScannerMode] = useState<RfidScannerMode>("default");
+    const [rapidTapQueue, setRapidTapQueue] = useState<RapidTapQueueItem[]>([]);
+    const [rapidTapResults, setRapidTapResults] = useState<RapidTapResult[]>([]);
+    const [rapidTapStorageReady, setRapidTapStorageReady] = useState(false);
+    const [rapidTapComplete, setRapidTapComplete] = useState(false);
     const [logs, setLogs] = useState<AttendanceLog[]>([]);
     const [lastScanned, setLastScanned] = useState<AttendanceLog | null>(null);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -1979,8 +2001,15 @@ export default function AdviserAttendancePage() {
 
     const inputRef = useRef<HTMLInputElement | null>(null);
     const newRfidInputRef = useRef<HTMLInputElement | null>(null);
+    const historyRequestRef = useRef<AbortController | null>(null);
     const scanValueRef = useRef("");
     const scanInFlightRef = useRef(false);
+    const rapidTapQueueRef = useRef<RapidTapQueueItem[]>([]);
+    const rapidTapProcessingRef = useRef(false);
+    const rapidTapPersistChainRef = useRef(Promise.resolve());
+    const rapidTapRetryTimerRef = useRef<number | null>(null);
+    const rapidTapOrderRef = useRef(0);
+    const rapidTapHadWorkRef = useRef(false);
     const rfidSaveInFlightRef = useRef(false);
 
     // A school-wide session can be active while this adviser's section belongs
@@ -2007,8 +2036,32 @@ export default function AdviserAttendancePage() {
     const selectedRfidStudent = rfidStudentDbId === null
         ? undefined
         : students.find((student) => student.id === rfidStudentDbId);
+    const rapidTapScope = adviser
+        ? [adviser.id, adviser.grade ?? "", [...adviser.sections].sort().join("|")].join(":")
+        : "";
+    const rapidTapPendingCount = rapidTapQueue.filter((item) => item.status !== "failed").length;
+    const rapidTapFailedCount = rapidTapQueue.filter((item) => item.status === "failed").length;
+    const hasRapidTapUnsynced = rapidTapQueue.length > 0;
+
+    const replaceRapidTapQueue = useCallback((next: RapidTapQueueItem[]) => {
+        rapidTapQueueRef.current = next;
+        setRapidTapQueue(next);
+        return next;
+    }, []);
+
+    const addRapidTapResult = useCallback((result: RapidTapResult) => {
+        setRapidTapResults((current) => [result, ...current].slice(0, 4));
+    }, []);
 
     function focusScanner() { inputRef.current?.focus(); }
+    function clearScannerInput() {
+        scanValueRef.current = "";
+        // Clear the DOM value in the same turn as Enter. This prevents a
+        // keyboard-emulating reader's next card from being appended to the
+        // prior UID before React has committed the controlled state update.
+        if (inputRef.current) inputRef.current.value = "";
+        setScanValue("");
+    }
     function focusNewRfidScanner() { newRfidInputRef.current?.focus(); }
 
     const loadStudents = useCallback(async (section?: string) => {
@@ -2053,12 +2106,19 @@ export default function AdviserAttendancePage() {
     }, [activeSection]);
 
     async function loadHistory(date: string, section?: string) {
+        historyRequestRef.current?.abort();
+        const controller = new AbortController();
+        historyRequestRef.current = controller;
         setIsLoadingHistory(true); setHistoryError(""); setHistoryIsHoliday(false); setHistoryPage(1);
         try {
             const sec = section !== undefined ? section : activeSection;
             const secParam = sec ? `&section=${encodeURIComponent(sec)}` : "";
-            const res = await fetch(`/api/attendance/history?date=${date}${secParam}`, { cache: "no-store" });
+            const res = await fetch(`/api/attendance/history?date=${date}${secParam}`, {
+                cache: "no-store",
+                signal: controller.signal,
+            });
             const data = await res.json();
+            if (historyRequestRef.current !== controller) return;
             if (data.success) {
                 setHistorySummary(data.summary || []);
                 setHistoryStats(data.stats || null);
@@ -2066,8 +2126,12 @@ export default function AdviserAttendancePage() {
             } else {
                 setHistoryError(data.message || "Failed to load history");
             }
-        } catch { setHistoryError("Failed to connect to server"); }
-        finally { setIsLoadingHistory(false); }
+        } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") return;
+            if (historyRequestRef.current === controller) setHistoryError("Failed to connect to server");
+        } finally {
+            if (historyRequestRef.current === controller) setIsLoadingHistory(false);
+        }
     }
 
     const loadClassSession = useCallback(async (background = false) => {
@@ -2101,6 +2165,301 @@ export default function AdviserAttendancePage() {
         }
     }, []);
 
+    const processRapidTapQueue = useCallback(async () => {
+        if (
+            rapidTapProcessingRef.current
+            || rfidScannerMode !== "rapid"
+            || !rapidTapStorageReady
+            || !isScanningOpen
+        ) return;
+
+        const nextItem = rapidTapQueueRef.current
+            .filter((item) => item.status === "queued" || item.status === "retrying")
+            .sort((first, second) => first.queueOrder - second.queueOrder)
+            .find((item) => !item.nextAttemptAt || item.nextAttemptAt <= Date.now());
+        if (!nextItem) return;
+
+        rapidTapProcessingRef.current = true;
+        const savingItem: RapidTapQueueItem = {
+            ...nextItem,
+            status: "saving",
+            attempts: nextItem.attempts + 1,
+            nextAttemptAt: null,
+            lastError: null,
+        };
+        try {
+            await saveRapidTapQueueItem(savingItem);
+            replaceRapidTapQueue(rapidTapQueueRef.current.map((item) =>
+                item.id === savingItem.id ? savingItem : item,
+            ));
+
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), RAPID_TAP_REQUEST_TIMEOUT_MS);
+            let response: Response;
+            try {
+                response = await fetch("/api/attendance/scan", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        rfid_card: savingItem.rfidCard,
+                        section: savingItem.section,
+                        scan_id: savingItem.id,
+                        scan_date: savingItem.scanDate,
+                        session_type: savingItem.sessionType,
+                    }),
+                    signal: controller.signal,
+                });
+            } finally {
+                window.clearTimeout(timeout);
+            }
+            const data = await response.json().catch(() => ({})) as {
+                success?: boolean;
+                duplicate?: boolean;
+                alreadyRecorded?: boolean;
+                message?: string;
+                log?: AttendanceLog;
+            };
+
+            if (data.success && data.log) {
+                try {
+                    await removeRapidTapQueueItem(savingItem.id);
+                } catch (storageError) {
+                    // The server idempotency key makes a later cleanup retry
+                    // safe if IndexedDB is temporarily unavailable.
+                    console.error("Could not remove saved Rapid Tap scan:", storageError);
+                }
+                const remaining = replaceRapidTapQueue(rapidTapQueueRef.current.filter((item) => item.id !== savingItem.id));
+                setLastScanned(data.log);
+                setLogs((current) => current.some((log) => log.id === data.log!.id)
+                    ? current.map((log) => log.id === data.log!.id ? data.log! : log)
+                    : [data.log!, ...current]);
+                setTodayLogPage(1);
+                addRapidTapResult({
+                    id: savingItem.id,
+                    outcome: "recorded",
+                    message: `✓ ${data.log.full_name} recorded as ${data.log.status}`,
+                });
+                if (remaining.length === 0 && rapidTapHadWorkRef.current) {
+                    setRapidTapComplete(true);
+                    setScanMessage("All attendance records have been recorded. Thank you!");
+                } else {
+                    setScanMessage(`✓ ${data.log.full_name} recorded as ${data.log.status}`);
+                }
+                void loadTodayLogs(savingItem.section);
+                return;
+            }
+
+            // A duplicate result is final: the API either found the previous
+            // Time In/Time Out or rejected a repeated RFID read. It must not
+            // hold up the next student's queued scan.
+            if (data.duplicate || data.alreadyRecorded) {
+                try {
+                    await removeRapidTapQueueItem(savingItem.id);
+                } catch (storageError) {
+                    console.error("Could not remove resolved Rapid Tap scan:", storageError);
+                }
+                const remaining = replaceRapidTapQueue(rapidTapQueueRef.current.filter((item) => item.id !== savingItem.id));
+                const message = data.message || "This attendance event was already recorded.";
+                addRapidTapResult({ id: savingItem.id, outcome: "duplicate", message: `Already recorded: ${message}` });
+                if (remaining.length === 0 && rapidTapHadWorkRef.current) {
+                    setRapidTapComplete(true);
+                    setScanMessage("All attendance records have been recorded. Thank you!");
+                } else {
+                    setScanMessage(`⚠ ${message}`);
+                }
+                void loadTodayLogs(savingItem.section);
+                return;
+            }
+
+            const retryable = response.status >= 500 || response.status === 408 || response.status === 429;
+            if (!retryable) {
+                const failedItem: RapidTapQueueItem = {
+                    ...savingItem,
+                    status: "failed",
+                    lastError: data.message || "This scan needs review before it can be recorded.",
+                };
+                await saveRapidTapQueueItem(failedItem);
+                replaceRapidTapQueue(rapidTapQueueRef.current.map((item) => item.id === failedItem.id ? failedItem : item));
+                addRapidTapResult({ id: failedItem.id, outcome: "failed", message: failedItem.lastError ?? "This scan needs review before it can be recorded." });
+                setScanMessage(`⚠ ${failedItem.lastError}`);
+                return;
+            }
+
+            throw new Error(data.message || "The server is temporarily unavailable.");
+        } catch (error) {
+            const message = error instanceof DOMException && error.name === "AbortError"
+                ? "The server is taking longer than expected. This scan will retry automatically."
+                : error instanceof Error ? error.message : "Unable to connect to the server.";
+            const delay = Math.min(
+                RAPID_TAP_MAX_RETRY_DELAY_MS,
+                1_000 * 2 ** Math.min(savingItem.attempts, 5),
+            );
+            const retryItem: RapidTapQueueItem = {
+                ...savingItem,
+                status: "retrying",
+                nextAttemptAt: Date.now() + delay,
+                lastError: message,
+            };
+            try {
+                await saveRapidTapQueueItem(retryItem);
+            } catch (storageError) {
+                console.error("Could not update Rapid Tap retry state:", storageError);
+            }
+            replaceRapidTapQueue(rapidTapQueueRef.current.map((item) => item.id === retryItem.id ? retryItem : item));
+            setScanMessage(`Waiting to retry a Rapid Tap scan. ${rapidTapQueueRef.current.filter((item) => item.status !== "failed").length} pending.`);
+        } finally {
+            rapidTapProcessingRef.current = false;
+        }
+    }, [addRapidTapResult, isScanningOpen, loadTodayLogs, rapidTapStorageReady, replaceRapidTapQueue, rfidScannerMode]);
+
+    const enqueueRapidTapScan = useCallback((rfidCard: string) => {
+        const sessionType = classSession?.session_type;
+        const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
+        if (!rapidTapScope || !sessionType || !section) {
+            setScanMessage("Rapid Tap is not ready. Check the class session and try again.");
+            return;
+        }
+
+        const queueOrder = Math.max(Date.now() * 100, rapidTapOrderRef.current + 1);
+        rapidTapOrderRef.current = queueOrder;
+        const scanId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `rapid-${queueOrder}-${Math.random().toString(36).slice(2, 12)}`;
+        const item: RapidTapQueueItem = {
+            id: scanId,
+            scope: rapidTapScope,
+            rfidCard,
+            section,
+            grade: adviser?.grade ?? "",
+            scanDate: toLocalDateString(new Date()),
+            sessionType,
+            queueOrder,
+            status: "queued",
+            attempts: 0,
+            nextAttemptAt: null,
+            lastError: null,
+        };
+
+        rapidTapPersistChainRef.current = rapidTapPersistChainRef.current
+            .then(async () => {
+                // Persist before exposing the item to the sender. A refresh or
+                // accidental tab close therefore cannot lose an accepted tap.
+                await saveRapidTapQueueItem(item);
+                rapidTapHadWorkRef.current = true;
+                setRapidTapComplete(false);
+                replaceRapidTapQueue([...rapidTapQueueRef.current, item]
+                    .sort((first, second) => first.queueOrder - second.queueOrder));
+                setScanMessage(`Rapid Tap captured. ${rapidTapQueueRef.current.filter((queued) => queued.status !== "failed").length} scan${rapidTapQueueRef.current.filter((queued) => queued.status !== "failed").length === 1 ? "" : "s"} waiting to save.`);
+            })
+            .catch((storageError) => {
+                console.error("Could not persist Rapid Tap scan:", storageError);
+                setScanMessage("Rapid Tap could not save this scan on this device. Please scan it again after checking browser storage.");
+            });
+    }, [activeSection, adviser, classSession?.session_type, rapidTapScope, replaceRapidTapQueue]);
+
+    const retryFailedRapidTapScans = useCallback(() => {
+        const retryItems = rapidTapQueueRef.current.map((item) => item.status === "failed"
+            ? { ...item, status: "queued" as const, nextAttemptAt: null, lastError: null }
+            : item,
+        );
+        const changedItems = retryItems.filter((item) => rapidTapQueueRef.current.some((current) =>
+            current.id === item.id && current.status === "failed" && item.status === "queued",
+        ));
+        if (changedItems.length === 0) return;
+        void Promise.all(changedItems.map((item) => saveRapidTapQueueItem(item)))
+            .catch((storageError) => console.error("Could not retry Rapid Tap scans:", storageError));
+        replaceRapidTapQueue(retryItems);
+        setRapidTapComplete(false);
+        setScanMessage(`Retrying ${changedItems.length} Rapid Tap scan${changedItems.length === 1 ? "" : "s"}...`);
+    }, [replaceRapidTapQueue]);
+
+    // Restore this Adviser's unfinished Rapid Tap queue after a refresh or an
+    // accidental close. A record left in "saving" is reset to queued: the
+    // server-side scan id makes retrying it safe even if it was already saved.
+    useEffect(() => {
+        let cancelled = false;
+        if (!rapidTapScope) {
+            replaceRapidTapQueue([]);
+            setRapidTapStorageReady(false);
+            return undefined;
+        }
+
+        setRapidTapStorageReady(false);
+        setRapidTapComplete(false);
+        setRapidTapResults([]);
+        void (async () => {
+            try {
+                const storedItems = await loadRapidTapQueue(rapidTapScope);
+                const restoredItems = storedItems.map((item) => item.status === "saving"
+                    ? { ...item, status: "queued" as const, nextAttemptAt: null }
+                    : item,
+                );
+                await Promise.all(restoredItems
+                    .filter((item, index) => item.status !== storedItems[index]?.status)
+                    .map((item) => saveRapidTapQueueItem(item)));
+                if (cancelled) return;
+                rapidTapOrderRef.current = restoredItems.reduce(
+                    (highest, item) => Math.max(highest, item.queueOrder),
+                    0,
+                );
+                rapidTapHadWorkRef.current = restoredItems.length > 0;
+                replaceRapidTapQueue(restoredItems);
+                if (restoredItems.length > 0) {
+                    // An unfinished queue must resume in the same scan mode;
+                    // silently switching to Default would strand attendance.
+                    setRfidScannerMode("rapid");
+                    setScanMessage(`Restored ${restoredItems.length} Rapid Tap scan${restoredItems.length === 1 ? "" : "s"} waiting to save.`);
+                }
+            } catch (storageError) {
+                console.error("Could not restore Rapid Tap scans:", storageError);
+                if (!cancelled) setScanMessage("Rapid Tap storage is unavailable in this browser. Default scanning is still available.");
+            } finally {
+                if (!cancelled) setRapidTapStorageReady(true);
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [rapidTapScope, replaceRapidTapQueue]);
+
+    useEffect(() => {
+        if (
+            rfidScannerMode !== "rapid"
+            || !rapidTapStorageReady
+            || !isScanningOpen
+            || rapidTapProcessingRef.current
+        ) return undefined;
+        const nextItem = rapidTapQueue
+            .filter((item) => item.status === "queued" || item.status === "retrying")
+            .sort((first, second) => first.queueOrder - second.queueOrder)[0];
+        if (!nextItem) return undefined;
+
+        const waitMs = Math.max(0, (nextItem.nextAttemptAt ?? Date.now()) - Date.now());
+        if (waitMs === 0) {
+            void processRapidTapQueue();
+            return undefined;
+        }
+        rapidTapRetryTimerRef.current = window.setTimeout(() => {
+            rapidTapRetryTimerRef.current = null;
+            void processRapidTapQueue();
+        }, waitMs);
+        return () => {
+            if (rapidTapRetryTimerRef.current) {
+                window.clearTimeout(rapidTapRetryTimerRef.current);
+                rapidTapRetryTimerRef.current = null;
+            }
+        };
+    }, [isScanningOpen, processRapidTapQueue, rapidTapQueue, rapidTapStorageReady, rfidScannerMode]);
+
+    useEffect(() => {
+        if (!hasRapidTapUnsynced) return undefined;
+        const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = "";
+        };
+        window.addEventListener("beforeunload", warnBeforeLeaving);
+        return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+    }, [hasRapidTapUnsynced]);
+
     function changeHistoryDate(offset: number) {
         const [y, m, d] = historyDate.split("-").map(Number);
         const next = new Date(y, m - 1, d + offset);
@@ -2114,11 +2473,25 @@ export default function AdviserAttendancePage() {
         // final UID character and Enter before React commits onChange, which
         // made the first tap submit a truncated, "not registered" card value.
         const value = resolveRfidScanValue(inputValue, scanValueRef.current);
-        if (!value || scanInFlightRef.current) return;
+        if (!value) return;
+        if (rfidScannerMode === "rapid") {
+            clearScannerInput();
+            if (!isScanningOpen) {
+                void loadClassSession();
+                inputRef.current?.focus();
+                return;
+            }
+            // Do not await persistence here. The persistence chain preserves
+            // scan order, while the input is immediately ready for the next
+            // keyboard-emulating RFID card.
+            enqueueRapidTapScan(value);
+            inputRef.current?.focus();
+            return;
+        }
+        if (scanInFlightRef.current) return;
         scanInFlightRef.current = true;
         if (!isScanningOpen) {
-            scanValueRef.current = "";
-            setScanValue("");
+            clearScannerInput();
             await loadClassSession();
             scanInFlightRef.current = false;
             inputRef.current?.focus();
@@ -2145,8 +2518,7 @@ export default function AdviserAttendancePage() {
             console.error("Scan failed:", error);
             setScanMessage("Failed to connect to server");
         } finally {
-            scanValueRef.current = "";
-            setScanValue("");
+            clearScannerInput();
             scanInFlightRef.current = false;
             inputRef.current?.focus();
         }
@@ -2817,6 +3189,78 @@ export default function AdviserAttendancePage() {
                             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isScanningOpen ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{scannerLabel}</span>
                         </div>
                         <div className="flex flex-col items-center p-4 sm:p-6">
+                            <div className="mb-5 grid w-full grid-cols-2 rounded-xl bg-slate-100 p-1" role="group" aria-label="RFID scanning mode">
+                                <button
+                                    type="button"
+                                    aria-pressed={rfidScannerMode === "default"}
+                                    onClick={() => {
+                                        if (hasRapidTapUnsynced) {
+                                            setScanMessage("Finish or retry the Rapid Tap queue before switching to Default mode.");
+                                            return;
+                                        }
+                                        setRfidScannerMode("default");
+                                        setRapidTapComplete(false);
+                                        window.setTimeout(focusScanner, 0);
+                                    }}
+                                    className={`min-h-10 rounded-lg px-3 text-sm font-bold transition-colors ${rfidScannerMode === "default" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                >
+                                    Default
+                                </button>
+                                <button
+                                    type="button"
+                                    aria-pressed={rfidScannerMode === "rapid"}
+                                    onClick={() => {
+                                        if (!rapidTapStorageReady) {
+                                            setScanMessage("Preparing Rapid Tap storage. Please wait a moment.");
+                                            return;
+                                        }
+                                        setRfidScannerMode("rapid");
+                                        setRapidTapComplete(false);
+                                        setScanMessage("Rapid Tap is ready. Each RFID is queued immediately and saved in order.");
+                                        window.setTimeout(focusScanner, 0);
+                                    }}
+                                    className={`min-h-10 rounded-lg px-3 text-sm font-bold transition-colors ${rfidScannerMode === "rapid" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                >
+                                    Rapid Tap
+                                </button>
+                            </div>
+                            {rfidScannerMode === "rapid" && (
+                                <div className="mb-4 w-full space-y-3" aria-live="polite">
+                                    {hasRapidTapUnsynced ? (
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left text-xs leading-5 text-amber-800">
+                                            <p className="font-bold">
+                                                {rapidTapPendingCount > 0
+                                                    ? `Processing attendance: ${rapidTapPendingCount} pending`
+                                                    : `${rapidTapFailedCount} scan${rapidTapFailedCount === 1 ? "" : "s"} needs review`}
+                                            </p>
+                                            <p className="mt-1">Please do not close this tab or switch to another browser while attendance records are still being processed in the queue.</p>
+                                            {rapidTapFailedCount > 0 && (
+                                                <button type="button" onClick={retryFailedRapidTapScans}
+                                                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                                                    Retry {rapidTapFailedCount} Failed Scan{rapidTapFailedCount === 1 ? "" : "s"}
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : rapidTapComplete ? (
+                                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-center text-sm font-bold text-emerald-800">
+                                            All attendance records have been recorded. Thank you!
+                                        </div>
+                                    ) : (
+                                        <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-center text-xs leading-5 text-sky-800">
+                                            Rapid Tap accepts the next RFID immediately and saves scans in their tap order.
+                                        </div>
+                                    )}
+                                    {rapidTapResults.length > 0 && (
+                                        <div className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                            {rapidTapResults.map((result) => (
+                                                <p key={result.id} className={`text-xs ${result.outcome === "recorded" ? "text-emerald-700" : result.outcome === "duplicate" ? "text-amber-700" : "text-red-600"}`}>
+                                                    {result.message}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             <input ref={inputRef} value={scanValue}
                                 onChange={e => { scanValueRef.current = e.currentTarget.value; setScanValue(e.currentTarget.value); }}
                                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void handleScan(e.currentTarget.value); } }}

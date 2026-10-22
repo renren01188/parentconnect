@@ -12,6 +12,7 @@ type StudentRow = {
   grade: string;
   section: string;
   class_session?: "Morning" | "Afternoon" | null;
+  archive_status?: string | null;
 };
 
 type LogRow = {
@@ -24,6 +25,8 @@ type LogRow = {
   status: "On Time" | "Late" | "Absent" | "Excused";
   via: "RFID" | "Manual" | "Auto";
   remark?: string | null;
+  student_grade_snapshot?: string | null;
+  student_section_snapshot?: string | null;
   students: StudentRow;
 };
 
@@ -77,6 +80,15 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+function isValidDateOnly(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
@@ -85,6 +97,12 @@ export async function GET(req: NextRequest) {
     }
     const { searchParams } = new URL(req.url);
     const date = searchParams.get("date") || getToday();
+    if (!isValidDateOnly(date)) {
+      return NextResponse.json(
+        { success: false, message: "date must use the YYYY-MM-DD format." },
+        { status: 400 },
+      );
+    }
 
     // ── Holiday + school year guard ──────────────────────────────────────────
     const { data: activeSY } = await supabase
@@ -116,26 +134,33 @@ export async function GET(req: NextRequest) {
       ? requested
       : adviserSections[0] ?? adviser?.section ?? "";
 
-    // Fetch attendance logs for the date
+    // Attendance rows retain the grade/section that existed when the event
+    // was recorded. Filtering by a student's current assignment would make a
+    // valid Morning record disappear after ICT moves that section to Afternoon
+    // or after the student transfers.
     let logsQuery = supabase
       .from("attendance_logs")
       .select(`
         id, student_id, student_db_id, time_logged, type, session_type, status, via, remark,
-        students!inner ( first_name, middle_name, last_name, suffix, grade, section )
+        student_grade_snapshot, student_section_snapshot,
+        students!inner ( id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
       `)
       .eq("attendance_date", date)
       .order("time_logged", { ascending: true });
 
-    if (activeSection) logsQuery = logsQuery.eq("students.section", activeSection);
-    if (adviser?.grade) logsQuery = logsQuery.eq("students.grade", adviser.grade);
+    if (activeSection) logsQuery = logsQuery.eq("student_section_snapshot", activeSection);
+    if (adviser?.grade) logsQuery = logsQuery.eq("student_grade_snapshot", adviser.grade);
 
     const { data: logRows, error: logError } = await logsQuery;
     if (logError) throw logError;
 
-    // Fetch all students in active section
+    // Active roster students are included even with no record yet. Students
+    // who were later archived/transferred are included only when they have a
+    // historical attendance row in the selected class/date.
     let studentsQuery = supabase
       .from("students")
-      .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section, class_session")
+      .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section, class_session, archive_status")
+      .eq("archive_status", "active")
       .order("last_name", { ascending: true });
 
     if (activeSection) studentsQuery = studentsQuery.eq("section", activeSection);
@@ -147,10 +172,27 @@ export async function GET(req: NextRequest) {
     const logs = (logRows ?? []) as unknown as LogRow[];
     const students = (studentRows ?? []) as StudentRow[];
 
+    // Start with the active roster, then retain any archived/transferred
+    // student who has a saved attendance event for this historical view.
+    const historyStudentsById = new Map<number, StudentRow>(
+      students.map((student) => [student.id, student]),
+    );
+
     // Build map of student_db_id → their logs
     const studentLogsMap: Record<number, SummaryLog[]> = {};
     for (const log of logs) {
       const s = log.students;
+      const grade = log.student_grade_snapshot ?? s.grade;
+      const section = log.student_section_snapshot ?? s.section;
+      if (!historyStudentsById.has(log.student_db_id)) {
+        historyStudentsById.set(log.student_db_id, {
+          ...s,
+          id: log.student_db_id,
+          student_id: log.student_id,
+          grade,
+          section,
+        });
+      }
       if (!studentLogsMap[log.student_db_id]) studentLogsMap[log.student_db_id] = [];
       studentLogsMap[log.student_db_id].push({
         id: log.id,
@@ -163,32 +205,17 @@ export async function GET(req: NextRequest) {
         status: log.status,
         via: log.via,
         remark: log.remark ?? null,
-        grade: s.grade,
-        section: s.section,
+        grade,
+        section,
       });
     }
 
-    // Section assignment is authoritative for attendance grouping.
-    const sectionSessionByKey = new Map<string, "Morning" | "Afternoon">();
-    const { data: sectionRows, error: sectionError } = await supabase
-      .from("sections")
-      .select("name, grade, class_session")
-      .eq("name", activeSection)
-      .eq("grade", adviser?.grade ?? "");
-    if (sectionError) throw sectionError;
-    for (const section of sectionRows ?? []) {
-      if (section.class_session === "Morning" || section.class_session === "Afternoon") {
-        sectionSessionByKey.set(`${section.grade}|${section.name}`, section.class_session);
-      }
-    }
-
-    const summary: SummaryRow[] = students.map((s) => {
-      const studentClassSession = sectionSessionByKey.get(`${s.grade}|${s.section}`)
-        ?? s.class_session
-        ?? "Morning";
-      const studentLogs = (studentLogsMap[s.id] || []).filter(
-        (log) => !log.session_type || log.session_type === studentClassSession
-      );
+    const summary: SummaryRow[] = Array.from(historyStudentsById.values())
+      .sort((first, second) => buildFullName(first).localeCompare(buildFullName(second), undefined, { sensitivity: "base" }))
+      .map((s) => {
+      // session_type is stored with the log. Do not filter it through the
+      // section's current Morning/Afternoon assignment.
+      const studentLogs = studentLogsMap[s.id] || [];
       const timeInLog = studentLogs.find((log) => log.type === "Time In");
       const timeOutLog = studentLogs.find((log) => log.type === "Time Out");
 
@@ -226,7 +253,7 @@ export async function GET(req: NextRequest) {
       success: true,
       date,
       summary,
-      stats: { total: students.length, present, late, absent, excused },
+      stats: { total: summary.length, present, late, absent, excused },
       isHoliday,
       schoolYear: activeSY ?? null,
     });

@@ -742,6 +742,7 @@ export async function GET(req: NextRequest) {
       pendingReports: pendingReports ?? 0,
       adviser: adviser
         ? {
+          id: adviser.id,
           section: activeSection,
           sections: adviserSections,
           grade: adviser.grade,
