@@ -4,7 +4,6 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getScheduledStudentLrns } from "@/lib/deletionAccess";
 import { logAudit } from "@/lib/audit";
 import { enqueueAttendanceSms } from "@/lib/attendanceSmsQueue";
-import { processAttendanceSmsJobs } from "@/lib/attendanceSmsWorker";
 import { enqueueAttendanceEmail } from "@/lib/attendanceEmailQueue";
 import { processAttendanceEmailJobs } from "@/lib/attendanceEmailWorker";
 import { settleAttendanceNotificationTasks } from "@/lib/attendanceNotificationDispatch";
@@ -296,10 +295,9 @@ function queueNotificationsAfterAttendance(input: Parameters<typeof enqueueAtten
           // The trigger normally creates this job atomically. This fallback
           // preserves existing installations; its conflict key keeps it idempotent.
           await enqueueAttendanceSms(input);
-          // Always make the first delivery attempt for this scan. A scheduled
-          // worker can still retry temporary failures, but a successful tap
-          // must never wait for a deployment-specific Cron configuration.
-          await processAttendanceSmsJobs({ attendanceLogId: input.attendanceLogId, batchSize: 20, concurrency: 4 });
+          // Provider delivery is deliberately owned by the globally leased
+          // scheduled worker. Several simultaneous RFID taps may enqueue many
+          // jobs, but can never start several competing SMS senders.
         },
       },
       {

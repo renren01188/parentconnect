@@ -135,6 +135,10 @@ const recoveryMigration = fs.readFileSync(
   path.join(root, "supabase/migrations/20261022142000_harden_attendance_sms_recovery.sql"),
   "utf8",
 );
+const dispatchLeaseMigration = fs.readFileSync(
+  path.join(root, "supabase/migrations/20261022143000_limit_attendance_sms_dispatch.sql"),
+  "utf8",
+);
 const recoveryScript = fs.readFileSync(path.join(root, "scripts/dispatch-pending-attendance-sms.cjs"), "utf8");
 const vercelConfig = fs.readFileSync(path.join(root, "vercel.json"), "utf8");
 const workerRoute = fs.readFileSync(path.join(root, "src/app/api/internal/process-attendance-sms/route.ts"), "utf8");
@@ -152,7 +156,9 @@ assert.match(
   /sendSms\(\{\s*recipient: job\.recipient_phone,\s*message: job\.message,\s*queueId: job\.id,\s*idempotencyKey: job\.idempotency_key,\s*semaphoreRoute: configuredAttendanceSmsRoute\(\),?\s*\}\)/,
 );
 assert.doesNotMatch(scanSource, /PConnect:\s*Your child/i);
-assert.match(scanSource, /enqueueAttendanceSms\(input\)[\s\S]*processAttendanceSmsJobs\(\{ attendanceLogId: input\.attendanceLogId/);
+assert.match(scanSource, /enqueueAttendanceSms\(input\)/);
+assert.doesNotMatch(scanSource, /processAttendanceSmsJobs/);
+assert.doesNotMatch(scanSource, /dispatchAttendanceSmsJobs/);
 assert.match(normalizedJobsMigration, /sms_job\.status = 'pending'/);
 assert.match(normalizedJobsMigration, /PConnect: Good Day!/);
 assert.doesNotMatch(normalizedJobsMigration, /PConnect: Good (Morning|Afternoon)!/);
@@ -160,6 +166,10 @@ assert.match(normalizedJobsMigration, /attendance_sms_jobs_template_guard/);
 assert.match(recoveryMigration, /idempotency_key/);
 assert.match(recoveryMigration, /reconciliation_required/);
 assert.match(recoveryMigration, /retry_eligible/);
+assert.match(dispatchLeaseMigration, /attendance_sms_dispatch_leases/);
+assert.match(dispatchLeaseMigration, /try_acquire_attendance_sms_dispatch_lease/);
+assert.match(dispatchLeaseMigration, /release_attendance_sms_dispatch_lease/);
+assert.match(dispatchLeaseMigration, /GRANT EXECUTE[\s\S]*TO service_role/);
 assert.match(workerSource, /getSemaphoreMessageStatus/);
 assert.match(workerSource, /provider_requested_at/);
 assert.match(workerSource, /Queued, Pending, Sent,[\s\S]*unknown outcomes never enter this list and can never be resent/);
@@ -168,6 +178,7 @@ assert.doesNotMatch(workerSource, /export async function retryEligibleAttendance
 assert.match(recoveryScript, /Direct SMS recovery dispatch is retired/);
 assert.match(vercelConfig, /process-attendance-sms/);
 assert.match(workerRoute, /export async function GET/);
+assert.match(workerRoute, /dispatchAttendanceSmsJobs/);
 
 console.log("RFID Time In/Out SMS templates and Semaphore payload checks passed.");
 })().catch((error) => {

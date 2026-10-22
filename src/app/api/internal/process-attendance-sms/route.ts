@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { processAttendanceSmsJobs } from "@/lib/attendanceSmsWorker";
+import { dispatchAttendanceSmsJobs } from "@/lib/attendanceSmsWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ async function processQueue(req: Request) {
   }
 
   try {
-    const outcomes = await processAttendanceSmsJobs();
+    const outcomes = await dispatchAttendanceSmsJobs();
     return NextResponse.json({
       success: true,
       ...outcomes,

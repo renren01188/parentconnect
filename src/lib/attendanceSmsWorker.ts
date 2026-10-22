@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { supabase } from "@/lib/supabase";
 import { isAttendanceSmsEnabled } from "@/lib/attendanceNotificationSettings";
 import { configuredAttendanceSmsRoute } from "@/lib/attendanceSmsRoute";
@@ -29,6 +30,7 @@ const MAX_ATTENDANCE_SMS_BATCH_SIZE = 20;
 const MAX_ATTENDANCE_SMS_CONCURRENCY = 4;
 const MAX_SMS_ATTEMPTS = 5;
 const PROCESSING_STALE_AFTER_MS = 10 * 60_000;
+const ATTENDANCE_SMS_DISPATCH_LEASE_SECONDS = 120;
 const UNKNOWN_PROCESSING_ERROR = "SMS provider outcome is unknown after a worker interruption. It was not resent; reconcile it with Semaphore before any retry.";
 const jobColumns = "id, attendance_log_id, status, recipient_phone, message, attempts, idempotency_key, provider, provider_message_id, provider_status, provider_requested_at, reconciliation_attempts";
 
@@ -633,8 +635,8 @@ export async function processAttendanceSmsJobs(options?: { batchSize?: number; c
     retryConfirmedAttendanceSmsJob,
   );
 
-  // Bound all outgoing sends in one worker pass. A rapid RFID tap still makes
-  // an immediate worker attempt; this scheduled path is the durable fallback.
+  // Bound all outgoing sends in one globally leased worker pass. RFID taps
+  // only create durable queue rows; the scheduled dispatcher drains them.
   const jobs: SmsJob[] = [];
   const freshCapacity = Math.max(0, batchSize - confirmedRetries.length);
   for (let index = 0; index < freshCapacity; index += 1) {
@@ -656,4 +658,49 @@ export async function processAttendanceSmsJobs(options?: { batchSize?: number; c
     automaticallyRetried: automaticRetryOutcomes.filter((outcome) => outcome !== "not_retry_eligible").length,
     reconciliation,
   };
+}
+
+/**
+ * Run at most one SMS dispatcher across every Vercel invocation. Attendance
+ * requests only enqueue durable jobs; the scheduled route owns provider I/O.
+ * This is intentionally separate from `processAttendanceSmsJobs` so tests and
+ * maintenance tools can exercise queue logic without acquiring a lease.
+ */
+export async function dispatchAttendanceSmsJobs() {
+  const ownerToken = randomUUID();
+  const { data: acquired, error: acquireError } = await supabase.rpc(
+    "try_acquire_attendance_sms_dispatch_lease",
+    {
+      p_owner_token: ownerToken,
+      p_lease_seconds: ATTENDANCE_SMS_DISPATCH_LEASE_SECONDS,
+    },
+  );
+  if (acquireError) throw acquireError;
+
+  if (!acquired) {
+    return {
+      acquired: false,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      review: 0,
+      retryEligible: 0,
+      automaticallyRetried: 0,
+    };
+  }
+
+  try {
+    return { acquired: true, ...await processAttendanceSmsJobs() };
+  } finally {
+    const { error: releaseError } = await supabase.rpc(
+      "release_attendance_sms_dispatch_lease",
+      { p_owner_token: ownerToken },
+    );
+    // A failed release is safe: the lease automatically expires. Do not mark
+    // a completed dispatch as failed just because this cleanup update failed.
+    if (releaseError) {
+      console.error("Could not release attendance SMS dispatch lease:", releaseError.message);
+    }
+  }
 }
