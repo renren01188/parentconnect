@@ -666,14 +666,15 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
             </section>
             <section className="rounded-xl border border-gray-200 bg-white p-4" aria-label="Attendance SMS delivery queue">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div><p className="text-sm font-bold text-gray-800">SMS delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">The queue automatically sends attendance messages and retries only provider-confirmed Failed or Refunded messages. Queued and Pending messages are never resent.</p></div>
+                <div><p className="text-sm font-bold text-gray-800">SMS delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">Sent means Semaphore accepted the request, not that it has a final delivery result. Pending and Queued statuses are checked again automatically after five minutes; only provider-confirmed Failed or Refunded messages are retried.</p></div>
                 <button type="button" onClick={() => { void loadSmsJobs(); }} disabled={loadingSmsJobs} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${loadingSmsJobs ? "animate-spin" : ""}`} />{loadingSmsJobs ? "Refreshing…" : "Refresh queue"}</button>
               </div>
               {loadingSmsJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : attentionSmsJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">No recent SMS jobs need review.</p> : <div className="mt-4 space-y-2">{attentionSmsJobs.map(job => {
                 const retryEligible = job.status === "retry_eligible";
                 const review = job.status === "reconciliation_required";
+                const awaitingSemaphore = job.status === "sent" && ["queued", "pending"].includes((job.provider_status || "").toLowerCase());
                 return <div key={job.id} className={`rounded-lg border p-3 ${review ? "border-amber-200 bg-amber-50" : retryEligible ? "border-emerald-200 bg-emerald-50" : "border-gray-200 bg-gray-50"}`}>
-                  <div className="min-w-0"><p className="text-xs font-bold text-gray-800">Attendance #{job.attendance_log_id} · {job.status.replace(/_/g, " ")}</p><p className="mt-1 text-[11px] text-gray-600">Semaphore: {job.provider_status || "not requested"} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
+                  <div className="min-w-0"><p className="text-xs font-bold text-gray-800">Attendance #{job.attendance_log_id} · {awaitingSemaphore ? "accepted by Semaphore — awaiting update" : job.status.replace(/_/g, " ")}</p><p className="mt-1 text-[11px] text-gray-600">Semaphore status: {job.provider_status || "not requested"}{awaitingSemaphore ? " · rechecks automatically" : ""} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
                 </div>;
               })}</div>}
             </section>

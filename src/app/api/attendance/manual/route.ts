@@ -18,8 +18,8 @@ import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 type ManualBody = {
   student_id: string;
   type: "Time In" | "Time Out";
-  // Kept optional for backwards compatibility. On Time/Late is always
-  // calculated on the server from ICT's saved Late After value.
+  // "On Time" is kept as a legacy API alias for Present. The Manual
+  // Attendance form explicitly offers Present, Late, Absent, and Excused.
   status?: "On Time" | "Late" | "Absent" | "Excused" | "Present";
   remark?: string;
   date_from?: string;
@@ -87,6 +87,23 @@ function buildFullName(student: StudentNameFields) {
     .join(" ");
 }
 
+// Attendance corrections must never result in a second notification. This is
+// primarily defensive for older database installations that enqueue an SMS on
+// an attendance_logs UPDATE trigger; an in-progress or delivered notice is
+// intentionally left untouched.
+async function suppressPendingSmsForManualAttendanceCorrection(attendanceLogId: number) {
+  const { error } = await supabase
+    .from("attendance_sms_jobs")
+    .update({
+      status: "skipped",
+      locked_at: null,
+      last_error: "SMS skipped: attendance was corrected by an adviser.",
+    })
+    .eq("attendance_log_id", attendanceLogId)
+    .eq("status", "pending");
+  if (error) throw error;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const adviser = await getAdviserFromToken();
@@ -101,12 +118,21 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    // The database stores Present as On Time. Continue accepting the legacy
+    // On Time request value so older clients remain compatible.
+    const selectedStatus = body.status === "On Time" ? "Present" : body.status;
+    if (selectedStatus && !["Present", "Late", "Absent", "Excused"].includes(selectedStatus)) {
+      return NextResponse.json(
+        { success: false, message: "Choose Present, Late, Absent, or Excused for manual attendance." },
+        { status: 400 },
+      );
+    }
 
     // An adviser-created Excused attendance entry follows the same approved
     // excuse-letter range rules as the approval modal. The database function
     // re-checks the adviser/student class boundary and creates only valid
     // class-day Time In records, never replacing Present or Late attendance.
-    if (body.status === "Excused") {
+    if (selectedStatus === "Excused") {
       if (body.type !== "Time In") {
         return NextResponse.json(
           { success: false, message: "Excused attendance is recorded only as a Time In status." },
@@ -310,11 +336,16 @@ export async function POST(req: NextRequest) {
     const now = getCurrentMinutes();
     const start = timeToMinutes(session.scheduled_start);
     const end = timeToMinutes(session.scheduled_end);
-    // An adviser can explicitly record a known absence. Otherwise, the
-    // server calculates On Time/Late so the UI cannot override ICT's rule.
-    const computedStatus: "On Time" | "Late" | "Absent" = body.status === "Absent"
+    // Present remains stored as On Time, while an Adviser can explicitly
+    // record a Late or Absent status. Clients that omit status retain the
+    // earlier ICT late-cutoff calculation.
+    const computedStatus: "On Time" | "Late" | "Absent" = selectedStatus === "Absent"
       ? "Absent"
-      : now <= timeToMinutes(session.late_after ?? session.scheduled_start) ? "On Time" : "Late";
+      : selectedStatus === "Late"
+        ? "Late"
+        : selectedStatus === "Present"
+          ? "On Time"
+          : now <= timeToMinutes(session.late_after ?? session.scheduled_start) ? "On Time" : "Late";
 
     const { data: existing, error: existingError } = await supabase
       .from("attendance_logs")
@@ -334,23 +365,36 @@ export async function POST(req: NextRequest) {
 
     const existingSameType = (existing ?? []).find((log) => log.type === body.type);
     const automaticAbsence = body.type === "Time In" &&
-      body.status === "Present" &&
+      (selectedStatus === "Present" || selectedStatus === "Late") &&
       existingSameType?.status === "Absent" &&
       existingSameType.via === "Auto";
+    // Manual Attendance is always scoped to getToday() in Asia/Manila. A
+    // manually recorded absence for that same date may be corrected directly
+    // from this form without creating another Time In record.
+    const manualAbsentToAttendanceCorrection = body.type === "Time In" &&
+      (selectedStatus === "Present" || selectedStatus === "Late") &&
+      existingSameType?.status === "Absent" &&
+      existingSameType.via === "Manual";
+    // A manually recorded Present is stored as On Time (and a late manual
+    // entry as Late), so changing it to Absent is an update to that same Time
+    // In record—not an attempt to create a duplicate Time In.
+    const manualAbsenceCorrection = body.type === "Time In" &&
+      selectedStatus === "Absent" &&
+      (existingSameType?.status === "On Time" || existingSameType?.status === "Late");
 
     // A normal manual entry is allowed only in the configured class window.
-    // The one exception is a documented correction of an automatic absence:
-    // it can be corrected after the session, but never creates a new record.
-    if (now < start || (now >= end && !automaticAbsence)) {
+    // Corrections update an existing record, so they can also be completed
+    // after the session has ended. Neither correction path creates a row.
+    if (now < start || (now >= end && !automaticAbsence && !manualAbsenceCorrection && !manualAbsentToAttendanceCorrection)) {
       return NextResponse.json(
         { success: false, message: now < start
           ? "Manual attendance is not started yet. It opens at the ICT-configured scheduled start."
-          : "Manual attendance is unavailable because the ICT-configured class session has ended. Only an automatic absence can be corrected after the session." },
+          : "Manual attendance is unavailable because the ICT-configured class session has ended. Only an existing attendance record can be corrected after the session." },
         { status: 409 }
       );
     }
 
-    if (body.type === "Time Out" && body.status === "Absent") {
+    if (body.type === "Time Out" && selectedStatus === "Absent") {
       return NextResponse.json(
         { success: false, message: "Absent attendance is recorded only as a Time In status." },
         { status: 400 },
@@ -366,11 +410,84 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (manualAbsenceCorrection) {
+      const correctionRemark = body.remark?.trim();
+      const { data: log, error: correctionError } = await supabase
+        .from("attendance_logs")
+        .update({
+          status: "Absent",
+          via: "Manual",
+          ...(correctionRemark ? { remark: correctionRemark } : {}),
+        })
+        .eq("id", existingSameType.id)
+        .select()
+        .single();
+      if (correctionError) throw correctionError;
+
+      await suppressPendingSmsForManualAttendanceCorrection(log.id);
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: existingSameType.status, newStatus: "Absent", details: `Corrected ${existingSameType.status} ${body.type} to Absent for ${buildFullName(student)} (${student.student_id}) without creating another attendance record.` });
+      after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
+      return NextResponse.json({
+        success: true,
+        message: "Attendance corrected to Absent",
+        log: {
+          id: log.id,
+          student_id: student.student_id,
+          full_name: buildFullName(student),
+          grade: student.grade,
+          section: student.section,
+          attendance_date: log.attendance_date,
+          time_logged: log.time_logged,
+          type: log.type,
+          session_type: log.session_type,
+          status: log.status,
+          via: log.via,
+        },
+      });
+    }
+
+    if (manualAbsentToAttendanceCorrection) {
+      const correctionRemark = body.remark?.trim();
+      const { data: log, error: correctionError } = await supabase
+        .from("attendance_logs")
+        .update({
+          status: computedStatus,
+          via: "Manual",
+          ...(correctionRemark ? { remark: correctionRemark } : {}),
+        })
+        .eq("id", existingSameType.id)
+        .select()
+        .single();
+      if (correctionError) throw correctionError;
+
+      await suppressPendingSmsForManualAttendanceCorrection(log.id);
+      const correctedStatusLabel = computedStatus === "On Time" ? "Present" : computedStatus;
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: computedStatus, details: `Corrected manual absence to ${correctedStatusLabel} for ${buildFullName(student)} (${student.student_id}) without creating another attendance record.` });
+      after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
+      return NextResponse.json({
+        success: true,
+        message: `Manual absence corrected to ${correctedStatusLabel}`,
+        log: {
+          id: log.id,
+          student_id: student.student_id,
+          full_name: buildFullName(student),
+          grade: student.grade,
+          section: student.section,
+          attendance_date: log.attendance_date,
+          time_logged: log.time_logged,
+          type: log.type,
+          session_type: log.session_type,
+          status: log.status,
+          via: log.via,
+        },
+      });
+    }
+
     // "Present" is a correction request, not a new attendance status. Keep
     // the established On Time value so existing history, reports, and parent
     // views continue to treat it as Present. Only a recorded Late event of
     // the same type can be corrected, and its original event fields remain.
-    if (body.status === "Present" && existingSameType?.status === "Late") {
+    if (selectedStatus === "Present" && existingSameType?.status === "Late") {
       const { data: log, error: correctionError } = await supabase
         .from("attendance_logs")
         .update({
@@ -404,7 +521,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (body.status === "Present" && !automaticAbsence) {
+    if (selectedStatus === "Present" && existingSameType && !automaticAbsence && !manualAbsentToAttendanceCorrection) {
       return NextResponse.json(
         { success: false, message: "Present can only be used to correct an existing Late record of the same type." },
         { status: 409 },
@@ -427,7 +544,7 @@ export async function POST(req: NextRequest) {
         .from("attendance_logs")
         .update({
           time_logged: timeLogged,
-          status: "On Time",
+        status: computedStatus,
           via: "Manual",
           remark: correctionRemark,
         })
@@ -437,11 +554,12 @@ export async function POST(req: NextRequest) {
 
       if (correctionError) throw correctionError;
 
-      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: "On Time", details: `Corrected automatic absence to Present for ${buildFullName(student)} (${student.student_id}).` });
+      const correctedStatusLabel = computedStatus === "On Time" ? "Present" : computedStatus;
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Absent", newStatus: computedStatus, details: `Corrected automatic absence to ${correctedStatusLabel} for ${buildFullName(student)} (${student.student_id}).` });
       after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
       return NextResponse.json({
         success: true,
-        message: "Automatic absence corrected to Present",
+        message: `Automatic absence corrected to ${correctedStatusLabel}`,
         log: {
           id: log.id,
           student_id: student.student_id,
@@ -452,7 +570,7 @@ export async function POST(req: NextRequest) {
           time_logged: timeLogged,
           type: body.type,
           session_type: sessionType,
-          status: "On Time",
+          status: computedStatus,
           via: "Manual",
         },
       });

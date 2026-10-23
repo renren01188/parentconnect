@@ -30,7 +30,7 @@ import {
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ScanMode = "Time In" | "Time Out";
 type AttendanceStatus = "Present" | "On Time" | "Late" | "Absent" | "Excused";
-type ManualAttendanceStatus = "On Time" | "Absent" | "Excused" | "Present";
+type ManualAttendanceStatus = "Present" | "Late" | "Absent" | "Excused";
 type AttendanceVia = "RFID" | "Manual" | "Auto";
 
 type ClassSessionStatus = "Active" | "Ended" | "Not Started";
@@ -1937,8 +1937,7 @@ export default function AdviserAttendancePage() {
     const [isLoadingStudents, setIsLoadingStudents] = useState(false);
 
     const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
-    const [manualType, setManualType] = useState<ScanMode>("Time In");
-    const [manualStatus, setManualStatus] = useState<ManualAttendanceStatus>("On Time");
+    const [manualStatus, setManualStatus] = useState<ManualAttendanceStatus>("Present");
     const [manualRemark, setManualRemark] = useState("");
     const [manualExcuseStartDate, setManualExcuseStartDate] = useState(toLocalDateString(new Date()));
     const [manualExcuseEndDate, setManualExcuseEndDate] = useState(toLocalDateString(new Date()));
@@ -2057,10 +2056,22 @@ export default function AdviserAttendancePage() {
         ? [adviser.id, adviser.grade ?? "", [...adviser.sections].sort().join("|")].join(":")
         : "";
     const rapidTapPendingCount = rapidTapQueue.filter((item) => item.status !== "failed").length;
+    const rapidTapCapturingCount = rapidTapQueue.filter((item) => item.status === "capturing").length;
+    const rapidTapQueuedCount = rapidTapQueue.filter((item) => item.status === "queued").length;
+    const rapidTapSavingCount = rapidTapQueue.filter((item) => item.status === "saving").length;
+    const rapidTapRetryingCount = rapidTapQueue.filter((item) => item.status === "retrying").length;
     const rapidTapFailedCount = rapidTapQueue.filter((item) => item.status === "failed").length;
     const rapidTapManualReviewCount = rapidTapQueue.filter((item) => item.status === "failed" && item.requiresManualReview).length;
     const rapidTapManualReviewItems = rapidTapQueue.filter((item) => item.status === "failed" && item.requiresManualReview);
     const rapidTapRetryableFailedCount = rapidTapFailedCount - rapidTapManualReviewCount;
+    const rapidTapStatusSummary = [
+        rapidTapCapturingCount > 0 ? `${rapidTapCapturingCount} capturing` : "",
+        rapidTapQueuedCount > 0 ? `${rapidTapQueuedCount} queued` : "",
+        rapidTapSavingCount > 0 ? `${rapidTapSavingCount} saving` : "",
+        rapidTapRetryingCount > 0 ? `${rapidTapRetryingCount} retrying` : "",
+        rapidTapRetryableFailedCount > 0 ? `${rapidTapRetryableFailedCount} failed` : "",
+        rapidTapManualReviewCount > 0 ? `${rapidTapManualReviewCount} needs review` : "",
+    ].filter(Boolean).join(" · ");
     // Only a scan still eligible for automatic processing should prevent an
     // Adviser from changing scanner modes or closing the browser.
     const hasRapidTapUnsynced = rapidTapPendingCount > 0;
@@ -2287,7 +2298,7 @@ export default function AdviserAttendancePage() {
                 });
                 if (remaining.length === 0 && rapidTapHadWorkRef.current) {
                     setRapidTapComplete(true);
-                    setScanMessage("All attendance records have been recorded. Thank you!");
+                    setScanMessage("All Rapid Tap scans have finished processing.");
                 } else {
                     setScanMessage(`✓ ${data.log.full_name} recorded as ${data.log.status}`);
                 }
@@ -2309,7 +2320,7 @@ export default function AdviserAttendancePage() {
                 addRapidTapResult({ id: savingItem.id, outcome: "duplicate", message: `Already recorded: ${message}` });
                 if (remaining.length === 0 && rapidTapHadWorkRef.current) {
                     setRapidTapComplete(true);
-                    setScanMessage("All attendance records have been recorded. Thank you!");
+                    setScanMessage("All Rapid Tap scans have finished processing.");
                 } else {
                     setScanMessage(`⚠ ${message}`);
                 }
@@ -2416,28 +2427,52 @@ export default function AdviserAttendancePage() {
             scanDate: toLocalDateString(new Date()),
             sessionType,
             queueOrder,
-            status: "queued",
+            // Register the tap before asynchronous local storage begins. A
+            // later tap can therefore never be invisible to completion logic
+            // while an earlier API request is finishing.
+            status: "capturing",
             attempts: 0,
             nextAttemptAt: null,
             lastError: null,
         };
 
+        rapidTapHadWorkRef.current = true;
+        setRapidTapComplete(false);
+        replaceRapidTapQueue([...rapidTapQueueRef.current, item]
+            .sort((first, second) => first.queueOrder - second.queueOrder));
+        setScanMessage(`Rapid Tap captured. Saving ${rapidTapQueueRef.current.filter((queued) => queued.status === "capturing").length} scan${rapidTapQueueRef.current.filter((queued) => queued.status === "capturing").length === 1 ? "" : "s"} locally...`);
+
         rapidTapPersistChainRef.current = rapidTapPersistChainRef.current
             .then(async () => {
-                // Persist before exposing the item to the sender. A refresh or
-                // accidental tab close therefore cannot lose an accepted tap.
-                await saveRapidTapQueueItem(item);
-                rapidTapHadWorkRef.current = true;
-                setRapidTapComplete(false);
-                replaceRapidTapQueue([...rapidTapQueueRef.current, item]
-                    .sort((first, second) => first.queueOrder - second.queueOrder));
-                setScanMessage(`Rapid Tap captured. ${rapidTapQueueRef.current.filter((queued) => queued.status !== "failed").length} scan${rapidTapQueueRef.current.filter((queued) => queued.status !== "failed").length === 1 ? "" : "s"} waiting to save.`);
+                // Do not send the scan until IndexedDB confirms it. A refresh
+                // or accidental close after this point can safely resume it.
+                const queuedItem: RapidTapQueueItem = { ...item, status: "queued" };
+                await saveRapidTapQueueItem(queuedItem);
+                const nextQueue = rapidTapQueueRef.current.map((current) =>
+                    current.id === queuedItem.id ? queuedItem : current,
+                );
+                replaceRapidTapQueue(nextQueue);
+                setScanMessage(`Rapid Tap queued. ${nextQueue.filter((queued) => queued.status !== "failed").length} scan${nextQueue.filter((queued) => queued.status !== "failed").length === 1 ? "" : "s"} waiting to save.`);
             })
             .catch((storageError) => {
                 console.error("Could not persist Rapid Tap scan:", storageError);
-                setScanMessage("Rapid Tap could not save this scan on this device. Please scan it again after checking browser storage.");
+                // Never silently discard a tap when browser storage is full
+                // or unavailable. Keep it in this queue as a normal retryable
+                // failure; Retry first persists it and then sends it.
+                const storageMessage = "This scan could not be saved in browser storage. Retry after checking browser storage.";
+                const failedItem: RapidTapQueueItem = {
+                    ...item,
+                    status: "failed",
+                    requiresManualReview: false,
+                    lastError: storageMessage,
+                };
+                replaceRapidTapQueue(rapidTapQueueRef.current.map((current) =>
+                    current.id === failedItem.id ? failedItem : current,
+                ));
+                addRapidTapResult({ id: failedItem.id, outcome: "failed", message: storageMessage });
+                setScanMessage(`⚠ ${storageMessage}`);
             });
-    }, [activeSection, adviser, classSession?.session_type, rapidTapScope, replaceRapidTapQueue]);
+    }, [activeSection, addRapidTapResult, adviser, classSession?.session_type, rapidTapScope, replaceRapidTapQueue]);
 
     const retryFailedRapidTapScans = useCallback(() => {
         const retryItems = rapidTapQueueRef.current.map((item) => item.status === "failed" && !item.requiresManualReview
@@ -2558,7 +2593,7 @@ export default function AdviserAttendancePage() {
         void (async () => {
             try {
                 const storedItems = await loadRapidTapQueue(rapidTapScope);
-                const restoredItems = storedItems.map((item) => item.status === "saving"
+                const restoredItems = storedItems.map((item) => item.status === "saving" || item.status === "capturing"
                     ? { ...item, status: "queued" as const, nextAttemptAt: null }
                     : item,
                 );
@@ -2722,7 +2757,7 @@ export default function AdviserAttendancePage() {
                         method: "POST", headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             student_id: studentId,
-                            type: manualType,
+                            type: "Time In",
                             status: manualStatus,
                             remark: manualRemark,
                             ...(manualStatus === "Excused" ? {
@@ -2758,8 +2793,8 @@ export default function AdviserAttendancePage() {
             setTodayLogPage(1);
             setSelectedStudentIds(failedStudentIds);
             if (failedStudentIds.length === 0) {
-                setManualStudentSearch(""); setManualType("Time In");
-                setManualStatus("On Time"); setManualRemark("");
+                setManualStudentSearch("");
+                setManualStatus("Present"); setManualRemark("");
                 setManualExcuseStartDate(toLocalDateString(new Date()));
                 setManualExcuseEndDate(toLocalDateString(new Date()));
                 setManualMessage(`Manual attendance saved for ${savedCount} student${savedCount === 1 ? "" : "s"}.`);
@@ -3049,10 +3084,13 @@ export default function AdviserAttendancePage() {
         ? students.find(student => student.student_id === selectedStudentIds[0])
         : undefined;
     const selectedManualLateLog = selectedStudentIds.length === 1
-        ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === manualType && log.status === "Late")
+        ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === "Time In" && log.status === "Late")
         : undefined;
-    const selectedManualAutoAbsentLog = selectedStudentIds.length === 1 && manualType === "Time In"
+    const selectedManualAutoAbsentLog = selectedStudentIds.length === 1
         ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === "Time In" && log.status === "Absent" && log.via === "Auto")
+        : undefined;
+    const selectedManualAbsentLog = selectedStudentIds.length === 1
+        ? logs.find(log => log.student_id === selectedStudentIds[0] && log.type === "Time In" && log.status === "Absent" && log.via === "Manual")
         : undefined;
     const filteredTodayLogs = logs.filter(log => {
         const search = todayLogSearch.trim().toLowerCase();
@@ -3113,7 +3151,7 @@ export default function AdviserAttendancePage() {
                                 setSelectedStudentIds([]);
                                 setManualStudentSearch("");
                                 setIsManualStudentPickerOpen(false);
-                                setManualStatus("On Time");
+                                setManualStatus("Present");
                                 loadStudents(sec);
                                 loadTodayLogs(sec);
                                 if (showHistory && historyDate) void loadHistory(historyDate, sec);
@@ -3446,6 +3484,9 @@ export default function AdviserAttendancePage() {
                                                     ? "Please do not close this tab or switch to another browser while attendance records are still being processed in the queue."
                                                     : "The class session is closed. The system is only checking whether each scan was already saved; use Apply only for an authorised manual correction."}
                                             </p>
+                                            {rapidTapStatusSummary && (
+                                                <p className="mt-1 font-medium">Status: {rapidTapStatusSummary}</p>
+                                            )}
                                             {rapidTapManualReviewCount > 0 && (
                                                 <p className="mt-1 font-medium">Apply a reviewed scan only when you confirm it belongs to this student and session. Applying records an audited manual Time In correction and does not send a parent SMS.</p>
                                             )}
@@ -3540,8 +3581,11 @@ export default function AdviserAttendancePage() {
                             </div>
                         </div>
                         <div className="p-4 sm:p-5">
+                            <div role="note" className="mb-4 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                                <span className="font-bold">Today&apos;s logs only.</span> Manual Attendance records the current Manila date. Use Edit Attendance to correct existing records, including late entries.
+                            </div>
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
-                                <div className="md:col-span-8">
+                                <div className="md:col-span-12">
                                     <label className="mb-1.5 block text-xs font-semibold text-slate-600">Student ({sectionLabel})</label>
                                     <div className="relative">
                                         <button type="button" onClick={() => setIsManualStudentPickerOpen(open => !open)}
@@ -3571,7 +3615,7 @@ export default function AdviserAttendancePage() {
                                                                     ...current,
                                                                     ...manualStudentOptions.map(student => student.student_id),
                                                                 ])]);
-                                                                setManualStatus("On Time");
+                                                                setManualStatus("Present");
                                                                 setManualMessage("");
                                                             }}
                                                             disabled={manualStudentOptions.length === 0}
@@ -3579,7 +3623,7 @@ export default function AdviserAttendancePage() {
                                                             Select all
                                                         </button>
                                                         <button type="button"
-                                                            onClick={() => { setSelectedStudentIds([]); setManualStatus("On Time"); setManualMessage(""); }}
+                                                            onClick={() => { setSelectedStudentIds([]); setManualStatus("Present"); setManualMessage(""); }}
                                                             disabled={selectedStudentIds.length === 0}
                                                             className="min-h-9 rounded-lg px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400">
                                                             Unselect all
@@ -3598,7 +3642,7 @@ export default function AdviserAttendancePage() {
                                                                     setSelectedStudentIds(current => current.includes(student.student_id)
                                                                         ? current.filter(id => id !== student.student_id)
                                                                         : [...current, student.student_id]);
-                                                                    setManualStatus("On Time");
+                                                                    setManualStatus("Present");
                                                                     setManualMessage("");
                                                                 }}
                                                                 className="h-4 w-4 shrink-0 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400" />
@@ -3620,44 +3664,22 @@ export default function AdviserAttendancePage() {
                                         )}
                                     </div>
                                 </div>
-                                <div className="md:col-span-4">
-                                    <label className="mb-1.5 block text-xs font-semibold text-slate-600">Type</label>
-                                    <div className="relative">
-                                        <select value={manualType} onChange={e => { setManualType(e.target.value as ScanMode); setManualStatus("On Time"); }}
-                                            className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition">
-                                            <option value="Time In">Time In</option>
-                                            <option value="Time Out">Time Out</option>
-                                        </select>
-                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                                    </div>
-                                </div>
                             </div>
                             <div className="mt-4">
                                 <label className="mb-1.5 block text-xs font-semibold text-slate-600">Status</label>
                                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                                    {(["On Time", "Late", "Absent", "Excused"] as const).map(status => {
-                                        const disabled = status === "Late" || (status === "Excused" && manualType === "Time Out");
-                                        return (
-                                            <button key={status} type="button" onClick={() => { if (status !== "Late") setManualStatus(status); }} disabled={disabled}
-                                                className={`h-10 rounded-xl border text-xs font-bold transition-all ${disabled
-                                                    ? "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
-                                                    : manualStatus === status
-                                                        ? status === "On Time" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
-                                                            : status === "Excused" ? "border-sky-500 bg-sky-500 text-white shadow-sm"
-                                                                : "border-red-500 bg-red-500 text-white shadow-sm"
-                                                        : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
-                                                    }`}>{status}</button>
-                                        );
-                                    })}
-                                    {(selectedManualLateLog || selectedManualAutoAbsentLog) && (
-                                        <button type="button" onClick={() => setManualStatus("Present")}
-                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === "Present"
-                                                ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
+                                    {(["Present", "Late", "Absent", "Excused"] as const).map(status => (
+                                        <button key={status} type="button" onClick={() => setManualStatus(status)}
+                                            className={`h-10 rounded-xl border text-xs font-bold transition-all ${manualStatus === status
+                                                ? status === "Present" ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
+                                                    : status === "Late" ? "border-amber-500 bg-amber-500 text-white shadow-sm"
+                                                        : status === "Excused" ? "border-sky-500 bg-sky-500 text-white shadow-sm"
+                                                            : "border-red-500 bg-red-500 text-white shadow-sm"
                                                 : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
-                                                }`}>Present</button>
-                                    )}
+                                                }`}>{status}</button>
+                                    ))}
                                 </div>
-                                <p className="mt-2 text-xs text-slate-400">On Time or Late is calculated from ICT&apos;s saved Late After time. Select Absent only to record a known absence. Excused requires a reason and date range; it is immediately approved and recorded as Time In only on scheduled class days.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : selectedManualAutoAbsentLog ? " Select Present with a remark to correct this system-created absence after the session." : ""}</p>
+                                <p className="mt-2 text-xs text-slate-400">Present is saved as On Time. Select Late when the student arrived late, or Absent to record a known absence or correct an existing Time In. Excused requires a reason and date range; it is immediately approved and recorded as Time In only on scheduled class days.{selectedManualLateLog ? " Select Present to correct this Late record without changing its recorded time." : selectedManualAutoAbsentLog ? " Select Present or Late with a remark to correct this system-created absence after the session." : selectedManualAbsentLog ? " Select Present or Late to correct this manual absence for today." : ""}</p>
                             </div>
                             <div className="mt-4">
                                 <div className="mb-1.5 flex items-center justify-between">
@@ -3665,7 +3687,7 @@ export default function AdviserAttendancePage() {
                                     <span className="text-xs text-slate-400">{manualStatus === "Excused" ? "Required" : "Optional"}</span>
                                 </div>
                                 <input value={manualRemark} onChange={e => setManualRemark(e.target.value)}
-                                placeholder={manualStatus === "Excused" ? "Required: reason for excusing this student" : selectedManualAutoAbsentLog && manualStatus === "Present" ? "Required: reason for correcting the automatic absence" : "e.g. Excuse letter submitted"}
+                                placeholder={manualStatus === "Excused" ? "Required: reason for excusing this student" : selectedManualAutoAbsentLog && (manualStatus === "Present" || manualStatus === "Late") ? "Required: reason for correcting the automatic absence" : "e.g. Excuse letter submitted"}
                                     className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition" />
                             </div>
                             {manualStatus === "Excused" && (

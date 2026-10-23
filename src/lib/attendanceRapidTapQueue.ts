@@ -1,4 +1,8 @@
-export type RapidTapQueueStatus = "queued" | "saving" | "retrying" | "failed";
+// A scan is shown as capturing immediately when the reader submits it. It is
+// promoted to queued only after IndexedDB confirms that the scan is durable.
+// Keeping the two states separate prevents a fast prior save from making the
+// UI report a completed queue while another tap is still being persisted.
+export type RapidTapQueueStatus = "capturing" | "queued" | "saving" | "retrying" | "failed";
 
 /**
  * A Rapid Tap item is deliberately scoped to the Adviser and the class

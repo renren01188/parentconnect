@@ -32,6 +32,9 @@ const MAX_SMS_ATTEMPTS = 5;
 const MAX_AUTOMATIC_RECONCILIATION_ATTEMPTS = 3;
 const PROCESSING_STALE_AFTER_MS = 10 * 60_000;
 const ATTENDANCE_SMS_DISPATCH_LEASE_SECONDS = 120;
+// Semaphore accepts a message before it has a final delivery result. Give it
+// time to progress, then refresh the provider status at most once per window.
+const SEMAPHORE_PENDING_STATUS_RECONCILIATION_GRACE_MS = 5 * 60_000;
 const UNKNOWN_PROCESSING_ERROR = "SMS provider outcome is unknown after a worker interruption. It was not resent; reconcile it with Semaphore before any retry.";
 const jobColumns = "id, attendance_log_id, status, recipient_phone, message, attempts, idempotency_key, provider, provider_message_id, provider_status, provider_requested_at, reconciliation_attempts";
 
@@ -66,6 +69,13 @@ function semaphoreState(status: string | null | undefined) {
     case "refunded": return "refunded";
     default: return "unknown";
   }
+}
+
+// Store Semaphore's known states consistently so an initial "Pending" and a
+// later "pending" are treated as the same state by the reconciliation query.
+function storedSemaphoreStatus(status: string | null | undefined) {
+  const state = semaphoreState(status);
+  return state === "unknown" ? String(status ?? "").trim() || "unknown" : state;
 }
 
 async function recordProviderEvent(input: {
@@ -320,6 +330,9 @@ async function processJob(job: SmsJob): Promise<JobOutcome> {
     providerResponseReceived = true;
     const now = new Date().toISOString();
     const state = result.provider === "semaphore" ? semaphoreState(result.providerStatus) : "sent";
+    const providerStatus = result.provider === "semaphore"
+      ? storedSemaphoreStatus(result.providerStatus)
+      : result.providerStatus;
 
     if (result.provider === "semaphore" && state === "unknown") {
       const { error } = await supabase
@@ -329,10 +342,11 @@ async function processJob(job: SmsJob): Promise<JobOutcome> {
           attempts: attempt,
           provider: result.provider,
           provider_message_id: result.providerMessageId,
-          provider_status: result.providerStatus,
+          provider_status: providerStatus,
           provider_response: result.response,
           provider_accepted_at: now,
           reconciliation_required_at: now,
+          updated_at: now,
           locked_at: null,
           last_error: "Semaphore accepted the request but returned an unrecognized status. Reconcile before any retry.",
         })
@@ -358,11 +372,12 @@ async function processJob(job: SmsJob): Promise<JobOutcome> {
           attempts: attempt,
           provider: result.provider,
           provider_message_id: result.providerMessageId,
-          provider_status: result.providerStatus,
+          provider_status: providerStatus,
           provider_response: result.response,
           provider_accepted_at: now,
           reconciled_at: now,
           retry_eligible_at: now,
+          updated_at: now,
           locked_at: null,
           last_error: state === "refunded"
             ? "Semaphore confirmed the original message was refunded. The queue will retry it automatically."
@@ -394,13 +409,14 @@ async function processJob(job: SmsJob): Promise<JobOutcome> {
         attempts: attempt,
         provider: result.provider,
         provider_message_id: result.providerMessageId,
-        provider_status: result.providerStatus,
+        provider_status: providerStatus,
         provider_response: result.response,
         provider_accepted_at: now,
         sent_at: now,
         locked_at: null,
         reconciliation_required_at: null,
         last_error: null,
+        updated_at: now,
       })
       .eq("id", job.id)
       .eq("status", "processing");
@@ -446,12 +462,13 @@ async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome
         .from("attendance_sms_jobs")
         .update({
           status: "sent",
-          provider_status: result.providerStatus,
+          provider_status: storedSemaphoreStatus(result.providerStatus),
           provider_response: result.response,
           reconciled_at: reconciledAt,
           reconciliation_required_at: null,
           delivered_at: result.state === "sent" ? reconciledAt : null,
           last_error: null,
+          updated_at: reconciledAt,
         })
         .eq("id", job.id)
         .neq("status", "processing");
@@ -472,11 +489,12 @@ async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome
         .from("attendance_sms_jobs")
         .update({
           status: "retry_eligible",
-          provider_status: result.providerStatus,
+          provider_status: storedSemaphoreStatus(result.providerStatus),
           provider_response: result.response,
           reconciled_at: reconciledAt,
           retry_eligible_at: reconciledAt,
           reconciliation_required_at: null,
+          updated_at: reconciledAt,
           last_error: result.state === "refunded"
             ? "Semaphore confirmed the original message was refunded. The queue will retry it automatically."
             : "Semaphore confirmed the original message failed. The queue will retry it automatically, but the credit is not assumed refunded.",
@@ -499,12 +517,13 @@ async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome
       .from("attendance_sms_jobs")
       .update({
         status: "reconciliation_required",
-        provider_status: result.providerStatus,
+        provider_status: storedSemaphoreStatus(result.providerStatus),
         provider_response: result.response,
         reconciled_at: reconciledAt,
         reconciliation_required_at: reconciledAt,
         reconciliation_attempts: job.reconciliation_attempts + 1,
         last_error: "Semaphore returned an unrecognized message status. Review this job before any retry.",
+        updated_at: reconciledAt,
       })
       .eq("id", job.id)
       .neq("status", "processing");
@@ -528,6 +547,7 @@ async function reconcileSemaphoreJob(job: SmsJob): Promise<ReconciliationOutcome
         reconciled_at: reconciledAt,
         reconciliation_attempts: job.reconciliation_attempts + 1,
         last_error: `${errorMessage(error)} Provider status could not be confirmed; do not resend.`,
+        updated_at: reconciledAt,
       })
       .eq("id", job.id)
       .neq("status", "processing");
@@ -573,7 +593,33 @@ async function reconcileAttendanceSmsJobBatch(options?: { batchSize?: number; at
   const { data: rows, error } = await query;
   if (error) throw error;
 
-  const jobs = (rows ?? []) as SmsJob[];
+  // These are accepted Semaphore messages whose dashboard status may have
+  // changed after our initial send response. `updated_at` is explicitly
+  // advanced after every lookup, so a still-Pending message is checked no
+  // more than once per grace period. Existing older rows are included in the
+  // first scheduled sweep without creating another SMS.
+  const pendingStatusCapacity = Math.max(0, batchSize - (rows?.length ?? 0));
+  let pendingStatusRows: SmsJob[] = [];
+  if (pendingStatusCapacity > 0) {
+    const reconcileBefore = new Date(Date.now() - SEMAPHORE_PENDING_STATUS_RECONCILIATION_GRACE_MS).toISOString();
+    let pendingStatusQuery = supabase
+      .from("attendance_sms_jobs")
+      .select(jobColumns)
+      .eq("provider", "semaphore")
+      .eq("status", "sent")
+      .not("provider_message_id", "is", null)
+      .in("provider_status", ["queued", "pending", "Queued", "Pending"])
+      .lte("updated_at", reconcileBefore)
+      .order("updated_at", { ascending: true })
+      .limit(pendingStatusCapacity);
+    if (options?.attendanceLogId !== undefined) pendingStatusQuery = pendingStatusQuery.eq("attendance_log_id", options.attendanceLogId);
+    if (options?.jobId) pendingStatusQuery = pendingStatusQuery.eq("id", options.jobId);
+    const { data, error: pendingStatusError } = await pendingStatusQuery;
+    if (pendingStatusError) throw pendingStatusError;
+    pendingStatusRows = (data ?? []) as SmsJob[];
+  }
+
+  const jobs = [...((rows ?? []) as SmsJob[]), ...pendingStatusRows];
   const outcomes = await mapWithConcurrency(
     jobs,
     Math.min(DEFAULT_ATTENDANCE_SMS_CONCURRENCY, batchSize),
@@ -637,8 +683,10 @@ export async function processAttendanceSmsJobs(options?: { batchSize?: number; c
   }
 
   // A retry is submitted only in the same worker pass that received a
-  // terminal Failed or Refunded result from Semaphore. Queued, Pending, Sent,
-  // and unknown outcomes never enter this list and can never be resent.
+  // terminal Failed or Refunded result from Semaphore. Queued and Pending
+  // messages are status-checked first, but cannot enter this list unless that
+  // check confirms a terminal failure. Sent and unknown outcomes are never
+  // resent automatically.
   const confirmedRetries = reconciliationBatch.jobs.filter(
     (_job, index) => reconciliationBatch.outcomes[index] === "retry_eligible",
   );

@@ -139,6 +139,10 @@ const dispatchLeaseMigration = fs.readFileSync(
   path.join(root, "supabase/migrations/20261022143000_limit_attendance_sms_dispatch.sql"),
   "utf8",
 );
+const pendingSemaphoreStatusMigration = fs.readFileSync(
+  path.join(root, "supabase/migrations/20261023100000_reconcile_semaphore_pending_sms_statuses.sql"),
+  "utf8",
+);
 const recoveryScript = fs.readFileSync(path.join(root, "scripts/dispatch-pending-attendance-sms.cjs"), "utf8");
 const vercelConfig = fs.readFileSync(path.join(root, "vercel.json"), "utf8");
 const workerRoute = fs.readFileSync(path.join(root, "src/app/api/internal/process-attendance-sms/route.ts"), "utf8");
@@ -172,7 +176,10 @@ assert.match(dispatchLeaseMigration, /release_attendance_sms_dispatch_lease/);
 assert.match(dispatchLeaseMigration, /GRANT EXECUTE[\s\S]*TO service_role/);
 assert.match(workerSource, /getSemaphoreMessageStatus/);
 assert.match(workerSource, /provider_requested_at/);
-assert.match(workerSource, /Queued, Pending, Sent,[\s\S]*unknown outcomes never enter this list and can never be resent/);
+assert.match(workerSource, /SEMAPHORE_PENDING_STATUS_RECONCILIATION_GRACE_MS = 5 \* 60_000/);
+assert.match(workerSource, /\.eq\("status", "sent"\)[\s\S]*?\.in\("provider_status", \["queued", "pending", "Queued", "Pending"\]\)[\s\S]*?\.lte\("updated_at", reconcileBefore\)/);
+assert.match(workerSource, /Queued and Pending[\s\S]*?status-checked first[\s\S]*?terminal failure/);
+assert.match(workerSource, /updated_at: reconciledAt/);
 assert.match(workerSource, /automatic_retry_started/);
 assert.match(workerSource, /MAX_AUTOMATIC_RECONCILIATION_ATTEMPTS = 3/);
 assert.match(workerSource, /\.in\("status", \["reconciliation_required", "retry_eligible"\]\)/);
@@ -181,6 +188,10 @@ assert.doesNotMatch(
   /\.in\("status", \["sent", "failed", "reconciliation_required", "retry_eligible"\]\)/,
 );
 assert.doesNotMatch(workerSource, /export async function retryEligibleAttendanceSmsJob/);
+assert.match(pendingSemaphoreStatusMigration, /UPDATE public\.attendance_sms_jobs[\s\S]*provider_status = lower\(btrim\(provider_status\)\)/);
+assert.match(pendingSemaphoreStatusMigration, /attendance_sms_jobs_semaphore_pending_reconcile_idx/);
+assert.match(pendingSemaphoreStatusMigration, /status = 'sent'/);
+assert.match(pendingSemaphoreStatusMigration, /provider_status IN \('queued', 'pending'\)/);
 assert.match(recoveryScript, /Direct SMS recovery dispatch is retired/);
 assert.match(vercelConfig, /process-attendance-sms/);
 assert.match(workerRoute, /export async function GET/);
