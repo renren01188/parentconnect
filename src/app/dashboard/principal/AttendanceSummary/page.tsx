@@ -208,15 +208,8 @@ function toManilaDateString(date = new Date()) {
 
 function setSf2DateHeader(ws: ExcelJS.Worksheet, col0: number, day: number) {
   const cell = ws.getCell(col0ToRef(col0, 6));
-  cell.value = String(day);
-  cell.numFmt = "@";
-  cell.alignment = {
-    ...cell.alignment,
-    horizontal: "center",
-    vertical: "top",
-    wrapText: false,
-    shrinkToFit: true,
-  };
+  // Preserve the official template's date-cell styling and merged widths.
+  cell.value = day;
 }
 
 function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, result: number = 0) {
@@ -227,9 +220,9 @@ function clearCellPreserveFormat(ws: ExcelJS.Worksheet, ref: string) {
   ws.getCell(ref).value = null;
 }
 
-// Keep the official template's borders, fills, alignment and emphasis while
-// applying the requested 9-point type to every populated export sheet.
-function setWorksheetFontSize(ws: ExcelJS.Worksheet, size: number) {
+// Attendance Detail is an app-generated supporting sheet. The official SF2
+// keeps the deliberately varied typography defined by its template.
+function setAttendanceDetailFontSize(ws: ExcelJS.Worksheet, size: number) {
   ws.eachRow({ includeEmpty: false }, (row) => {
     row.eachCell({ includeEmpty: false }, (cell) => {
       cell.font = { ...cell.font, size };
@@ -282,6 +275,12 @@ function copyWorksheetToWorkbook(
 
 type MergeRange = { top: number; left: number; bottom: number; right: number };
 
+// ExcelJS style objects are mutable. Clone them before recreating merged
+// ranges so a restored outer border cannot leak into adjacent date columns.
+function cloneExcelStyle<T>(style: T): T {
+  return JSON.parse(JSON.stringify(style)) as T;
+}
+
 function getMergeRanges(ws: ExcelJS.Worksheet): MergeRange[] {
   const merges = (ws as unknown as { _merges?: Record<string, MergeRange> })._merges ?? {};
   return Object.values(merges).map(({ top, left, bottom, right }) => ({ top, left, bottom, right }));
@@ -314,7 +313,7 @@ function copyWorksheetWithDynamicAttendanceRows(
     target.width = source.width;
     target.hidden = source.hidden;
     target.outlineLevel = source.outlineLevel;
-    target.style = source.style;
+    target.style = cloneExcelStyle(source.style);
   }
 
   const mapRow = (row: number): number | null => {
@@ -342,7 +341,7 @@ function copyWorksheetWithDynamicAttendanceRows(
       const source = sourceRow.getCell(col);
       const target = targetRow.getCell(col);
       target.value = source.value;
-      target.style = source.style;
+      target.style = cloneExcelStyle(source.style);
     }
   }
 
@@ -353,7 +352,7 @@ function copyWorksheetWithDynamicAttendanceRows(
       targetRow.height = sourceRow.height;
       for (let col = 1; col <= templateWs.columnCount; col++) {
         targetRow.getCell(col).value = null;
-        targetRow.getCell(col).style = sourceRow.getCell(col).style;
+        targetRow.getCell(col).style = cloneExcelStyle(sourceRow.getCell(col).style);
       }
     }
   };
@@ -456,11 +455,6 @@ function populateSF2Worksheet(
       setCellValue(ws, `A${row}`, idx + 1);
       setCellValue(ws, `C${row}`, st.name);
       setCellValue(ws, `AQ${row}`, (st.remarks ?? []).map(formatStudentRemarkForSf2).join("\n"));
-      ws.getCell(`AQ${row}`).alignment = {
-        ...ws.getCell(`AQ${row}`).alignment,
-        vertical: "top",
-        wrapText: true,
-      };
 
       for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
         clearCellPreserveFormat(ws, col0ToRef(col0, row));
@@ -599,8 +593,7 @@ function populateSF2Worksheet(
   }
   detailWs.columns = [{ width: 16 }, { width: 32 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 16 }];
   detailWs.views = [{ state: "frozen", ySplit: 4 }];
-  setWorksheetFontSize(ws, 9);
-  setWorksheetFontSize(detailWs, 9);
+  setAttendanceDetailFontSize(detailWs, 9);
 }
 
 async function exportSF2(

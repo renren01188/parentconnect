@@ -65,6 +65,10 @@ const RFID_TIME_OUT_MIN_DELAY_SECONDS = Math.max(
     Number(process.env.RFID_TIME_OUT_MIN_DELAY_SECONDS ?? process.env.RFID_SCAN_DEBOUNCE_SECONDS ?? 60 * 60) || 60 * 60,
   ),
 );
+// Attendance can only switch from Time In to Time Out during the final two
+// hours of the ICT-configured class session. The minimum-delay setting above
+// still protects against duplicate reader taps inside that window.
+const TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES = 2 * 60;
 
 async function ensureGradeSessionSnapshot(
   sessionDate: string,
@@ -111,7 +115,7 @@ async function ensureGradeSessionSnapshot(
  * scanner cannot be opened merely because somebody previously clicked Start.
  */
 async function getScheduledSessionStatus(today: string, currentMinutes: number, grade: string): Promise<
-  | { status: "On Time" | "Late"; sessionType: ClassSessionType; classSessionId: number }
+  | { status: "On Time" | "Late"; sessionType: ClassSessionType; classSessionId: number; scheduledEnd: string }
   | { unavailable: true; message: string }
 > {
   if (!grade) {
@@ -205,12 +209,18 @@ async function getScheduledSessionStatus(today: string, currentMinutes: number, 
     status: currentMinutes <= timeToMinutes(activeSession.late_after ?? activeSession.scheduled_start) ? "On Time" : "Late",
     sessionType: activeSession.session_type as ClassSessionType,
     classSessionId,
+    scheduledEnd: activeSession.scheduled_end,
   };
 }
 
 function timeToSeconds(value: string) {
   const [hour = 0, minute = 0, second = 0] = value.split(":").map(Number);
   return hour * 3600 + minute * 60 + second;
+}
+
+function formatMinutesAsClock(value: number) {
+  const minutes = Math.max(0, Math.min(23 * 60 + 59, value));
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
 function buildFullName(student: StudentNameFields) {
@@ -524,7 +534,7 @@ export async function POST(req: NextRequest) {
     const attendanceDate = today;
     const timeLogged = schoolClock.time;
 
-    const { status, sessionType, classSessionId } = sessionStatus;
+    const { status, sessionType, classSessionId, scheduledEnd } = sessionStatus;
 
     // Do not allow a delayed Rapid Tap item captured during Morning Class to
     // be recorded later as an Afternoon event merely because the queue caught
@@ -597,10 +607,27 @@ export async function POST(req: NextRequest) {
 
     // RFID readers frequently emit the same card value more than once. A
     // second read immediately after a Time In is not evidence of departure.
+    // Even after the duplicate-tap delay, Time Out is unavailable until the
+    // final two hours of the ICT-configured class session.
     const mostRecentTimeIn = (existingLogs ?? [])
       .filter((log) => log.type === "Time In" && (log.status === "On Time" || log.status === "Late"))
       .sort((first, second) => String(second.time_logged).localeCompare(String(first.time_logged)))[0];
     if (mostRecentTimeIn && !hasTimeOut) {
+      const timeOutWindowStartMinutes = Math.max(
+        0,
+        timeToMinutes(scheduledEnd) - TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES,
+      );
+      if (schoolClock.minutes < timeOutWindowStartMinutes) {
+        return NextResponse.json(
+          {
+            success: false,
+            duplicate: true,
+            alreadyRecorded: true,
+            message: `This student is already Time In. Time Out scanning opens at ${formatMinutesAsClock(timeOutWindowStartMinutes)}, two hours before the ICT-configured class end time.`,
+          },
+          { status: 409 },
+        );
+      }
       const elapsed = timeToSeconds(timeLogged) - timeToSeconds(String(mostRecentTimeIn.time_logged));
       if (elapsed >= 0 && elapsed < RFID_TIME_OUT_MIN_DELAY_SECONDS) {
         return NextResponse.json(

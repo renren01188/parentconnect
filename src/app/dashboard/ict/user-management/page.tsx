@@ -14,6 +14,7 @@ import {
   uppercaseFamilyName,
   validateUserManagementPasswordChange,
 } from "@/lib/ictUserManagementAccountUpdate";
+import { buildIctAccountEditConfirmation } from "@/lib/ictUserManagementEditConfirmation";
 import { BulkDeletionModal } from "./BulkDeletionModal";
 import {
   Search, ChevronDown, Pencil, MoreHorizontal,
@@ -950,6 +951,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordChangeAuthorized, setPasswordChangeAuthorized] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [transferConflicts, setTransferConflicts] = useState<AdviserTransferConflict[]>([]);
   const [transferRelocation, setTransferRelocation] = useState<AdviserRelocation | null>(null);
@@ -987,6 +989,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
   if (form.classGrade !== user.classGrade) changes.push({ field: assignmentLabel, from: user.classGrade, to: form.classGrade });
   if (form.newPassword) changes.push({ field: "Password", from: "Current password", to: "Updated password" });
   const hasChanges = changes.length > 0;
+  const confirmation = buildIctAccountEditConfirmation(changes, passwordChangeAuthorized);
 
   async function handleReview() {
     if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim()) {
@@ -1016,6 +1019,9 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
         setPasswordError(verifyData.message || "Current ICT password is incorrect.");
         return;
       }
+      setPasswordChangeAuthorized(true);
+    } else {
+      setPasswordChangeAuthorized(false);
     }
     setPasswordError("");
 
@@ -1291,7 +1297,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
                 <div className="col-span-2">
                   <FLabel>Current ICT Password</FLabel>
                   <div className="relative">
-                    <input type={showCurrentPassword ? "text" : "password"} value={form.currentPassword} onChange={e => { setForm(p => ({ ...p, currentPassword: e.target.value })); setPasswordError(""); }} placeholder="Required only when changing password" autoComplete="current-password"
+                    <input type={showCurrentPassword ? "text" : "password"} value={form.currentPassword} onChange={e => { setForm(p => ({ ...p, currentPassword: e.target.value })); setPasswordChangeAuthorized(false); setPasswordError(""); }} placeholder="Required only when changing password" autoComplete="current-password"
                       className="w-full pr-10 px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
                     <button type="button" onClick={() => setShowCurrentPassword(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
                   </div>
@@ -1299,7 +1305,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
                 <div>
                   <FLabel>New Password</FLabel>
                   <div className="relative">
-                    <input type={showNewPassword ? "text" : "password"} value={form.newPassword} onChange={e => { setForm(p => ({ ...p, newPassword: e.target.value })); setPasswordError(""); }} placeholder="At least 8 characters" autoComplete="new-password"
+                    <input type={showNewPassword ? "text" : "password"} value={form.newPassword} onChange={e => { setForm(p => ({ ...p, newPassword: e.target.value })); setPasswordChangeAuthorized(false); setPasswordError(""); }} placeholder="At least 8 characters" autoComplete="new-password"
                       className="w-full pr-10 px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
                     <button type="button" onClick={() => setShowNewPassword(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
                   </div>
@@ -1307,7 +1313,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
                 <div>
                   <FLabel>Confirm Password</FLabel>
                   <div className="relative">
-                    <input id="adviser-confirm-password" type={showConfirmPassword ? "text" : "password"} value={form.confirmPassword} onChange={e => { setForm(p => ({ ...p, confirmPassword: e.target.value })); setPasswordError(""); }} placeholder="Confirm new password" autoComplete="new-password"
+                    <input id="adviser-confirm-password" type={showConfirmPassword ? "text" : "password"} value={form.confirmPassword} onChange={e => { setForm(p => ({ ...p, confirmPassword: e.target.value })); setPasswordChangeAuthorized(false); setPasswordError(""); }} placeholder="Confirm new password" autoComplete="new-password"
                       className="w-full pr-10 px-3.5 py-2.5 text-sm bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] transition text-gray-900" />
                     <button type="button" onClick={() => setShowConfirmPassword(p => !p)} aria-controls="adviser-confirm-password" aria-label={showConfirmPassword ? "Hide confirmation password" : "Show confirmation password"} aria-pressed={showConfirmPassword} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-[#274e13]/30 rounded-sm">
                       {showConfirmPassword ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
@@ -1379,10 +1385,10 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
           <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto p-6">
             <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-700">Save changes to <strong>{user.name}</strong>? Password changes were authorized with the current ICT password.</p>
+              <p className="text-xs text-amber-700">{confirmation.prompt} to <strong>{user.name}</strong>?</p>
             </div>
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
-              <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{changes.length} Change{changes.length !== 1 ? "s" : ""} Ready to Save</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-3">{confirmation.summary}</p>
               <div className="space-y-3">
                 {changes.map(({ field, from, to }) => (
                   <div key={field} className="grid min-w-0 grid-cols-[minmax(7rem,9rem)_minmax(0,1fr)] items-start gap-3">
@@ -1397,7 +1403,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
               </div>
             </div>
             <div className="bg-teal-50 border border-teal-200 rounded-lg px-3 py-2.5 text-xs text-teal-700">
-              ICT saves these changes directly. Account details are updated immediately and recorded in the audit trail.
+              {confirmation.notice}
             </div>
             {passwordError && <p role="alert" className="text-xs font-semibold text-red-600">{passwordError}</p>}
             <div className="flex gap-3">

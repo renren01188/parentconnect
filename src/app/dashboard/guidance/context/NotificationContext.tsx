@@ -3,6 +3,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
+// Realtime invalidations are the normal update path. This is deliberately a
+// quiet, visible-tab-only recovery path for a dropped browser subscription.
+const SIDEBAR_FALLBACK_REFRESH_MS = 600_000;
+const RETURN_TO_TAB_REFRESH_COOLDOWN_MS = 15_000;
+
 function ictSeenTimestamp() {
   if (typeof window === "undefined") return 0;
   const value = Number(window.sessionStorage.getItem("guidance-contact-ict-seen-at") ?? 0);
@@ -24,6 +29,13 @@ type GuidanceNotifContextType = {
   ictUnreadCount: number;
   setIctUnreadCount: (count: number) => void;
   clearIctUnreadCount: () => void;
+};
+
+type GuidanceDashboardSummaryResponse = {
+  success?: boolean;
+  reportsUnreadCount?: number;
+  escalatedCount?: number;
+  ictUnreadCount?: number;
 };
 
 const GuidanceNotifContext = createContext<GuidanceNotifContextType>({
@@ -56,6 +68,34 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const ictBadgeVersionRef = useRef(0);
   const ictSeenAtRef = useRef(ictSeenTimestamp());
   const [principalAnnouncementUnreadCount, setPrincipalAnnouncementUnreadCount] = useState(0);
+  const dashboardSummaryRequestRef = useRef<Promise<void> | null>(null);
+
+  const refreshDashboardSummary = useCallback(async () => {
+    if (dashboardSummaryRequestRef.current) return dashboardSummaryRequestRef.current;
+    const ictBadgeVersion = ictBadgeVersionRef.current;
+    const query = new URLSearchParams();
+    if (ictSeenAtRef.current) query.set("ictSeenAfter", new Date(ictSeenAtRef.current).toISOString());
+    dashboardSummaryRequestRef.current = (async () => {
+      try {
+        const suffix = query.size ? `?${query}` : "";
+        const res = await fetch(`/api/guidance/dashboard-summary${suffix}`, { cache: "no-store" });
+        const data = await res.json().catch(() => null) as GuidanceDashboardSummaryResponse | null;
+        if (!res.ok || !data?.success) return;
+        const reportsCount = Math.max(0, Number(data.reportsUnreadCount ?? 0));
+        setUnreadCount(reportsCount);
+        setReportsUnreadCount(reportsCount);
+        setEscalatedCount(Math.max(0, Number(data.escalatedCount ?? 0)));
+        if (ictBadgeVersion === ictBadgeVersionRef.current) {
+          setIctUnreadCount(Math.max(0, Number(data.ictUnreadCount ?? 0)));
+        }
+      } catch {
+        // Retain the last confirmed snapshot during a temporary failure.
+      } finally {
+        dashboardSummaryRequestRef.current = null;
+      }
+    })();
+    return dashboardSummaryRequestRef.current;
+  }, []);
 
   const refreshGuidanceCounts = useCallback(async () => {
     const requestVersion = ++guidanceCountRequestVersionRef.current;
@@ -225,20 +265,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, [refreshNotificationCounts]);
 
   useEffect(() => {
+    let lastFallbackRefreshAt = Date.now();
     const frame = requestAnimationFrame(() => {
-      refreshGuidanceCounts();
-      loadIctCount();
+      refreshDashboardSummary();
       refreshNotificationCounts();
     });
     // The server-side broadcast is the normal update path. This is only a
     // recovery path when a browser drops its Realtime socket.
     const refreshWhenVisible = () => {
       if (document.visibilityState !== "visible") return;
-      refreshGuidanceCounts();
-      loadIctCount();
+      const now = Date.now();
+      // A browser can emit more than one foreground event while the layout
+      // remounts. Treat that burst as one recovery refresh.
+      if (now - lastFallbackRefreshAt < RETURN_TO_TAB_REFRESH_COOLDOWN_MS) return;
+      lastFallbackRefreshAt = now;
+      refreshDashboardSummary();
       refreshNotificationCounts();
     };
-    const refreshInterval = window.setInterval(refreshWhenVisible, 300_000);
+    const refreshInterval = window.setInterval(refreshWhenVisible, SIDEBAR_FALLBACK_REFRESH_MS);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
@@ -246,7 +290,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       window.clearInterval(refreshInterval);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [refreshGuidanceCounts, loadIctCount, refreshNotificationCounts]);
+  }, [refreshDashboardSummary, refreshNotificationCounts]);
 
   return (
     <GuidanceNotifContext.Provider value={{

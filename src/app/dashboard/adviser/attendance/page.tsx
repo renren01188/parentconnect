@@ -185,6 +185,7 @@ type RapidTapResult = {
 
 const RAPID_TAP_REQUEST_TIMEOUT_MS = 15_000;
 const RAPID_TAP_MAX_RETRY_DELAY_MS = 30_000;
+const TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES = 2 * 60;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function formatTime(value: string | null) {
@@ -197,6 +198,23 @@ function formatTime(value: string | null) {
     hour = hour % 12;
     if (hour === 0) hour = 12;
     return `${hour.toString().padStart(2, "0")}:${minute} ${suffix}`;
+}
+
+function timeToMinutes(value: string) {
+    const [hour = 0, minute = 0] = value.split(":").map(Number);
+    return hour * 60 + minute;
+}
+
+function getManilaMinutes(now = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+    }).formatToParts(now);
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+    return hour * 60 + minute;
 }
 
 function formatRapidTapScanTime(capturedAt?: string) {
@@ -428,6 +446,13 @@ function escapePrintHtml(value: unknown): string {
 
 type MergeRange = { top: number; left: number; bottom: number; right: number };
 
+// ExcelJS style objects are mutable. A rebuilt worksheet must own each style;
+// otherwise restoring one merged range's outer border changes every cell that
+// still shares that style object.
+function cloneExcelStyle<T>(style: T): T {
+    return JSON.parse(JSON.stringify(style)) as T;
+}
+
 function getMergeRanges(ws: ExcelJS.Worksheet): MergeRange[] {
     const merges = (ws as unknown as { _merges?: Record<string, MergeRange> })._merges ?? {};
     return Object.values(merges).map(({ top, left, bottom, right }) => ({ top, left, bottom, right }));
@@ -460,7 +485,7 @@ function copyWorksheetWithDynamicAttendanceRows(
         targetColumn.width = sourceColumn.width;
         targetColumn.hidden = sourceColumn.hidden;
         targetColumn.outlineLevel = sourceColumn.outlineLevel;
-        targetColumn.style = sourceColumn.style;
+        targetColumn.style = cloneExcelStyle(sourceColumn.style);
     }
 
     const mapTemplateRow = (row: number): number | null => {
@@ -497,7 +522,7 @@ function copyWorksheetWithDynamicAttendanceRows(
             const sourceCell = sourceRow.getCell(col);
             const targetCell = targetRow.getCell(col);
             targetCell.value = sourceCell.value;
-            targetCell.style = sourceCell.style;
+            targetCell.style = cloneExcelStyle(sourceCell.style);
         }
     }
 
@@ -512,7 +537,7 @@ function copyWorksheetWithDynamicAttendanceRows(
                 const sourceCell = sourceRow.getCell(col);
                 const targetCell = targetRow.getCell(col);
                 targetCell.value = null;
-                targetCell.style = sourceCell.style;
+                targetCell.style = cloneExcelStyle(sourceCell.style);
             }
         }
     };
@@ -589,28 +614,20 @@ function setCellValue(ws: ExcelJS.Worksheet, ref: string, value: string | number
 
 function setSf2DateHeader(ws: ExcelJS.Worksheet, col0: number, day: number) {
     const cell = ws.getCell(col0ToRef(col0, 6));
-    // Excel renders narrow numeric cells as ###. The template has a few
-    // intentionally narrow day columns, so store the day as text and let it
-    // shrink inside the existing cell instead of changing the report layout.
-    cell.value = String(day);
-    cell.numFmt = "@";
-    cell.alignment = {
-        ...cell.alignment,
-        horizontal: "center",
-        vertical: "top",
-        wrapText: false,
-        shrinkToFit: true,
-    };
+    // The official workbook already defines the day-cell number format,
+    // alignment, font, and merged widths. Change only the value so its
+    // printed layout remains identical to the supplied SF2 template.
+    cell.value = day;
 }
 
 function setCellFormula(ws: ExcelJS.Worksheet, ref: string, formula: string, result: number = 0) {
     ws.getCell(ref).value = { formula, result };
 }
 
-// The monthly export is printed as an official form. Keep the template's
-// borders, fills, alignment, colors, and bold/italic styling, but make every
-// populated export cell consistently use the requested 9-point type.
-function setWorksheetFontSize(ws: ExcelJS.Worksheet, size: number) {
+// Attendance Detail is an app-generated supporting sheet, not part of the
+// official SF2 form. It can use a consistent readable size independently of
+// the supplied template's intentionally varied typography.
+function setAttendanceDetailFontSize(ws: ExcelJS.Worksheet, size: number) {
     ws.eachRow({ includeEmpty: false }, (row) => {
         row.eachCell({ includeEmpty: false }, (cell) => {
             cell.font = { ...cell.font, size };
@@ -758,12 +775,6 @@ async function exportMonthlySF2(
             setCellValue(ws, `A${row}`, idx + 1);
             setCellValue(ws, `C${row}`, student.name);
             setCellValue(ws, `AQ${row}`, student.remarks.map(formatStudentRemarkForSf2).join("\n"));
-            ws.getCell(`AQ${row}`).alignment = {
-                ...ws.getCell(`AQ${row}`).alignment,
-                vertical: "top",
-                wrapText: true,
-                shrinkToFit: true,
-            };
 
             for (const [col0, mergePartner] of SF2_DAY_SLOTS) {
                 clearCellPreserveFormat(ws, col0ToRef(col0, row));
@@ -929,8 +940,10 @@ async function exportMonthlySF2(
     ];
     detailWs.views = [{ state: "frozen", ySplit: 4 }];
 
-    setWorksheetFontSize(ws, 9);
-    setWorksheetFontSize(detailWs, 9);
+    // Do not normalize the SF2 worksheet fonts: the supplied official
+    // template deliberately uses different sizes for headings, instructions,
+    // table cells, and the summary. The export changes values only.
+    setAttendanceDetailFontSize(detailWs, 9);
 
     const out = await workbook.xlsx.writeBuffer();
     const safeSection = sectionName.replace(/[^a-z0-9]+/gi, "_");
@@ -2012,6 +2025,7 @@ export default function AdviserAttendancePage() {
     const [classSession, setClassSession] = useState<ClassSessionInfo | null>(null);
     const [classSessions, setClassSessions] = useState<ClassSessionInfo[]>([]);
     const [sessionLoading, setSessionLoading] = useState(false);
+    const [manilaMinutes, setManilaMinutes] = useState<number | null>(null);
 
     // ── Multi-section support ──
     const [activeSection, setActiveSection] = useState<string>("");
@@ -2041,6 +2055,15 @@ export default function AdviserAttendancePage() {
     const isScanningOpen = Boolean(
         classSession && selectedSectionSession === classSession.session_type
     );
+
+    // This changes only the displayed scan type. The API independently uses
+    // the school clock and the saved ICT schedule before it records Time Out.
+    useEffect(() => {
+        const updateManilaClock = () => setManilaMinutes(getManilaMinutes());
+        updateManilaClock();
+        const timer = window.setInterval(updateManilaClock, 30_000);
+        return () => window.clearInterval(timer);
+    }, []);
     const normalizedRfidStudentSearch = rfidStudentSearch.trim().toLocaleLowerCase();
     const filteredRfidStudents = students.filter((student) => {
         if (!normalizedRfidStudentSearch) return true;
@@ -3113,11 +3136,16 @@ export default function AdviserAttendancePage() {
 
     const adviserName = adviser?.full_name || "Class Adviser";
     const todayStr = toLocalDateString(new Date());
-    const scannerLabel = isScanningOpen && classSession ? `${classSession.session_type} Class` : "Outside Schedule";
     const selectedSchedule = classSessions.find((session) => session.session_type === selectedSectionSession)
         ?? classSessions.find((session) => session.status === "Active")
         ?? classSessions[0]
         ?? null;
+    const timeOutWindowStartsAt = selectedSchedule
+        ? Math.max(0, timeToMinutes(selectedSchedule.scheduled_end) - TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES)
+        : null;
+    const scannerLabel = timeOutWindowStartsAt !== null && manilaMinutes !== null && manilaMinutes >= timeOutWindowStartsAt
+        ? "Time Out"
+        : "Time In";
 
     const filteredHistoryRows = historySummary.filter(row => {
         const matchSearch = historySearch === "" ||
@@ -3197,7 +3225,7 @@ export default function AdviserAttendancePage() {
                     <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 shadow-sm">
                         <span className={`h-2 w-2 rounded-full ${isScanningOpen ? "bg-emerald-500 animate-pulse" : "bg-slate-300"}`} />
                         <span className="text-sm font-medium text-slate-600">
-                            {sessionLoading ? "Checking Schedule..." : isScanningOpen ? "Scanner Ready" : "Outside Schedule"}
+                            {sessionLoading ? "Checking Schedule..." : scannerLabel}
                         </span>
                     </div>
                 </div>

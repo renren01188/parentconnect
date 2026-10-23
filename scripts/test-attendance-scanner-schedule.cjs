@@ -77,9 +77,17 @@ assert.ok(
   "The schedule must reject an expired scan before an attendance record can be looked up or inserted.",
 );
 assert.match(scanRoute, /ICT-configured class schedule has ended/);
+assert.match(scanRoute, /TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES = 2 \* 60/);
+assert.match(scanRoute, /timeToMinutes\(scheduledEnd\) - TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES/);
+assert.match(scanRoute, /schoolClock\.minutes < timeOutWindowStartMinutes/);
+assert.match(scanRoute, /RFID_TIME_OUT_MIN_DELAY_SECONDS/);
 assert.match(classSessionRoute, /availability: schoolYearAvailability/);
 assert.match(classSessionRoute, /no active school year is configured/);
 assert.match(adviserPage, /data\.availability\?\.message/);
 assert.match(adviserPage, /window\.setInterval\(refreshWhenVisible, 300_000\)/);
+assert.match(adviserPage, /getManilaMinutes/);
+assert.match(adviserPage, /manilaMinutes >= timeOutWindowStartsAt/);
+assert.match(adviserPage, /\? "Time Out"\s*:\s*"Time In"/);
+assert.doesNotMatch(adviserPage, /isScanningOpen \? "Scanner Ready" : "Outside Schedule"/);
 
 console.log("Attendance scanner school-year and class-session schedule checks passed.");

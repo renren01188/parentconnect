@@ -44,6 +44,16 @@ const NotifContext = createContext<NotifContextType>({
 type IctMessagesResponse = { unreadCount?: number };
 type AdviserNotificationsResponse = { sidebarUnreadCount?: number; unreadCount?: number };
 type ReadyTransferSummaryResponse = { total?: number };
+type AdviserDashboardSummaryResponse = {
+  reportsUnreadCount?: number;
+  ictUnreadCount?: number;
+  transferUnreadCount?: number;
+};
+
+// Realtime invalidations are the normal update path. This is deliberately a
+// quiet, visible-tab-only recovery path for a dropped browser subscription.
+const SIDEBAR_FALLBACK_REFRESH_MS = 600_000;
+const RETURN_TO_TAB_REFRESH_COOLDOWN_MS = 15_000;
 
 function ictSeenTimestamp() {
   if (typeof window === "undefined") return 0;
@@ -93,6 +103,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     let ictCountRequest: Promise<void> | null = null;
     let notificationCountRequest: Promise<void> | null = null;
     let transferCountRequest: Promise<void> | null = null;
+    let dashboardSummaryRequest: Promise<void> | null = null;
 
     async function loadReportCount() {
       if (reportCountRequest) return reportCountRequest;
@@ -212,12 +223,44 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       return transferCountRequest;
     }
 
-    const refreshAllCounts = () => Promise.all([loadReportCount(), loadIctCount(), loadNotifCount(), loadTransferCount()]);
+    async function loadDashboardSummary() {
+      if (dashboardSummaryRequest) return dashboardSummaryRequest;
+      const ictBadgeVersion = ictBadgeVersionRef.current;
+      const query = new URLSearchParams();
+      if (ictSeenAtRef.current) query.set("ictSeenAfter", new Date(ictSeenAtRef.current).toISOString());
+      dashboardSummaryRequest = (async () => {
+        try {
+          const suffix = query.size ? `?${query}` : "";
+          const { response, data } = await fetchJsonWithRetry<AdviserDashboardSummaryResponse>(
+            `/api/adviser/dashboard-summary${suffix}`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) return;
+          setUnreadCount(Math.max(0, Number(data?.reportsUnreadCount ?? 0)));
+          if (ictBadgeVersion === ictBadgeVersionRef.current) {
+            setIctUnreadCount(Math.max(0, Number(data?.ictUnreadCount ?? 0)));
+          }
+          setTransferUnreadCount(Math.max(0, Number(data?.transferUnreadCount ?? 0)));
+        } catch {
+          // Retain the last confirmed snapshot during a temporary failure.
+        } finally {
+          dashboardSummaryRequest = null;
+        }
+      })();
+      return dashboardSummaryRequest;
+    }
+
+    // The sidebar's report, Contact ICT, and transfer counts share one
+    // authorized request. The notifications feed keeps its own request so
+    // its durable per-row read state remains exactly the same as the list.
+    const refreshAllCounts = () => Promise.all([loadDashboardSummary(), loadNotifCount()]);
     // React Strict Mode deliberately runs effects twice in local development.
     // Do not turn that development-only check into a duplicate five-request
     // sidebar burst. A real remount gets a new provider/ref and still loads.
+    let lastFallbackRefreshAt = 0;
     if (!hasLoadedInitialCounts.current) {
       hasLoadedInitialCounts.current = true;
+      lastFallbackRefreshAt = Date.now();
       void refreshAllCounts();
     }
 
@@ -226,10 +269,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // Supabase Realtime database event.
     const refreshWhenVisible = () => {
       if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      // A browser commonly fires both visibilitychange and focus when an
+      // Adviser returns to a tab. Treat that as one recovery refresh.
+      if (now - lastFallbackRefreshAt < RETURN_TO_TAB_REFRESH_COOLDOWN_MS) return;
+      lastFallbackRefreshAt = now;
       void refreshAllCounts();
       window.dispatchEvent(new Event("adviser-notifications-changed"));
     };
-    const fallbackRefresh = window.setInterval(refreshWhenVisible, 300_000);
+    const fallbackRefresh = window.setInterval(refreshWhenVisible, SIDEBAR_FALLBACK_REFRESH_MS);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", refreshWhenVisible);
 

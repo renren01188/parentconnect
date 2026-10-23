@@ -89,8 +89,14 @@ assert.match(attendancePage, /summaryStartRow \+ 16/);
 assert.match(attendancePage, /summaryStartRow \+ 18/);
 assert.match(attendancePage, /summaryStartRow \+ 20/);
 assert.match(attendancePage, /Save Remark/);
-assert.match(attendancePage, /setWorksheetFontSize\(ws, 9\)/);
-assert.match(attendancePage, /setWorksheetFontSize\(detailWs, 9\)/);
+// The official SF2 sheet preserves the varied fonts and alignment supplied
+// by the template. Only the app-generated Attendance Detail sheet is
+// normalized for readability.
+assert.doesNotMatch(attendancePage, /setWorksheetFontSize\(ws, 9\)/);
+assert.doesNotMatch(attendancePage, /setSf2DateHeader[\s\S]*?cell\.alignment\s*=/);
+assert.match(attendancePage, /setAttendanceDetailFontSize\(detailWs, 9\)/);
+assert.match(attendancePage, /function cloneExcelStyle/);
+assert.doesNotMatch(attendancePage, /targetCell\.style = sourceCell\.style/);
 
 // The Principal export reads the same dated source for the selected month,
 // writes the template's Remarks column, and uses the identical three summary
@@ -103,7 +109,11 @@ assert.match(principalAttendancePage, /`AQ\$\{row\}`/);
 assert.match(principalAttendancePage, /summaryStartRow \+ 16/);
 assert.match(principalAttendancePage, /summaryStartRow \+ 18/);
 assert.match(principalAttendancePage, /summaryStartRow \+ 20/);
-assert.match(principalAttendancePage, /setWorksheetFontSize\(ws, 9\)/);
+assert.doesNotMatch(principalAttendancePage, /setWorksheetFontSize\(ws, 9\)/);
+assert.doesNotMatch(principalAttendancePage, /setSf2DateHeader[\s\S]*?cell\.alignment\s*=/);
+assert.match(principalAttendancePage, /setAttendanceDetailFontSize\(detailWs, 9\)/);
+assert.match(principalAttendancePage, /function cloneExcelStyle/);
+assert.doesNotMatch(principalAttendancePage, /target\.style = source\.style/);
 assert.doesNotMatch(principalAttendancePage, /setCellValue\(ws, "F3", 107966\)/);
 assert.doesNotMatch(principalAttendancePage, /setCellValue\(ws, "F4", "Santiago Elementary School"\)/);
 
