@@ -30,6 +30,17 @@ assert.match(manualRoute, /without creating another attendance record/);
 assert.match(manualRoute, /const manualAbsentToAttendanceCorrection = body\.type === "Time In"/);
 assert.match(manualRoute, /existingSameType\.via === "Manual"/);
 assert.match(manualRoute, /Manual absence corrected to \$\{correctedStatusLabel\}/);
+assert.match(manualRoute, /function getManilaClock\(now = new Date\(\)\)/);
+assert.match(manualRoute, /timeZone: "Asia\/Manila"/);
+assert.match(manualRoute, /const manilaClock = getManilaClock\(\)/);
+assert.match(manualRoute, /const lateToPresentCorrection = body\.type === "Time In"/);
+assert.match(manualRoute, /selectedStatus === "Present"[\s\S]*?existingSameType\?\.status === "Late"/);
+assert.match(manualRoute, /const isExistingAttendanceCorrection = automaticAbsence/);
+assert.match(manualRoute, /\|\| lateToPresentCorrection/);
+assert.match(manualRoute, /if \(!isExistingAttendanceCorrection && \(now < start \|\| now >= end\)\)/,
+  "The session window must gate only new manual entries, not existing-record corrections.");
+assert.match(manualRoute, /if \(lateToPresentCorrection\)/);
+assert.match(manualRoute, /Corrected Late \$\{body\.type\} to Present[\s\S]*?preserving the recorded attendance time/);
 assert.match(adviserPage, /\["Present", "Late", "Absent", "Excused"\]/);
 assert.match(adviserPage, /type: "Time In"/);
 assert.doesNotMatch(adviserPage, /setManualType/);

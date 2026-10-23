@@ -199,6 +199,19 @@ function formatTime(value: string | null) {
     return `${hour.toString().padStart(2, "0")}:${minute} ${suffix}`;
 }
 
+function formatRapidTapScanTime(capturedAt?: string) {
+    if (!capturedAt) return "Not available for an older queued scan";
+    const timestamp = new Date(capturedAt);
+    if (Number.isNaN(timestamp.getTime())) return "Not available";
+    return new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+    }).format(timestamp);
+}
+
 function formatDateLabel(dateStr: string) {
     const [y, m, d] = dateStr.split("-").map(Number);
     return new Date(y, m - 1, d).toLocaleDateString("en-US", {
@@ -1929,6 +1942,8 @@ export default function AdviserAttendancePage() {
     const [rapidTapStorageReady, setRapidTapStorageReady] = useState(false);
     const [rapidTapComplete, setRapidTapComplete] = useState(false);
     const [applyingRapidTapId, setApplyingRapidTapId] = useState<string | null>(null);
+    const [retryingRapidTapId, setRetryingRapidTapId] = useState<string | null>(null);
+    const [showRapidTapReview, setShowRapidTapReview] = useState(false);
     const [logs, setLogs] = useState<AttendanceLog[]>([]);
     const [lastScanned, setLastScanned] = useState<AttendanceLog | null>(null);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -2092,7 +2107,7 @@ export default function AdviserAttendancePage() {
             resolveRfidScanValue(candidate.rfid_card, "") === item.rfidCard
             && candidate.section === item.section,
         );
-        return student ? buildFullName(student) : `Queued RFID ${item.rfidCard}`;
+        return student ? buildFullName(student) : "Student not found in the assigned roster";
     };
 
     function focusScanner() { inputRef.current?.focus(); }
@@ -2418,13 +2433,15 @@ export default function AdviserAttendancePage() {
         const scanId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : `rapid-${queueOrder}-${Math.random().toString(36).slice(2, 12)}`;
+        const capturedAt = new Date();
         const item: RapidTapQueueItem = {
             id: scanId,
             scope: rapidTapScope,
             rfidCard,
             section,
             grade: adviser?.grade ?? "",
-            scanDate: toLocalDateString(new Date()),
+            scanDate: toLocalDateString(capturedAt),
+            capturedAt: capturedAt.toISOString(),
             sessionType,
             queueOrder,
             // Register the tap before asynchronous local storage begins. A
@@ -2490,8 +2507,43 @@ export default function AdviserAttendancePage() {
         setScanMessage(`Retrying ${changedItems.length} Rapid Tap scan${changedItems.length === 1 ? "" : "s"}...`);
     }, [replaceRapidTapQueue]);
 
+    const retryManualReviewRapidTapScan = useCallback(async (item: RapidTapQueueItem) => {
+        if (!item.requiresManualReview || applyingRapidTapId || retryingRapidTapId) return;
+        setRetryingRapidTapId(item.id);
+        setScanMessage("Retrying the reviewed Rapid Tap scan with its original duplicate-protection ID...");
+        try {
+            // Retrying reuses the original scan ID. The scan API therefore
+            // returns an already-saved event rather than creating a second
+            // one, and still enforces the queue item's date, section, and
+            // class-session checks before it can write any attendance.
+            const retryItem: RapidTapQueueItem = {
+                ...item,
+                status: "queued",
+                requiresManualReview: false,
+                nextAttemptAt: null,
+                lastError: null,
+            };
+            await saveRapidTapQueueItem(retryItem);
+            const nextQueue = rapidTapQueueRef.current.map((current) =>
+                current.id === retryItem.id ? retryItem : current,
+            );
+            replaceRapidTapQueue(nextQueue);
+            setRapidTapResults((current) => current.filter((result) => result.id !== item.id));
+            setRapidTapComplete(false);
+            setScanMessage(`Retrying the reviewed scan for RFID ${item.rfidCard}...`);
+            if (!nextQueue.some((current) => current.status === "failed" && current.requiresManualReview)) {
+                setShowRapidTapReview(false);
+            }
+        } catch (storageError) {
+            console.error("Could not retry reviewed Rapid Tap scan:", storageError);
+            setScanMessage("Could not queue this reviewed Rapid Tap scan for retry. Please try again.");
+        } finally {
+            setRetryingRapidTapId(null);
+        }
+    }, [applyingRapidTapId, replaceRapidTapQueue, retryingRapidTapId]);
+
     const removeManualReviewRapidTapScan = useCallback(async (item: RapidTapQueueItem) => {
-        if (!item.requiresManualReview || applyingRapidTapId) return;
+        if (!item.requiresManualReview || applyingRapidTapId || retryingRapidTapId) return;
         try {
             await removeRapidTapQueueItem(item.id);
             const remaining = replaceRapidTapQueue(rapidTapQueueRef.current.filter((current) => current.id !== item.id));
@@ -2502,18 +2554,20 @@ export default function AdviserAttendancePage() {
             if (remainingReviews > 0) {
                 setScanMessage(`${remainingReviews} Rapid Tap scan${remainingReviews === 1 ? "" : "s"} still needs review.`);
             } else if (remaining.length > 0) {
+                setShowRapidTapReview(false);
                 setScanMessage(`${remaining.length} Rapid Tap queue item${remaining.length === 1 ? "" : "s"} remains.`);
             } else {
+                setShowRapidTapReview(false);
                 setScanMessage("Reviewed Rapid Tap scan removed from this browser. No attendance record was changed.");
             }
         } catch (storageError) {
             console.error("Could not remove reviewed Rapid Tap scan:", storageError);
             setScanMessage("Could not remove this Rapid Tap item from this browser. Please try again.");
         }
-    }, [applyingRapidTapId, replaceRapidTapQueue]);
+    }, [applyingRapidTapId, replaceRapidTapQueue, retryingRapidTapId]);
 
     const applyManualReviewRapidTapScan = useCallback(async (item: RapidTapQueueItem) => {
-        if (!item.requiresManualReview || applyingRapidTapId) return;
+        if (!item.requiresManualReview || applyingRapidTapId || retryingRapidTapId) return;
         setApplyingRapidTapId(item.id);
         setScanMessage("Applying queued Rapid Tap through authorised attendance correction...");
         try {
@@ -2559,6 +2613,7 @@ export default function AdviserAttendancePage() {
             };
             setRapidTapResults((current) => [appliedResult, ...current.filter((result) => result.id !== item.id)].slice(0, 4));
             const remainingReviews = remaining.filter((current) => current.status === "failed" && current.requiresManualReview).length;
+            if (remainingReviews === 0) setShowRapidTapReview(false);
             setScanMessage(remainingReviews > 0
                 ? `Queued Rapid Tap applied. ${remainingReviews} scan${remainingReviews === 1 ? "" : "s"} still needs review.`
                 : remaining.length > 0
@@ -2574,7 +2629,16 @@ export default function AdviserAttendancePage() {
         } finally {
             setApplyingRapidTapId(null);
         }
-    }, [applyingRapidTapId, loadTodayLogs, replaceRapidTapQueue]);
+    }, [applyingRapidTapId, loadTodayLogs, replaceRapidTapQueue, retryingRapidTapId]);
+
+    useEffect(() => {
+        if (!showRapidTapReview) return undefined;
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setShowRapidTapReview(false);
+        };
+        window.addEventListener("keydown", closeOnEscape);
+        return () => window.removeEventListener("keydown", closeOnEscape);
+    }, [showRapidTapReview]);
 
     // Restore this Adviser's unfinished Rapid Tap queue after a refresh or an
     // accidental close. A record left in "saving" is reset to queued: the
@@ -3488,38 +3552,19 @@ export default function AdviserAttendancePage() {
                                                 <p className="mt-1 font-medium">Status: {rapidTapStatusSummary}</p>
                                             )}
                                             {rapidTapManualReviewCount > 0 && (
-                                                <p className="mt-1 font-medium">Apply a reviewed scan only when you confirm it belongs to this student and session. Applying records an audited manual Time In correction and does not send a parent SMS.</p>
+                                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="max-w-sm font-medium">Apply a reviewed scan only when you confirm it belongs to this student and session. Applying records an audited manual Time In correction and does not send a parent SMS.</p>
+                                                    <button type="button" onClick={() => setShowRapidTapReview(true)}
+                                                        className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                                                        View
+                                                    </button>
+                                                </div>
                                             )}
                                             {rapidTapRetryableFailedCount > 0 && (
                                                 <button type="button" onClick={retryFailedRapidTapScans}
                                                     className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
                                                     Retry {rapidTapRetryableFailedCount} Failed Scan{rapidTapRetryableFailedCount === 1 ? "" : "s"}
                                                 </button>
-                                            )}
-                                            {rapidTapManualReviewCount > 0 && (
-                                                <div className="mt-3 space-y-2">
-                                                    {rapidTapManualReviewItems.map((item) => {
-                                                        const applying = applyingRapidTapId === item.id;
-                                                        return (
-                                                            <div key={item.id} className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-white/80 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
-                                                                <div className="min-w-0">
-                                                                    <p className="truncate font-bold text-amber-900">{rapidTapItemLabel(item)}</p>
-                                                                    <p className="truncate text-[11px] text-amber-800">{item.section} · {item.sessionType} · {item.lastError || "Needs attendance review"}</p>
-                                                                </div>
-                                                                <div className="flex shrink-0 gap-2">
-                                                                    <button type="button" onClick={() => void applyManualReviewRapidTapScan(item)} disabled={applyingRapidTapId !== null}
-                                                                        className="rounded-lg border border-emerald-300 bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
-                                                                        {applying ? "Applying..." : "Apply"}
-                                                                    </button>
-                                                                    <button type="button" onClick={() => void removeManualReviewRapidTapScan(item)} disabled={applyingRapidTapId !== null}
-                                                                        className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60">
-                                                                        Remove
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
                                             )}
                                         </div>
                                     ) : rapidTapComplete ? (
@@ -3798,6 +3843,85 @@ export default function AdviserAttendancePage() {
                     </div>
                 </div>
             </div>
+
+            {/* Rapid Tap review modal */}
+            {showRapidTapReview && (
+                <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="rapid-tap-review-title" aria-describedby="rapid-tap-review-description">
+                    <div className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-h-[88vh] sm:rounded-2xl">
+                        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-6">
+                            <div>
+                                <h2 id="rapid-tap-review-title" className="text-lg font-extrabold text-slate-800">Rapid Tap scan review</h2>
+                                <p id="rapid-tap-review-description" className="mt-0.5 text-sm text-slate-500">
+                                    {rapidTapManualReviewItems.length} scan{rapidTapManualReviewItems.length === 1 ? "" : "s"} needs review. Retrying keeps the original scan ID and all attendance safeguards in place.
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setShowRapidTapReview(false)} aria-label="Close Rapid Tap scan review"
+                                className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
+                            <div className="space-y-4">
+                                {rapidTapManualReviewItems.map((item) => {
+                                    const applying = applyingRapidTapId === item.id;
+                                    const retrying = retryingRapidTapId === item.id;
+                                    const actionInProgress = applyingRapidTapId !== null || retryingRapidTapId !== null;
+                                    return (
+                                        <article key={item.id} className="overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/50">
+                                            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-amber-100 bg-white/80 px-4 py-3">
+                                                <div className="min-w-0">
+                                                    <h3 className="truncate text-sm font-extrabold text-slate-800">{rapidTapItemLabel(item)}</h3>
+                                                    <p className="mt-0.5 text-xs text-slate-500">{item.section} · {item.sessionType} class</p>
+                                                </div>
+                                                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">Needs review</span>
+                                            </div>
+                                            <div className="p-4">
+                                                <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                                                    <div>
+                                                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Student name</dt>
+                                                        <dd className="mt-1 font-semibold text-slate-700">{rapidTapItemLabel(item)}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">RFID tag</dt>
+                                                        <dd className="mt-1 break-all font-mono text-xs font-semibold text-slate-700">{item.rfidCard}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Scan time</dt>
+                                                        <dd className="mt-1 font-semibold text-slate-700">{formatRapidTapScanTime(item.capturedAt)}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current status</dt>
+                                                        <dd className="mt-1"><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">Failed — needs review</span></dd>
+                                                    </div>
+                                                </dl>
+                                                <div className="mt-4 rounded-xl border border-amber-200 bg-white px-3 py-3">
+                                                    <p className="text-xs font-bold text-amber-900">Why this needs review</p>
+                                                    <p className="mt-1 text-sm leading-5 text-amber-800">{item.lastError || "This scan could not be confirmed automatically. Verify the student and session before applying a manual attendance correction."}</p>
+                                                </div>
+                                                <p className="mt-3 text-xs leading-5 text-slate-500">Retry checks the same scan ID first and never bypasses duplicate protection, class-session timing, or section access rules.</p>
+                                                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                                                    <button type="button" onClick={() => void retryManualReviewRapidTapScan(item)} disabled={actionInProgress}
+                                                        className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-xs font-bold text-sky-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                                        {retrying ? "Retrying..." : "Retry"}
+                                                    </button>
+                                                    <button type="button" onClick={() => void applyManualReviewRapidTapScan(item)} disabled={actionInProgress}
+                                                        className="rounded-lg border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                                        {applying ? "Applying..." : "Apply"}
+                                                    </button>
+                                                    <button type="button" onClick={() => void removeManualReviewRapidTapScan(item)} disabled={actionInProgress}
+                                                        className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60">
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </article>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Register RFID Modal */}
             {showRegisterRfid && (

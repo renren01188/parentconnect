@@ -33,38 +33,29 @@ type StudentNameFields = {
   suffix?: string | null;
 };
 
-function getToday() {
+function getManilaClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${year}-${month}-${day}`;
-}
-
-function getNowTime() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-  }).formatToParts(new Date());
+  }).formatToParts(now);
 
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
   const hour = parts.find((p) => p.type === "hour")?.value ?? "00";
   const minute = parts.find((p) => p.type === "minute")?.value ?? "00";
   const second = parts.find((p) => p.type === "second")?.value ?? "00";
-  return `${hour}:${minute}:${second}`;
-}
-
-function getCurrentMinutes() {
-  const [hour, minute] = getNowTime().split(":").map(Number);
-  return hour * 60 + minute;
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}:${second}`,
+    minutes: Number(hour) * 60 + Number(minute),
+  };
 }
 
 function timeToMinutes(value: string) {
@@ -254,9 +245,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // One Asia/Manila clock snapshot supplies both the calendar date used to
+    // find today's attendance and the session-time guard. This avoids a UTC
+    // conversion (or a midnight boundary between separate clock reads)
+    // treating a valid Manila-day correction as a different day.
+    const manilaClock = getManilaClock();
     const student        = students[0];
-    const attendanceDate = getToday();
-    const timeLogged     = getNowTime();
+    const attendanceDate = manilaClock.date;
+    const timeLogged     = manilaClock.time;
     const { data: activeSY, error: schoolYearError } = await supabase
       .from("school_year_config")
       .select("id, start_date, end_date, attendance_weekdays")
@@ -333,7 +329,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const now = getCurrentMinutes();
+    const now = manilaClock.minutes;
     const start = timeToMinutes(session.scheduled_start);
     const end = timeToMinutes(session.scheduled_end);
     // Present remains stored as On Time, while an Adviser can explicitly
@@ -381,11 +377,22 @@ export async function POST(req: NextRequest) {
     const manualAbsenceCorrection = body.type === "Time In" &&
       selectedStatus === "Absent" &&
       (existingSameType?.status === "On Time" || existingSameType?.status === "Late");
+    // Present is an authorised correction of an existing Late Time In. It
+    // updates that row in place, so the original recorded time remains
+    // intact and no new attendance event is created.
+    const lateToPresentCorrection = body.type === "Time In" &&
+      selectedStatus === "Present" &&
+      existingSameType?.status === "Late";
+    const isExistingAttendanceCorrection = automaticAbsence
+      || manualAbsentToAttendanceCorrection
+      || manualAbsenceCorrection
+      || lateToPresentCorrection;
 
-    // A normal manual entry is allowed only in the configured class window.
-    // Corrections update an existing record, so they can also be completed
-    // after the session has ended. Neither correction path creates a row.
-    if (now < start || (now >= end && !automaticAbsence && !manualAbsenceCorrection && !manualAbsentToAttendanceCorrection)) {
+    // Creating a new manual entry is allowed only in the configured class
+    // window. An authorised correction updates an existing record instead,
+    // and may be performed after the session ends while the Manila day is
+    // still active. Neither correction path creates a row.
+    if (!isExistingAttendanceCorrection && (now < start || now >= end)) {
       return NextResponse.json(
         { success: false, message: now < start
           ? "Manual attendance is not started yet. It opens at the ICT-configured scheduled start."
@@ -487,7 +494,7 @@ export async function POST(req: NextRequest) {
     // the established On Time value so existing history, reports, and parent
     // views continue to treat it as Present. Only a recorded Late event of
     // the same type can be corrected, and its original event fields remain.
-    if (selectedStatus === "Present" && existingSameType?.status === "Late") {
+    if (lateToPresentCorrection) {
       const { data: log, error: correctionError } = await supabase
         .from("attendance_logs")
         .update({
@@ -499,7 +506,8 @@ export async function POST(req: NextRequest) {
         .single();
       if (correctionError) throw correctionError;
 
-      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Late", newStatus: "On Time", details: `Corrected Late ${body.type} to Present for ${buildFullName(student)} (${student.student_id}) without changing the attendance event.` });
+      await suppressPendingSmsForManualAttendanceCorrection(log.id);
+      await logAudit({ action: "Attendance Corrected", performedById: adviser.id, performedBy: buildFullName(adviser), performedByRole: "Adviser", module: "Attendance", targetType: "Attendance", targetId: log.id, targetUser: buildFullName(student), targetRole: "Student", relatedStudentId: student.student_id, previousStatus: "Late", newStatus: "On Time", details: `Corrected Late ${body.type} to Present for ${buildFullName(student)} (${student.student_id}) while preserving the recorded attendance time.` });
       after(() => publishAttendanceRealtimeInvalidation({ studentDbId: student.id }));
 
       return NextResponse.json({

@@ -35,12 +35,21 @@ const ATTENDANCE_SMS_DISPATCH_LEASE_SECONDS = 120;
 // Semaphore accepts a message before it has a final delivery result. Give it
 // time to progress, then refresh the provider status at most once per window.
 const SEMAPHORE_PENDING_STATUS_RECONCILIATION_GRACE_MS = 5 * 60_000;
+// Fresh attendance messages must keep their one-minute dispatch cadence.
+// Provider status reconciliation is recovery work only, so the scheduled
+// worker runs it once every five minutes instead of paying those reads on
+// every invocation. Manual ICT reconciliation remains immediate.
+export const SCHEDULED_SEMAPHORE_RECONCILIATION_INTERVAL_MINUTES = 5;
 const UNKNOWN_PROCESSING_ERROR = "SMS provider outcome is unknown after a worker interruption. It was not resent; reconcile it with Semaphore before any retry.";
 const jobColumns = "id, attendance_log_id, status, recipient_phone, message, attempts, idempotency_key, provider, provider_message_id, provider_status, provider_requested_at, reconciliation_attempts";
 
 function positiveInt(value: string | undefined, fallback: number, maximum: number) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
+}
+
+export function shouldRunScheduledSemaphoreReconciliation(nowMs = Date.now()) {
+  return Math.floor(nowMs / 60_000) % SCHEDULED_SEMAPHORE_RECONCILIATION_INTERVAL_MINUTES === 0;
 }
 
 function errorMessage(error: unknown) {
@@ -662,7 +671,12 @@ export async function reconcileAttendanceSmsJobs(options?: { batchSize?: number;
   return (await reconcileAttendanceSmsJobBatch(options)).summary;
 }
 
-export async function processAttendanceSmsJobs(options?: { batchSize?: number; concurrency?: number; attendanceLogId?: number }) {
+export async function processAttendanceSmsJobs(options?: {
+  batchSize?: number;
+  concurrency?: number;
+  attendanceLogId?: number;
+  reconcile?: boolean;
+}) {
   const batchSize = positiveInt(
     options?.batchSize === undefined ? process.env.ATTENDANCE_SMS_BATCH_SIZE : String(options.batchSize),
     DEFAULT_ATTENDANCE_SMS_BATCH_SIZE,
@@ -674,7 +688,13 @@ export async function processAttendanceSmsJobs(options?: { batchSize?: number; c
     MAX_ATTENDANCE_SMS_CONCURRENCY,
   );
   const movedToReview = await moveStaleProcessingJobsToReview(options?.attendanceLogId);
-  const reconciliationBatch = await reconcileAttendanceSmsJobBatch({ batchSize, attendanceLogId: options?.attendanceLogId });
+  const reconciliationBatch = options?.reconcile === false
+    ? {
+      jobs: [] as SmsJob[],
+      outcomes: [] as ReconciliationOutcome[],
+      summary: { checked: 0, accepted: 0, retryEligible: 0, review: 0 },
+    }
+    : await reconcileAttendanceSmsJobBatch({ batchSize, attendanceLogId: options?.attendanceLogId });
   const reconciliation = reconciliationBatch.summary;
 
   if (!await isAttendanceSmsEnabled()) {
@@ -752,7 +772,15 @@ export async function dispatchAttendanceSmsJobs() {
   }
 
   try {
-    return { acquired: true, ...await processAttendanceSmsJobs() };
+    // A provider-status lookup cannot make a fresh pending SMS safer or
+    // faster to send. Keep dispatching every minute, and reserve the heavier
+    // recovery sweep for five-minute boundaries.
+    return {
+      acquired: true,
+      ...await processAttendanceSmsJobs({
+        reconcile: shouldRunScheduledSemaphoreReconciliation(),
+      }),
+    };
   } finally {
     const { error: releaseError } = await supabase.rpc(
       "release_attendance_sms_dispatch_lease",

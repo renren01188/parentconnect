@@ -17,6 +17,11 @@ export type RapidTapQueueItem = {
   section: string;
   grade: string;
   scanDate: string;
+  // Kept with the queued scan so an Adviser can review when the RFID was
+  // actually tapped, rather than when a later retry reached the server.
+  // It is optional so scans stored before this field was introduced remain
+  // recoverable and can still be reviewed safely.
+  capturedAt?: string;
   sessionType: "Morning" | "Afternoon";
   queueOrder: number;
   status: RapidTapQueueStatus;

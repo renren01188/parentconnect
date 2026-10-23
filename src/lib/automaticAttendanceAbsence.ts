@@ -450,6 +450,32 @@ export async function processDueAutomaticAbsences() {
     sectionsByGrade.set(grade, sections);
   }
 
+  // The cron runs every five minutes. Once today's class-session snapshots
+  // exist, fetch all of them in one query rather than querying each grade and
+  // session pair separately. A missing row still uses the existing fallback
+  // below, so a saved ICT schedule can create its first daily snapshot and
+  // automatic absences remain independent of anyone opening the control UI.
+  const gradeNames = [...sectionsByGrade.keys()];
+  const sessionsByScope = new Map<string, SessionSchedule>();
+  if (gradeNames.length > 0) {
+    const { data: todaySessions, error: todaySessionsError } = await supabase
+      .from("class_sessions")
+      .select("id, scheduled_start, scheduled_end, late_after, absent_after, grade, session_type")
+      .eq("session_date", schoolClock.date)
+      .in("grade", gradeNames)
+      .in("session_type", ["Morning", "Afternoon"]);
+    if (todaySessionsError) throw todaySessionsError;
+    for (const session of todaySessions ?? []) {
+      const grade = String(session.grade ?? "").trim();
+      const sessionType = session.session_type === "Morning" || session.session_type === "Afternoon"
+        ? session.session_type
+        : null;
+      if (grade && sessionType) {
+        sessionsByScope.set(`${grade}|${sessionType}`, session as SessionSchedule);
+      }
+    }
+  }
+
   const processedSessions: AutomaticAbsenceResult[] = [];
   for (const [grade, sections] of sectionsByGrade) {
     const activeStudentsForGrade = activeRoster.filter((student) =>
@@ -457,7 +483,8 @@ export async function processDueAutomaticAbsences() {
       && sections.has(String(student.section ?? "").trim()),
     );
     for (const sessionType of ["Morning", "Afternoon"] as const) {
-      const session = await getOrCreateSessionSnapshot(schoolClock.date, sessionType, grade);
+      const session = sessionsByScope.get(`${grade}|${sessionType}`)
+        ?? await getOrCreateSessionSnapshot(schoolClock.date, sessionType, grade);
       if (!session || !hasReachedSessionEnd(schoolClock.minutes, session.absent_after ?? session.scheduled_end)) continue;
       processedSessions.push(await markAutomaticAbsencesForValidatedScope({
         sessionType,
