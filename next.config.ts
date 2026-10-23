@@ -7,6 +7,9 @@ if (process.env.NODE_ENV === "production" && (!process.env.NEXTAUTH_SECRET || pr
 }
 
 const nextConfig: NextConfig = {
+  experimental: {
+    agentUpgrade: "security",
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com", pathname: "/**" },
