@@ -278,24 +278,31 @@ export async function PATCH(req: NextRequest) {
     // trigger on attendance_logs updates before a worker can dispatch it.
     await suppressPendingSmsForAttendanceEdits(verifiedRows.map((row) => row.id));
 
-    await Promise.all(verifiedRows.map((row) => {
-      const student = studentById.get(row.student_db_id)!;
-      return logAudit({
-        action: "Attendance Edited",
-        performedById: scope.adviser.id,
-        performedBy: buildFullName(scope.adviser),
-        performedByRole: "Adviser",
-        module: "Attendance",
-        targetType: "Attendance",
-        targetId: row.id,
-        targetUser: buildFullName(student),
-        targetRole: "Student",
-        relatedStudentId: student.student_id,
-        previousStatus: row.status,
-        newStatus,
-        details: `Edited Time In attendance for ${body.date} in ${scope.grade} - ${scope.section}.`,
-      });
-    }));
+    // This is one Adviser save action, even when it changes many students.
+    // Keep the audit trail at that same action level so ICT and Principal see
+    // one complete, meaningful event rather than one indistinguishable row per
+    // student. Individual attendance rows remain the source of record for the
+    // per-student change.
+    await logAudit({
+      action: "Attendance Edited",
+      performedById: scope.adviser.id,
+      performedBy: buildFullName(scope.adviser),
+      performedByRole: "Adviser",
+      module: "Attendance",
+      targetType: "Attendance Batch",
+      targetId: `attendance-edit:${body.date}:${scope.grade}:${scope.section}`,
+      targetUser: `${scope.grade} - ${scope.section}`,
+      targetRole: "Class Section",
+      newStatus,
+      details: `Edited ${verifiedRows.length} Time In attendance record${verifiedRows.length === 1 ? "" : "s"} for ${body.date} in ${scope.grade} - ${scope.section}; set to ${newStatus}.`,
+      metadata: {
+        attendanceDate: body.date,
+        grade: scope.grade,
+        section: scope.section,
+        updatedRecordCount: verifiedRows.length,
+        attendanceLogIds: verifiedRows.map((row) => row.id),
+      },
+    });
 
     after(() => publishAttendanceRealtimeInvalidations(
       verifiedRows.map((row) => ({ studentDbId: row.student_db_id })),

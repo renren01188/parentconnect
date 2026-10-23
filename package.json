@@ -21,6 +21,7 @@
     "test:class-session-manila-calendar": "node scripts/test-class-session-manila-calendar.cjs",
     "test:attendance-scanner-schedule": "node scripts/test-attendance-scanner-schedule.cjs",
     "test:attendance-rapid-tap": "node scripts/test-attendance-rapid-tap.cjs",
+    "test:attendance-edit-audit": "node scripts/test-attendance-edit-audit.cjs",
     "test:adviser-attendance-history": "node scripts/test-adviser-attendance-history.cjs",
     "test:attendance-auto-absence": "node scripts/test-attendance-auto-absence.cjs",
     "test:adviser-manual-attendance-edit": "node scripts/test-adviser-manual-attendance-edit.cjs",
