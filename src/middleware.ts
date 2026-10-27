@@ -3,7 +3,6 @@ import { jwtVerify } from "jose";
 import { getJwtSecret } from "@/lib/authSecret";
 import { dashboardSessionCookies, DashboardRole, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-import { isParentAccountOwnerRole } from "@/lib/parentAccountOwner";
 import {
   PASSWORD_SESSION_REVOCATION_ACTIONS,
   isTokenRevokedByPasswordChange,
@@ -69,13 +68,6 @@ async function getAuthorizedDashboard(req: NextRequest, excludedRole?: Dashboard
         return route.setPassword;
       }
 
-      if (role === "parent" && await parentAccountSetupRequired(Number(verified.payload.id))) {
-        if (!(await parentOwnerRoleSelected(Number(verified.payload.id)))) {
-          return "/login/guardian/account-owner";
-        }
-        return "/dashboard/parent/profile?setup=1";
-      }
-
       return route.dashboard;
     } catch {
       // The target dashboard guard will clear an expired cookie for its role.
@@ -138,51 +130,6 @@ async function parentCanAccess(parentId: number) {
   if (!response.ok) return false;
   const rows = await response.json();
   return Array.isArray(rows) && rows.length === 1 && parentAccountCanAccess(rows[0]);
-}
-
-/** Edge-safe check for the one-time owner selection of bulk Parent accounts. */
-async function parentOwnerRoleSelected(parentId: number) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseKey || !Number.isSafeInteger(parentId) || parentId <= 0) return false;
-
-  try {
-    const response = await fetch(
-      `${supabaseUrl}/rest/v1/parents?id=eq.${parentId}&select=account_owner_role`,
-      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }, cache: "no-store" },
-    );
-    // During a rolling deployment, preserve established dashboard access if
-    // the schema migration has not reached this environment yet.
-    if (!response.ok) return true;
-    const rows = await response.json();
-    return Array.isArray(rows) && rows.length === 1 && isParentAccountOwnerRole(rows[0]?.account_owner_role);
-  } catch {
-    return true;
-  }
-}
-
-/**
- * Bulk-provisioned accounts must save a new password (and an email if one is
- * missing) before any Parent dashboard route except Profile is reachable.
- */
-async function parentAccountSetupRequired(parentId: number) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseKey || !Number.isSafeInteger(parentId) || parentId <= 0) return true;
-
-  try {
-    const response = await fetch(
-      `${supabaseUrl}/rest/v1/parents?id=eq.${parentId}&select=requires_account_setup`,
-      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }, cache: "no-store" },
-    );
-    // Fail closed: a transient database/schema error must not let a required
-    // first-login setup be bypassed.
-    if (!response.ok) return true;
-    const rows = await response.json();
-    return !Array.isArray(rows) || rows.length !== 1 || rows[0]?.requires_account_setup === true;
-  } catch {
-    return true;
-  }
 }
 
 /** Edge-safe read of the durable ICT password-revocation marker. */
@@ -428,14 +375,6 @@ export async function middleware(req: NextRequest) {
       if (!Number.isSafeInteger(parentId) || parentId <= 0 || !(await parentCanAccess(parentId))
         || !(await passwordSessionCanAccess("parent", parentId, verified.payload))) {
         return redirectToAuthorizedDashboardOrLogin(req, "parent", true);
-      }
-      if (await parentAccountSetupRequired(parentId)) {
-        if (!(await parentOwnerRoleSelected(parentId))) {
-          return NextResponse.redirect(new URL("/login/guardian/account-owner", req.url));
-        }
-        if (pathname !== "/dashboard/parent/profile") {
-          return NextResponse.redirect(new URL("/dashboard/parent/profile?setup=1", req.url));
-        }
       }
       return NextResponse.next();
     } catch {

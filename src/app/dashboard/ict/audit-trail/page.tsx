@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
 } from "lucide-react";
-import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
+import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, AUDIT_STATUS_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -102,12 +102,42 @@ function resolveAction(raw: string): string {
   return ACTION_META[cap] ? cap : raw;
 }
 
+// Every action in the filter menu and every stored audit event receives an
+// icon. The semantic fallback also covers newer audit actions until a more
+// specific presentation is added above.
+function getActionMeta(raw: string) {
+  const resolved = resolveAction(raw);
+  const known = ACTION_META[resolved];
+  if (known) return known;
+
+  const action = resolved.toLowerCase();
+  if (/(security|failed|password|otp|captcha|rate limit)/.test(action)) {
+    return { label: resolved, bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert };
+  }
+  if (/(login|logout)/.test(action)) {
+    return { label: resolved, bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", Icon: LogIn };
+  }
+  if (/(message|reply)/.test(action)) {
+    return { label: resolved, bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare };
+  }
+  if (/(delete|reject|cancel|revoke|failed)/.test(action)) {
+    return { label: resolved, bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2 };
+  }
+  if (/(approve|accept|publish|restore|complete)/.test(action)) {
+    return { label: resolved, bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", Icon: CheckCircle };
+  }
+  if (/(report|ticket|attendance|rfid|import|announcement)/.test(action)) {
+    return { label: resolved, bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText };
+  }
+  if (/(create|account|student|transfer|assign|update|edit|correct|replace|school year|session)/.test(action)) {
+    return { label: resolved, bg: "#fefce8", text: "#ca8a04", border: "#fde68a", Icon: Edit3 };
+  }
+  return { label: resolved, bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: Activity };
+}
+
 // ─── Action Badge ─────────────────────────────────────────────
 function ActionBadge({ type }: { type: string }) {
-  const resolved = resolveAction(type);
-  const m = ACTION_META[resolved] ?? {
-    label: resolved, bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: Activity,
-  };
+  const m = getActionMeta(type);
   return (
     <span
       className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap"
@@ -147,10 +177,7 @@ function SkeletonRow() {
 
 // ─── Event Detail Modal ───────────────────────────────────────
 function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () => void }) {
-  const resolved = resolveAction(event.action);
-  const m = ACTION_META[resolved] ?? {
-    label: resolved, bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: Activity,
-  };
+  const m = getActionMeta(event.action);
   const initials = getInitials(event.performedBy);
   const color    = avatarColor(event.performedBy);
   const role     = event.performedByRole || "Unknown";
@@ -346,7 +373,7 @@ export default function AuditTrailPage() {
     { label: "Total Events",    value: stats.total,    icon: Activity,    color: "#274e13", bg: "bg-green-50"  },
     { label: "Login Events",    value: stats.logins,   icon: LogIn,       color: "#2563eb", bg: "bg-blue-50"   },
     { label: "Edit Actions",    value: stats.edits,    icon: Edit3,       color: "#d97706", bg: "bg-amber-50"  },
-    { label: "Security Alerts", value: stats.security, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50"    },
+    { label: "Security Alerts", value: stats.security, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", actionFilter: "Security Events" },
   ];
 
   return (
@@ -376,23 +403,24 @@ export default function AuditTrailPage() {
 
       {/* ── Stats ── */}
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {statCards.map(({ label, value, icon: Icon, color, bg }) => (
-          <div key={label} className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
+        {statCards.map(({ label, value, icon: Icon, color, bg, actionFilter }) => {
+          const content = <>
             <div className={`w-12 h-12 rounded-xl ${bg} flex items-center justify-center shrink-0`}>
               <Icon className="w-5 h-5" style={{ color }} />
             </div>
             <div>
               <p className="text-2xl font-black text-gray-800">
-                {loading ? (
-                  <span className="inline-block w-10 h-5 bg-gray-100 rounded animate-pulse" />
-                ) : (
-                  value.toLocaleString()
-                )}
+                {loading ? <span className="inline-block w-10 h-5 bg-gray-100 rounded animate-pulse" /> : value.toLocaleString()}
               </p>
               <p className="text-xs font-semibold text-gray-400 mt-0.5">{label}</p>
             </div>
-          </div>
-        ))}
+          </>;
+          return actionFilter ? (
+            <button key={label} type="button" onClick={() => { setActionFilter(actionFilter); setPage(1); }} className="flex items-center gap-4 rounded-xl border border-red-100 bg-white p-4 text-left shadow-sm transition hover:border-red-300 hover:bg-red-50/30 focus:outline-none focus:ring-2 focus:ring-red-200 sm:p-5" aria-label="Show security alert events">
+              {content}
+            </button>
+          ) : <div key={label} className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">{content}</div>;
+        })}
       </div>
 
       {/* ── Table card ── */}
@@ -445,7 +473,8 @@ export default function AuditTrailPage() {
             <option value="">All Modules</option><option>Reports</option><option>Student Reports</option><option>Guidance Tickets</option><option>Attendance</option><option>Students</option><option>Auth</option><option>School Year Control</option>
           </select>
           <select aria-label="Filter by status" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-700 sm:w-auto">
-            <option value="">All Statuses</option><option>new</option><option>ongoing</option><option>resolved</option><option>accepted</option><option>rejected</option><option>Active</option><option>Ended</option><option>Absent</option>
+            <option value="">All Statuses</option>
+            {AUDIT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
 
           {/* Action type filter */}
@@ -462,19 +491,20 @@ export default function AuditTrailPage() {
               <div className="absolute top-full mt-1.5 left-0 bg-white border border-gray-200 rounded-xl shadow-2xl z-[9999] py-1 min-w-48 max-h-72 overflow-y-auto">
                 <button
                   onClick={() => { setActionFilter(""); setActionOpen(false); setPage(1); }}
-                  className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition ${!actionFilter ? "font-bold text-[#274e13]" : "text-gray-700"}`}
+                  className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition hover:bg-green-50 ${!actionFilter ? "font-bold text-[#274e13]" : "text-gray-700"}`}
                 >
+                  <Activity className="h-3.5 w-3.5 shrink-0" />
                   All Actions
                 </button>
                 {AUDIT_ACTION_OPTIONS.map((option) => {
-                  const m = ACTION_META[option.label];
+                  const m = getActionMeta(option.label);
                   return (
                     <button
                       key={option.value}
                       onClick={() => { setActionFilter(option.value); setActionOpen(false); setPage(1); }}
                       className={`w-full text-left px-4 py-2 text-sm hover:bg-green-50 transition flex items-center gap-2 ${actionFilter === option.value ? "font-bold text-[#274e13] bg-green-50" : "text-gray-700"}`}
                     >
-                      {m && <m.Icon className="w-3.5 h-3.5 shrink-0" style={{ color: m.text }} />}
+                      <m.Icon className="w-3.5 h-3.5 shrink-0" style={{ color: m.text }} />
                       {option.label}
                     </button>
                   );

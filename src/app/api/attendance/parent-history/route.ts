@@ -87,12 +87,13 @@ export async function GET(req: NextRequest) {
             type: string;
             status: string;
             via: string;
+            parent_recording_source: "RFID" | "Manual" | null;
         };
         const logs: AttendanceLog[] = [];
         for (let from = 0; ; from += ATTENDANCE_LOG_PAGE_SIZE) {
             const { data: page, error: logsError } = await supabase
                 .from("attendance_logs")
-                .select("id, attendance_date, time_logged, type, status, via")
+                .select("id, attendance_date, time_logged, type, status, via, parent_recording_source")
                 .eq("student_id", studentLrn)
                 .gte("attendance_date", activeSchoolYear.start_date)
                 .lte("attendance_date", activeSchoolYear.end_date)
@@ -114,6 +115,8 @@ export async function GET(req: NextRequest) {
             time_out: string | null;
             status: string;
             via: string;
+            rfid_scan: boolean;
+            manual_attendance: boolean;
         }>();
 
         for (const log of logs) {
@@ -125,9 +128,13 @@ export async function GET(req: NextRequest) {
                     time_out: null,
                     status: log.status,
                     via: log.via,
+                    rfid_scan: false,
+                    manual_attendance: false,
                 });
             }
             const entry = dateMap.get(date)!;
+            if (log.parent_recording_source === "RFID") entry.rfid_scan = true;
+            if (log.parent_recording_source === "Manual") entry.manual_attendance = true;
             if (log.type === "Time In") {
                 entry.time_in = log.time_logged;
                 entry.status = log.status;

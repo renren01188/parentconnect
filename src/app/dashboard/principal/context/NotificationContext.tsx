@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { fetchJsonWithRetry } from "@/lib/fetchJsonWithRetry";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { mergeNotificationFeed } from "@/lib/notificationFeed";
 
 function ictSeenTimestamp() {
   if (typeof window === "undefined") return 0;
@@ -15,7 +16,23 @@ type PrincipalConversationSummary = {
 };
 type PrincipalMessagesResponse = { inbox?: PrincipalConversationSummary[] };
 type IctMessagesResponse = { unreadCount?: number };
-type PrincipalNotificationsResponse = { reportUnreadCount?: number; unreadCount?: number };
+
+export type PrincipalNotification = {
+  id: string;
+  type: string;
+  category: "report";
+  reportId?: number;
+  title: string;
+  message: string;
+  time: string;
+  read: boolean;
+};
+
+type PrincipalNotificationsResponse = {
+  notifications?: PrincipalNotification[];
+  reportUnreadCount?: number;
+  unreadCount?: number;
+};
 
 interface NotifContextType {
   unreadCount: number;
@@ -29,6 +46,11 @@ interface NotifContextType {
   clearIctMessageCount: () => void;
   refreshCounts: () => Promise<void>;
   principalNotifCount: number;
+  notifications: PrincipalNotification[];
+  notificationsLoading: boolean;
+  refreshNotifications: () => Promise<void>;
+  markNotificationsRead: (notifications: PrincipalNotification[]) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
 }
 
 const NotifContext = createContext<NotifContextType>({
@@ -43,6 +65,11 @@ const NotifContext = createContext<NotifContextType>({
   clearIctMessageCount: () => { },
   refreshCounts: async () => { },
   principalNotifCount: 0,
+  notifications: [],
+  notificationsLoading: true,
+  refreshNotifications: async () => { },
+  markNotificationsRead: async () => { },
+  markAllNotificationsRead: async () => { },
 });
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -52,6 +79,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const ictBadgeVersionRef = useRef(0);
   const ictSeenAtRef = useRef(ictSeenTimestamp());
   const [principalNotifCount, setPrincipalNotifCount] = useState(0);
+  const [notifications, setNotifications] = useState<PrincipalNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const notificationsRequestVersionRef = useRef(0);
   const unreadCount = reportCount + adviserMessageCount + ictMessageCount;
 
   const refreshAdviserMessages = useCallback(async () => {
@@ -86,12 +116,48 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshNotifications = useCallback(async () => {
+    const requestVersion = ++notificationsRequestVersionRef.current;
     const { response, data } = await fetchJsonWithRetry<PrincipalNotificationsResponse>("/api/principal/notifications", { cache: "no-store" });
-    if (response.ok) {
-      setReportCount(Number(data?.reportUnreadCount ?? 0));
-      setPrincipalNotifCount(Number(data?.unreadCount ?? 0));
+    if (requestVersion !== notificationsRequestVersionRef.current) return;
+    if (!response.ok) {
+      setNotificationsLoading(false);
+      return;
     }
+    const snapshot = (data?.notifications ?? []) as PrincipalNotification[];
+    // Notification event keys are deterministic. Merging the server snapshot
+    // prevents a Realtime request racing the first load from duplicating or
+    // briefly reverting a locally acknowledged notification.
+    setNotifications((current) => mergeNotificationFeed(current, snapshot));
+    setReportCount(Number(data?.reportUnreadCount ?? 0));
+    setPrincipalNotifCount(Number(data?.unreadCount ?? 0));
+    setNotificationsLoading(false);
   }, []);
+
+  const markNotificationsRead = useCallback(async (rows: PrincipalNotification[]) => {
+    const keys = rows.filter((item) => !item.read).map((item) => item.id);
+    if (!keys.length) return;
+
+    // Show the acknowledgement immediately. The read route persists exactly
+    // these existing notification keys and broadcasts the authoritative
+    // snapshot to every open Principal dashboard tab.
+    setNotifications((current) => current.map((item) => keys.includes(item.id) ? { ...item, read: true } : item));
+    setPrincipalNotifCount((current) => Math.max(0, current - keys.length));
+
+    const { response } = await fetchJsonWithRetry("/api/principal/notifications/read", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mark_all: true, notif_keys: keys }),
+    });
+    if (!response.ok) {
+      await refreshNotifications();
+      return;
+    }
+    await refreshNotifications();
+  }, [refreshNotifications]);
+
+  const markAllNotificationsRead = useCallback(async () => {
+    await markNotificationsRead(notifications);
+  }, [markNotificationsRead, notifications]);
 
   const refreshCounts = useCallback(async () => {
     await Promise.all([refreshAdviserMessages(), refreshIctMessages(), refreshNotifications()]);
@@ -144,6 +210,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       clearIctMessageCount,
       refreshCounts,
       principalNotifCount,
+      notifications,
+      notificationsLoading,
+      refreshNotifications,
+      markNotificationsRead,
+      markAllNotificationsRead,
     }}>
       {children}
     </NotifContext.Provider>

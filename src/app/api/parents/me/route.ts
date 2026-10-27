@@ -70,7 +70,7 @@ export async function GET() {
 
     const { data: primaryParent, error } = await supabase
       .from("parents")
-      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, contact_number, address, student_id, requires_account_setup")
+      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, contact_number, address, student_id")
       .eq("id", parentId)
       .maybeSingle();
 
@@ -140,7 +140,6 @@ export async function GET() {
           lastName: primaryParent.parent_last_name ?? "",
           suffix: primaryParent.parent_suffix ?? "",
           phone: primaryParent.contact_number ?? "",
-          requiresAccountSetup: primaryParent.requires_account_setup === true,
           // Student registration is the single source of truth for the
           // household address displayed to a parent.
           address: students[0]?.address || primaryParent.address || "",

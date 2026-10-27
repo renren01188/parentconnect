@@ -220,10 +220,6 @@ function GuardianLoginPageContent() {
           ? `/login/guardian/verify-temp-password?expiresAt=${encodeURIComponent(expiresAt)}`
           : "/login/guardian/verify-temp-password");
       } else {
-        if (data.requiresOwnerSelection === true) {
-          window.location.assign("/login/guardian/account-owner");
-          return;
-        }
         // Start the dashboard from a new document after the server has set
         // the parent session cookie. App-router navigation can otherwise mount
         // the Reports client before its Realtime capability request sees this
@@ -401,7 +397,7 @@ function GuardianLoginPageContent() {
                   disabled={isLocked}
                   className={inputClass}
                 />
-                <p className="mt-1 text-xs text-slate-500">Use the mobile number registered with the school, or your email address.</p>
+                
               </div>
 
               <div>

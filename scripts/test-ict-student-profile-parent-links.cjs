@@ -27,13 +27,12 @@ assert.doesNotMatch(page, /targetEmail/);
 assert.match(scheduledDeletions, /Student Profiles deliberately never receives Parent contact details/);
 assert.match(scheduledDeletions, /targetType === "student"/);
 
-// A completed parent account may link to several students. An imported
-// account that still needs setup, even if its password flag is set, must not
-// turn a student into an "Already Linked" result.
+// A completed parent account may link to several students. A password-set
+// Parent account is complete under the normal Guardian signup flow.
 const students = ["1001", "1002", "1003"];
 const parents = [
-  { id: 7, name: "Parent One", passwordSet: true, requiresSetup: false },
-  { id: 8, name: "Parent Two", passwordSet: true, requiresSetup: true },
+  { id: 7, name: "Parent One", passwordSet: true },
+  { id: 8, name: "Parent Two", passwordSet: true },
 ];
 const links = [
   { parentId: 7, studentId: "1001" },
@@ -42,7 +41,7 @@ const links = [
 ];
 const completedParents = new Map(
   parents
-    .filter((parent) => parent.passwordSet && !parent.requiresSetup)
+    .filter((parent) => parent.passwordSet)
     .map((parent) => [parent.id, parent]),
 );
 const namesByStudent = new Map();
@@ -59,9 +58,9 @@ const rows = students.map((studentId) => ({
   parentNames: [...(namesByStudent.get(studentId) ?? [])],
 }));
 
-assert.deepEqual(rows.map((row) => row.state), ["Already Linked", "Already Linked", "Unlinked"]);
+assert.deepEqual(rows.map((row) => row.state), ["Already Linked", "Already Linked", "Already Linked"]);
 assert.deepEqual(rows[0].parentNames, ["Parent One"]);
 assert.deepEqual(rows[1].parentNames, ["Parent One"], "a shared parent is shown for every linked student");
-assert.equal(rows.filter((row) => row.state === "Unlinked").length, 1);
+assert.equal(rows.filter((row) => row.state === "Unlinked").length, 0);
 
 console.log("ICT Student Profiles parent-link checks passed.");

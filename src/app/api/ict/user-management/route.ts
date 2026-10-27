@@ -411,7 +411,7 @@ export async function GET(request: NextRequest) {
         .order("last_name", { ascending: true }),
       supabase
         .from("parents")
-        .select("id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, parent_remarks, status, password_set, requires_account_setup, archive_status")
+        .select("id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, contact_number, email, address, parent_remarks, status, password_set, archive_status")
         .order("parent_last_name", { ascending: true }),
       supabase
         .from("parent_student_links")
@@ -653,7 +653,7 @@ export async function GET(request: NextRequest) {
     // student in the directory or its counts.
     const signedUpParentsById = new Map<number, (typeof visibleParents)[number]>();
     for (const parent of visibleParents) {
-      if (hasCompletedParentSignup([parent.id], parent.password_set, parent.requires_account_setup)) {
+      if (hasCompletedParentSignup([parent.id], parent.password_set)) {
         signedUpParentsById.set(Number(parent.id), parent);
       }
     }

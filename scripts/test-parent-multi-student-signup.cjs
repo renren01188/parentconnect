@@ -21,7 +21,7 @@ assert.match(signupRoute, /\.eq\("login_contact_number", contactNumber\)/);
 assert.match(signupRoute, /await ensureParentStudentLink\(\{[\s\S]*?parentId: matchedParent\.id,[\s\S]*?studentId: student\.student_id,[\s\S]*?relationship,/);
 assert.match(signupRoute, /accountExists: true/);
 assert.match(signupRoute, /Please log in, or use Forgot password/);
-assert.match(guardianPage, /if \(data\.accountExists === true\)[\s\S]*?switchMode\("login"\)[\s\S]*?setLoginIdentifier\(signup\.email\)/);
+assert.match(guardianPage, /if \(data\.accountExists === true\)[\s\S]*?switchMode\("login"\)[\s\S]*?setLoginIdentifier\(signup\.email \|\| signup\.contactNumber\)/);
 
 // Do not select an account from every matching Father/Mother/Guardian name.
 // A same-name parent with another email must be allowed to sign up normally.

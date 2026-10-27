@@ -98,7 +98,11 @@ export async function PATCH(
     if (!report) {
       return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     }
-    const refreshedMessages = await listMessages([reportId]);
+    // A Principal may acknowledge a monitoring card before Guidance has
+    // escalated it, but that acknowledgement must not fetch its conversation.
+    const refreshedMessages = report.escalated_to_principal
+      ? await listMessages([reportId])
+      : new Map();
     await logAudit({ action: normalized === "resolved" ? "Report Resolved" : normalized === "read" ? "Report Viewed" : "Report Status Updated", performedById: principal.id, performedBy: principal.name, performedByRole: "Principal", targetUser: `Report #${reportId}`, targetRole: "Report", targetType: "Parent Report", targetId: reportId, relatedReportId: reportId, previousStatus: existing.status, newStatus: normalized === "read" ? existing.status : normalized, module: "Reports", details: normalized === "read" ? `Opened report #${reportId}.` : `Changed report #${reportId} from ${existing.status} to ${normalized}.` });
     await publishReportRealtimeInvalidation({
       parentId: report.parent_id,

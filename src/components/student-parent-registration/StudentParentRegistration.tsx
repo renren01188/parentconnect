@@ -12,6 +12,8 @@ import {
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
 import { normalizeStudentAge } from "@/lib/studentAge";
+import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
+import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 
 export type StudentParentRegistrationProps = {
   variant?: "adviser" | "ict";
@@ -358,6 +360,9 @@ export function StudentParentRegistration({
   const [registeredCount, setRegisteredCount] = useState(0);
 
   const form = students[activeStudentIndex] ?? students[0] ?? emptyForm;
+  // The date input and validation use the same school-local calendar day as
+  // the API, avoiding an off-by-one day around UTC midnight.
+  const localToday = getSchoolClock().date;
   const setForm = (updater: FormUpdater) => {
     setStudents(prev => prev.map((student, index) => {
       if (index !== activeStudentIndex) return student;
@@ -487,6 +492,8 @@ export function StudentParentRegistration({
     else if (duplicateStudentId)                   E.studentId = "This LRN is already used by another student in this registration.";
   }
   if (show("gender")   && !form.gender)            E.gender   = "Please select a gender.";
+  const birthDateValidation = normalizeStudentBirthDate(form.birthDate, localToday);
+  if (show("birthDate") && birthDateValidation.error) E.birthDate = birthDateValidation.error;
   const ageValidation = normalizeStudentAge(form.age);
   if (show("age") && ageValidation.error) E.age = ageValidation.error;
   if ((show("religion") || show("religionOther")) && form.religion === "Others" && !form.religionOther.trim()) {
@@ -553,8 +560,9 @@ export function StudentParentRegistration({
     E.guardianRelationshipOther = "Specify the guardian's relationship when Others is selected.";
   }
 
-  const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender && !E.age
+  const step0OK = !E.firstName && !E.middleName && !E.lastName && !E.studentId && !E.gender && !E.birthDate && !E.age
     && form.firstName && form.middleName && form.lastName && form.studentId && form.gender && !E.religionOther
+    && !birthDateValidation.error
     && !E.remarkDate && !E.remarkNote && !E.remarkSchoolName && hasCompleteStudentRemark(form)
     && !studentIdTaken && !studentIdChecking && !duplicateStudentId;
   const step1OK = !E.grade && !E.classSession && !E.section && !!(form.grade && form.classSession && form.section) && !rfidConflict
@@ -583,6 +591,7 @@ export function StudentParentRegistration({
       const incompleteIndex = students.findIndex(student =>
         !student.firstName.trim() || !student.middleName.trim() || !student.lastName.trim() ||
         !student.studentId.trim() || !/^\d{12}$/.test(student.studentId.trim()) || !student.gender
+        || !!normalizeStudentBirthDate(student.birthDate, localToday).error
         || !!normalizeStudentAge(student.age).error
         || (student.religion === "Others" && !student.religionOther.trim())
         || !hasCompleteStudentRemark(student)
@@ -650,6 +659,15 @@ export function StudentParentRegistration({
   function validateBeforeSubmit(): boolean {
     const ids = students.map(s => s.studentId.trim()).filter(Boolean);
     const rfids = students.map(s => s.rfidCard.trim().toUpperCase()).filter(Boolean);
+    const invalidBirthDateIndex = students.findIndex(student =>
+      Boolean(normalizeStudentBirthDate(student.birthDate, localToday).error)
+    );
+    if (invalidBirthDateIndex >= 0) {
+      if (invalidBirthDateIndex !== activeStudentIndex) selectStudent(invalidBirthDateIndex);
+      setTryNext(true);
+      setApiError(normalizeStudentBirthDate(students[invalidBirthDateIndex].birthDate, localToday).error ?? "Birth date is invalid.");
+      return false;
+    }
     const incompleteStudent = students.find(s =>
       !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
       !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
@@ -689,33 +707,8 @@ export function StudentParentRegistration({
 
   const handleSubmit = async () => {
     if (requirePrincipalApproval) { handleProceedToApproval(); return; }
+    if (!validateBeforeSubmit()) return;
     setLoading(true); setApiError("");
-    const ids = students.map(s => s.studentId.trim()).filter(Boolean);
-    const rfids = students.map(s => s.rfidCard.trim().toUpperCase()).filter(Boolean);
-    const hasDuplicateIds = new Set(ids).size !== ids.length;
-    const hasDuplicateRfids = new Set(rfids).size !== rfids.length;
-    const incompleteStudent = students.find(s =>
-      !s.firstName.trim() || !s.middleName.trim() || !s.lastName.trim() ||
-      !s.studentId.trim() || !/^\d{12}$/.test(s.studentId.trim()) || !s.gender || !s.grade || !s.classSession || !s.section.trim()
-      || !!normalizeStudentAge(s.age).error
-      || (s.religion === "Others" && !s.religionOther.trim())
-      || !hasCompleteStudentRemark(s)
-    );
-    const invalidVerificationRecord = students.some(student => {
-      const hasGuardian = recordHasAnyName(student, "Guardian");
-      return !hasVerificationRecord(student)
-        || hasIncompleteVerificationRecord(student)
-        || (hasGuardian && !student.guardianRelationship)
-        || isMissingOtherGuardianRelationship(
-          hasGuardian ? student.guardianRelationship : "",
-          student.guardianRelationshipOther,
-        );
-    });
-    if (incompleteStudent || invalidVerificationRecord || hasDuplicateIds || hasDuplicateRfids) {
-      setApiError("Complete every student, record one complete family verification name, specify an Others guardian relationship, and use unique 12-digit LRNs/RFIDs before submitting.");
-      setLoading(false);
-      return;
-    }
 
     try {
       let saved = 0;
@@ -1012,7 +1005,16 @@ export function StudentParentRegistration({
                     </div>
                   </Field>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field label="Birth Date"><input type="date" className={inputOk} value={form.birthDate} onChange={e => set("birthDate", e.target.value)} /></Field>
+                    <Field label="Birth Date" error={E.birthDate}>
+                      <input
+                        type="date"
+                        max={localToday}
+                        className={E.birthDate ? inputErr : inputOk}
+                        value={form.birthDate}
+                        onChange={e => set("birthDate", e.target.value)}
+                        onBlur={() => touch("birthDate")}
+                      />
+                    </Field>
                     <Field label="Age" error={E.age} hint="Optional · whole years (1–120)">
                       <input type="text" inputMode="numeric" maxLength={3} className={E.age ? inputErr : inputOk} placeholder="e.g. 12" value={form.age} onChange={e => set("age", e.target.value)} onBlur={() => touch("age")} />
                     </Field>

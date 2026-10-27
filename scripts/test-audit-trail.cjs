@@ -15,7 +15,11 @@ assert.match(presentation, /function auditManilaDateRange/);
 assert.match(presentation, /T00:00:00\+08:00/);
 assert.match(presentation, /function auditManilaDate/);
 assert.match(filters, /function isSecurityAuditAction/);
-assert.match(filters, /normalized === "security alert" \|\| normalized === "failed login"/);
+assert.match(filters, /AUDIT_SECURITY_ALERT_ACTION_VALUES/);
+assert.match(filters, /Subject Teacher OTP CAPTCHA Failed/);
+assert.match(filters, /Subject Teacher OTP Rate Limited/);
+assert.match(filters, /AUDIT_STATUS_OPTIONS/);
+assert.match(filters, /function auditStatusDatabaseValues/);
 assert.match(auditWriter, /action: "Failed Login"/);
 
 const timestamp = new Date("2026-10-13T14:22:25.188Z");
@@ -31,11 +35,16 @@ for (const role of ["principal", "ict"]) {
   assert.match(route, /auditManilaDateRange/);
   assert.match(route, /formatAuditTimestamp\(row\.created_at\)/);
   assert.match(route, /\.lt\("created_at", dateRange\.end\)/);
-  assert.match(route, /\.in\("action", \["Failed Login", "Security Alert"\]\)/);
+  assert.match(route, /AUDIT_SECURITY_ALERT_ACTION_VALUES/);
+  assert.match(route, /\.in\("action", \[\.\.\.AUDIT_SECURITY_ALERT_ACTION_VALUES\]\)/);
+  assert.match(route, /auditStatusDatabaseValues/);
+  assert.match(route, /statusValues\.flatMap/);
   assert.match(route, /securityTotal: securityTotal \?\? 0/);
 
-  assert.match(page, /AUDIT_TIME_ZONE/);
-  assert.match(page, /timeZone: AUDIT_TIME_ZONE/);
+  assert.match(page, /AUDIT_STATUS_OPTIONS/);
+  assert.match(page, /getActionMeta/);
+  assert.match(page, /const m = getActionMeta\(option\.label\)/);
+  assert.match(page, /<Activity className="h-3\.5 w-3\.5 shrink-0" \/>\s*All Actions/);
   assert.match(page, /isSecurityAuditAction\(event\.action\)/);
   assert.match(page, /setSecurityTotal\(json\.securityTotal \?\? 0\)/);
   assert.match(page, /security: securityTotal/);

@@ -6,12 +6,11 @@ import { useRouter } from "next/navigation";
 import {
     ChevronRight, Settings, Lock, X, CheckCircle,
     AlertTriangle, User, Mail, Phone, MapPin,
-    Eye, EyeOff, Upload,
+    Eye, EyeOff,
 } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
-import FirstLoginSetupModal from "./FirstLoginSetupModal";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
 // ─── Password input ───────────────────────────────────────────────────────────
@@ -323,7 +322,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                             </div>
 
                             <EditField label="Email Address *" icon={Mail}   value={pForm.email}   onChange={setP("email")}   type="email" error={pErr.email} />
-                            <EditField label="Phone Number"    icon={Phone}  value={pForm.phone}   onChange={setP("phone")}   hint="Format: +63 9XX XXX XXXX" />
+                            <EditField label="Phone Number"    icon={Phone}  value={pForm.phone}   onChange={setP("phone")}   hint="Format: 09XX XXX XXXX" />
                             <div>
                                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Address</label>
                                 <div className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
@@ -331,26 +330,6 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                                     <span className="min-w-0 break-words">{pForm.address || "—"}</span>
                                 </div>
                                 <p className="mt-1 text-xs text-slate-400">Matches the address in your child&apos;s school registration record.</p>
-                            </div>
-
-                            <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
-                                <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-                                    <div className="h-24 w-24 shrink-0 overflow-hidden rounded-full border-4 border-white bg-blue-500 shadow-md flex items-center justify-center text-2xl font-extrabold text-white">
-                                        {false && pForm.profilePicture
-                                            ? <img src={pForm.profilePicture} alt="Profile picture preview" className="h-full w-full object-cover" />
-                                            : <User className="h-9 w-9" />}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                        <p className="text-sm font-extrabold text-slate-700">Default Avatar</p>
-                                        <p className="mt-0.5 text-xs leading-relaxed text-slate-500">ParentConnect displays your initials across the school dashboards.</p>
-                                        <label className="hidden">
-                                            <Upload className="h-3.5 w-3.5" /> {pForm.profilePicture ? "Change Photo" : "Upload Photo"}
-                                            <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only"
-                                                onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 10 * 1024 * 1024) { setAuthErr("Profile picture must be 10 MB or smaller."); return; } const reader = new FileReader(); reader.onload = () => setPForm(prev => ({ ...prev, profilePicture: String(reader.result ?? "") })); reader.readAsDataURL(file); }} />
-                                        </label>
-                                        <p className="mt-2 text-[11px] font-medium text-slate-400">JPG, PNG, or WebP · maximum 10 MB</p>
-                                    </div>
-                                </div>
                             </div>
 
                             {/* Authorization */}
@@ -575,7 +554,6 @@ export default function ProfilePage() {
     const [notificationPreferencesNotice, setNotificationPreferencesNotice] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [settingsTab,  setSettingsTab]  = useState<"profile" | "password">("profile");
-    const [requiresAccountSetup, setRequiresAccountSetup] = useState(false);
 
     function openSettings(tab: "profile" | "password" = "profile") {
         setSettingsTab(tab);
@@ -611,7 +589,6 @@ export default function ProfilePage() {
                     address: data.parent.address || "",
                     profilePicture: data.parent.profilePicture || "",
                 });
-                setRequiresAccountSetup(data.parent.requiresAccountSetup === true);
                 setStudents(data.students ?? []);
 
                 try {
@@ -689,14 +666,6 @@ export default function ProfilePage() {
         }
     }
 
-    function finishRequiredAccountSetup() {
-        setRequiresAccountSetup(false);
-        // The dashboard contains the normal first-use guide. It is not mounted
-        // on this Profile route while the required setup modal is open. The
-        // completion API has already refreshed the HttpOnly session cookie.
-        window.location.assign("/dashboard/parent");
-    }
-
     const fullName = getFullName(profile);
     const initials = [profile.firstName, profile.lastName].filter(Boolean).map(n => n[0].toUpperCase()).join("");
     const studentColors = ["#3b82f6", "#2563eb", "#0ea5e9", "#6366f1"];
@@ -762,10 +731,6 @@ export default function ProfilePage() {
                                 </div>
                                 <p className="break-words text-center text-base font-extrabold text-slate-800">{fullName}</p>
                                 <p className="mt-0.5 break-words text-center text-xs text-slate-400">Parent · Santiago Elementary School</p>
-                                <button onClick={() => openSettings("profile")}
-                                    className="hidden">
-                                    <Upload className="w-4 h-4" /> Change Photo via Settings
-                                </button>
                             </div>
 
                             {/* Lock notice */}
@@ -880,13 +845,6 @@ export default function ProfilePage() {
                     initialTab={settingsTab}
                     onSave={saveProfile}
                     onClose={() => setShowSettings(false)}
-                />
-            )}
-            {requiresAccountSetup && (
-                <FirstLoginSetupModal
-                    currentEmail={profile.email}
-                    currentContactNumber={profile.phone}
-                    onCompleted={finishRequiredAccountSetup}
                 />
             )}
         </div>

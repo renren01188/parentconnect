@@ -177,6 +177,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, message: "Unable to save the manual excuse." }, { status: 500 });
       }
 
+      // The range RPC creates or updates the actual Time In rows. Mark those
+      // rows as originating from Today's Manual Attendance without relying on
+      // `via`, which the Edit Attendance modal also changes.
+      const { error: sourceError } = await supabase
+        .from("attendance_logs")
+        .update({ parent_recording_source: "Manual" })
+        .eq("student_db_id", savedExcuse.student_db_id)
+        .eq("status", "Excused")
+        .gte("attendance_date", savedExcuse.date_from)
+        .lte("attendance_date", savedExcuse.date_to);
+      if (sourceError) throw sourceError;
+
       await logAudit({
         action: "Manual Excuse Recorded",
         performedById: adviser.id,
@@ -424,6 +436,7 @@ export async function POST(req: NextRequest) {
         .update({
           status: "Absent",
           via: "Manual",
+          parent_recording_source: "Manual",
           ...(correctionRemark ? { remark: correctionRemark } : {}),
         })
         .eq("id", existingSameType.id)
@@ -460,6 +473,7 @@ export async function POST(req: NextRequest) {
         .update({
           status: computedStatus,
           via: "Manual",
+          parent_recording_source: "Manual",
           ...(correctionRemark ? { remark: correctionRemark } : {}),
         })
         .eq("id", existingSameType.id)
@@ -499,6 +513,7 @@ export async function POST(req: NextRequest) {
         .from("attendance_logs")
         .update({
           status: "On Time",
+          parent_recording_source: "Manual",
           remark: body.remark?.trim() || existingSameType.remark || "Corrected from Late to Present by adviser",
         })
         .eq("id", existingSameType.id)
@@ -552,8 +567,9 @@ export async function POST(req: NextRequest) {
         .from("attendance_logs")
         .update({
           time_logged: timeLogged,
-        status: computedStatus,
+          status: computedStatus,
           via: "Manual",
+          parent_recording_source: "Manual",
           remark: correctionRemark,
         })
         .eq("id", existingSameType.id)
@@ -603,6 +619,7 @@ export async function POST(req: NextRequest) {
         session_type:    sessionType,
         status:          computedStatus,
         via:             "Manual",
+          parent_recording_source: "Manual",
         remark:          body.remark || null,
       })
       .select()

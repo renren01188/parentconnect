@@ -257,6 +257,7 @@ export async function POST(req: NextRequest) {
           time_logged: schoolClock.time,
           status: "On Time",
           via: "Manual",
+          parent_recording_source: "RFID",
           remark,
           scan_request_id: scanId,
         })
@@ -283,6 +284,7 @@ export async function POST(req: NextRequest) {
           session_type: sessionType,
           status: "On Time",
           via: "Manual",
+          parent_recording_source: "RFID",
           remark,
           scan_request_id: scanId,
         })

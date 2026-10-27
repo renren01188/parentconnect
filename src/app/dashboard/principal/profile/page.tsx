@@ -1,12 +1,11 @@
 ﻿"use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   User, Mail, Phone, CreditCard, Lock, Eye, EyeOff,
-  Camera, Building2, Calendar,
+  Building2, Calendar,
   CheckCircle, AlertTriangle, Shield, Check,
   X, ChevronRight, Settings,
 } from "lucide-react";
@@ -86,7 +85,7 @@ function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
 }
 
 // Settings modal
-type SettingsTab  = "profile" | "password" | "photo";
+type SettingsTab  = "profile" | "password";
 type SettingsStep = "edit" | "confirm" | "success";
 
 interface ProfileEdit {
@@ -109,21 +108,16 @@ interface PrincipalProfile extends ProfileEdit {
 }
 
 function SettingsModal({
-  profile, onSave, onPasswordSave, onPhotoSave, onClose,
+  profile, onSave, onPasswordSave, onClose,
 }: {
   profile: ProfileEdit;
   onSave: (updated: ProfileEdit, currentPassword: string) => Promise<void>;
   onPasswordSave: (updated: PasswordEdit) => Promise<void>;
-  onPhotoSave: (profilePicture: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [tab,  setTab]  = useState<SettingsTab>("profile");
   const [step, setStep] = useState<SettingsStep>("edit");
   const [saving, setSaving] = useState(false);
-
-  // Photo state
-  const [photoPreview, setPhotoPreview] = useState<string | null>(profile.profilePicture || null);
-  const [photoSaved,   setPhotoSaved]   = useState(false);
 
   const [pForm, setPForm] = useState<ProfileEdit>({ ...profile });
   const [pErrors, setPErrors] = useState<Partial<ProfileEdit>>({});
@@ -376,90 +370,6 @@ function SettingsModal({
             </>
           )}
 
-          {/* Edit: Profile Photo */}
-          {false && step === "edit" && tab === "photo" && (
-            <div className="space-y-4">
-              <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
-                <Camera className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-blue-700">Upload a PNG, JPEG, or WebP profile photo up to 10 MB.</p>
-              </div>
-
-              {/* Current / Preview avatar */}
-              <div className="flex flex-col items-center gap-4 py-4">
-                <div className="relative">
-                  {photoPreview ? (
-                    <Image src={photoPreview || ""} alt="Preview" width={96} height={96} unoptimized className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg" />
-                  ) : (
-                    <div className="w-24 h-24 rounded-full flex items-center justify-center text-3xl font-extrabold text-white border-4 border-white shadow-lg"
-                      style={{ background: `linear-gradient(135deg, ${PRIMARY} 0%, #7c3aed 100%)` }}>
-                      {profile.firstName[0]}{profile.lastName[0]}
-                    </div>
-                  )}
-                  {photoPreview && (
-                    <button onClick={() => setPhotoPreview(null)}
-                      className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center shadow hover:bg-red-600 transition">
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs text-gray-400">{photoPreview ? "Preview - click Save to apply" : "Current profile photo"}</p>
-              </div>
-
-              {/* Upload area */}
-              <label className="block w-full border-2 border-dashed border-gray-200 rounded-xl p-6 text-center cursor-pointer hover:border-[#522081]/40 hover:bg-purple-50/30 transition group">
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    if (!/^image\/(png|jpe?g|webp)$/.test(file.type) || file.size > 10 * 1024 * 1024) {
-                      setPAuthErr("Choose a PNG, JPEG, or WebP image smaller than 10 MB.");
-                      e.target.value = "";
-                      return;
-                    }
-                    const reader = new FileReader();
-                    reader.onload = () => setPhotoPreview(reader.result as string);
-                    reader.readAsDataURL(file);
-                  }} />
-                <Camera className="w-8 h-8 mx-auto mb-2 text-gray-300 group-hover:text-[#522081] transition" />
-                <p className="text-sm font-semibold text-gray-600 group-hover:text-[#522081] transition">Click to upload a photo</p>
-                <p className="text-xs text-gray-400 mt-1">PNG, JPEG, or WebP, max 10 MB</p>
-              </label>
-
-              {photoSaved && (
-                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
-                  <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-                  <p className="text-xs text-emerald-700 font-semibold">Photo saved successfully!</p>
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-1">
-                <button onClick={handleClose}
-                  className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
-                  Cancel
-                </button>
-                <button
-                  disabled={!photoPreview}
-                  onClick={async () => {
-                    if (!photoPreview) return;
-                    try {
-                      setSaving(true);
-                      await onPhotoSave(photoPreview);
-                      setPhotoSaved(true);
-                      setTimeout(() => { setPhotoSaved(false); handleClose(); }, 1000);
-                    } catch (error) {
-                      setPAuthErr(error instanceof Error ? error.message : "Unable to save profile picture.");
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl hover:opacity-90 disabled:opacity-40 transition"
-                  style={{ background: PRIMARY }}>
-                  <Camera className="w-4 h-4" /> Save Photo
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Confirm */}
           {step === "confirm" && (
             <>
@@ -549,7 +459,7 @@ function SettingsModal({
           )}
         </div>
 
-        {step !== "success" && tab !== "photo" && (
+        {step !== "success" && (
           <div className="flex shrink-0 flex-col gap-3 border-t border-gray-100 bg-gray-50/60 px-4 py-4 sm:flex-row sm:px-6">
             {step === "edit" && (
               <>
@@ -708,16 +618,6 @@ export default function AccountProfilePage() {
     showToast(data.message || "Profile updated successfully!");
   }
 
-  async function savePhoto(profilePicture: string) {
-    const res = await fetch("/api/principal/me", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ photoOnly: true, profilePicture }) });
-    const data = await res.json().catch(() => null);
-    if (res.status === 401) { router.push("/login/principal"); throw new Error("Session expired. Please log in again."); }
-    if (!res.ok || !data?.principal) throw new Error(data?.message || "Unable to save profile picture.");
-    setProfile((prev) => ({ ...prev, profilePicture: data.principal.profilePicture || "" }));
-    window.dispatchEvent(new CustomEvent("principal-profile-updated", { detail: { name: data.principal.name || "Principal", firstName: data.principal.firstName, lastName: data.principal.lastName, profilePicture: data.principal.profilePicture || "" } }));
-    showToast(data.message || "Profile picture updated successfully!");
-  }
-
   async function savePassword(updated: PasswordEdit) {
     const res = await fetch("/api/principal/me", {
       method: "PUT",
@@ -836,7 +736,6 @@ export default function AccountProfilePage() {
           profile={profile}
           onSave={saveProfile}
           onPasswordSave={savePassword}
-          onPhotoSave={savePhoto}
           onClose={() => setShowSettingsModal(false)}
         />
       )}

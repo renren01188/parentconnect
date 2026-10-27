@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
-import { auditActionDatabaseValues, auditRoleDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_SECURITY_ALERT_ACTION_VALUES, auditActionDatabaseValues, auditRoleDatabaseValues, auditStatusDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { parseAuditArchiveFilter } from "@/lib/auditArchive";
 import { auditManilaDateRange, formatAuditTimestamp } from "@/lib/auditPresentation";
 
@@ -77,7 +77,13 @@ export async function GET(req: NextRequest) {
     if (role)   query = query.in("performed_by_role", [...auditRoleDatabaseValues(role)]);
     if (user)   query = query.ilike("performed_by", `%${user}%`);
     if (moduleFilter) query = query.ilike("module", `%${moduleFilter}%`);
-    if (status) query = query.or(`previous_status.ilike.%${status}%,new_status.ilike.%${status}%`);
+    const statusValues = auditStatusDatabaseValues(status);
+    if (statusValues.length) {
+      query = query.or(statusValues.flatMap((value) => [
+        `previous_status.ilike.${value}`,
+        `new_status.ilike.${value}`,
+      ]).join(","));
+    }
     // Archive state is a read-time boundary: Recent contains the last seven
     // days and Archived preserves every older audit row for viewing. This
     // avoids making page loads depend on an optional archival RPC or view.
@@ -96,7 +102,7 @@ export async function GET(req: NextRequest) {
     let securityQuery = supabase
       .from("audit_log")
       .select("id", { count: "exact", head: true })
-      .in("action", ["Failed Login", "Security Alert"]);
+      .in("action", [...AUDIT_SECURITY_ALERT_ACTION_VALUES]);
     securityQuery = archive === "archived"
       ? securityQuery.lt("created_at", archiveCutoff)
       : securityQuery.gte("created_at", archiveCutoff);

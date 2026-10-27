@@ -34,6 +34,7 @@ import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 import { hasReachedSessionEnd, markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
 import { normalizeStudentAge } from "@/lib/studentAge";
+import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 import { resolveTodayAttendanceStatus } from "@/lib/todayAttendanceStatus";
 
@@ -335,6 +336,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const normalizedBirthDate = normalizeStudentBirthDate(birthDate, getSchoolClock().date);
+    if (normalizedBirthDate.error) {
+      return NextResponse.json(
+        { success: false, message: normalizedBirthDate.error },
+        { status: 400 },
+      );
+    }
+
     const guardianHasName = [guardianFirstName, guardianMiddleName, guardianLastName]
       .some(value => typeof value === "string" && value.trim());
     if (guardianHasName && isMissingOtherGuardianRelationship(guardianRelationship, guardianRelationshipOther)) {
@@ -409,7 +418,7 @@ export async function POST(req: NextRequest) {
       section: resolvedSection,
       class_session: resolvedClassSession,
       rfid_card: normalizedRfid,
-      birth_date: birthDate || null,
+      birth_date: normalizedBirthDate.value,
       age: normalizedAge.value,
       mother_tongue: motherTongue || null,
       ip_ethnic_group: ipEthnicGroup || null,

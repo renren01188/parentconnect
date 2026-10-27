@@ -25,7 +25,7 @@ assert.match(brevo, /if \(!isRetryableStatus\(response\.status\)\) \{[\s\S]*?bre
 assert.match(temporaryPasswords, /PARENT_TEMPORARY_PASSWORD_MAX_ACTIVE_CODES = 2/);
 assert.match(temporaryPasswords, /export function temporaryPasswordProofEntries/);
 assert.match(temporaryPasswords, /export function matchingTemporaryPasswordProof/);
-assert.match(signup, /temporaryPasswordProofEntries: \[\{/);
+assert.match(signup, /temporaryPasswordProofEntries:[\s\S]*?\[\{/);
 assert.match(signup, /parentEmail: email/);
 assert.ok(
   signup.indexOf('cookieStore.set("parent_signup_token"') < signup.indexOf("await sendTempPasswordEmail"),

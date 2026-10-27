@@ -674,6 +674,7 @@ export async function POST(req: NextRequest) {
         session_type: sessionType,
         status: logStatus,
         via: "RFID",
+        parent_recording_source: "RFID",
         remark: null,
         scan_request_id: scanRequestId || null,
       })

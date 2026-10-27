@@ -12,7 +12,6 @@ import {
   Phone,
   Save,
   Settings,
-  Camera,
   ShieldCheck,
   UserRound,
   X,
@@ -81,8 +80,7 @@ export default function ProfilePage() {
   const [showApprovalPassword, setShowApprovalPassword] = useState(false);
   const [approvalUnlocked, setApprovalUnlocked] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activePanel, setActivePanel] = useState<"profile" | "password" | "photo">("profile");
-  const [photoMessage, setPhotoMessage] = useState("");
+  const [activePanel, setActivePanel] = useState<"profile" | "password">("profile");
   const [approvalSent, setApprovalSent] = useState(false);
   const [approvalSaving, setApprovalSaving] = useState(false);
   const [approvalError, setApprovalError] = useState("");
@@ -222,7 +220,7 @@ export default function ProfilePage() {
     setApprovalUnlocked(true);
   };
 
-  const openSettings = (panel: "profile" | "password" | "photo") => {
+  const openSettings = (panel: "profile" | "password") => {
     setActivePanel(panel);
     setRequestForm(profile);
     setSettingsOpen(true);
@@ -457,27 +455,7 @@ export default function ProfilePage() {
                   </button>
                 </div>
               </div>
-            ) : (
-              <div className="modal-body">
-                <div className="approval-note"><Camera size={17} /><span>Upload a PNG, JPEG, or WebP photo up to 10 MB.</span></div>
-                <label className="btn-secondary" style={{ display: "flex", justifyContent: "center", cursor: "pointer" }}>
-                  <Camera size={15} /> Choose Photo
-                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async (event) => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-                    if (file.size > 10 * 1024 * 1024) { setPhotoMessage("Profile picture must be 10 MB or smaller."); return; }
-                    const form = new FormData(); form.append("avatar", file);
-                    const res = await fetch("/api/guidance/avatar", { method: "POST", body: form });
-                    const data = await res.json().catch(() => null);
-                    if (!res.ok || !data?.profilePicture) { setPhotoMessage(data?.message || "Unable to upload photo."); return; }
-                    setProfile((previous) => ({ ...previous, profilePicture: data.profilePicture }));
-                    setRequestForm((previous) => ({ ...previous, profilePicture: data.profilePicture }));
-                    setPhotoMessage("Profile picture updated successfully.");
-                  }} />
-                </label>
-                {photoMessage && <div className="success-note"><CheckCircle2 size={16} />{photoMessage}</div>}
-              </div>
-            )}
+            ) : null}
           </div>
         </div>
       ) : null}

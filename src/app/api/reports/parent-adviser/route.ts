@@ -253,8 +253,12 @@ export async function GET(req: NextRequest) {
       // after their linked parent accepts the conversation agreement.
       const rows = (await resolveParentIdentities((data ?? []) as unknown as ReportRow[]))
         .filter(isPrincipalVisibleReport);
+      // The Principal may monitor every visible report, but Guidance must
+      // explicitly escalate it before its message history is authorized. Do
+      // not retrieve locked conversations at all, even for a detail request.
+      const conversationRows = rows.filter((row) => Boolean(row.escalated_to_principal));
       const [messages, tickets, principalReadsResult] = await Promise.all([
-        (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
+        (summary ? listMessageSummaries : listMessages)(conversationRows.map((row) => row.id)),
         listGuidanceTickets(rows.map((row) => row.id), !summary),
         supabase.from("principal_notification_reads").select("notif_key").eq("principal_id", principal.id),
       ]);

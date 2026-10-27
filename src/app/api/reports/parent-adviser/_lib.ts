@@ -519,10 +519,10 @@ function guidanceThreadMessages(row: ReportRow, messages: MessageRow[]) {
 }
 
 function principalThreadMessages(row: ReportRow, messages: MessageRow[]) {
-  // Principal monitoring is read-only until Guidance escalates the report;
-  // the report confirmation now records consent for the complete history.
-  void row;
-  return messages;
+  // Monitoring metadata is visible to the Principal, but the actual report
+  // conversation is not. Guidance's durable escalation is the sole
+  // authorization boundary for the complete history.
+  return row.escalated_to_principal ? messages : [];
 }
 
 export function unreadGuidanceMessageIds(row: ReportRow, messages: MessageRow[]) {
@@ -572,15 +572,20 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
 }
 
 export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null, principalHasRead = false) {
-  const openingMessage = messages.find((msg) => msg.sender_role === "parent" || msg.sender_role === "subject_teacher");
+  // Do this in the mapper as well as the route query. That keeps a future
+  // caller from accidentally exposing content by passing message rows here.
+  const conversationAvailable = Boolean(row.escalated_to_principal);
+  const principalMessages = conversationAvailable ? messages : [];
+  const openingMessage = principalMessages.find((msg) => msg.sender_role === "parent" || msg.sender_role === "subject_teacher");
   const threadMessages = principalThreadMessages(row, messages);
   const isResolved = row.status === "resolved" || row.status === "cancelled";
-  const hasUnreadForPrincipal = hasUnreadPrincipalReport({
-    status: row.status,
-    principalHasRead,
-    messages: threadMessages,
-    isStudentConcern: isStudentConcernReport(row) && row.allow_history_access === true,
-  });
+  const hasUnreadForPrincipal = conversationAvailable
+    && hasUnreadPrincipalReport({
+      status: row.status,
+      principalHasRead,
+      messages: threadMessages,
+      isStudentConcern: isStudentConcernReport(row) && row.allow_history_access === true,
+    });
 
   return {
     id: row.id,
@@ -605,7 +610,11 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
     escalatedToGuidance: row.escalated_to_guidance,
-    escalatedToPrincipal: Boolean(row.escalated_to_principal),
+    escalatedToPrincipal: conversationAvailable,
+    // This server-derived flag distinguishes monitoring access from access to
+    // the underlying conversation. The Principal UI must never unlock on a
+    // client-local action alone.
+    conversationAvailable,
     hasUnreadForAdviser: false,
     hasUnreadForGuidance: false,
     hasUnreadForPrincipal,
@@ -613,7 +622,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     // It survives page refreshes and distinguishes a new handoff from an
     // already viewed Principal report.
     principalHasRead,
-    canReply: row.status !== "cancelled" && Boolean(row.escalated_to_principal),
+    canReply: row.status !== "cancelled" && conversationAvailable,
     ticketId: ticket?.id ?? null,
     ticketStatus: ticket?.status ?? null,
     ticketRejectionReason: ticket?.rejection_reason ?? null,

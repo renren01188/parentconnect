@@ -11,7 +11,6 @@ import {
   rememberLoginGuard,
 } from "@/lib/loginProtection";
 import { parentAccountAccessIssue } from "@/lib/parentAccountAccess";
-import { isParentAccountOwnerRole } from "@/lib/parentAccountOwner";
 import {
   normalizeParentLoginContactNumber,
   normalizeParentLoginEmail,
@@ -46,7 +45,7 @@ export async function POST(req: NextRequest) {
     const parentQuery = supabase
       .from("parents")
       .select(`
-        id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number, login_contact_number, account_owner_role, requires_account_setup,
+        id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number, login_contact_number,
         parent_first_name, parent_last_name,
         students!inner ( first_name, last_name, grade, section )
       `);
@@ -123,10 +122,6 @@ export async function POST(req: NextRequest) {
     }
 
     const passwordSet = parent.password_set === true || parent.password_set === 1;
-    // Account Owner selection belongs only to direct SQL-imported accounts.
-    // Normal Guardian Sign Up already verifies the chosen relationship.
-    const requiresAccountSetup = parent.requires_account_setup === true;
-    const ownerRoleSelected = isParentAccountOwnerRole(parent.account_owner_role);
     const temporaryPasswordExpirySeconds = passwordSet
       ? null
       : temporaryPasswordExpiryEpochSeconds(parent.temporary_password_expires_at)
@@ -165,7 +160,6 @@ export async function POST(req: NextRequest) {
       section:     student.section,
       role:        "parent",
       passwordSet,
-      ownerRoleSelected,
       sessionIssuedAt: Date.now(),
       temporaryPasswordVerified: passwordSet,
       ...(temporaryPasswordExpirySeconds ? {
@@ -191,7 +185,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success:     true,
       passwordSet,
-      requiresOwnerSelection: passwordSet && requiresAccountSetup && !ownerRoleSelected,
       expiresAt: temporaryPasswordExpirySeconds
         ? new Date(temporaryPasswordExpirySeconds * 1_000).toISOString()
         : undefined,

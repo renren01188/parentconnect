@@ -22,7 +22,7 @@ for (const [file, keys] of [
   ["src/app/dashboard/adviser/components/Sidebar.tsx", ["reports", "notifications", "ict"]],
   ["src/app/dashboard/guidance/components/Sidebar.tsx", ["reports", "announcements", "ict", "notifications"]],
   ["src/app/dashboard/ict/components/Sidebar.tsx", ["inbox", "announcements"]],
-  ["src/app/dashboard/principal/components/Sidebar.tsx", ["reports", "ict", "notifications"]],
+  ["src/app/dashboard/principal/components/Sidebar.tsx", ["reports", "ict"]],
 ]) {
   const sidebar = read(file);
   assert.match(sidebar, /import \{ useSidebarBadgeDismissal \} from "@\/hooks\/useSidebarBadgeDismissal"/);
@@ -31,6 +31,9 @@ for (const [file, keys] of [
   assert.match(sidebar, /visibleBadgeCount\(/);
   for (const key of keys) assert.match(sidebar, new RegExp(`${key}:`));
 }
+
+const principalSidebar = read("src/app/dashboard/principal/components/Sidebar.tsx");
+assert.doesNotMatch(principalSidebar, /label: "Notifications"/);
 
 // Opening an actual Contact ICT/Inbox conversation remains the only place that
 // marks its persisted message state read; the page-entry acknowledgement is

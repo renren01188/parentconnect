@@ -1275,7 +1275,6 @@ function PrincipalReportsPageContent() {
   // A Realtime message can arrive before the first Reports-message snapshot
   // resolves. Only allow the newest snapshot to replace the selected thread.
   const principalMessagesRequestVersionRef = useRef(0);
-  const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
@@ -1427,13 +1426,15 @@ function PrincipalReportsPageContent() {
       }).sort(newestReportFirst);
       setReports((current) => nextReports.map((report) => {
         const loaded = current.find((item) => item.id === report.id);
-        return loaded?.detailsLoaded
+        // A live Guidance escalation changes what the Principal is allowed to
+        // read. Never retain a previously loaded detail across that boundary.
+        return loaded?.detailsLoaded && loaded.conversationAvailable === report.conversationAvailable
           ? { ...report, message: loaded.message, attachments: loaded.attachments, replies: loaded.replies, detailsLoaded: true }
           : report;
       }));
       setPrincipalReplies((current) => Object.fromEntries(nextReports.map((report) => [
         report.id,
-        (current[report.id]?.length ?? 0) > 0
+        report.conversationAvailable && (current[report.id]?.length ?? 0) > 0
           ? current[report.id]
           : (report.replies ?? []).map((reply) => ({ ...reply, attachments: reply.attachments ?? [] })),
       ])));
@@ -1441,7 +1442,7 @@ function PrincipalReportsPageContent() {
         if (!current) return current;
         const summary = nextReports.find((report) => report.id === current.id);
         if (!summary) return current;
-        return current.detailsLoaded
+        return current.detailsLoaded && current.conversationAvailable === summary.conversationAvailable
           ? { ...summary, message: current.message, attachments: current.attachments, replies: current.replies, detailsLoaded: true }
           : summary;
       });
@@ -1737,20 +1738,6 @@ function PrincipalReportsPageContent() {
     if (viewStep !== "detail" || !selectedReport || !isPrincipalReportUnread(selectedReport)) return;
     void markReportStatus(selectedReport.id, "Read");
   }, [selectedReport?.id, selectedReport?.hasUnreadForPrincipal, viewStep]);
-
-  async function unlockReport(report: Report) {
-    setUnlockedReports((prev) => new Set(prev).add(report.id));
-    if (report.status !== "Resolved") {
-      const started = await markReportStatus(report.id, "Ongoing");
-      if (!started) {
-        setUnlockedReports((prev) => {
-          const next = new Set(prev);
-          next.delete(report.id);
-          return next;
-        });
-      }
-    }
-  }
 
   async function sendReply() {
     if (sendingReply || !selectedReport || selectedReport.status === "Resolved" || !selectedReport.canReply) return;
@@ -2692,18 +2679,19 @@ function PrincipalReportsPageContent() {
                   const hasPrincipalReply = replies.some((reply) => reply.sender === "Principal");
                   const canReply = Boolean(selectedReport.canReply);
                   const escalatedFromGuidance = Boolean(selectedReport.escalatedToPrincipal);
-                  const canStartConversation = canReply
-                    && (selectedReport.status === "New" || selectedReport.status === "Escalated")
-                    && !selectedReport.principalHasRead;
-                  const isUnlocked = !canStartConversation || unlockedReports.has(selectedReport.id);
+                  // This comes only from the Principal API, where it is
+                  // derived from parent_adviser_reports.escalated_to_principal.
+                  // Treat a missing value as locked while an older snapshot is
+                  // being replaced by the authoritative server response.
+                  const conversationAvailable = selectedReport.conversationAvailable === true;
 
-                  if (!isUnlocked) {
+                  if (!conversationAvailable) {
                     return (
                       <div className="flex flex-1 flex-col overflow-hidden">
                         <div className="border-b border-slate-100 bg-white px-6 py-5">
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0 flex-1">
-                              <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-700">Pending principal review</span>
+                              <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-700">Conversation locked</span>
                               <h2 className="mt-2 text-base font-extrabold leading-snug text-slate-900">{selectedReport.subject}</h2>
                               <p className="mt-0.5 text-xs text-slate-400">{selectedReport.submitted_at}</p>
                               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2718,8 +2706,8 @@ function PrincipalReportsPageContent() {
                           </div>
                         </div>
 
-                        <div className="relative flex-1 overflow-hidden px-6 py-5">
-                          <div className="flex flex-col gap-4 blur-[7px] select-none pointer-events-none">
+                        <div className="relative flex-1 overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
+                          <div aria-hidden="true" className="flex flex-col gap-4 blur-[7px] select-none pointer-events-none">
                             <div className="flex items-start gap-3">
                               <ParentAvatar name={parentDisplayName(selectedReport)} profilePicture={selectedReport.parent_profile_picture} initials={getInitials(parentDisplayName(selectedReport))} className="mt-0.5 h-9 w-9 rounded-full text-xs" />
                               <div className="flex-1">
@@ -2732,19 +2720,14 @@ function PrincipalReportsPageContent() {
                               </div>
                             </div>
                           </div>
-                          <div className="absolute inset-0 flex items-center justify-center bg-white/60 backdrop-blur-[2px]">
-                            <div className="max-w-xs rounded-2xl border border-slate-200 bg-white px-8 py-7 text-center shadow-xl">
+                          <div className="absolute inset-0 flex items-center justify-center bg-white/60 p-4 backdrop-blur-[2px] sm:p-6">
+                            <div role="status" className="max-w-sm rounded-2xl border border-slate-200 bg-white px-6 py-6 text-center shadow-xl sm:px-8 sm:py-7">
                               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-violet-100">
                                 <Shield className="h-7 w-7 text-violet-600" />
                               </div>
-                              <p className="mt-3 text-sm font-extrabold text-slate-900">Principal review required</p>
-                              <p className="mt-2 text-xs leading-relaxed text-slate-500">Previous parent-guidance conversations stay private. Start a new principal-parent thread to continue.</p>
-                              <button
-                                onClick={() => { void unlockReport(selectedReport); }}
-                                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-violet-700"
-                              >
-                                <Eye className="h-4 w-4" /> Start Conversation
-                              </button>
+                              <p className="mt-3 text-sm font-extrabold text-slate-900">Conversation unavailable</p>
+                              <p className="mt-2 text-xs leading-relaxed text-slate-500">This conversation will be available after Guidance escalates the report to the Principal.</p>
+                              {replyError && <p className="mt-3 text-xs font-semibold text-slate-400">The report details could not be refreshed, but this conversation remains locked.</p>}
                             </div>
                           </div>
                         </div>

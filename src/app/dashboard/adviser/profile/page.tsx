@@ -6,7 +6,7 @@ import {
     School, Mail, Phone, Check, CircleAlert,
     BookOpen, TrendingUp, ClipboardList,
     RefreshCw, Send, Users, FileText,
-    Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, Camera, ImagePlus, Trash2, ChevronDown,
+    Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, ChevronDown,
 } from "lucide-react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 
@@ -118,7 +118,7 @@ function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; on
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-type SettingsView = "menu" | "auth" | "personal-info" | "password" | "profile-picture";
+type SettingsView = "menu" | "auth" | "personal-info" | "password";
 
 function SettingsModal({
     profile,
@@ -131,7 +131,7 @@ function SettingsModal({
 }) {
     const [view, setView] = useState<SettingsView>("menu");
     const [verifiedPw, setVerifiedPw] = useState("");
-    const [pendingNav, setPendingNav] = useState<"personal-info" | "password" | "profile-picture" | null>(null);
+    const [pendingNav, setPendingNav] = useState<"personal-info" | "password" | null>(null);
 
     // Personal info state
     // Personal info state
@@ -180,69 +180,8 @@ function SettingsModal({
     const [pwError, setPwError] = useState(false);
     const [isSavingPw, setIsSavingPw] = useState(false);
 
-    // Profile picture state
-    const [avatarPreview, setAvatarPreview] = useState<string | null>(profile.profile_picture ?? null);
-    const [avatarFile, setAvatarFile] = useState<File | null>(null);
-    const [avatarMsg, setAvatarMsg] = useState("");
-    const [avatarErr, setAvatarErr] = useState(false);
-    const [isSavingAvatar, setIsSavingAvatar] = useState(false);
-
-    function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        if (file.size > 10 * 1024 * 1024) { setAvatarErr(true); setAvatarMsg("Image must be 10 MB or smaller."); return; }
-        if (!file.type.startsWith("image/")) { setAvatarErr(true); setAvatarMsg("Please select a valid image file."); return; }
-        setAvatarErr(false); setAvatarMsg("");
-        setAvatarFile(file);
-        const reader = new FileReader();
-        reader.onload = (ev) => setAvatarPreview(ev.target?.result as string);
-        reader.readAsDataURL(file);
-    }
-
-    async function handleSaveAvatar() {
-        if (!avatarFile) return;
-        setIsSavingAvatar(true); setAvatarMsg(""); setAvatarErr(false);
-        try {
-            const formData = new FormData();
-            formData.append("avatar", avatarFile);
-            const res = await fetch("/api/adviser/avatar", { method: "POST", body: formData });
-            const json = await res.json();
-            if (!json.success) throw new Error(json.message);
-            setAvatarMsg("Profile picture updated successfully!");
-            onProfileUpdated();
-            window.dispatchEvent(new Event("adviser-profile-updated"));
-            setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2500);
-        } catch (e: any) {
-            setAvatarErr(true); setAvatarMsg(e.message || "Failed to upload photo.");
-        } finally {
-            setIsSavingAvatar(false);
-        }
-    }
-
-    async function handleRemoveAvatar() {
-        setIsSavingAvatar(true); setAvatarMsg(""); setAvatarErr(false);
-        try {
-            const res = await fetch("/api/adviser/avatar", { method: "DELETE" });
-            const json = await res.json();
-            if (!json.success) throw new Error(json.message);
-            setAvatarPreview(null); setAvatarFile(null);
-            setAvatarMsg("Profile picture removed.");
-            onProfileUpdated();
-            window.dispatchEvent(new Event("adviser-profile-updated"));
-            setTimeout(() => { setAvatarMsg(""); setView("menu"); }, 2000);
-        } catch (e: any) {
-            setAvatarErr(true); setAvatarMsg(e.message || "Failed to remove photo.");
-        } finally {
-            setIsSavingAvatar(false);
-        }
-    }
-
     const pwChecks = checkPassword(newPw);
     const pwValid = pwChecks.length && pwChecks.uppercase && pwChecks.numOrSym;
-    const allSections = (profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []);
-    const advisoryClass = profile.grade && allSections.length
-        ? `${formatGradeLabel(profile.grade)} · ${allSections.join(" & ")}`
-        : "No section assigned";
 
     // Close on Escape
     useEffect(() => {
@@ -251,7 +190,7 @@ function SettingsModal({
         return () => window.removeEventListener("keydown", handler);
     }, [onClose]);
 
-    function navigate(dest: "personal-info" | "password" | "profile-picture") {
+    function navigate(dest: "personal-info" | "password") {
         if (verifiedPw) { setView(dest); }
         else { setPendingNav(dest); setView("auth"); }
     }
@@ -334,14 +273,12 @@ function SettingsModal({
         "auth": "Verify Identity",
         "personal-info": "Edit Personal Information",
         "password": "Change Password",
-        "profile-picture": "Change Profile Picture",
     };
     const viewSubtitle: Record<SettingsView, string> = {
         "menu": "Manage your profile and security",
         "auth": "Confirm your identity to continue",
         "personal-info": "Changes require ICT approval",
         "password": "No approval needed for password changes",
-        "profile-picture": "Upload a new photo — no approval needed",
     };
 
     return (
@@ -356,7 +293,7 @@ function SettingsModal({
             >
                 {/* Header */}
                 <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
-                    {(view === "personal-info" || view === "password" || view === "auth" || view === "profile-picture") && (
+                    {(view === "personal-info" || view === "password" || view === "auth") && (
                         <button
                             type="button"
                             onClick={() => setView("menu")}
@@ -380,19 +317,6 @@ function SettingsModal({
                     {/* ── MENU ── */}
                     {view === "menu" && (
                         <div className="p-5 space-y-3">
-                            {/* Profile chip */}
-                            <div className="flex items-center gap-3 bg-slate-50 rounded-xl border border-slate-100 px-4 py-3 mb-2">
-                                <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white text-sm font-extrabold shrink-0 overflow-hidden">
-                                    {avatarPreview
-                                        ? <img src={avatarPreview} alt="avatar" className="w-full h-full object-cover" />
-                                        : getInitials(profile.first_name, profile.last_name)}
-                                </div>
-                                <div className="min-w-0">
-                                    <p className="text-sm font-bold text-slate-800 truncate">{profile.first_name} {profile.last_name}</p>
-                                    <p className="text-xs text-slate-400 truncate">{profile.email}</p>
-                                </div>
-                            </div>
-
                             {/* Menu items */}
                             {[
                                 {
@@ -820,93 +744,6 @@ function SettingsModal({
                         </div>
                     )}
 
-                    {/* ── PROFILE PICTURE ── */}
-                    {view === "profile-picture" && (
-                        <div className="space-y-5 p-4 sm:p-6">
-                            <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
-                                <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
-                                <p className="text-xs text-emerald-700">
-                                    Profile picture changes take effect <strong>immediately</strong> — no Principal approval needed.
-                                </p>
-                            </div>
-
-                            {/* Avatar preview */}
-                            <div className="flex flex-col items-center gap-4 py-2">
-                                <div className="relative">
-                                    <div className="w-28 h-28 rounded-full overflow-hidden ring-4 ring-slate-100 shadow-md bg-emerald-600 flex items-center justify-center text-white text-3xl font-extrabold">
-                                        {avatarPreview
-                                            ? <img src={avatarPreview} alt="Preview" className="w-full h-full object-cover" />
-                                            : getInitials(profile.first_name, profile.last_name)}
-                                    </div>
-                                    {/* Camera overlay button */}
-                                    <label
-                                        htmlFor="avatar-upload"
-                                        className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-emerald-500 hover:bg-emerald-600 border-2 border-white flex items-center justify-center cursor-pointer transition-colors shadow"
-                                        title="Upload photo"
-                                    >
-                                        <Camera className="w-4 h-4 text-white" />
-                                    </label>
-                                    <input
-                                        id="avatar-upload"
-                                        type="file"
-                                        accept="image/*"
-                                        className="hidden"
-                                        onChange={handleAvatarFileChange}
-                                    />
-                                </div>
-                                <div className="text-center">
-                                    <p className="text-sm font-bold text-slate-700">{profile.first_name} {profile.last_name}</p>
-                                    <p className="text-xs text-slate-400 mt-0.5">Class Adviser</p>
-                                </div>
-                            </div>
-
-                            {/* Upload area */}
-                            <label
-                                htmlFor="avatar-upload-drop"
-                                className="flex flex-col items-center justify-center gap-2 w-full rounded-xl border-2 border-dashed border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40 transition-all cursor-pointer py-6 px-4"
-                            >
-                                <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
-                                    <ImagePlus className="w-5 h-5 text-slate-400" />
-                                </div>
-                                <p className="text-sm font-semibold text-slate-600">
-                                    {avatarFile ? avatarFile.name : "Click to select a photo"}
-                                </p>
-                                <p className="text-xs text-slate-400">PNG, JPG, GIF up to 5 MB</p>
-                                <input
-                                    id="avatar-upload-drop"
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    onChange={handleAvatarFileChange}
-                                />
-                            </label>
-
-                            {avatarMsg && (
-                                <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium ${avatarErr ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
-                                    {avatarErr ? <CircleAlert className="h-4 w-4 shrink-0" /> : <Check className="h-4 w-4 shrink-0" />}
-                                    {avatarMsg}
-                                </div>
-                            )}
-
-                            <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:gap-3">
-                                <button type="button" onClick={handleRemoveAvatar} disabled={isSavingAvatar}
-                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-semibold text-red-500 transition-colors hover:bg-red-50 disabled:opacity-50 sm:w-auto sm:shrink-0">
-                                    <Trash2 className="h-4 w-4" /> Remove
-                                </button>
-                                <button type="button" onClick={() => setView("menu")}
-                                    className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
-                                    Cancel
-                                </button>
-                                <button type="button" onClick={handleSaveAvatar}
-                                    disabled={!avatarFile || isSavingAvatar}
-                                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50 sm:flex-1">
-                                    {isSavingAvatar
-                                        ? <><RefreshCw className="h-4 w-4 animate-spin" /> Saving…</>
-                                        : <><Camera className="h-4 w-4" /> Save Photo</>}
-                                </button>
-                            </div>
-                        </div>
-                    )}
                 </div>
             </div>
         </div>
@@ -1115,7 +952,7 @@ export default function AdviserProfilePage() {
                                     <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                                     <p className="text-xs text-amber-700">
                                         To edit your profile or change your password, use the <strong>Settings</strong> button at the top right.
-                                        Profile changes require <strong>ICT approval</strong>; password and photo changes take effect immediately.
+                                        Profile changes require <strong>ICT approval</strong>; password changes take effect immediately.
                                     </p>
                                 </div>
                             </div>

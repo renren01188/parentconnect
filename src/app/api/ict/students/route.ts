@@ -15,7 +15,6 @@ type ParentAccountLink = {
   parent_last_name?: string | null;
   parent_suffix?: string | null;
   password_set?: unknown;
-  requires_account_setup?: unknown;
   archive_status?: string | null;
 };
 
@@ -39,7 +38,7 @@ function completedParentLink(parent: ParentAccountLink): DisplayParentLink | nul
   const id = Number(parent.id);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   if (!parentAccountIsVisible(parent)) return null;
-  if (!hasCompletedParentSignup([id], parent.password_set, parent.requires_account_setup)) return null;
+  if (!hasCompletedParentSignup([id], parent.password_set)) return null;
   return { id, name: parentAccountName(parent) };
 }
 
@@ -127,11 +126,11 @@ export async function GET(req: NextRequest) {
 
     // ── 2. Fetch parents via parent_student_links ──────────────
     const studentIds = students.map((s: any) => s.student_id);
-    const parentColumns = "id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, requires_account_setup, archive_status";
+    const parentColumns = "id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, archive_status";
     const [linksResult, directParentsResult] = await Promise.all([
       supabase
         .from("parent_student_links")
-        .select("student_id, parents!inner(id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, requires_account_setup, archive_status)")
+        .select("student_id, parents!inner(id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, archive_status)")
         .in("student_id", studentIds),
       supabase
         .from("parents")

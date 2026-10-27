@@ -48,6 +48,8 @@ export interface Report {
   escalatedToGuidance?: boolean;
   /** True when Guidance escalated the concern onward to Principal */
   escalatedToPrincipal?: boolean;
+  /** Server-authorized Principal access to the complete report conversation. */
+  conversationAvailable?: boolean;
   /** True after Guidance has opened the escalated concern */
   guidanceSeen?: boolean;
   /** True when an escalated report was resolved by Guidance */

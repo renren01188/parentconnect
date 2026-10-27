@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import PrincipalNotificationBell from "./components/PrincipalNotificationBell";
 
 // ─── Color Palette ───────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -410,8 +411,11 @@ export default function Page() {
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, color: GRAY_800 }}>Dashboard</h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: PRIMARY }}>Welcome back, {principalName}! Here&apos;s what&apos;s happening today.</p>
         </div>
-        <div className="pd-date-chip">
-          <Icons.Calendar /><span>{new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" }).format(new Date())}</span>
+        <div className="pd-header-actions">
+          <PrincipalNotificationBell />
+          <div className="pd-date-chip">
+            <Icons.Calendar /><span>{new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" }).format(new Date())}</span>
+          </div>
         </div>
       </div>
 
@@ -612,11 +616,19 @@ export default function Page() {
           background: ${WHITE};
           border: 1px solid ${GRAY_200};
           border-radius: 10px;
+          box-sizing: border-box;
+          height: 38px;
           padding: 8px 14px;
           font-size: 13px;
           color: ${GRAY_600};
           font-weight: 500;
           white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .pd-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
           flex-shrink: 0;
         }
         .pd-stats {
@@ -701,7 +713,7 @@ export default function Page() {
           .pd-wrap { padding: 16px 12px 20px; }
           .pd-stats { grid-template-columns: repeat(2, 1fr); gap: 10px; }
           .pd-header { flex-wrap: wrap; }
-          .pd-date-chip { width: 100%; justify-content: center; }
+          .pd-header-actions { width: 100%; justify-content: flex-end; }
           .pd-attendance-wrap { flex-direction: column; }
           .pd-attendance-legend { flex-direction: row; flex-wrap: wrap; gap: 10px; width: 100%; margin-top: 8px; }
           .pd-list-item { flex-wrap: wrap; gap: 8px; }

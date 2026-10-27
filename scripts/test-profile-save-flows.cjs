@@ -10,6 +10,8 @@ const parentRoute = read("src/app/api/parents/me/route.ts");
 const parentProfile = read("src/app/dashboard/parent/profile/page.tsx");
 const adviserProfile = read("src/app/dashboard/adviser/profile/page.tsx");
 const guidanceProfile = read("src/app/dashboard/guidance/profile/page.tsx");
+const principalProfile = read("src/app/dashboard/principal/profile/page.tsx");
+const ictProfile = read("src/app/dashboard/ict/profile/page.tsx");
 const ictRoute = read("src/app/api/ict/me/route.ts");
 
 const parentPatch = parentRoute.match(/export async function PATCH[\s\S]*?(?=export async function PUT)/)?.[0] || "";
@@ -46,5 +48,22 @@ assert.match(adviserProfile, /if \(!res\.ok \|\| !json\?\.success\)/);
 const ictPatch = ictRoute.match(/export async function PATCH[\s\S]*?(?=\n}\n?$)/)?.[0] || ictRoute;
 assert.match(ictRoute, /issueDashboardIdleSession/);
 assert.match(ictPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("ict_token", newToken, dashboardSessionCookieOptions\);/);
+
+// Account settings must remain focused on personal information and password
+// management. Dashboard-level initials and avatars are intentionally outside
+// this check.
+for (const [role, source] of [
+  ["Parent", parentProfile],
+  ["Adviser", adviserProfile],
+  ["Guidance", guidanceProfile],
+  ["Principal", principalProfile],
+  ["ICT", ictProfile],
+]) {
+  assert.doesNotMatch(
+    source,
+    /Default Avatar|Change Profile Picture|Choose Photo|Save Photo|Upload Photo|Change Photo|type="file"/,
+    `${role} account settings must not offer an avatar or profile-photo control.`,
+  );
+}
 
 console.log("profile save flow checks passed");

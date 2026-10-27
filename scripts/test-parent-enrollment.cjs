@@ -1,0 +1,37 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+
+const signup = read("src/app/api/parents/signup/route.ts");
+const signupOtp = read("src/app/api/parents/signup-otp/route.ts");
+const verifyTemporaryPassword = read("src/app/api/parents/verify-temp-password/route.ts");
+const otp = read("src/lib/parentVerificationOtp.ts");
+const guardianPage = read("src/app/login/guardian/page.tsx");
+const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx");
+
+// Normal signup verifies the claimed family role and offers email or SMS
+// verification without creating a direct-import-only Parent account.
+assert.match(signup, /verifyGoogleRecaptcha/);
+assert.match(signup, /\.in\("role", \["Father", "Mother", "Guardian"\]\)/);
+assert.match(signup, /const verificationMethod = email \? "email" : "sms"/);
+assert.match(signup, /verificationMethod: "sms"/);
+assert.match(signup, /redirectTo: "\/login\/guardian\/send-otp"/);
+assert.match(guardianPage, /fetch\("\/api\/parents\/signup"/);
+assert.match(guardianPage, /relationship: "Father"/);
+assert.match(guardianPage, /GUARDIAN_RELATIONSHIP_OPTIONS/);
+
+// Phone signup uses the durable OTP table with bounded, one-time verification
+// before the account receives its normal temporary-password session.
+assert.match(signupOtp, /issueParentOtp\(/);
+assert.match(otp, /from\("parent_verification_otps"\)/);
+assert.match(verifyTemporaryPassword, /verifyParentOtp\(signup\.otpChallengeId, "signup", otp\)/);
+assert.match(verifyTemporaryPassword, /redirectTo: "\/login\/guardian\/set-password"/);
+
+// Password recovery remains available from the normal guardian entry point.
+assert.match(forgotPasswordPage, /Forgot password\?/);
+
+console.log("Normal Parent enrollment and SMS OTP checks passed.");

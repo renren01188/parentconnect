@@ -1,83 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCheck, FileText, TicketCheck } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
-import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
-import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
-import { mergeNotificationFeed } from "@/lib/notificationFeed";
-
-type Notification = {
-  id: string;
-  type: string;
-  category: "report";
-  reportId?: number;
-  title: string;
-  message: string;
-  time: string;
-  read: boolean;
-};
 
 export default function PrincipalNotificationsPage() {
-  const { refreshCounts } = useNotifContext();
+  const {
+    notifications: items,
+    notificationsLoading: loading,
+    reportCount: reportUnreadCount,
+    refreshNotifications,
+    markNotificationsRead,
+    markAllNotificationsRead,
+  } = useNotifContext();
   const router = useRouter();
-  const [items, setItems] = useState<Notification[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reportUnreadCount, setReportUnreadCount] = useState(0);
-  const fetchSequence = useRef(0);
-
-  const loadNotifications = useCallback(async (): Promise<void> => {
-    const requestId = ++fetchSequence.current;
-    const response = await fetch("/api/principal/notifications", { cache: "no-store" });
-    const data = await response.json().catch(() => null);
-    if (requestId !== fetchSequence.current || !response.ok || !data?.success) return;
-    const rows = (data.notifications ?? []) as Notification[];
-    // Keep a card visible while an older page-open request finishes after a
-    // newer Realtime invalidation. The deterministic notification keys also
-    // make duplicate broadcasts harmless.
-    setItems((current) => mergeNotificationFeed(current, rows));
-    setReportUnreadCount(Number(data.reportUnreadCount ?? 0));
-  }, []);
-
-  const markRowsRead = useCallback(async (rows: Notification[]) => {
-    const keys = rows.filter((item) => !item.read).map((item) => item.id);
-    if (!keys.length) return;
-
-    // Viewing this page acknowledges notification cards only. A report remains
-    // new in the Reports sidebar until the Principal opens that report.
-    setItems((current) => current.map((item) => keys.includes(item.id) ? { ...item, read: true } : item));
-
-    const response = await fetch("/api/principal/notifications/read", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mark_all: true, notif_keys: keys }),
-    });
-    if (!response.ok) {
-      await loadNotifications();
-      return;
-    }
-    await refreshCounts();
-  }, [loadNotifications, refreshCounts]);
-
-  const markAll = useCallback(async () => {
-    await markRowsRead(items);
-  }, [items, markRowsRead]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      loadNotifications()
-        .finally(() => setLoading(false));
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadNotifications]);
-
-  useVisibleRefresh(loadNotifications);
-  useSessionInvalidation(({ scope }) => {
-    if (!scope || scope === "reports" || scope === "notifications" || scope === "announcements") {
-      return loadNotifications();
-    }
-  });
+    void refreshNotifications();
+  }, [refreshNotifications]);
 
   return (
     <div className="min-h-full min-w-0 overflow-x-clip bg-slate-50 p-4 sm:p-6">
@@ -89,7 +30,7 @@ export default function PrincipalNotificationsPage() {
             <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-700">{reportUnreadCount} unread report{reportUnreadCount === 1 ? "" : "s"}</span>
           </div>
         </div>
-        <button onClick={() => void markAll()} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border bg-white px-4 py-2 text-sm font-semibold text-slate-600">
+        <button onClick={() => void markAllNotificationsRead()} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border bg-white px-4 py-2 text-sm font-semibold text-slate-600">
           <CheckCheck className="h-4 w-4" /> Mark All Read
         </button>
       </div>
@@ -105,13 +46,13 @@ export default function PrincipalNotificationsPage() {
               tabIndex={item.reportId ? 0 : undefined}
               onClick={() => {
                 if (!item.reportId) return;
-                void markRowsRead([item]);
+                void markNotificationsRead([item]);
                 router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
               }}
               onKeyDown={(event) => {
                 if (!item.reportId || (event.key !== "Enter" && event.key !== " ")) return;
                 event.preventDefault();
-                void markRowsRead([item]);
+                void markNotificationsRead([item]);
                 router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
               }}
               className={`flex min-w-0 gap-3 border-b border-slate-100 p-4 last:border-0 ${item.read ? "" : "bg-violet-50/60"} ${item.reportId ? "cursor-pointer transition hover:bg-sky-50" : ""}`}

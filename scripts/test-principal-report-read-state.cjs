@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,6 +11,7 @@ const readRoute = read("src/app/api/principal/notifications/read/route.ts");
 const context = read("src/app/dashboard/principal/context/NotificationContext.tsx");
 const sidebar = read("src/app/dashboard/principal/components/Sidebar.tsx");
 const notificationsPage = read("src/app/dashboard/principal/notifications/page.tsx");
+const notificationBell = read("src/app/dashboard/principal/components/PrincipalNotificationBell.tsx");
 
 assert.match(
   notificationsRoute,
@@ -30,7 +32,11 @@ assert.match(readRoute, /principal_notification_reads/);
 assert.match(readRoute, /publishRealtimeInvalidation\(\[\{ role: "principal", id: principal\.id \}\], "notifications"\)/);
 assert.match(context, /setReportCount\(Number\(data\?\.reportUnreadCount \?\? 0\)\)/);
 assert.match(context, /setPrincipalNotifCount\(Number\(data\?\.unreadCount \?\? 0\)\)/);
-assert.match(sidebar, /reports: reportCount \+ adviserMessageCount,[\s\S]*?notifications: principalNotifCount/);
-assert.match(notificationsPage, /await refreshCounts\(\)/);
+assert.match(sidebar, /reports: reportCount \+ adviserMessageCount,[\s\S]*?ict: ictMessageCount/);
+assert.doesNotMatch(sidebar, /principalNotifCount|notifications:/);
+assert.match(context, /mergeNotificationFeed\(current, snapshot\)/);
+assert.match(notificationsPage, /markAllNotificationsRead\(\)/);
+assert.match(notificationsPage, /markNotificationsRead\(\[item\]\)/);
+assert.match(notificationBell, /principalNotifCount/);
 
 console.log("Principal report and notification read-state checks passed.");

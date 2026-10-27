@@ -14,11 +14,10 @@ const NAV_ITEMS: {
   label: string;
   icon: React.ElementType;
   href: string;
-  badgeKey?: "reports" | "ict" | "announcements" | "notifications";
+  badgeKey?: "reports" | "ict" | "announcements";
 }[] = [
     { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard/principal" },
     { label: "Reports", icon: FileText, href: "/dashboard/principal/reports", badgeKey: "reports" },
-    { label: "Notifications", icon: Bell, href: "/dashboard/principal/notifications", badgeKey: "notifications" },
     { label: "Contact ICT", icon: Monitor, href: "/dashboard/principal/contact-ict", badgeKey: "ict" },
 
     { label: "Attendance Summary", icon: CreditCard, href: "/dashboard/principal/AttendanceSummary" },
@@ -48,12 +47,11 @@ function getInitials(principal: PrincipalSummary | null) {
 
 export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
-  const { reportCount, adviserMessageCount, ictMessageCount, principalNotifCount } = useNotifContext();
+  const { reportCount, adviserMessageCount, ictMessageCount } = useNotifContext();
   const [principal, setPrincipal] = useState<PrincipalSummary | null>(null);
   const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
     reports: reportCount + adviserMessageCount,
     ict: ictMessageCount,
-    notifications: principalNotifCount,
   });
   const acknowledgedBadgePathRef = useRef<string | null>(null);
 

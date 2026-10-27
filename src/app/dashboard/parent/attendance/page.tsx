@@ -33,8 +33,9 @@ import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-type AttendanceStatus = "Present" | "Late" | "Absent" | "Excused";
+type AttendanceStatus = "On Time" | "Present" | "Late" | "Absent" | "Excused";
 type ExcuseStatus = "Pending" | "Declined" | "Approved";
+type AttendanceRecordingSource = "RFID Scan" | "Manual";
 
 interface AttendanceRecord {
     date: string;
@@ -42,7 +43,7 @@ interface AttendanceRecord {
     status: AttendanceStatus;
     timeIn: string;
     timeOut: string;
-    rfidScan: "Verified" | "Manual" | "None";
+    recordingSources: AttendanceRecordingSource[];
 }
 
 interface MonthData {
@@ -97,6 +98,7 @@ const MAX_ATTACHMENTS = 1;
 // ─────────────────────────────────────────────────────────────────────────────
 function statusBadgeClass(status: AttendanceStatus) {
     switch (status) {
+        case "On Time":
         case "Present": return "bg-green-500 text-white";
         case "Late": return "bg-yellow-400 text-white";
         case "Absent": return "bg-red-500 text-white";
@@ -130,10 +132,22 @@ function formatLastUpdated(value: string) {
     }).format(timestamp);
 }
 
-function rfidBadgeClass(scan: string) {
-    if (scan === "Verified") return "bg-sky-500 text-white";
-    if (scan === "Manual") return "bg-amber-400 text-white";
-    return "bg-slate-200 text-slate-500";
+function recordingSourceBadgeClass(source: AttendanceRecordingSource) {
+    return source === "RFID Scan" ? "bg-sky-500 text-white" : "bg-amber-400 text-white";
+}
+
+function attendanceDateParts(value: string) {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const formatter = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", {
+        ...options,
+        timeZone: "UTC",
+    }).format(date);
+    return {
+        monthLabel: formatter({ month: "long", year: "numeric" }),
+        dateLabel: formatter({ month: "short", day: "numeric", year: "numeric" }),
+        dayLabel: formatter({ weekday: "long" }),
+    };
 }
 
 interface ExcuseTrackerItem {
@@ -583,16 +597,19 @@ export default function ParentAttendancePage() {
                     // Group records by month
                     const monthMap = new Map<string, AttendanceRecord[]>();
                     for (const rec of (attData.records || [])) {
-                        const d = new Date(rec.attendance_date);
-                        const label = d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+                        const attendanceDate = attendanceDateParts(rec.attendance_date);
+                        const label = attendanceDate.monthLabel;
+                        const recordingSources: AttendanceRecordingSource[] = [];
+                        if (rec.rfid_scan) recordingSources.push("RFID Scan");
+                        if (rec.manual_attendance) recordingSources.push("Manual");
                         if (!monthMap.has(label)) monthMap.set(label, []);
                         monthMap.get(label)!.push({
-                            date: d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-                            day: d.toLocaleDateString("en-US", { weekday: "long" }),
+                            date: attendanceDate.dateLabel,
+                            day: attendanceDate.dayLabel,
                             status: rec.status as AttendanceStatus,
                             timeIn: rec.time_in ? formatTime(rec.time_in) : "—",
                             timeOut: rec.time_out ? formatTime(rec.time_out) : "—",
-                            rfidScan: rec.via === "RFID" ? "Verified" : rec.via === "Manual" ? "Manual" : "None",
+                            recordingSources,
                         });
                     }
 
@@ -877,7 +894,7 @@ export default function ParentAttendancePage() {
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="border-b border-slate-100">
-                                        {["Date", "Day", "Status", "Time In", "Time Out", "RFID Scan"].map(h => (
+                                        {["Date", "Day", "Status", "Time In", "Time Out", "Recorded Via"].map(h => (
                                             <th key={h} className="px-6 py-3 text-left text-xs font-semibold text-slate-400">{h}</th>
                                         ))}
                                     </tr>
@@ -899,10 +916,14 @@ export default function ParentAttendancePage() {
                                             <td className="px-6 py-3.5 text-sm text-slate-600">{rec.timeIn}</td>
                                             <td className="px-6 py-3.5 text-sm text-slate-600">{rec.timeOut}</td>
                                             <td className="px-6 py-3.5">
-                                                {rec.rfidScan !== "None" ? (
-                                                    <span className={`inline-flex px-2.5 py-1 rounded-lg text-xs font-semibold ${rfidBadgeClass(rec.rfidScan)}`}>
-                                                        {rec.rfidScan}
-                                                    </span>
+                                                {rec.recordingSources.length > 0 ? (
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {rec.recordingSources.map(source => (
+                                                            <span key={source} className={`inline-flex px-2.5 py-1 rounded-lg text-xs font-semibold ${recordingSourceBadgeClass(source)}`}>
+                                                                {source}
+                                                            </span>
+                                                        ))}
+                                                    </div>
                                                 ) : (
                                                     <span className="text-slate-300 text-xs">—</span>
                                                 )}
@@ -925,7 +946,7 @@ export default function ParentAttendancePage() {
                                     <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                                         <div><dt className="text-xs font-medium text-slate-400">Time In</dt><dd className="mt-0.5 font-medium text-slate-700">{rec.timeIn}</dd></div>
                                         <div><dt className="text-xs font-medium text-slate-400">Time Out</dt><dd className="mt-0.5 font-medium text-slate-700">{rec.timeOut}</dd></div>
-                                        <div className="col-span-2"><dt className="text-xs font-medium text-slate-400">RFID Scan</dt><dd className="mt-1">{rec.rfidScan !== "None" ? <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${rfidBadgeClass(rec.rfidScan)}`}>{rec.rfidScan}</span> : <span className="text-sm text-slate-400">—</span>}</dd></div>
+                                        <div className="col-span-2"><dt className="text-xs font-medium text-slate-400">Recorded Via</dt><dd className="mt-1">{rec.recordingSources.length > 0 ? <span className="flex flex-wrap gap-1.5">{rec.recordingSources.map(source => <span key={source} className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${recordingSourceBadgeClass(source)}`}>{source}</span>)}</span> : <span className="text-sm text-slate-400">—</span>}</dd></div>
                                     </dl>
                                 </article>
                             ))}
