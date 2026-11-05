@@ -287,8 +287,15 @@ export default function NotificationsPage() {
     const [markingId, setMarkingId] = useState<string | null>(null);
     const [openingAnnouncementId, setOpeningAnnouncementId] = useState<string | null>(null);
     const fetchSequence = useRef(0);
+    const hasAcknowledgedNotificationsEntry = useRef(false);
 
-    const fetchNotifications = useCallback(async ({ refresh = false }: { refresh?: boolean } = {}) => {
+    const fetchNotifications = useCallback(async ({
+        refresh = false,
+        markCurrentAsRead = false,
+    }: {
+        refresh?: boolean;
+        markCurrentAsRead?: boolean;
+    } = {}) => {
         const requestId = ++fetchSequence.current;
         if (refresh) setIsRefreshing(true);
         try {
@@ -303,9 +310,37 @@ export default function NotificationsPage() {
                 (Array.isArray(data.notifications) ? data.notifications : [])
                     .map((notification: Notification) => [notification.id, notification])
             ).values()] as Notification[];
-            setNotifs(uniqueNotifications);
+
+            // Entering Notifications acknowledges only this GET snapshot.
+            // A notification that arrives after it was fetched is not in
+            // `unreadKeys`, so it remains unread and restores the sidebar
+            // badge through the existing realtime refresh.
+            const unreadKeys = [...new Set(uniqueNotifications
+                .filter((notification) => !notification.read)
+                .map((notification) => notification.id))];
+            let displayedNotifications = uniqueNotifications;
+            if (markCurrentAsRead && unreadKeys.length > 0) {
+                const readResponse = await fetch("/api/adviser/notifications/read", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ mark_all: true, notif_keys: unreadKeys }),
+                });
+                const readData = await readResponse.json().catch(() => null);
+                if (!readResponse.ok || !readData?.success) {
+                    throw new Error("Unable to mark current notifications as read.");
+                }
+                displayedNotifications = uniqueNotifications.map((notification) => ({
+                    ...notification,
+                    read: true,
+                }));
+            }
+            if (requestId !== fetchSequence.current) return false;
+
+            setNotifs(displayedNotifications);
             setLoadError(null);
-            setNotifUnreadCount(Number(data.sidebarUnreadCount ?? data.unreadCount ?? 0));
+            setNotifUnreadCount(markCurrentAsRead
+                ? 0
+                : Number(data.sidebarUnreadCount ?? data.unreadCount ?? 0));
             return true;
         } catch (error) {
             if (requestId === fetchSequence.current) {
@@ -321,7 +356,13 @@ export default function NotificationsPage() {
     }, [setNotifUnreadCount]);
 
     useEffect(() => {
-        void fetchNotifications();
+        // The first fetch after navigating to this page is the only one that
+        // acknowledges notifications. Realtime and manual refreshes must
+        // keep later arrivals unread until the Adviser visits again.
+        if (!hasAcknowledgedNotificationsEntry.current) {
+            hasAcknowledgedNotificationsEntry.current = true;
+            void fetchNotifications({ markCurrentAsRead: true });
+        }
 
         // The layout owns the single real-time subscription. Batch the
         // resulting page refreshes so a publication can never render a

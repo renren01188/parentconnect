@@ -213,56 +213,6 @@ function AttachmentChips({ attachments, mine = false }: { attachments?: MessageA
   return <MessageAttachments attachments={attachments} mine={mine} className="mt-2 flex max-w-[78%] flex-wrap gap-2" />;
 }
 
-type ResolvedReportParentMessage = {
-  id: number;
-  sender: "principal" | "parent";
-  senderName: string;
-  message: string;
-  attachments: MessageAttachment[];
-  sentAt: string;
-};
-
-function PrincipalReportParentMessages({
-  messages,
-  loading,
-}: {
-  messages: ResolvedReportParentMessage[];
-  loading: boolean;
-}) {
-  return (
-    <section className="border-b border-violet-100 bg-violet-50/50 px-4 py-3 sm:px-6" aria-label="Principal messages to Parent">
-      <div className="flex items-center gap-2">
-        <MessageSquare className="h-4 w-4 text-violet-600" />
-        <h3 className="text-xs font-extrabold text-violet-900">Principal Messages to Parent</h3>
-      </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-violet-700">Separate School Messages for this resolved report. They do not reopen the locked report conversation.</p>
-      {loading ? (
-        <p className="mt-3 text-xs font-semibold text-violet-500">Loading messages…</p>
-      ) : messages.length === 0 ? (
-        <p className="mt-3 rounded-xl border border-dashed border-violet-200 bg-white/70 px-3 py-2 text-xs font-semibold text-violet-700">No separate Principal message has been sent to the Parent.</p>
-      ) : (
-        <div className="mt-3 max-h-52 space-y-3 overflow-y-auto pr-1">
-          {messages.map((entry) => {
-            const mine = entry.sender === "principal";
-            return (
-              <div key={entry.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[90%] rounded-2xl px-3 py-2.5 text-sm shadow-sm ${mine ? "rounded-tr-none bg-violet-600 text-white" : "rounded-tl-none border border-violet-100 bg-white text-slate-700"}`}>
-                  <div className={`mb-1 flex items-center gap-2 text-[10px] font-semibold ${mine ? "text-violet-100" : "text-slate-400"}`}>
-                    <span>{mine ? "You" : entry.senderName}</span>
-                    <span>{entry.sentAt}</span>
-                  </div>
-                  {entry.message && <p className="whitespace-pre-wrap leading-relaxed">{entry.message}</p>}
-                  <MessageAttachments attachments={entry.attachments} mine={mine} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function ResolvedReportParentMessageModal({
   report,
   onClose,
@@ -1423,13 +1373,10 @@ function PrincipalReportsPageContent() {
   const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
   const favoriteRequestVersionRef = useRef(0);
   const favoriteSaveInFlightRef = useRef<Set<number>>(new Set());
-  const reportParentMessagesRequestVersionRef = useRef<Record<number, number>>({});
   // A Realtime message can arrive before the first Reports-message snapshot
   // resolves. Only allow the newest snapshot to replace the selected thread.
   const principalMessagesRequestVersionRef = useRef(0);
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
-  const [reportParentMessages, setReportParentMessages] = useState<Record<number, ResolvedReportParentMessage[]>>({});
-  const [loadingReportParentMessageId, setLoadingReportParentMessageId] = useState<number | null>(null);
   const [sendParentMessageReport, setSendParentMessageReport] = useState<Report | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
@@ -1658,26 +1605,6 @@ function PrincipalReportsPageContent() {
     }
   }, []);
 
-  const loadResolvedReportParentMessages = useCallback(async (reportId: number) => {
-    const requestVersion = (reportParentMessagesRequestVersionRef.current[reportId] ?? 0) + 1;
-    reportParentMessagesRequestVersionRef.current[reportId] = requestVersion;
-    setLoadingReportParentMessageId(reportId);
-    try {
-      const res = await fetch(`/api/reports/principal/${reportId}/parent-message`, { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.message || "Unable to load Principal messages for this report.");
-      if (reportParentMessagesRequestVersionRef.current[reportId] !== requestVersion) return;
-      setReportParentMessages((current) => ({
-        ...current,
-        [reportId]: (data?.messages ?? []) as ResolvedReportParentMessage[],
-      }));
-    } finally {
-      if (reportParentMessagesRequestVersionRef.current[reportId] === requestVersion) {
-        setLoadingReportParentMessageId((current) => current === reportId ? null : current);
-      }
-    }
-  }, []);
-
   const refreshReportDetailAfterInFlight = useCallback(async (id: number) => {
     // The initial detail request can still be running when its first
     // Realtime message arrives. Waiting for that stale snapshot and then
@@ -1742,17 +1669,27 @@ function PrincipalReportsPageContent() {
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.message || "Unable to send the Principal message to the Parent.");
 
-    const created = data?.message as ResolvedReportParentMessage | undefined;
-    if (created?.id) {
-      setReportParentMessages((current) => ({
-        ...current,
-        [report.id]: [...(current[report.id] ?? []).filter((entry) => entry.id !== created.id), created],
-      }));
-    }
-    // The normal Principal inbox also receives this staff-message event, but
-    // updating it now makes the sender's screen coherent before Realtime
-    // reaches the current browser.
-    void loadPrincipalMessages();
+    const createdMessageId = Number(data?.message?.id);
+    const conversationId = Number.isSafeInteger(createdMessageId) && createdMessageId > 0
+      ? `staff-message:${createdMessageId}`
+      : undefined;
+
+    // This is a separate School Message, not an entry in the locked report
+    // conversation. Move the sender to the existing Messages panel, where
+    // the normal staff-message thread is rendered for both participants.
+    setMainTab("Messages");
+    setSelectedParentKey(null);
+    setSelectedReport(null);
+    setViewStep("list");
+    setFilterTab("All");
+    setCategoryFilter("All");
+    setReplyText("");
+    setReplyAttachments([]);
+    setConversationReply("");
+    setConversationReplyAttachments([]);
+    setMobileConversationOpen(true);
+    if (conversationId) setSelectedConversationId(conversationId);
+    await loadPrincipalMessages(conversationId);
   }, [loadPrincipalMessages]);
 
   useEffect(() => {
@@ -1791,26 +1728,17 @@ function PrincipalReportsPageContent() {
     await Promise.all([
       loadPrincipalReports(),
       loadPrincipalMessages(),
-      canSendResolvedReportParentMessage(selectedReport)
-        ? loadResolvedReportParentMessages(selectedReport!.id)
-        : Promise.resolve(),
     ]);
-  }, [loadPrincipalMessages, loadPrincipalReports, loadResolvedReportParentMessages, selectedReport]);
+  }, [loadPrincipalMessages, loadPrincipalReports]);
 
   const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
     staffConversationTyping.onRealtimeEvent(event);
     if (event.kind === "typing") return;
     // This source has already excluded Contact ICT rows. Fetch it straight
-    // away so a staff New Message or reply appears in the open Reports panel.
-    // A report-linked Principal follow-up also reloads its separate panel
-    // without opening or altering the resolved report conversation.
-    await Promise.all([
-      loadPrincipalMessages(),
-      event.reportId && selectedReport?.id === event.reportId && canSendResolvedReportParentMessage(selectedReport)
-        ? loadResolvedReportParentMessages(event.reportId)
-        : Promise.resolve(),
-    ]);
-  }, [loadPrincipalMessages, loadResolvedReportParentMessages, selectedReport, staffConversationTyping]);
+    // away so a staff New Message or reply appears in the existing Messages
+    // panel without altering a report's locked conversation.
+    await loadPrincipalMessages();
+  }, [loadPrincipalMessages, staffConversationTyping]);
 
   const liveUpdateNotice = useReportMessagesRealtime(refreshPrincipalInbox, {
     onReportUpdate: handleLiveReportUpdate,
@@ -1834,14 +1762,6 @@ function PrincipalReportsPageContent() {
       setReplyError(error instanceof Error ? error.message : "Unable to load this conversation.");
     });
   }, [selectedReport, loadReportDetail]);
-
-  useEffect(() => {
-    const report = selectedReport;
-    if (!report || !canSendResolvedReportParentMessage(report)) return;
-    void loadResolvedReportParentMessages(report.id).catch((error) => {
-      console.warn("Unable to load separate Principal messages for this report:", error);
-    });
-  }, [loadResolvedReportParentMessages, selectedReport]);
 
   useEffect(() => {
     if (!Number.isSafeInteger(requestedReportId) || openedNotificationReportRef.current === requestedReportId) return;
@@ -2984,13 +2904,8 @@ function PrincipalReportsPageContent() {
                   // being replaced by the authoritative server response.
                   const conversationAvailable = selectedReport.conversationAvailable === true;
                   const canSendParentMessage = canSendResolvedReportParentMessage(selectedReport);
-                  const parentMessages = reportParentMessages[selectedReport.id] ?? [];
-                  const parentMessagesPanel = canSendParentMessage ? (
-                    <PrincipalReportParentMessages
-                      messages={parentMessages}
-                      loading={loadingReportParentMessageId === selectedReport.id}
-                    />
-                  ) : null;
+                  const resolvedByAdviserOrGuidance = isResolved
+                    && (selectedReport.resolvedByRole === "Adviser" || selectedReport.resolvedByRole === "Guidance");
                   const sendParentMessageButton = canSendParentMessage ? (
                     <button
                       type="button"
@@ -3020,8 +2935,6 @@ function PrincipalReportsPageContent() {
                           </div>
                         </div>
 
-                        {parentMessagesPanel}
-
                         <div className="relative flex-1 overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
                           <div aria-hidden="true" className="flex flex-col gap-4 blur-[7px] select-none pointer-events-none">
                             <div className="flex items-start gap-3">
@@ -3041,8 +2954,16 @@ function PrincipalReportsPageContent() {
                               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-violet-100">
                                 <Shield className="h-7 w-7 text-violet-600" />
                               </div>
-                              <p className="mt-3 text-sm font-extrabold text-slate-900">Conversation unavailable</p>
-                              <p className="mt-2 text-xs leading-relaxed text-slate-500">This conversation will be available after Guidance escalates the report to the Principal.</p>
+                              <p className="mt-3 text-sm font-extrabold text-slate-900">
+                                {resolvedByAdviserOrGuidance
+                                  ? `This report was resolved by ${selectedReport.resolvedByRole}.`
+                                  : "This report has not been escalated to the Principal."}
+                              </p>
+                              <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                                {resolvedByAdviserOrGuidance
+                                  ? "The original conversation is locked."
+                                  : "The original conversation is locked and becomes available only after Guidance escalates this report to the Principal."}
+                              </p>
                               {replyError && <p className="mt-3 text-xs font-semibold text-slate-400">The report details could not be refreshed, but this conversation remains locked.</p>}
                             </div>
                           </div>
@@ -3078,8 +2999,6 @@ function PrincipalReportsPageContent() {
                           </div>
                         )}
                       </div>
-
-                      {parentMessagesPanel}
 
                       <div
                         ref={reportMessagesRef}

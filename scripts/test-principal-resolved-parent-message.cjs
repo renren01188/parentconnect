@@ -45,21 +45,25 @@ assert.match(route, /scope: "staff-messages",[\s\S]*?reportId,/);
 assert.match(route, /after\(async \(\) =>[\s\S]*?sendStaffMessageEmail/);
 assert.match(route, /parentAccountCanAccess\(data\)/);
 
-// Parent replies keep the optional link, allowing the report-level panel to
-// display the separate thread while normal School Messages behavior remains.
+// Parent replies keep the optional link while normal School Messages behavior
+// remains unchanged.
 assert.match(staffMessages, /report_id: Number\(root\.report_id\) \|\| null/);
 assert.match(parentReports, /fetch\("\/api\/reports\/staff-messages\?role=parent/);
 
 // The Principal page uses a visible modal, client-side 10 MB validation, a
-// report-specific panel, and the existing staff-message Realtime scope.
+// report-specific sender action, then opens the existing Messages panel. The
+// separate School Message must never be rendered in the locked report thread.
 assert.match(principalReports, /function canSendResolvedReportParentMessage/);
 assert.match(principalReports, /report\.resolvedByRole === "Adviser" \|\| report\.resolvedByRole === "Guidance"/);
 assert.match(principalReports, /function ResolvedReportParentMessageModal/);
 assert.match(principalReports, /Send Message to Parent/);
 assert.match(principalReports, /is over the 10 MB attachment limit/);
-assert.match(principalReports, /function PrincipalReportParentMessages/);
-assert.match(principalReports, /Separate School Messages for this resolved report\. They do not reopen the locked report conversation\./);
-assert.match(principalReports, /fetch\(`\/api\/reports\/principal\/\$\{report\.id\}\/parent-message`/);
-assert.match(principalReports, /event\.reportId && selectedReport\?\.id === event\.reportId[\s\S]*?loadResolvedReportParentMessages/);
+assert.doesNotMatch(principalReports, /PrincipalReportParentMessages|Principal Messages to Parent/);
+assert.match(principalReports, /const conversationId = Number\.isSafeInteger\(createdMessageId\)[\s\S]*?`staff-message:\$\{createdMessageId\}`/);
+assert.match(principalReports, /setMainTab\("Messages"\)[\s\S]*?await loadPrincipalMessages\(conversationId\)/);
+assert.match(principalReports, /This report was resolved by \$\{selectedReport\.resolvedByRole\}\./);
+assert.match(principalReports, /The original conversation is locked\./);
+assert.match(principalReports, /This report has not been escalated to the Principal\./);
+assert.match(principalReports, /The original conversation is locked and becomes available only after Guidance escalates this report to the Principal\./);
 
 console.log("principal resolved Parent-message checks passed");

@@ -3526,11 +3526,7 @@ export default function AdviserAttendancePage() {
                                         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-center text-sm font-bold text-emerald-800">
                                             All attendance records have been recorded. Thank you!
                                         </div>
-                                    ) : (
-                                        <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-center text-xs leading-5 text-sky-800">
-                                            Rapid Tap accepts the next RFID immediately and saves scans in their tap order.
-                                        </div>
-                                    )}
+                                    ) : null}
                                     {rapidTapResults.length > 0 && (
                                         <div className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                                             {rapidTapResults.map((result) => (

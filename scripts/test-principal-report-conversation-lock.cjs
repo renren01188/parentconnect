@@ -128,7 +128,9 @@ assert.match(principalRoute, /\(summary \? listMessageSummaries : listMessages\)
 assert.match(principalStatusRoute, /report\.escalated_to_principal\s*\? await listMessages\(\[reportId\]\)\s*:\s*new Map\(\)/);
 assert.match(principalPage, /const conversationAvailable = selectedReport\.conversationAvailable === true/);
 assert.match(principalPage, /if \(!conversationAvailable\)/);
-assert.match(principalPage, /This conversation will be available after Guidance escalates the report to the Principal\./);
+assert.match(principalPage, /This report was resolved by \$\{selectedReport\.resolvedByRole\}\./);
+assert.match(principalPage, /This report has not been escalated to the Principal\./);
+assert.match(principalPage, /The original conversation is locked and becomes available only after Guidance escalates this report to the Principal\./);
 assert.match(principalPage, /blur-\[7px\] select-none pointer-events-none/);
 assert.match(principalPage, /refreshReportDetailAfterInFlight\(event\.reportId\)/);
 assert.doesNotMatch(principalPage, /unlockedReports|unlockReport|Start Conversation/);

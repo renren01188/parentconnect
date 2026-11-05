@@ -394,7 +394,8 @@ export async function GET() {
         retainedNotifications.sort((a, b) => new Date(b.rawTime).getTime() - new Date(a.rawTime).getTime());
         const unreadCount = retainedNotifications.filter(n => !n.read).length;
         // The sidebar uses the same durable per-notification read state as
-        // the list. Visiting this page must not acknowledge unrelated rows.
+        // the list. The Notifications page acknowledges only the IDs in its
+        // initial response; events that arrive afterward remain unread.
         const sidebarUnreadCount = unreadCount;
 
         return NextResponse.json({ success: true, notifications: retainedNotifications, unreadCount, sidebarUnreadCount });
