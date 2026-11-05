@@ -33,6 +33,8 @@ assert.match(reportForm, /Complete the CAPTCHA to enable Submit Report\./);
 assert.match(reportForm, /Terms and Agreement/);
 assert.match(reportForm, /records the submitter&apos;s IP address and device\/browser information/);
 assert.match(reportForm, /function sortGradeLevels/);
+assert.match(reportForm, /includeEmptyOption/);
+assert.match(reportForm, /onChange\(\"\"\); setOpen\(false\);/);
 
 // The endpoint remains the security boundary; client-side gating alone must
 // never be enough to save a public report.

@@ -53,12 +53,15 @@ function CustomSelect({
   options,
   onChange,
   disabled = false,
+  includeEmptyOption = false,
 }: {
   placeholder: string;
   value: string;
   options: string[];
   onChange: (v: string) => void;
   disabled?: boolean;
+  /** Makes the displayed placeholder an explicit, selectable empty value. */
+  includeEmptyOption?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
@@ -98,6 +101,18 @@ function CustomSelect({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div id={listId} role="listbox" className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+            {includeEmptyOption && (
+              <button
+                type="button"
+                role="option"
+                aria-selected={!value}
+                onClick={() => { onChange(""); setOpen(false); }}
+                className={`w-full text-left px-4 py-2.5 text-sm transition-colors hover:bg-amber-50
+                  ${!value ? "bg-amber-50 text-amber-700 font-semibold" : "text-slate-700"}`}
+              >
+                {placeholder}
+              </button>
+            )}
             {options.map(opt => (
               <button
                 key={opt}
@@ -494,6 +509,7 @@ export default function ReportPage() {
                         value={form.suffix}
                         options={SUFFIXES.filter(s => s !== "")}
                         onChange={v => set("suffix", v)}
+                        includeEmptyOption
                       />
                     </div>
                   </div>
