@@ -12,12 +12,14 @@ import {
   Search,
   Send,
   Shield,
+  Star,
   TriangleAlert,
   Upload,
   X,
 } from "lucide-react";
 import { type Report, type ReportStatus } from "../../adviser/data";
 import { UserAvatar } from "@/components/UserAvatar";
+import { ConcernExportModal } from "@/components/reports/ConcernExportModal";
 import { MessageAttachments } from "@/components/MessageAttachments";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
@@ -40,8 +42,6 @@ type MonitoringPriority = "low" | "medium" | "high";
 type MonitoringStatus = "Pending" | "Under Review" | "Accepted Ticket" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved";
 type MonitoringSourceFilter = "All" | "Parent" | "Student";
 type MonitoringStatusFilter = "All" | MonitoringStatus;
-type ExportFormat = "excel" | "pdf";
-
 type MonitoringEntry = {
   id: string;
   /** Immutable database timestamp used for sorting, filtering, and export. */
@@ -213,9 +213,191 @@ function AttachmentChips({ attachments, mine = false }: { attachments?: MessageA
   return <MessageAttachments attachments={attachments} mine={mine} className="mt-2 flex max-w-[78%] flex-wrap gap-2" />;
 }
 
+type ResolvedReportParentMessage = {
+  id: number;
+  sender: "principal" | "parent";
+  senderName: string;
+  message: string;
+  attachments: MessageAttachment[];
+  sentAt: string;
+};
+
+function PrincipalReportParentMessages({
+  messages,
+  loading,
+}: {
+  messages: ResolvedReportParentMessage[];
+  loading: boolean;
+}) {
+  return (
+    <section className="border-b border-violet-100 bg-violet-50/50 px-4 py-3 sm:px-6" aria-label="Principal messages to Parent">
+      <div className="flex items-center gap-2">
+        <MessageSquare className="h-4 w-4 text-violet-600" />
+        <h3 className="text-xs font-extrabold text-violet-900">Principal Messages to Parent</h3>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-violet-700">Separate School Messages for this resolved report. They do not reopen the locked report conversation.</p>
+      {loading ? (
+        <p className="mt-3 text-xs font-semibold text-violet-500">Loading messages…</p>
+      ) : messages.length === 0 ? (
+        <p className="mt-3 rounded-xl border border-dashed border-violet-200 bg-white/70 px-3 py-2 text-xs font-semibold text-violet-700">No separate Principal message has been sent to the Parent.</p>
+      ) : (
+        <div className="mt-3 max-h-52 space-y-3 overflow-y-auto pr-1">
+          {messages.map((entry) => {
+            const mine = entry.sender === "principal";
+            return (
+              <div key={entry.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[90%] rounded-2xl px-3 py-2.5 text-sm shadow-sm ${mine ? "rounded-tr-none bg-violet-600 text-white" : "rounded-tl-none border border-violet-100 bg-white text-slate-700"}`}>
+                  <div className={`mb-1 flex items-center gap-2 text-[10px] font-semibold ${mine ? "text-violet-100" : "text-slate-400"}`}>
+                    <span>{mine ? "You" : entry.senderName}</span>
+                    <span>{entry.sentAt}</span>
+                  </div>
+                  {entry.message && <p className="whitespace-pre-wrap leading-relaxed">{entry.message}</p>}
+                  <MessageAttachments attachments={entry.attachments} mine={mine} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ResolvedReportParentMessageModal({
+  report,
+  onClose,
+  onSubmit,
+}: {
+  report: Report;
+  onClose: () => void;
+  onSubmit: (message: string, attachments: MessageAttachment[]) => Promise<void>;
+}) {
+  const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
+  const addAttachments = async (files: FileList | File[]) => {
+    const selected = Array.from(files);
+    if (!selected.length) return;
+    const oversize = selected.find((file) => file.size > MAX_ATTACHMENT_BYTES);
+    if (oversize) {
+      setError(`“${oversize.name}” is over the 10 MB attachment limit.`);
+      return;
+    }
+    if (attachments.length + selected.length > 5) {
+      setError("You can attach up to 5 files.");
+      return;
+    }
+    try {
+      const next = await Promise.all(selected.map(fileToAttachment));
+      setAttachments((current) => [...current, ...next]);
+      setError(null);
+    } catch {
+      setError("One of the attachments could not be read. Please try again.");
+    }
+  };
+
+  const submit = async () => {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage) {
+      setError("Enter a message for the Parent.");
+      return;
+    }
+    if (sending) return;
+    try {
+      setSending(true);
+      setError(null);
+      await onSubmit(trimmedMessage, attachments);
+      onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Unable to send the message.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 p-4" onMouseDown={() => !sending && onClose()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="send-parent-message-title"
+        className="w-full max-w-xl rounded-2xl bg-white shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
+          <div className="min-w-0">
+            <h2 id="send-parent-message-title" className="text-lg font-extrabold text-slate-900">Send Message to Parent</h2>
+            <p className="mt-1 text-sm text-slate-500">This sends a separate School Message and does not reopen the resolved report conversation.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={sending} aria-label="Close Send Message to Parent" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-5 sm:px-6">
+          {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</div>}
+
+          <label className="block text-sm font-bold text-slate-700">
+            Concern
+            <input value={report.subject} readOnly aria-readonly="true" className="mt-1.5 w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-normal text-slate-600" />
+          </label>
+
+          <label className="block text-sm font-bold text-slate-700">
+            Message <span className="text-red-500">*</span>
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              rows={5}
+              maxLength={10_000}
+              placeholder="Write a message for the Parent…"
+              className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 font-normal text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+            />
+          </label>
+
+          <div>
+            <p className="mb-1.5 text-sm font-bold text-slate-700">Attachment <span className="font-normal text-slate-400">(optional, max. 10 MB each)</span></p>
+            <label className="flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-violet-200 bg-violet-50/40 p-4 text-center transition hover:border-violet-400 hover:bg-violet-50">
+              <Upload className="h-5 w-5 text-violet-500" />
+              <span className="text-sm font-semibold text-violet-800">Choose attachment</span>
+              <span className="text-xs text-violet-600">PDF, DOC, DOCX, JPG, or PNG · up to 5 files</span>
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                className="hidden"
+                onChange={async (event) => {
+                  await addAttachments(event.target.files ?? []);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+            <MessageAttachments
+              attachments={attachments}
+              onRemove={(index) => setAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          <button type="button" onClick={onClose} disabled={sending} className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+          <button type="button" onClick={submit} disabled={sending || !message.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300">
+            <Send className="h-4 w-4" /> {sending ? "Submitting…" : "Submit"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function parentDisplayName(report: Report) {
   return report.parent_name?.trim() || `${report.student_name} Parent's`;
+}
+
+function canSendResolvedReportParentMessage(report: Report | null) {
+  return report?.status === "Resolved" && (report.resolvedByRole === "Adviser" || report.resolvedByRole === "Guidance");
 }
 
 function getInitials(name: string) {
@@ -246,6 +428,16 @@ function newestReportFirst(a: Report, b: Report) {
 
 function newestGroupFirst(a: ParentGroup, b: ParentGroup) {
   return newestReportFirst(a.reports[0]!, b.reports[0]!);
+}
+
+function favoriteFirstReport(favoriteReportIds: Set<number>) {
+  return (a: Report, b: Report) =>
+    Number(favoriteReportIds.has(b.id)) - Number(favoriteReportIds.has(a.id))
+    || newestReportFirst(a, b);
+}
+
+function groupHasFavorite(group: ParentGroup, favoriteReportIds: Set<number>) {
+  return group.reports.some((report) => favoriteReportIds.has(report.id));
 }
 
 function ParentAvatar({ name, profilePicture, initials, className }: { name: string; profilePicture?: string | null; initials: string; className: string }) {
@@ -471,6 +663,10 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function safeFilePart(value: string) {
+  return value.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "selected";
+}
+
 function monitoringExportRows(items: MonitoringEntry[]) {
   return items.map((entry) => ({
     recordId: entry.id,
@@ -487,7 +683,11 @@ function monitoringExportRows(items: MonitoringEntry[]) {
   }));
 }
 
-async function exportMonitoringToExcel(items: MonitoringEntry[], filterSummary: string) {
+async function exportMonitoringToExcel(
+  items: MonitoringEntry[],
+  filterSummary: string,
+  filename = `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.xlsx`,
+) {
   const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "ParentConnect";
@@ -558,7 +758,7 @@ async function exportMonitoringToExcel(items: MonitoringEntry[], filterSummary: 
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(
     new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-    `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.xlsx`,
+    filename,
   );
 }
 
@@ -704,89 +904,44 @@ function createMonitoringPdf(items: MonitoringEntry[], filterSummary: string) {
   return new Blob([pdf], { type: "application/pdf" });
 }
 
-function exportMonitoringToPdf(items: MonitoringEntry[], filterSummary: string) {
-  downloadBlob(createMonitoringPdf(items, filterSummary), `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.pdf`);
+function exportMonitoringToPdf(
+  items: MonitoringEntry[],
+  filterSummary: string,
+  filename = `principal_report_monitoring_${manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10)}.pdf`,
+) {
+  downloadBlob(createMonitoringPdf(items, filterSummary), filename);
 }
 
 function ExportMonitoringModal({ items, filterSummary, onClose }: { items: MonitoringEntry[]; filterSummary: string; onClose: () => void }) {
-  const [format, setFormat] = useState<ExportFormat>("excel");
-  const [exporting, setExporting] = useState(false);
-
-  async function handleExport() {
-    if (!items.length) return;
-    setExporting(true);
-    try {
-      if (format === "excel") await exportMonitoringToExcel(items, filterSummary);
-      else exportMonitoringToPdf(items, filterSummary);
-      onClose();
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
-      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[520px] flex-col overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
-          <div className="min-w-0">
-            <h2 className="text-xl font-extrabold text-slate-900">Export Report Monitoring</h2>
-            <p className="mt-1 text-sm text-slate-400">Choose a polished Excel or PDF copy of the monitoring table.</p>
-          </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+    <ConcernExportModal
+      title="Export Concerns"
+      description="Choose a file type and which report monitoring records to include."
+      theme="violet"
+      allLabel="All Concerns"
+      recordNoun="monitoring concern"
+      options={items.map((entry) => ({
+        id: entry.id,
+        label: `${entry.student} - ${entry.concern}`,
+      }))}
+      filters={filterSummary.split(" · ")}
+      onClose={onClose}
+      onExport={async ({ format, scope, selectedId }) => {
+        const selected = selectedId ? items.find((entry) => entry.id === selectedId) ?? null : null;
+        const exportItems = scope === "all" ? items : selected ? [selected] : [];
+        if (exportItems.length === 0) throw new Error("There are no matching concerns to export.");
 
-        <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
-          <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
-            <p className="text-sm font-extrabold text-violet-800">Included Data</p>
-            <p className="mt-1 text-xs leading-relaxed text-violet-700">
-              {items.length} matching record{items.length === 1 ? "" : "s"}. {filterSummary}
-            </p>
-          </div>
+        const scopeLabel = scope === "all" ? "All matching report monitoring results" : "Selected monitoring concern";
+        const exportSummary = `${filterSummary} · Scope: ${scopeLabel}`;
+        const date = manilaDateKey(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
+        const filename = scope === "all"
+          ? `principal_all_concerns_${date}.${format === "excel" ? "xlsx" : "pdf"}`
+          : `principal_concern_${safeFilePart(selected?.concern ?? "selected")}.${format === "excel" ? "xlsx" : "pdf"}`;
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            {([
-              { value: "excel", label: "Excel", desc: "Formatted workbook with styled headers and readable columns." },
-              { value: "pdf", label: "PDF", desc: "Clean printable report with summary and table layout." },
-            ] as { value: ExportFormat; label: string; desc: string }[]).map((option) => {
-              const selected = format === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setFormat(option.value)}
-                  className={`rounded-2xl border p-4 text-left transition ${selected ? "border-violet-300 bg-violet-50 ring-2 ring-violet-100" : "border-slate-200 bg-white hover:bg-slate-50"}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <FileDown className={`h-4 w-4 ${selected ? "text-violet-700" : "text-slate-400"}`} />
-                      <p className={`text-sm font-extrabold ${selected ? "text-violet-800" : "text-slate-800"}`}>{option.label}</p>
-                    </div>
-                    {selected && <CheckCircle className="h-4 w-4 text-violet-600" />}
-                  </div>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">{option.desc}</p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
-          <button onClick={onClose} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 sm:w-auto">
-            Cancel
-          </button>
-          <button
-            onClick={handleExport}
-            disabled={exporting || items.length === 0}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300 sm:w-auto"
-          >
-            <FileDown className="h-4 w-4" />
-            {exporting ? "Exporting..." : items.length === 0 ? "No matching reports" : `Export ${format.toUpperCase()}`}
-          </button>
-        </div>
-      </div>
-    </div>
+        if (format === "excel") await exportMonitoringToExcel(exportItems, exportSummary, filename);
+        else exportMonitoringToPdf(exportItems, exportSummary, filename);
+      }}
+    />
   );
 }
 
@@ -828,14 +983,6 @@ function PriorityBadge({ level, large = false, compact = false }: { level: numbe
   return (
     <span className={`${large ? "px-3 py-1.5 text-xs" : compact ? "px-2 py-1 text-[10px] leading-none" : "px-2 py-0.5 text-[11px]"} rounded-full font-extrabold ${priorityClass(level)}`}>
       {priorityLabel(level)}
-    </span>
-  );
-}
-
-function ResolvedBadge({ large = false }: { large?: boolean }) {
-  return (
-    <span className={`${large ? "px-3 py-1.5 text-xs" : "px-2 py-0.5 text-[11px]"} rounded-lg bg-emerald-100 font-extrabold text-emerald-700`}>
-      Resolved
     </span>
   );
 }
@@ -1266,16 +1413,24 @@ function PrincipalReportsPageContent() {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [viewStep, setViewStep] = useState<"list" | "reports" | "detail">("list");
   const [reports, setReports] = useState<Report[]>([]);
+  const [favoriteReportIds, setFavoriteReportIds] = useState<Set<number>>(new Set());
+  const [favoriteSavingReportIds, setFavoriteSavingReportIds] = useState<Set<number>>(new Set());
   const [studentReports, setStudentReports] = useState<PrincipalStudentReport[]>([]);
   const [staffRecipients, setStaffRecipients] = useState<StaffRecipient[]>([]);
   const [parentRecipients, setParentRecipients] = useState<ParentRecipient[]>([]);
   const [loadingReports, setLoadingReports] = useState(true);
   const statusOverridesRef = useRef<Record<number, { status: ReportStatus; at: number }>>({});
   const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+  const favoriteRequestVersionRef = useRef(0);
+  const favoriteSaveInFlightRef = useRef<Set<number>>(new Set());
+  const reportParentMessagesRequestVersionRef = useRef<Record<number, number>>({});
   // A Realtime message can arrive before the first Reports-message snapshot
   // resolves. Only allow the newest snapshot to replace the selected thread.
   const principalMessagesRequestVersionRef = useRef(0);
   const [principalReplies, setPrincipalReplies] = useState<Record<number, PrincipalReply[]>>({});
+  const [reportParentMessages, setReportParentMessages] = useState<Record<number, ResolvedReportParentMessage[]>>({});
+  const [loadingReportParentMessageId, setLoadingReportParentMessageId] = useState<number | null>(null);
+  const [sendParentMessageReport, setSendParentMessageReport] = useState<Report | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
   const [sendingReply, setSendingReply] = useState(false);
@@ -1308,8 +1463,12 @@ function PrincipalReportsPageContent() {
   // queue. Every report visible to its parent remains available here.
   const currentReports = reports;
   const parentGroups = useMemo(
-    () => groupByStudentParent(currentReports).sort(newestGroupFirst),
-    [currentReports],
+    () => groupByStudentParent(currentReports)
+      .sort((a, b) =>
+        Number(groupHasFavorite(b, favoriteReportIds)) - Number(groupHasFavorite(a, favoriteReportIds))
+        || newestGroupFirst(a, b))
+      .map((group) => ({ ...group, reports: [...group.reports].sort(favoriteFirstReport(favoriteReportIds)) })),
+    [currentReports, favoriteReportIds],
   );
   const selectedParent = useMemo(
     () => findSelectedParentGroup(parentGroups, selectedParentKey, selectedReport?.id ?? null) as ParentGroup | null,
@@ -1460,6 +1619,19 @@ function PrincipalReportsPageContent() {
     }
   }, []);
 
+  const loadFavoriteReportIds = useCallback(async () => {
+    const requestVersion = ++favoriteRequestVersionRef.current;
+    const res = await fetch("/api/reports/principal/favorites", { cache: "no-store" });
+    const data = await res.json().catch(() => null);
+    if (requestVersion !== favoriteRequestVersionRef.current) return;
+    if (!res.ok) throw new Error(data?.message || "Unable to load report favorites.");
+    setFavoriteReportIds(new Set(
+      (data?.reportIds ?? [])
+        .map((reportId: unknown) => Number(reportId))
+        .filter((reportId: number) => Number.isSafeInteger(reportId) && reportId > 0),
+    ));
+  }, []);
+
   const loadReportDetail = useCallback(async (id: number) => {
     const inFlight = reportDetailRequestsRef.current.get(id);
     if (inFlight) return inFlight;
@@ -1483,6 +1655,26 @@ function PrincipalReportsPageContent() {
       await request;
     } finally {
       reportDetailRequestsRef.current.delete(id);
+    }
+  }, []);
+
+  const loadResolvedReportParentMessages = useCallback(async (reportId: number) => {
+    const requestVersion = (reportParentMessagesRequestVersionRef.current[reportId] ?? 0) + 1;
+    reportParentMessagesRequestVersionRef.current[reportId] = requestVersion;
+    setLoadingReportParentMessageId(reportId);
+    try {
+      const res = await fetch(`/api/reports/principal/${reportId}/parent-message`, { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to load Principal messages for this report.");
+      if (reportParentMessagesRequestVersionRef.current[reportId] !== requestVersion) return;
+      setReportParentMessages((current) => ({
+        ...current,
+        [reportId]: (data?.messages ?? []) as ResolvedReportParentMessage[],
+      }));
+    } finally {
+      if (reportParentMessagesRequestVersionRef.current[reportId] === requestVersion) {
+        setLoadingReportParentMessageId((current) => current === reportId ? null : current);
+      }
     }
   }, []);
 
@@ -1537,12 +1729,38 @@ function PrincipalReportsPageContent() {
     });
   }, []);
 
+  const sendResolvedReportParentMessage = useCallback(async (
+    report: Report,
+    message: string,
+    attachments: MessageAttachment[],
+  ) => {
+    const res = await fetch(`/api/reports/principal/${report.id}/parent-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, attachments }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.message || "Unable to send the Principal message to the Parent.");
+
+    const created = data?.message as ResolvedReportParentMessage | undefined;
+    if (created?.id) {
+      setReportParentMessages((current) => ({
+        ...current,
+        [report.id]: [...(current[report.id] ?? []).filter((entry) => entry.id !== created.id), created],
+      }));
+    }
+    // The normal Principal inbox also receives this staff-message event, but
+    // updating it now makes the sender's screen coherent before Realtime
+    // reaches the current browser.
+    void loadPrincipalMessages();
+  }, [loadPrincipalMessages]);
+
   useEffect(() => {
     let mounted = true;
     async function loadInitial() {
       try {
         setLoadingReports(true);
-        await Promise.all([loadPrincipalReports(), loadPrincipalMessages()]);
+        await Promise.all([loadPrincipalReports(), loadFavoriteReportIds(), loadPrincipalMessages()]);
       } finally {
         if (mounted) setLoadingReports(false);
       }
@@ -1554,7 +1772,7 @@ function PrincipalReportsPageContent() {
     return () => {
       mounted = false;
     };
-  }, [loadPrincipalMessages, loadPrincipalReports]);
+  }, [loadFavoriteReportIds, loadPrincipalMessages, loadPrincipalReports]);
 
   const handleLiveReportUpdate = useCallback(async (event: Parameters<typeof reportTyping.onRealtimeEvent>[0]) => {
     reportTyping.onRealtimeEvent(event);
@@ -1570,16 +1788,29 @@ function PrincipalReportsPageContent() {
   }, [loadPrincipalReports, refreshReportDetailAfterInFlight, reportTyping, selectedReportId]);
 
   const refreshPrincipalInbox = useCallback(async () => {
-    await Promise.all([loadPrincipalReports(), loadPrincipalMessages()]);
-  }, [loadPrincipalMessages, loadPrincipalReports]);
+    await Promise.all([
+      loadPrincipalReports(),
+      loadPrincipalMessages(),
+      canSendResolvedReportParentMessage(selectedReport)
+        ? loadResolvedReportParentMessages(selectedReport!.id)
+        : Promise.resolve(),
+    ]);
+  }, [loadPrincipalMessages, loadPrincipalReports, loadResolvedReportParentMessages, selectedReport]);
 
   const handleLiveStaffMessageUpdate = useCallback(async (event: Parameters<typeof staffConversationTyping.onRealtimeEvent>[0]) => {
     staffConversationTyping.onRealtimeEvent(event);
     if (event.kind === "typing") return;
     // This source has already excluded Contact ICT rows. Fetch it straight
     // away so a staff New Message or reply appears in the open Reports panel.
-    await loadPrincipalMessages();
-  }, [loadPrincipalMessages, staffConversationTyping]);
+    // A report-linked Principal follow-up also reloads its separate panel
+    // without opening or altering the resolved report conversation.
+    await Promise.all([
+      loadPrincipalMessages(),
+      event.reportId && selectedReport?.id === event.reportId && canSendResolvedReportParentMessage(selectedReport)
+        ? loadResolvedReportParentMessages(event.reportId)
+        : Promise.resolve(),
+    ]);
+  }, [loadPrincipalMessages, loadResolvedReportParentMessages, selectedReport, staffConversationTyping]);
 
   const liveUpdateNotice = useReportMessagesRealtime(refreshPrincipalInbox, {
     onReportUpdate: handleLiveReportUpdate,
@@ -1603,6 +1834,14 @@ function PrincipalReportsPageContent() {
       setReplyError(error instanceof Error ? error.message : "Unable to load this conversation.");
     });
   }, [selectedReport, loadReportDetail]);
+
+  useEffect(() => {
+    const report = selectedReport;
+    if (!report || !canSendResolvedReportParentMessage(report)) return;
+    void loadResolvedReportParentMessages(report.id).catch((error) => {
+      console.warn("Unable to load separate Principal messages for this report:", error);
+    });
+  }, [loadResolvedReportParentMessages, selectedReport]);
 
   useEffect(() => {
     if (!Number.isSafeInteger(requestedReportId) || openedNotificationReportRef.current === requestedReportId) return;
@@ -1636,7 +1875,10 @@ function PrincipalReportsPageContent() {
         if (categoryFilter !== "All" && !group.reports.some((report) => report.categories.includes(categoryFilter))) return false;
         return true;
       })
-      .sort(newestGroupFirst);
+      .sort((a, b) =>
+        Number(groupHasFavorite(b, favoriteReportIds)) - Number(groupHasFavorite(a, favoriteReportIds))
+        || newestGroupFirst(a, b))
+      .map((group) => ({ ...group, reports: [...group.reports].sort(favoriteFirstReport(favoriteReportIds)) }));
   })();
 
   const showReportsPanel = isReportsPanelVisible(viewStep, Boolean(selectedParent), true);
@@ -1657,6 +1899,48 @@ function PrincipalReportsPageContent() {
 
     return `relative h-full w-full max-w-none flex-col overflow-hidden ${bg} ${mobileVisible ? "flex" : "hidden"} md:absolute md:inset-y-0 ${desktopPosition} ${desktopWidth} md:flex md:border-r md:border-slate-100 md:shadow-sm md:transition-all md:duration-200 md:ease-out ${visible ? "md:opacity-100 md:translate-y-0 md:scale-100 md:pointer-events-auto" : "md:opacity-0 md:translate-y-2 md:scale-[0.99] md:pointer-events-none"
       }`;
+  }
+
+  async function toggleReportFavorite(reportId: number) {
+    if (favoriteSaveInFlightRef.current.has(reportId)) return;
+
+    const wasFavorite = favoriteReportIds.has(reportId);
+    const mutationVersion = ++favoriteRequestVersionRef.current;
+    favoriteSaveInFlightRef.current.add(reportId);
+    setFavoriteSavingReportIds((current) => new Set(current).add(reportId));
+    setFavoriteReportIds((current) => {
+      const next = new Set(current);
+      if (wasFavorite) next.delete(reportId);
+      else next.add(reportId);
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/reports/principal/favorites", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reportId, favorite: !wasFavorite }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || "Unable to save report favorite.");
+    } catch (error) {
+      console.error("Unable to save principal report favorite:", error);
+      if (mutationVersion === favoriteRequestVersionRef.current) {
+        setFavoriteReportIds((current) => {
+          const next = new Set(current);
+          if (wasFavorite) next.add(reportId);
+          else next.delete(reportId);
+          return next;
+        });
+      }
+    } finally {
+      favoriteSaveInFlightRef.current.delete(reportId);
+      setFavoriteSavingReportIds((current) => {
+        const next = new Set(current);
+        next.delete(reportId);
+        return next;
+      });
+    }
   }
 
   async function markReportStatus(id: number, status: ReportStatus) {
@@ -2625,29 +2909,43 @@ function PrincipalReportsPageContent() {
                             const isResolvedReport = report.status === "Resolved";
                             const isEscalatedFromGuidance = Boolean(report.escalatedToPrincipal);
                             const isAcceptedGuidanceTicket = report.ticketStatus === "accepted";
+                            const isFavorite = favoriteReportIds.has(report.id);
+                            const isSavingFavorite = favoriteSavingReportIds.has(report.id);
                             return (
-                              <button
-                                key={report.id}
-                                onClick={() => selectReport(report)}
-                                className={`w-full rounded-xl border px-3.5 py-3.5 text-left shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 ${isActive ? "border-violet-300 bg-violet-50 shadow-violet-100 ring-1 ring-violet-100" : isResolvedReport ? "border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50" : isEscalatedFromGuidance ? "border-red-100 bg-red-50 hover:bg-red-100" : isAcceptedGuidanceTicket ? "border-sky-100 bg-sky-50 hover:bg-sky-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/40"}`}
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <p className="min-w-0 flex-1 break-words text-sm font-extrabold leading-snug text-slate-800">{report.subject}</p>
-                                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold leading-none ${principalReportStatusClass(report)}`}>
-                                    {principalReportStatusLabel(report)}
-                                  </span>
-                                </div>
-                                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                                  {report.categories.map((category) => (
-                                    <span key={category} className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold leading-none text-slate-600">{category}</span>
-                                  ))}
-                                </div>
-                                {/* ConcernBar removed per UX request */}
-                                <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-2.5">
-                                  {!isResolvedReport ? <PriorityBadge level={report.concernLevel} compact /> : <ResolvedBadge />}
-                                  <p className="shrink-0 text-right text-[10px] font-medium leading-none text-slate-400">{report.submitted_at}</p>
-                                </div>
-                              </button>
+                              <div key={report.id} className="relative">
+                                <button
+                                  onClick={() => selectReport(report)}
+                                  className={`w-full rounded-xl border px-3.5 py-3.5 text-left shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 ${isActive ? "border-violet-300 bg-violet-50 shadow-violet-100 ring-1 ring-violet-100" : isResolvedReport ? "border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50" : isEscalatedFromGuidance ? "border-red-100 bg-red-50 hover:bg-red-100" : isAcceptedGuidanceTicket ? "border-sky-100 bg-sky-50 hover:bg-sky-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/40"}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <p className="min-w-0 flex-1 break-words text-sm font-extrabold leading-snug text-slate-800">{report.subject}</p>
+                                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold leading-none ${principalReportStatusClass(report)}`}>
+                                      {principalReportStatusLabel(report)}
+                                    </span>
+                                  </div>
+                                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                                    {report.categories.map((category) => (
+                                      <span key={category} className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold leading-none text-slate-600">{category}</span>
+                                    ))}
+                                  </div>
+                                  {/* ConcernBar removed per UX request */}
+                                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-2.5">
+                                    {!isResolvedReport && <PriorityBadge level={report.concernLevel} compact />}
+                                    <p className="mr-8 shrink-0 text-right text-[10px] font-medium leading-none text-slate-400">{report.submitted_at}</p>
+                                  </div>
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-pressed={isFavorite}
+                                  aria-label={isFavorite ? "Remove report from favorites" : "Add report to favorites"}
+                                  title={isFavorite ? "Remove report from favorites" : "Add report to favorites"}
+                                  disabled={isSavingFavorite}
+                                  onClick={() => { void toggleReportFavorite(report.id); }}
+                                  className={`absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg border transition disabled:cursor-wait disabled:opacity-60 ${isFavorite ? "border-amber-200 bg-amber-100 text-amber-500 hover:bg-amber-200" : "border-slate-100 bg-white text-slate-300 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-500"}`}
+                                >
+                                  <Star className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
+                                </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -2679,11 +2977,29 @@ function PrincipalReportsPageContent() {
                   const hasPrincipalReply = replies.some((reply) => reply.sender === "Principal");
                   const canReply = Boolean(selectedReport.canReply);
                   const escalatedFromGuidance = Boolean(selectedReport.escalatedToPrincipal);
+                  const showEscalationBanner = escalatedFromGuidance && !isResolved;
                   // This comes only from the Principal API, where it is
                   // derived from parent_adviser_reports.escalated_to_principal.
                   // Treat a missing value as locked while an older snapshot is
                   // being replaced by the authoritative server response.
                   const conversationAvailable = selectedReport.conversationAvailable === true;
+                  const canSendParentMessage = canSendResolvedReportParentMessage(selectedReport);
+                  const parentMessages = reportParentMessages[selectedReport.id] ?? [];
+                  const parentMessagesPanel = canSendParentMessage ? (
+                    <PrincipalReportParentMessages
+                      messages={parentMessages}
+                      loading={loadingReportParentMessageId === selectedReport.id}
+                    />
+                  ) : null;
+                  const sendParentMessageButton = canSendParentMessage ? (
+                    <button
+                      type="button"
+                      onClick={() => setSendParentMessageReport(selectedReport)}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-xs font-extrabold text-white shadow-sm transition hover:bg-violet-700"
+                    >
+                      <Send className="h-3.5 w-3.5" /> Send Message to Parent
+                    </button>
+                  ) : null;
 
                   if (!conversationAvailable) {
                     return (
@@ -2700,11 +3016,11 @@ function PrincipalReportsPageContent() {
                                 ))}
                               </div>
                             </div>
-                            <div className="flex shrink-0 flex-col items-end gap-2">
-                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${principalReportStatusClass(selectedReport)}`}>{principalReportStatusLabel(selectedReport)}</span>
-                            </div>
+                            {sendParentMessageButton}
                           </div>
                         </div>
+
+                        {parentMessagesPanel}
 
                         <div className="relative flex-1 overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
                           <div aria-hidden="true" className="flex flex-col gap-4 blur-[7px] select-none pointer-events-none">
@@ -2737,8 +3053,8 @@ function PrincipalReportsPageContent() {
 
                   return (
                     <div className="flex flex-1 flex-col overflow-hidden">
-                      <div className={`border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5 ${escalatedFromGuidance ? "border-l-4 border-l-red-500" : ""}`}>
-                        {escalatedFromGuidance && (
+                      <div className={`border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5 ${showEscalationBanner ? "border-l-4 border-l-red-500" : ""}`}>
+                        {showEscalationBanner && (
                           <div className="mb-3 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
                             <TriangleAlert className="h-4 w-4 shrink-0 text-red-600" />
                             <p className="text-xs font-bold text-red-700">Escalated from Guidance to the Principal.</p>
@@ -2754,11 +3070,7 @@ function PrincipalReportsPageContent() {
                               ))}
                             </div>
                           </div>
-                          <div className="flex shrink-0 flex-col items-end gap-2">
-                            {isResolved ? <ResolvedBadge large /> : (
-                              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${principalReportStatusClass(selectedReport)}`}>{principalReportStatusLabel(selectedReport)}</span>
-                            )}
-                          </div>
+                          {sendParentMessageButton}
                         </div>
                         {selectedReport.ticketStatus === "rejected" && selectedReport.ticketRejectionReason && (
                           <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
@@ -2766,6 +3078,8 @@ function PrincipalReportsPageContent() {
                           </div>
                         )}
                       </div>
+
+                      {parentMessagesPanel}
 
                       <div
                         ref={reportMessagesRef}
@@ -2944,6 +3258,13 @@ function PrincipalReportsPageContent() {
           onMessageSent={handleNewMessageSent}
           staffRecipients={staffRecipients}
           parentRecipients={parentRecipients}
+        />
+      )}
+      {sendParentMessageReport && (
+        <ResolvedReportParentMessageModal
+          report={sendParentMessageReport}
+          onClose={() => setSendParentMessageReport(null)}
+          onSubmit={(message, attachments) => sendResolvedReportParentMessage(sendParentMessageReport, message, attachments)}
         />
       )}
       {showExportMonitoring && (

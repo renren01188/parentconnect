@@ -1,0 +1,109 @@
+// ParentConnect — Parent role — Identity and Linked Learners
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs describe the Parent workflow relationships. Polymorphic or cross-role identifiers are documented application-level links where the schema has no direct foreign key.
+
+Project parent_identity_and_linked_learners {
+  database_type: 'PostgreSQL'
+  Note: 'Guardian account, linked learner records, household contacts, and class placement.'
+}
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table sections {
+  id int4 [pk, not null]
+  name text [unique, not null]
+  grade text [unique, not null]
+  class_session text
+}
+
+Table parent_student_links {
+  id int8 [pk, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  relationship text
+  created_at timestamptz [not null]
+}
+
+Table student_family_members {
+  id int8 [pk, not null]
+  student_db_id int4 [not null]
+  role text [not null]
+  first_name text
+  middle_name text
+  last_name text
+  relationship text
+  contact_number text
+  created_at timestamptz [not null]
+  suffix text
+}
+
+// Parent workflow relationships.
+Ref: parents.student_id > students.student_id
+Ref: students.section > sections.name
+Ref: parent_student_links.parent_id > parents.id
+Ref: parent_student_links.student_id > students.student_id
+Ref: student_family_members.student_db_id > students.id

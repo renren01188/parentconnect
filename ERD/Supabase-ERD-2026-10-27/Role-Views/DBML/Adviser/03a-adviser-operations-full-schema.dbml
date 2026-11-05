@@ -1,0 +1,217 @@
+// ParentConnect — Adviser role — Adviser Operations
+// This is one focused DBML diagram. It is not the complete application schema.
+// Unlabelled Refs are live Supabase foreign-key constraints. Refs under the application-level heading are documented ID links without a database constraint.
+
+Project adviser_operations {
+  database_type: 'PostgreSQL'
+  Note: 'Assigned learners, class placement, attendance, absence requests, family context, student remarks, and school-year settings. The live students-to-sections relationship uses the composite key (section, grade) → (name, grade). dbdiagram does not support importing composite references, so it is documented here rather than emitted as a Ref.'
+}
+Table advisers {
+  id int4 [pk, not null]
+  employee_id text [unique]
+  first_name text [not null]
+  last_name text [not null]
+  email text [unique, not null]
+  phone text
+  grade text
+  section text
+  status text
+  password_hash text [not null]
+  created_at timestamptz
+  updated_at timestamptz
+  sections text[] [not null]
+  middle_name text
+  password_set bool
+  suffix text
+  class_session text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  notifications_last_seen_at timestamptz
+  adviser_attendance_guide_completed_at timestamptz
+  adviser_reports_guide_completed_at timestamptz
+  adviser_dashboard_guide_completed_at timestamptz
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table parent_student_links {
+  id int8 [pk, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  relationship text
+  created_at timestamptz [not null]
+}
+
+Table student_family_members {
+  id int8 [pk, not null]
+  student_db_id int4 [not null]
+  role text [not null]
+  first_name text
+  middle_name text
+  last_name text
+  relationship text
+  contact_number text
+  created_at timestamptz [not null]
+  suffix text
+}
+
+Table sections {
+  id int4 [pk, not null]
+  name text [unique, not null]
+  grade text [unique, not null]
+  class_session text
+}
+
+Table class_sessions {
+  id int4 [pk, not null]
+  session_date date [not null]
+  session_type text [not null]
+  scheduled_start time [not null]
+  scheduled_end time [not null]
+  status text [not null]
+  actual_start timestamptz
+  actual_end timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  late_after time
+  absent_after time
+  grade text
+}
+
+Table attendance_logs {
+  id int4 [pk, not null]
+  student_db_id int4
+  student_id text
+  attendance_date date [not null]
+  time_logged time [not null]
+  type text
+  status text
+  via text
+  remark text
+  session_type text [not null]
+  class_session_id int4
+  scan_request_id text
+  student_grade_snapshot text
+  student_section_snapshot text
+  parent_recording_source text
+}
+
+Table excuse_letters {
+  id int4 [pk, not null]
+  student_id text [not null]
+  parent_id int4
+  date_from date [not null]
+  date_to date [not null]
+  message text [not null]
+  status text [not null]
+  decline_reason text
+  submitted_at timestamptz [not null]
+  file_name text
+  file_data text
+  file_type text
+  attachment_uploaded_at timestamptz
+  submitted_by_role text [not null]
+  submitted_by_id int8
+}
+
+Table student_remarks {
+  id int8 [pk, not null]
+  student_db_id int4 [not null]
+  remark_type text [not null]
+  effectivity_date date [not null]
+  note text [not null]
+  school_name text
+  created_by_adviser_id int4
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table school_year_config {
+  id int4 [pk, not null]
+  school_year_label varchar(20) [not null]
+  start_date date [not null]
+  end_date date [not null]
+  is_active bool
+  created_at timestamptz
+  updated_at timestamptz
+  attendance_weekdays text[] [not null]
+}
+
+// Live Supabase foreign-key constraints.
+Ref: parents.student_id > students.student_id
+Ref: parent_student_links.parent_id > parents.id
+Ref: parent_student_links.student_id > students.student_id
+Ref: student_family_members.student_db_id > students.id
+Ref: attendance_logs.student_db_id > students.id
+Ref: attendance_logs.class_session_id > class_sessions.id
+Ref: excuse_letters.student_id > students.student_id
+Ref: student_remarks.student_db_id > students.id
+Ref: student_remarks.created_by_adviser_id > advisers.id

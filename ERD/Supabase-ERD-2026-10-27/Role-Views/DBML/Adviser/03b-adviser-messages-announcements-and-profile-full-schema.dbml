@@ -1,0 +1,148 @@
+// ParentConnect — Adviser role — Messages, Announcements, and Profile
+// This is one focused DBML diagram. It is not the complete application schema.
+// Unlabelled Refs are live Supabase foreign-key constraints. Refs under the application-level heading are documented ID links without a database constraint.
+
+Project adviser_messages_announcements_and_profile {
+  database_type: 'PostgreSQL'
+  Note: 'Adviser account, announcement reads, staff messages, and adviser-principal correspondence.'
+}
+Table advisers {
+  id int4 [pk, not null]
+  employee_id text [unique]
+  first_name text [not null]
+  last_name text [not null]
+  email text [unique, not null]
+  phone text
+  grade text
+  section text
+  status text
+  password_hash text [not null]
+  created_at timestamptz
+  updated_at timestamptz
+  sections text[] [not null]
+  middle_name text
+  password_set bool
+  suffix text
+  class_session text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  notifications_last_seen_at timestamptz
+  adviser_attendance_guide_completed_at timestamptz
+  adviser_reports_guide_completed_at timestamptz
+  adviser_dashboard_guide_completed_at timestamptz
+}
+
+Table adviser_notification_reads {
+  id int8 [pk, not null]
+  adviser_id int8 [not null]
+  notif_key text [not null]
+  read_at timestamptz
+}
+
+Table staff_messages {
+  id int8 [pk, not null]
+  sender_type text [not null]
+  sender_id int8 [not null]
+  sender_name text [not null]
+  sender_email text
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  source_message_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  idempotency_key uuid
+}
+
+Table adviser_announcements {
+  id int8 [pk, not null]
+  adviser_id int8 [not null]
+  adviser_name text [not null]
+  grade text
+  sections text[] [not null]
+  title text [not null]
+  message text [not null]
+  created_at timestamptz [not null]
+}
+
+Table adviser_principal_messages {
+  id int8 [pk, not null]
+  adviser_id int8 [not null]
+  adviser_name text [not null]
+  adviser_email text
+  principal_id int8 [not null]
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  status text [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  source_staff_message_id int8
+  attachments jsonb [not null]
+}
+
+Table principals {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [not null]
+  phone text [not null]
+  status text [not null]
+  is_active bool [unique, not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  auth_version uuid [not null]
+  effective_date date
+  succession_reason text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  principal_attendance_summary_guide_completed_at timestamptz
+  principal_reports_guide_completed_at timestamptz
+}
+
+Table principal_staff_messages {
+  id int8 [pk, not null]
+  principal_id int8 [not null]
+  principal_name text [not null]
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  status text [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  attachments jsonb [not null]
+  source_adviser_message_id int8
+  idempotency_key uuid [unique]
+}
+
+// Live Supabase foreign-key constraints.
+Ref: adviser_notification_reads.adviser_id > advisers.id
+Ref: adviser_announcements.adviser_id > advisers.id
+Ref: staff_messages.source_message_id > staff_messages.id
+Ref: adviser_principal_messages.principal_id > principals.id
+Ref: adviser_principal_messages.source_staff_message_id > principal_staff_messages.id
+
+// Application-level logical references (not database constraints).
+Ref: adviser_principal_messages.adviser_id > advisers.id
+Ref: principal_staff_messages.source_adviser_message_id > adviser_principal_messages.id

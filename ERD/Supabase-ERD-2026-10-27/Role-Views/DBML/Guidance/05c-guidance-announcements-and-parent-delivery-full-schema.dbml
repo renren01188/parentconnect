@@ -1,0 +1,146 @@
+// ParentConnect — Guidance role — Announcements and Parent Delivery
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs above the application-level heading are live Supabase foreign-key constraints.
+
+Project guidance_announcements_and_parent_delivery {
+  database_type: 'PostgreSQL'
+  Note: 'Guidance-authored announcements and their parent-facing notification delivery records. announcement_id is polymorphic; the source column identifies guidance as the originating announcement table.'
+}
+Table guidance_counselors {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  guidance_reports_guide_completed_at timestamptz
+  guidance_dashboard_guide_completed_at timestamptz
+}
+
+Table guidance_announcements {
+  id int8 [pk, not null]
+  guidance_id int8 [not null]
+  guidance_name text [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  emails_sent bool
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parent_student_links {
+  id int8 [pk, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  relationship text
+  created_at timestamptz [not null]
+}
+
+Table parent_announcement_notifications {
+  id int8 [pk, not null]
+  announcement_id int8 [not null]
+  parent_id int8 [not null]
+  student_id text
+  grade text
+  section text
+  read_at timestamptz
+  created_at timestamptz [not null]
+  source text
+  title text
+  message text
+  sender_name text
+  unread bool [not null]
+  tab text [not null]
+}
+
+// Live Supabase foreign-key constraints.
+Ref: guidance_announcements.guidance_id > guidance_counselors.id
+Ref: parent_student_links.parent_id > parents.id
+Ref: parent_student_links.student_id > students.student_id
+Ref: parent_announcement_notifications.parent_id > parents.id
+Ref: parent_announcement_notifications.student_id > students.student_id
+
+// Application-level logical references (not database constraints).
+Ref: parent_announcement_notifications.announcement_id > guidance_announcements.id

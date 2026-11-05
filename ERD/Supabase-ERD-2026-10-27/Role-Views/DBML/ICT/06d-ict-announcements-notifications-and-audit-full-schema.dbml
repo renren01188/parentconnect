@@ -1,0 +1,158 @@
+// ParentConnect — ICT role — Announcements, Notifications, and Audit
+
+// Focused DBML diagram for dbdiagram.io.
+
+
+
+Project ict_announcements_notifications_and_audit {
+
+  database_type: 'PostgreSQL'
+
+  Note: 'ICT announcements, staff-message threads, notification read state, Principal announcements, and audit records.'
+
+}
+
+
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table ict_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  sender_name text
+  title text [not null]
+  message text [not null]
+  audience text[] [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+Table ict_notification_reads {
+  id int8 [pk, not null]
+  ict_id int8 [not null]
+  notif_key text [not null]
+  created_at timestamptz
+}
+
+Table staff_messages {
+  id int8 [pk, not null]
+  sender_type text [not null]
+  sender_id int8 [not null]
+  sender_name text [not null]
+  sender_email text
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  source_message_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  idempotency_key uuid
+}
+
+Table audit_log {
+  id int8 [pk, not null]
+  action text [not null]
+  target_user text [not null]
+  target_role text [not null]
+  target_email text [not null]
+  performed_by text [not null]
+  details text
+  changes jsonb
+  created_at timestamptz [not null]
+  ip_address text
+  browser text
+  module text
+  performed_by_role text
+  performed_by_id text
+  performed_by_email text
+  target_type text [not null]
+  target_id text
+  previous_status text
+  new_status text
+  related_report_id text
+  related_ticket_id text
+  related_student_id text
+  related_user_id text
+  metadata jsonb
+}
+
+Table principals {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [not null]
+  phone text [not null]
+  status text [not null]
+  is_active bool [unique, not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  auth_version uuid [not null]
+  effective_date date
+  succession_reason text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  principal_attendance_summary_guide_completed_at timestamptz
+  principal_reports_guide_completed_at timestamptz
+}
+
+Table principal_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+
+
+// Live Supabase foreign-key constraints.
+
+Ref: ict_notification_reads.ict_id > ict_admins.id
+
+Ref: staff_messages.source_message_id > staff_messages.id
+
+// Application-level logical references (not database constraints).
+Ref: ict_announcements.sender_id > ict_admins.id
+Ref: staff_messages.sender_id > ict_admins.id
+Ref: staff_messages.recipient_id > ict_admins.id
+Ref: principal_announcements.sender_id > principals.id

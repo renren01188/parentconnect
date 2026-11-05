@@ -1,0 +1,270 @@
+// ParentConnect — ICT role — ICT Operations
+
+// dbdiagram free-plan master: 15 core ICT operations tables.
+
+// Refs above the application-level heading are live Supabase foreign-key constraints.
+
+
+
+Project ict_operations {
+
+  database_type: 'PostgreSQL'
+
+  Note: 'ICT account, audit trail, announcement delivery, attendance notification settings, SMS dispatch, deletion jobs, deletion targets, and staff employee-ID registry.'
+
+}
+
+
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table ict_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  sender_name text
+  title text [not null]
+  message text [not null]
+  audience text[] [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+Table attendance_email_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_email text
+  recipient_key text [not null]
+  subject text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  provider text
+  provider_message_id text
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_sms_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_phone text
+  recipient_key text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  delivered_at timestamptz
+  provider text
+  provider_message_id text
+  provider_status text
+  provider_response jsonb
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  provider_requested_at timestamptz
+  provider_accepted_at timestamptz
+  idempotency_key text [not null]
+  reconciliation_required_at timestamptz
+  reconciled_at timestamptz
+  retry_eligible_at timestamptz
+  reconciliation_attempts int4 [not null]
+}
+
+Table attendance_notification_settings {
+  id bool [pk, not null]
+  sms_enabled bool [not null]
+  email_enabled bool [not null]
+  sms_low_credit_threshold int4 [not null]
+  sms_credit_balance int4
+  sms_credits_checked_at timestamptz
+  sms_credits_check_error text
+  updated_by_ict_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_sms_provider_events {
+  id uuid [pk, not null]
+  attendance_sms_job_id uuid [not null]
+  idempotency_key text [not null]
+  event_type text [not null]
+  provider text
+  provider_message_id text
+  provider_status text
+  detail jsonb
+  created_at timestamptz [not null]
+}
+
+Table attendance_sms_dispatch_leases {
+  lease_name text [pk, not null]
+  owner_token uuid
+  locked_until timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table audit_log {
+  id int8 [pk, not null]
+  action text [not null]
+  target_user text [not null]
+  target_role text [not null]
+  target_email text [not null]
+  performed_by text [not null]
+  details text
+  changes jsonb
+  created_at timestamptz [not null]
+  ip_address text
+  browser text
+  module text
+  performed_by_role text
+  performed_by_id text
+  performed_by_email text
+  target_type text [not null]
+  target_id text
+  previous_status text
+  new_status text
+  related_report_id text
+  related_ticket_id text
+  related_student_id text
+  related_user_id text
+  metadata jsonb
+}
+
+Table deletion_email_jobs {
+  id uuid [pk, not null]
+  batch_id uuid [not null]
+  recipient_email text [not null]
+  recipient_email_normalized text
+  recipient_name text [not null]
+  target_names text[] [not null]
+  scheduled_deletion_ids int8[] [not null]
+  reason text [not null]
+  delete_after timestamptz [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table deletion_email_job_items {
+  deletion_email_job_id uuid [pk, not null]
+  scheduled_deletion_id int8 [pk, not null]
+  created_at timestamptz [not null]
+}
+
+Table ict_notification_reads {
+  id int8 [pk, not null]
+  ict_id int8 [not null]
+  notif_key text [not null]
+  created_at timestamptz
+}
+
+Table scheduled_deletions {
+  id int8 [pk, not null]
+  target_type text [not null]
+  target_id text [not null]
+  target_name text [not null]
+  target_email text
+  requested_by_role text [not null]
+  requested_by_id int8 [not null]
+  reason text [not null]
+  status text [not null]
+  requested_at timestamptz [not null]
+  approved_at timestamptz
+  approved_by_ict_id int8
+  delete_after timestamptz
+  restored_at timestamptz
+  notice_sent_at timestamptz
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+}
+
+Table scheduled_deletion_requesters {
+  scheduled_deletion_id int8 [pk, not null]
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table scheduled_deletion_targets {
+  scheduled_deletion_id int8 [pk, not null]
+  student_id int8
+  parent_id int8
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table staff_employee_ids {
+  employee_id_key text [pk, not null]
+  employee_id text [not null]
+  account_role text [not null]
+  account_id int8 [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+
+
+// Live Supabase foreign-key constraints.
+
+Ref: attendance_notification_settings.updated_by_ict_id > ict_admins.id
+
+Ref: attendance_sms_provider_events.attendance_sms_job_id > attendance_sms_jobs.id
+
+Ref: ict_notification_reads.ict_id > ict_admins.id
+
+Ref: scheduled_deletions.approved_by_ict_id > ict_admins.id
+
+Ref: scheduled_deletion_requesters.scheduled_deletion_id > scheduled_deletions.id
+
+Ref: scheduled_deletion_requesters.ict_admin_id > ict_admins.id
+
+Ref: scheduled_deletion_targets.scheduled_deletion_id > scheduled_deletions.id
+
+Ref: scheduled_deletion_targets.ict_admin_id > ict_admins.id
+
+Ref: deletion_email_job_items.deletion_email_job_id > deletion_email_jobs.id
+
+Ref: deletion_email_job_items.scheduled_deletion_id > scheduled_deletions.id
+
+
+
+// Application-level logical references (not database constraints).
+
+Ref: ict_announcements.sender_id > ict_admins.id
+

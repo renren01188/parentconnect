@@ -8,6 +8,8 @@ import { hasUnreadForPrincipal as hasUnreadPrincipalReport } from "@/lib/princip
 import { isPasswordSessionRevoked } from "@/lib/passwordSessionRevocationStore";
 import { isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 
+export type ReportResolverRole = "Adviser" | "Guidance" | "Principal";
+
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
 );
@@ -56,6 +58,7 @@ export type ReportRow = {
   concern_level: number;
   allow_history_access?: boolean | null;
   status: string;
+  resolved_by_role?: ReportResolverRole | null;
   escalated_to_guidance: boolean;
   escalated_to_principal?: boolean | null;
   cancelled_at?: string | null;
@@ -103,6 +106,20 @@ export type GuidanceTicketRow = {
   created_at: string;
   decided_at?: string | null;
 };
+
+export function reportResolverRole(row: ReportRow): ReportResolverRole | undefined {
+  if (String(row.status ?? "").toLowerCase() !== "resolved") return undefined;
+  if (row.resolved_by_role === "Adviser" || row.resolved_by_role === "Guidance" || row.resolved_by_role === "Principal") {
+    return row.resolved_by_role;
+  }
+
+  // Historical rows predate the dedicated resolver column. Workflow ownership
+  // makes this fallback deterministic: the Principal owns the final handoff,
+  // Guidance owns its own handoff, and all remaining reports belong to Adviser.
+  if (row.escalated_to_principal) return "Principal";
+  if (row.escalated_to_guidance) return "Guidance";
+  return "Adviser";
+}
 
 function attachmentsFromRow(value: unknown): MessageAttachment[] {
   if (!Array.isArray(value)) return [];
@@ -426,6 +443,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
     sent_at: formatDate(msg.created_at),
     attachments: attachmentsFromRow(msg.attachments),
   }));
+  const resolvedByRole = reportResolverRole(row);
 
   return {
     id: row.id,
@@ -443,8 +461,9 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
     submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     submitted_at: formatDate(row.created_at),
     status: adviserDisplayReportStatus(row),
-    resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance && !row.escalated_to_principal,
-    resolvedByPrincipal: row.status === "resolved" && Boolean(row.escalated_to_principal),
+    resolvedByGuidance: resolvedByRole === "Guidance",
+    resolvedByPrincipal: resolvedByRole === "Principal",
+    resolvedByRole,
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
@@ -538,6 +557,7 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
   const threadMessages = guidanceThreadMessages(row, messages);
   const hasUnreadForGuidance = unreadGuidanceMessageIds(row, messages).length > 0;
   const isResolved = row.status === "resolved" || row.status === "cancelled";
+  const resolvedByRole = reportResolverRole(row);
 
   return {
     id: row.id,
@@ -551,7 +571,9 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     lastActivityAt: row.last_message_at || row.created_at,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : hasUnreadForGuidance ? "New" as const : adviserReportStatus(row.status),
-    resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance,
+    resolvedByGuidance: resolvedByRole === "Guidance",
+    resolvedByPrincipal: resolvedByRole === "Principal",
+    resolvedByRole,
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
@@ -586,6 +608,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
       messages: threadMessages,
       isStudentConcern: isStudentConcernReport(row) && row.allow_history_access === true,
     });
+  const resolvedByRole = reportResolverRole(row);
 
   return {
     id: row.id,
@@ -605,7 +628,9 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     lastActivityAt: row.last_message_at || row.created_at,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : hasUnreadForPrincipal ? "New" as const : adviserReportStatus(row.status),
-    resolvedByGuidance: row.status === "resolved" && row.escalated_to_guidance,
+    resolvedByGuidance: resolvedByRole === "Guidance",
+    resolvedByPrincipal: resolvedByRole === "Principal",
+    resolvedByRole,
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,

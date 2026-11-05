@@ -6,6 +6,7 @@
 // ─── Report types ─────────────────────────────────────────────────────────────
 export type ReportStatus = "New" | "Read" | "Ongoing" | "Replied" | "Resolved" | "Escalated";
 export type ReportCategory = "Academic Concern" | "Request" | "Absence Excuse" | "Behavioral" | "Other";
+export type ReportResolverRole = "Adviser" | "Guidance" | "Principal";
 
 /**
  * Returns a priority label based on concern level.
@@ -55,6 +56,8 @@ export interface Report {
   /** True when an escalated report was resolved by Guidance */
   resolvedByGuidance?: boolean;
   resolvedByPrincipal?: boolean;
+  /** The role that actually resolved this report, captured at resolution time. */
+  resolvedByRole?: ReportResolverRole;
   /** True when the parent has a new message/reply the adviser has not read yet */
   hasUnreadForAdviser?: boolean;
   /** True when the parent has a new Guidance-thread message not yet read by Guidance */

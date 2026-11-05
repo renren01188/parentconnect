@@ -10,16 +10,18 @@ const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
 const scanRoute = read("src/app/api/attendance/scan/route.ts");
 const correctionRoute = read("src/app/api/attendance/rapid-tap-correction/route.ts");
 const queueStorage = read("src/lib/attendanceRapidTapQueue.ts");
+const smsQueue = read("src/lib/attendanceSmsQueue.ts");
 const migration = read("supabase/migrations/20261022103000_add_attendance_scan_request_id.sql");
 
-assert.match(adviserPage, /type RfidScannerMode = "default" \| "rapid"/);
-assert.match(adviserPage, />\s*Default\s*</);
-assert.match(adviserPage, />\s*Rapid Tap\s*</);
-assert.match(adviserPage, /if \(rfidScannerMode === "rapid"\)[\s\S]*?enqueueRapidTapScan\(value\)/);
+assert.doesNotMatch(adviserPage, /RfidScannerMode|rfidScannerMode|setRfidScannerMode/);
+assert.doesNotMatch(adviserPage, />\s*Default\s*</);
+assert.doesNotMatch(adviserPage, /Default scanning|switching to Default mode/);
+assert.match(adviserPage, /const rapidTapScannerReady = isScanningOpen && rapidTapStorageReady/);
+assert.match(adviserPage, /if \(!rapidTapStorageReady\)[\s\S]*?Rapid Tap is preparing secure local storage/);
+assert.match(adviserPage, /enqueueRapidTapScan\(value\)/);
 assert.match(adviserPage, /Rapid Tap captured/);
 assert.match(adviserPage, /All Rapid Tap scans have finished processing\./);
 assert.match(adviserPage, /beforeunload/);
-assert.match(adviserPage, /Finish or retry the Rapid Tap queue before switching to Default mode/);
 assert.match(adviserPage, /scan_id: savingItem\.id/);
 assert.match(adviserPage, /scan_date: savingItem\.scanDate/);
 assert.match(adviserPage, /session_type: savingItem\.sessionType/);
@@ -52,6 +54,8 @@ assert.match(adviserPage, /status: "capturing"/);
 assert.match(adviserPage, /const queuedItem: RapidTapQueueItem = \{ \.\.\.item, status: "queued" \}/);
 assert.match(adviserPage, /This scan could not be saved in browser storage\. Retry after checking browser storage\./);
 assert.match(adviserPage, /Status: \{rapidTapStatusSummary\}/);
+assert.match(adviserPage, /sort\(\(first, second\) => first\.queueOrder - second\.queueOrder\)/);
+assert.match(adviserPage, /Do not await persistence here\. The persistence chain preserves scan/);
 
 assert.match(queueStorage, /indexedDB\.open/);
 assert.match(queueStorage, /"capturing" \| "queued" \| "saving" \| "retrying" \| "failed"/);
@@ -70,6 +74,10 @@ assert.match(scanRoute, /requestedSessionType && requestedSessionType !== sessio
 assert.match(scanRoute, /attendanceSuccessPayload\(recorded\.log, recorded\.student, true\)/);
 assert.match(scanRoute, /outOfSection: Boolean\(anyStudent && anyStudent\.length > 0\)/);
 assert.match(scanRoute, /This student is not in your assigned section\. No attendance was recorded\./);
+assert.match(scanRoute, /after\(async \(\) => \{[\s\S]*?await enqueueAttendanceSms\(input\);/);
+assert.doesNotMatch(scanRoute, /processAttendanceSmsJobs|dispatchAttendanceSmsJobs/);
+assert.match(smsQueue, /onConflict: "idempotency_key", ignoreDuplicates: true/);
+assert.match(smsQueue, /attendanceSmsIdempotencyKey/);
 
 assert.match(correctionRoute, /getAdviserFromToken/);
 assert.match(correctionRoute, /getScheduledStudentLrns/);

@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
+import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
 
 const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
 
@@ -52,6 +53,7 @@ export default function SetPasswordPage() {
     { text: "One lowercase letter", met: /[a-z]/.test(newPassword) },
     { text: "One number", met: /[0-9]/.test(newPassword) },
   ];
+  const passwordMeetsRequirements = parentPasswordMeetsRequirements(newPassword);
   const passwordsMatch = newPassword === confirmPassword && confirmPassword !== "";
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -62,8 +64,8 @@ export default function SetPasswordPage() {
       setError("Passwords do not match.");
       return;
     }
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
+    if (!passwordMeetsRequirements) {
+      setError(PARENT_PASSWORD_REQUIREMENTS_MESSAGE);
       return;
     }
 
@@ -119,7 +121,7 @@ export default function SetPasswordPage() {
       showConfirmation={showConfirm}
       rules={rules}
       passwordsMatch={passwordsMatch}
-      canSubmit={!loading}
+      canSubmit={!loading && passwordMeetsRequirements && passwordsMatch}
       loading={loading}
       error={error}
       completed={success}

@@ -7,7 +7,7 @@ import {
     ChevronRight, Paperclip, Send, MessageSquare,
     TriangleAlert, Upload,
     GraduationCap, User, X, Shield, TrendingUp,
-    LoaderCircle, HeartHandshake, Search,
+    LoaderCircle, HeartHandshake, Search, FileDown, Star,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -23,6 +23,12 @@ import {
     effectiveAdviserReportStatus,
     summarizeAdviserReportStatuses,
 } from "@/lib/adviserReportStatusSummary";
+import { ConcernExportModal } from "@/components/reports/ConcernExportModal";
+import {
+    createGuidanceReportsExcel as buildAdviserReportsExcel,
+    createGuidanceReportsPdf as buildAdviserReportsPdf,
+    type GuidanceReportExportContext,
+} from "@/lib/guidanceReportExport";
 import {
     getPriorityLabel,
     type Report, type ReportStatus, type ReportCategory,
@@ -68,6 +74,16 @@ function newestGroupFirst<T extends TimestampedReport>(a: { reports: T[] }, b: {
     return newestReportFirst(a.reports[0]!, b.reports[0]!);
 }
 
+function favoriteFirstReport<T extends TimestampedReport>(favoriteReportIds: Set<number>) {
+    return (a: T, b: T) =>
+        Number(favoriteReportIds.has(b.id)) - Number(favoriteReportIds.has(a.id))
+        || newestReportFirst(a, b);
+}
+
+function groupHasFavorite<T extends TimestampedReport>(group: { reports: T[] }, favoriteReportIds: Set<number>) {
+    return group.reports.some((report) => favoriteReportIds.has(report.id));
+}
+
 function adminMessageActivityTime(message: AdminMessage) {
     const timestamp = Date.parse(message.latest_created_at ?? message.latest_sent_at ?? message.sent_at);
     return Number.isFinite(timestamp) ? timestamp : 0;
@@ -75,6 +91,21 @@ function adminMessageActivityTime(message: AdminMessage) {
 
 function newestAdminMessageFirst(a: AdminMessage, b: AdminMessage) {
     return adminMessageActivityTime(b) - adminMessageActivityTime(a) || b.id - a.id;
+}
+
+function safeFilePart(value: string) {
+    return value.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "adviser_reports";
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
 }
 
 function getInitials(name: string) {
@@ -861,6 +892,7 @@ function ReportsPageContent() {
     const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
     const [sendingReply, setSendingReply] = useState(false);
     const [showNewMessage, setShowNewMessage] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
     const [guideTarget, setGuideTarget] = useState<string | null>(null);
     const [escalateTarget, setEscalateTarget] = useState<number | null>(null);
     const [escalateSuccess, setEscalateSuccess] = useState(false);
@@ -882,9 +914,13 @@ function ReportsPageContent() {
 
     // Local mutable copies of data
     const [reports, setReports] = useState<Report[]>([]);
+    const [favoriteReportIds, setFavoriteReportIds] = useState<Set<number>>(new Set());
+    const [favoriteSavingReportIds, setFavoriteSavingReportIds] = useState<Set<number>>(new Set());
     const [studentReps, setStudentReps] = useState<StudentReport[]>([]);
     const [adminMsgs, setAdminMsgs] = useState<AdminMessage[]>([]);
     const reportDetailRequestsRef = useRef<Map<number, Promise<void>>>(new Map());
+    const favoriteRequestVersionRef = useRef(0);
+    const favoriteSaveInFlightRef = useRef<Set<number>>(new Set());
     // A selected report can be loading while its participant sends a live
     // reply. Queue one authoritative re-read after the older snapshot settles
     // so the new message never waits for the Adviser to interact again.
@@ -937,6 +973,19 @@ function ReportsPageContent() {
         });
     }, []);
 
+    const loadFavoriteReportIds = useCallback(async () => {
+        const requestVersion = ++favoriteRequestVersionRef.current;
+        const res = await fetch("/api/reports/adviser/favorites", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+        if (requestVersion !== favoriteRequestVersionRef.current) return;
+        if (!res.ok) throw new Error(data?.message || "Unable to load report favorites.");
+        setFavoriteReportIds(new Set(
+            (data?.reportIds ?? [])
+                .map((reportId: unknown) => Number(reportId))
+                .filter((reportId: number) => Number.isSafeInteger(reportId) && reportId > 0),
+        ));
+    }, []);
+
     const loadReportDetail = useCallback(async (id: number) => {
         const inFlight = reportDetailRequestsRef.current.get(id);
         if (inFlight) {
@@ -963,6 +1012,16 @@ function ReportsPageContent() {
         } finally {
             reportDetailRequestsRef.current.delete(id);
         }
+    }, []);
+
+    const loadReportsForExport = useCallback(async (ids: number[]) => {
+        const responses = await Promise.all(ids.map(async (id) => {
+            const res = await fetch(`/api/reports/parent-adviser?role=adviser&reportId=${id}`, { cache: "no-store" });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to load a report for export.");
+            return (data?.reports?.[0] ?? null) as Report | null;
+        }));
+        return responses.filter((report): report is Report => report !== null);
     }, []);
 
     const loadStudentReports = useCallback(async () => {
@@ -1020,7 +1079,7 @@ function ReportsPageContent() {
         async function loadInitialReports() {
             try {
                 setReportsLoading(true);
-                await Promise.all([loadReports(), loadStudentReports(), loadAdminMessages()]);
+                await Promise.all([loadReports(), loadFavoriteReportIds(), loadStudentReports(), loadAdminMessages()]);
             } finally {
                 if (isMounted) setReportsLoading(false);
             }
@@ -1031,7 +1090,7 @@ function ReportsPageContent() {
         return () => {
             isMounted = false;
         };
-    }, [loadReports, loadStudentReports, loadAdminMessages]);
+    }, [loadReports, loadFavoriteReportIds, loadStudentReports, loadAdminMessages]);
 
     // ── Handle deep-link from notification ───────────────────────────────
     useEffect(() => {
@@ -1056,7 +1115,11 @@ function ReportsPageContent() {
     }, [reports, studentReps, adminMsgs, setUnreadCount]);
 
     // ── Derived data ──────────────────────────────────────────────────────
-    const parentGroups = groupByParent(reports).sort(newestGroupFirst);
+    const parentGroups = groupByParent(reports)
+        .sort((a, b) =>
+            Number(groupHasFavorite(b, favoriteReportIds)) - Number(groupHasFavorite(a, favoriteReportIds))
+            || newestGroupFirst(a, b))
+        .map((group) => ({ ...group, reports: [...group.reports].sort(favoriteFirstReport(favoriteReportIds)) }));
 
     const studentGroups = groupByStudent(studentReps).sort(newestGroupFirst);
     // Read Panel 2 from the live report collection rather than the saved
@@ -1065,7 +1128,7 @@ function ReportsPageContent() {
     const selectedParentReports = selectedParent
         ? reports
             .filter((report) => report.parent_name === selectedParent.parent_name)
-            .sort(newestReportFirst)
+            .sort(favoriteFirstReport(favoriteReportIds))
         : [];
 
     const principalMsgs = adminMsgs;
@@ -1151,8 +1214,61 @@ function ReportsPageContent() {
         if (categoryFilter !== "All") if (!g.reports.some(r => r.categories.includes(categoryFilter))) return false;
         return true;
     });
+    const exportableReports = reports.filter((report) => {
+        if (filterTab === "Pending" && adviserReportStatusCategory(report) !== "pending") return false;
+        if (filterTab === "Ongoing" && adviserReportStatusCategory(report) !== "ongoing") return false;
+        if (filterTab === "Escalated" && adviserReportStatusCategory(report) !== "escalated") return false;
+        if (categoryFilter !== "All" && !report.categories.includes(categoryFilter)) return false;
+        return true;
+    });
+    const exportFilters = [
+        `Status: ${filterTab === "All" ? "All statuses" : filterTab}`,
+        `Category: ${categoryFilter === "All" ? "All categories" : categoryFilter}`,
+    ];
 
     // ── Actions ───────────────────────────────────────────────────────────
+    async function toggleReportFavorite(reportId: number) {
+        if (favoriteSaveInFlightRef.current.has(reportId)) return;
+
+        const wasFavorite = favoriteReportIds.has(reportId);
+        const mutationVersion = ++favoriteRequestVersionRef.current;
+        favoriteSaveInFlightRef.current.add(reportId);
+        setFavoriteSavingReportIds((current) => new Set(current).add(reportId));
+        setFavoriteReportIds((current) => {
+            const next = new Set(current);
+            if (wasFavorite) next.delete(reportId);
+            else next.add(reportId);
+            return next;
+        });
+
+        try {
+            const res = await fetch("/api/reports/adviser/favorites", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reportId, favorite: !wasFavorite }),
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || "Unable to save report favorite.");
+        } catch (error) {
+            console.error("Unable to save adviser report favorite:", error);
+            if (mutationVersion === favoriteRequestVersionRef.current) {
+                setFavoriteReportIds((current) => {
+                    const next = new Set(current);
+                    if (wasFavorite) next.add(reportId);
+                    else next.delete(reportId);
+                    return next;
+                });
+            }
+        } finally {
+            favoriteSaveInFlightRef.current.delete(reportId);
+            setFavoriteSavingReportIds((current) => {
+                const next = new Set(current);
+                next.delete(reportId);
+                return next;
+            });
+        }
+    }
+
     async function markReportStatus(id: number, status?: ReportStatus, markRead = false) {
         setActionError("");
         const res = await fetch(`/api/reports/parent-adviser/${id}/status`, {
@@ -1514,13 +1630,25 @@ function ReportsPageContent() {
                     <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">Reports & Messages</h1>
                     <p className="text-xs text-slate-400 mt-0.5">Manage parent reports, student concerns, and admin messages</p>
                 </div>
-                <button
-                    onClick={() => setShowNewMessage(true)}
-                    data-parent-guide="new-message"
-                    className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-600 sm:w-auto ${guideHighlight("new-message")}`}
-                >
-                    <TrendingUp className="w-3.5 h-3.5" /> New Message
-                </button>
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    {leftTab === "Parent" && (
+                        <button
+                            type="button"
+                            onClick={() => setShowExportModal(true)}
+                            disabled={exportableReports.length === 0}
+                            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                        >
+                            <FileDown className="w-3.5 h-3.5" /> Export
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setShowNewMessage(true)}
+                        data-parent-guide="new-message"
+                        className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-600 sm:w-auto ${guideHighlight("new-message")}`}
+                    >
+                        <TrendingUp className="w-3.5 h-3.5" /> New Message
+                    </button>
+                </div>
             </div>
             {actionError && (
                 <div className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700">
@@ -1746,28 +1874,40 @@ function ReportsPageContent() {
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
                                     {selectedParentReports.map(r => {
                                         const isActive = selectedReport?.id === r.id;
+                                        const isFavorite = favoriteReportIds.has(r.id);
+                                        const isSavingFavorite = favoriteSavingReportIds.has(r.id);
                                         return (
-                                            <button key={r.id} onClick={() => { selectReport(r); setViewStep("detail"); }}
-                                                className={`w-full text-left rounded-xl px-3 py-3 transition border ${r.status === "Resolved" ? "bg-emerald-50 border-emerald-100 hover:bg-emerald-100" : "bg-red-50 border-red-100 hover:bg-red-100"} ${isActive ? "ring-2 ring-emerald-300" : ""}`}>
-                                                <div className="flex items-start justify-between gap-2 mb-1.5">
-                                                    <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(effectiveAdviserReportStatus(r))}`}>{adviserReportStatusLabel(r)}</span>
-                                                </div>
-                                                <div className="flex flex-wrap gap-1 mb-2">
-                                                    {r.categories.map(cat => (
-                                                        <span key={cat} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-semibold">{cat}</span>
-                                                    ))}
-                                                </div>
-                                                {r.status !== "Resolved" && (
-                                                    <>
+                                            <div key={r.id} className="relative">
+                                                <button onClick={() => { selectReport(r); setViewStep("detail"); }}
+                                                    className={`w-full text-left rounded-xl px-3 py-3 transition border ${r.status === "Resolved" ? "bg-emerald-50 border-emerald-100 hover:bg-emerald-100" : "bg-red-50 border-red-100 hover:bg-red-100"} ${isActive ? "ring-2 ring-emerald-300" : ""}`}>
+                                                    <div className="flex items-start justify-between gap-2 mb-1.5">
+                                                        <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(effectiveAdviserReportStatus(r))}`}>{adviserReportStatusLabel(r)}</span>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-1 mb-2">
+                                                        {r.categories.map(cat => (
+                                                            <span key={cat} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-semibold">{cat}</span>
+                                                        ))}
+                                                    </div>
+                                                    {r.status !== "Resolved" && (
                                                         <div className="flex items-center justify-between mt-1.5">
                                                             <PriorityBadge level={r.concernLevel} />
-
                                                         </div>
-                                                    </>
-                                                )}
-                                                <p className="text-[10px] text-slate-400 mt-1.5">{r.submitted_at}</p>
-                                            </button>
+                                                    )}
+                                                    <p className="mt-1.5 pr-8 text-[10px] text-slate-400">{r.submitted_at}</p>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-pressed={isFavorite}
+                                                    aria-label={isFavorite ? "Remove report from favorites" : "Add report to favorites"}
+                                                    title={isFavorite ? "Remove report from favorites" : "Add report to favorites"}
+                                                    disabled={isSavingFavorite}
+                                                    onClick={() => { void toggleReportFavorite(r.id); }}
+                                                    className={`absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg border transition disabled:cursor-wait disabled:opacity-60 ${isFavorite ? "border-amber-200 bg-amber-100 text-amber-500 hover:bg-amber-200" : "border-slate-100 bg-white text-slate-300 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-500"}`}
+                                                >
+                                                    <Star className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
+                                                </button>
+                                            </div>
                                         );
                                     })}
                                 </div>
@@ -1871,9 +2011,6 @@ function ReportsPageContent() {
                                                     ))}
                                                 </div>
                                             </div>
-                                            <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(effectiveAdviserReportStatus(selectedReport))}`}>{adviserReportStatusLabel(selectedReport)}</span>
-                                            </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (
                                             <div className="mt-3 max-w-xs">
@@ -1960,9 +2097,6 @@ function ReportsPageContent() {
                                                         <span key={cat} className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 font-semibold border border-slate-200">{cat}</span>
                                                     ))}
                                                 </div>
-                                            </div>
-                                            <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(effectiveAdviserReportStatus(selectedReport))}`}>{adviserReportStatusLabel(selectedReport)}</span>
                                             </div>
                                         </div>
                                         {selectedReport.status !== "Resolved" && (
@@ -2447,6 +2581,49 @@ function ReportsPageContent() {
                 onCancel={() => { if (!resolvingStudent) setStudentResolveTargetId(null); }}
                 onConfirm={() => { void confirmStudentResolve(); }}
             />
+            {showExportModal && (
+                <ConcernExportModal
+                    theme="emerald"
+                    options={exportableReports.map((report) => ({
+                        id: String(report.id),
+                        label: `${report.parent_name} - ${report.subject}`,
+                    }))}
+                    selectedId={selectedReport ? String(selectedReport.id) : null}
+                    filters={exportFilters}
+                    onClose={() => setShowExportModal(false)}
+                    onExport={async ({ format, scope, selectedId }) => {
+                        const selected = selectedId ? exportableReports.find((report) => String(report.id) === selectedId) ?? null : null;
+                        const reportIds = scope === "all"
+                            ? exportableReports.map((report) => report.id)
+                            : selected ? [selected.id] : [];
+                        if (reportIds.length === 0) throw new Error("There are no matching concerns to export.");
+
+                        const items = await loadReportsForExport(reportIds);
+                        if (items.length !== reportIds.length) {
+                            throw new Error("One or more concerns are no longer available. Refresh the report list and try again.");
+                        }
+
+                        const baseName = scope === "all"
+                            ? `adviser_all_concerns_${new Date().toISOString().slice(0, 10)}`
+                            : `adviser_concern_${safeFilePart(selected?.subject ?? "selected")}`;
+                        const context: GuidanceReportExportContext = {
+                            scopeLabel: scope === "all" ? "All matching report results" : "Selected report",
+                            filters: exportFilters,
+                            reportTitle: "Adviser Reports",
+                            sheetName: "Adviser Reports",
+                            schoolName: "Santiago Elementary School - Adviser Office",
+                            confidentialityLabel: "Confidential - Adviser use only",
+                            accentColor: "FF059669",
+                        };
+
+                        if (format === "excel") {
+                            downloadBlob(await buildAdviserReportsExcel(items, context), `${baseName}.xlsx`);
+                        } else {
+                            downloadBlob(buildAdviserReportsPdf(items, context), `${baseName}.pdf`);
+                        }
+                    }}
+                />
+            )}
             {showNewMessage && (
                 <NewMessageModal
                     onClose={() => setShowNewMessage(false)}

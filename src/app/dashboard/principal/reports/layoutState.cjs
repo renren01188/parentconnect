@@ -43,7 +43,18 @@ function detailPanelLayout(hasSelectedParent) {
  */
 function principalReportStatusLabel(report) {
   const status = String(report.status ?? "").toLowerCase();
-  if (status === "resolved") return "Resolved";
+  if (status === "resolved") {
+    const storedResolverRole = String(report.resolvedByRole ?? "").trim();
+    if (["Adviser", "Guidance", "Principal"].includes(storedResolverRole)) {
+      return `Resolved by ${storedResolverRole}`;
+    }
+
+    // Reports resolved before resolver metadata was introduced retain their
+    // correct owner through the same durable routing rules used at the time.
+    if (report.escalatedToPrincipal) return "Resolved by Principal";
+    if (report.escalatedToGuidance) return "Resolved by Guidance";
+    return "Resolved by Adviser";
+  }
   if (report.escalatedToPrincipal) return "Escalated from Guidance";
   if (report.escalatedToGuidance) return "Escalated to Guidance";
   if (report.ticketStatus === "accepted") return "Accepted Ticket";

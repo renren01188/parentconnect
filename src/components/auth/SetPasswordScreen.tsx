@@ -94,6 +94,7 @@ export function SetPasswordScreen({
   onSubmit,
 }: SetPasswordScreenProps) {
   const strength = rules.filter((rule) => rule.met).length;
+  const passwordRequirementsMet = rules.every((rule) => rule.met);
   const strengthLabel = ["", "Weak", "Fair", "Good", "Strong"][strength] ?? "";
   const strengthColor = [
     "#e5e7eb",
@@ -213,6 +214,11 @@ export function SetPasswordScreen({
                   <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Password Requirements</p>
                   {rules.map((rule) => <PasswordRule key={rule.text} rule={rule} theme={theme} />)}
                 </div>
+                {password && !passwordRequirementsMet && (
+                  <p role="status" className="text-xs leading-5 text-red-600">
+                    Complete every password requirement before continuing.
+                  </p>
+                )}
 
                 <div>
                   <label className="mb-1.5 block text-xs font-bold text-gray-600">

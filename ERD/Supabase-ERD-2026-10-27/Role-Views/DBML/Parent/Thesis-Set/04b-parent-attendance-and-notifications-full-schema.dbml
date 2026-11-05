@@ -1,0 +1,183 @@
+// ParentConnect — Parent role — Attendance and Notifications
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs describe the Parent workflow relationships. Polymorphic or cross-role identifiers are documented application-level links where the schema has no direct foreign key.
+
+Project parent_attendance_and_notifications {
+  database_type: 'PostgreSQL'
+  Note: 'Linked learner attendance, class-session context, parent read receipts, and email/SMS alert delivery jobs.'
+}
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parent_student_links {
+  id int8 [pk, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  relationship text
+  created_at timestamptz [not null]
+}
+
+Table class_sessions {
+  id int4 [pk, not null]
+  session_date date [not null]
+  session_type text [not null]
+  scheduled_start time [not null]
+  scheduled_end time [not null]
+  status text [not null]
+  actual_start timestamptz
+  actual_end timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  late_after time
+  absent_after time
+  grade text
+}
+
+Table attendance_logs {
+  id int4 [pk, not null]
+  student_db_id int4
+  student_id text
+  attendance_date date [not null]
+  time_logged time [not null]
+  type text
+  status text
+  via text
+  remark text
+  session_type text [not null]
+  class_session_id int4
+  scan_request_id text
+  student_grade_snapshot text
+  student_section_snapshot text
+  parent_recording_source text
+}
+
+Table parent_attendance_notification_reads {
+  parent_id int4 [pk, not null]
+  attendance_log_id int8 [pk, not null]
+  read_at timestamptz [not null]
+}
+
+Table attendance_email_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_email text
+  recipient_key text [not null]
+  subject text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  provider text
+  provider_message_id text
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_sms_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_phone text
+  recipient_key text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  delivered_at timestamptz
+  provider text
+  provider_message_id text
+  provider_status text
+  provider_response jsonb
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  provider_requested_at timestamptz
+  provider_accepted_at timestamptz
+  idempotency_key text [not null]
+  reconciliation_required_at timestamptz
+  reconciled_at timestamptz
+  retry_eligible_at timestamptz
+  reconciliation_attempts int4 [not null]
+}
+
+// Parent workflow relationships.
+Ref: parent_student_links.parent_id > parents.id
+Ref: parent_student_links.student_id > students.student_id
+Ref: attendance_logs.student_db_id > students.id
+Ref: attendance_logs.class_session_id > class_sessions.id
+Ref: parent_attendance_notification_reads.parent_id > parents.id
+Ref: parent_attendance_notification_reads.attendance_log_id > attendance_logs.id
+Ref: attendance_email_jobs.parent_id > parents.id
+Ref: attendance_email_jobs.attendance_log_id > attendance_logs.id
+Ref: attendance_sms_jobs.parent_id > parents.id
+Ref: attendance_sms_jobs.attendance_log_id > attendance_logs.id

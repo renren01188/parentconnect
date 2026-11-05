@@ -253,6 +253,7 @@ function ExportReportsModal({
     const [scope, setScope] = useState<ExportScope>("all");
     const [reportId, setReportId] = useState<number>(selectedReport?.id ?? reports[0]?.id ?? 0);
     const [exporting, setExporting] = useState(false);
+    const [exportError, setExportError] = useState("");
     const selectedExportReport = reports.find((report) => report.id === reportId) ?? null;
     const canExport = scope === "all" ? reports.length > 0 : !!selectedExportReport;
 
@@ -266,6 +267,7 @@ function ExportReportsModal({
     async function handleExport() {
         if (!canExport) return;
         setExporting(true);
+        setExportError("");
         const reportIds = scope === "all"
             ? reports.map((report) => report.id)
             : selectedExportReport ? [selectedExportReport.id] : [];
@@ -277,6 +279,9 @@ function ExportReportsModal({
             // Exporting is an explicit user action, so it is the right time
             // to load the complete records without slowing the inbox itself.
             const items = await loadReportsForExport(reportIds);
+            if (items.length !== reportIds.length) {
+                throw new Error("One or more concerns are no longer available. Refresh the report list and try again.");
+            }
             const context: GuidanceReportExportContext = {
                 scopeLabel: scope === "all" ? "All matching report results" : "Selected report",
                 filters,
@@ -287,6 +292,8 @@ function ExportReportsModal({
                 downloadBlob(buildGuidanceReportsPdf(items, context), `${baseName}.pdf`);
             }
             onClose();
+        } catch (exportError) {
+            setExportError(exportError instanceof Error ? exportError.message : "Unable to export the selected concerns.");
         } finally {
             setExporting(false);
         }
@@ -366,6 +373,7 @@ function ExportReportsModal({
                         </p>
                         <p className="mt-1 text-[11px] text-slate-400">{filters.join(" · ")}</p>
                     </div>
+                    {exportError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">{exportError}</p>}
                   </div>
                 </div>
 
@@ -1920,13 +1928,6 @@ function ReportsPageContent() {
                                                     ))}
                                                 </div>
                                             </div>
-                                            <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(
-                                                    isPrincipalEscalated && selectedReport.status === "Resolved" ? "ResolvedByPrincipal" : selectedReport.status
-                                                )}`}>
-                                                    {isPrincipalEscalated && selectedReport.status === "Resolved" ? "Resolved by Principal" : selectedReport.status}
-                                                </span>
-                                            </div>
                                         </div>
                                     </div>
 
@@ -2003,13 +2004,6 @@ function ReportsPageContent() {
                                                         <span key={cat} className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 font-semibold border border-slate-200">{cat}</span>
                                                     ))}
                                                 </div>
-                                            </div>
-                                            <div className="shrink-0 flex flex-col items-end gap-2">
-                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStatusStyle(
-                                                    isPrincipalEscalated && selectedReport.status === "Resolved" ? "ResolvedByPrincipal" : selectedReport.status
-                                                )}`}>
-                                                    {isPrincipalEscalated && selectedReport.status === "Resolved" ? "Resolved by Principal" : selectedReport.status}
-                                                </span>
                                             </div>
                                         </div>
                                     </div>

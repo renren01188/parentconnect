@@ -1,0 +1,222 @@
+// ParentConnect — ICT role — Deletion Workflow
+
+// Focused DBML diagram for dbdiagram.io.
+
+
+
+Project ict_deletion_workflow {
+
+  database_type: 'PostgreSQL'
+
+  Note: 'Scheduled deletion approvals, requested and targeted accounts, and deletion-notice email jobs.'
+
+}
+
+
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table scheduled_deletions {
+  id int8 [pk, not null]
+  target_type text [not null]
+  target_id text [not null]
+  target_name text [not null]
+  target_email text
+  requested_by_role text [not null]
+  requested_by_id int8 [not null]
+  reason text [not null]
+  status text [not null]
+  requested_at timestamptz [not null]
+  approved_at timestamptz
+  approved_by_ict_id int8
+  delete_after timestamptz
+  restored_at timestamptz
+  notice_sent_at timestamptz
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+}
+
+Table scheduled_deletion_requesters {
+  scheduled_deletion_id int8 [pk, not null]
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table scheduled_deletion_targets {
+  scheduled_deletion_id int8 [pk, not null]
+  student_id int8
+  parent_id int8
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table deletion_email_jobs {
+  id uuid [pk, not null]
+  batch_id uuid [not null]
+  recipient_email text [not null]
+  recipient_email_normalized text
+  recipient_name text [not null]
+  target_names text[] [not null]
+  scheduled_deletion_ids int8[] [not null]
+  reason text [not null]
+  delete_after timestamptz [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table deletion_email_job_items {
+  deletion_email_job_id uuid [pk, not null]
+  scheduled_deletion_id int8 [pk, not null]
+  created_at timestamptz [not null]
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table advisers {
+  id int4 [pk, not null]
+  employee_id text [unique]
+  first_name text [not null]
+  last_name text [not null]
+  email text [unique, not null]
+  phone text
+  grade text
+  section text
+  status text
+  password_hash text [not null]
+  created_at timestamptz
+  updated_at timestamptz
+  sections text[] [not null]
+  middle_name text
+  password_set bool
+  suffix text
+  class_session text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  notifications_last_seen_at timestamptz
+  adviser_attendance_guide_completed_at timestamptz
+  adviser_reports_guide_completed_at timestamptz
+  adviser_dashboard_guide_completed_at timestamptz
+}
+
+
+
+// Live Supabase foreign-key constraints.
+
+Ref: scheduled_deletions.approved_by_ict_id > ict_admins.id
+
+Ref: scheduled_deletion_requesters.scheduled_deletion_id > scheduled_deletions.id
+
+Ref: scheduled_deletion_requesters.adviser_id > advisers.id
+
+Ref: scheduled_deletion_requesters.ict_admin_id > ict_admins.id
+
+Ref: scheduled_deletion_targets.scheduled_deletion_id > scheduled_deletions.id
+
+Ref: scheduled_deletion_targets.student_id > students.id
+
+Ref: scheduled_deletion_targets.parent_id > parents.id
+
+Ref: scheduled_deletion_targets.adviser_id > advisers.id
+
+Ref: scheduled_deletion_targets.ict_admin_id > ict_admins.id
+
+Ref: deletion_email_job_items.deletion_email_job_id > deletion_email_jobs.id
+
+Ref: deletion_email_job_items.scheduled_deletion_id > scheduled_deletions.id

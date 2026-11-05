@@ -727,6 +727,11 @@ export async function PATCH(req: NextRequest) {
         body: replyBody,
         attachments: cleanedAttachments,
         source_message_id: rootId,
+        // A Principal follow-up can be tied to a resolved report without
+        // becoming a parent_adviser_report_message. Preserve that optional
+        // link on Parent replies so its separate School Messages thread stays
+        // visible in the Principal's report-level message panel.
+        report_id: Number(root.report_id) || null,
         status: "unread",
       }).select("*").single();
       if (error) throw error;

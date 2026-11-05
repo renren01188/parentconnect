@@ -126,6 +126,7 @@ export async function PATCH(
       last_message_at: now,
     };
     if (escalatedToPrincipal) updatePayload.escalated_to_principal = true;
+    if (normalized === "resolved") updatePayload.resolved_by_role = "Guidance";
 
     let updateResult = await supabase
       .from("parent_adviser_reports")

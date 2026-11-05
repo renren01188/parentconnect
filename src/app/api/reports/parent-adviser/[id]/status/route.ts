@@ -57,6 +57,7 @@ export async function PATCH(
         status_updated_at: now,
         updated_at: now,
       };
+      if (normalized === "resolved") updatePayload.resolved_by_role = "Adviser";
       let { error } = await supabase
         .from("parent_adviser_reports")
         .update(updatePayload)

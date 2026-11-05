@@ -1,0 +1,400 @@
+// ParentConnect — Parent role DBML
+// Scope: parent-facing workflows only. This is intentionally not the full application schema.
+// The Refs at the end document application-level ID links. The current Supabase
+// schema does not enforce them as PostgreSQL foreign-key constraints.
+
+Project parentconnect_parent_role {
+  database_type: 'PostgreSQL'
+  Note: 'Parent role view: identity, linked learners, attendance, reports, notifications, deletion notices, and account recovery.'
+}
+
+TableGroup parent_identity_and_learners {
+  parents
+  students
+  parent_student_links
+  student_family_members
+  sections
+}
+
+TableGroup attendance {
+  attendance_logs
+  class_sessions
+  parent_attendance_notification_reads
+  attendance_email_jobs
+  attendance_sms_jobs
+}
+
+TableGroup reports_and_parent_notifications {
+  parent_adviser_reports
+  parent_adviser_report_messages
+  parent_report_guidance_tickets
+  parent_announcement_notifications
+  parent_deletion_notifications
+  scheduled_deletions
+}
+
+TableGroup parent_account_security {
+  parent_verification_otps
+  parent_password_reset_otps
+  parent_password_reset_rate_limits
+  login_attempt_guards
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parent_student_links {
+  id int8 [pk, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  relationship text
+  created_at timestamptz [not null]
+}
+
+Table student_family_members {
+  id int8 [pk, not null]
+  student_db_id int4 [not null]
+  role text [not null]
+  first_name text
+  middle_name text
+  last_name text
+  relationship text
+  contact_number text
+  created_at timestamptz [not null]
+  suffix text
+}
+
+Table sections {
+  id int4 [pk, not null]
+  name text [unique, not null]
+  grade text [unique, not null]
+  class_session text
+}
+
+Table attendance_logs {
+  id int4 [pk, not null]
+  student_db_id int4
+  student_id text
+  attendance_date date [not null]
+  time_logged time [not null]
+  type text
+  status text
+  via text
+  remark text
+  session_type text [not null]
+  class_session_id int4
+  scan_request_id text
+  student_grade_snapshot text
+  student_section_snapshot text
+  parent_recording_source text
+}
+
+Table class_sessions {
+  id int4 [pk, not null]
+  session_date date [not null]
+  session_type text [not null]
+  scheduled_start time [not null]
+  scheduled_end time [not null]
+  status text [not null]
+  actual_start timestamptz
+  actual_end timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  late_after time
+  absent_after time
+  grade text
+}
+
+Table parent_attendance_notification_reads {
+  parent_id int4 [pk, not null]
+  attendance_log_id int8 [pk, not null]
+  read_at timestamptz [not null]
+}
+
+Table attendance_email_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_email text
+  recipient_key text [not null]
+  subject text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  provider text
+  provider_message_id text
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_sms_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_phone text
+  recipient_key text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  delivered_at timestamptz
+  provider text
+  provider_message_id text
+  provider_status text
+  provider_response jsonb
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  provider_requested_at timestamptz
+  provider_accepted_at timestamptz
+  idempotency_key text [not null]
+  reconciliation_required_at timestamptz
+  reconciled_at timestamptz
+  retry_eligible_at timestamptz
+  reconciliation_attempts int4 [not null]
+}
+
+Table parent_adviser_reports {
+  id int8 [pk, not null]
+  parent_id int8
+  parent_email text [not null]
+  parent_name text [not null]
+  adviser_id int8
+  adviser_name text [not null]
+  student_id text [not null]
+  student_name text [not null]
+  grade text
+  section text
+  subject text [not null]
+  categories text[] [not null]
+  concern_level int4 [not null]
+  status text [not null]
+  escalated_to_guidance bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  last_message_at timestamptz [not null]
+  parent_seen_at timestamptz
+  status_updated_at timestamptz [not null]
+  escalated_to_principal bool [not null]
+  guidance_seen_at timestamptz
+  allow_history_access bool
+  subject_teacher_email text
+  subject_teacher_report_date_manila date
+  cancelled_at timestamptz
+  cancelled_by_parent_id int8
+  subject_teacher_submission_key uuid
+}
+
+Table parent_adviser_report_messages {
+  id int8 [pk, not null]
+  report_id int8 [not null]
+  sender_role text [not null]
+  sender_name text [not null]
+  body text [not null]
+  created_at timestamptz [not null]
+  read_by_parent bool [not null]
+  read_by_adviser bool [not null]
+  attachments jsonb [not null]
+  thread_type text [not null]
+  idempotency_key uuid
+}
+
+Table parent_report_guidance_tickets {
+  id int8 [pk, not null]
+  report_id int8 [unique, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  adviser_id int8
+  concern text [not null]
+  message text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  rejection_reason text
+  assigned_guidance_id int8
+  created_at timestamptz [not null]
+  decided_at timestamptz
+  updated_at timestamptz [not null]
+}
+
+Table parent_announcement_notifications {
+  id int8 [pk, not null]
+  announcement_id int8 [not null]
+  parent_id int8 [not null]
+  student_id text
+  grade text
+  section text
+  read_at timestamptz
+  created_at timestamptz [not null]
+  source text
+  title text
+  message text
+  sender_name text
+  unread bool [not null]
+  tab text [not null]
+}
+
+Table parent_deletion_notifications {
+  id int8 [pk, not null]
+  parent_id int4 [not null]
+  scheduled_deletion_id int8 [not null]
+  read_at timestamptz
+  created_at timestamptz [not null]
+}
+
+Table scheduled_deletions {
+  id int8 [pk, not null]
+  target_type text [not null]
+  target_id text [not null]
+  target_name text [not null]
+  target_email text
+  requested_by_role text [not null]
+  requested_by_id int8 [not null]
+  reason text [not null]
+  status text [not null]
+  requested_at timestamptz [not null]
+  approved_at timestamptz
+  approved_by_ict_id int8
+  delete_after timestamptz
+  restored_at timestamptz
+  notice_sent_at timestamptz
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+}
+
+Table parent_verification_otps {
+  challenge_id uuid [pk, not null]
+  parent_id int4
+  purpose text [not null]
+  channel text [not null]
+  otp_hash text [not null]
+  expires_at timestamptz [not null]
+  resend_available_at timestamptz [not null]
+  attempts int2 [not null]
+  locked_until timestamptz
+  used_at timestamptz
+  requested_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table parent_password_reset_otps {
+  parent_id int4 [pk, not null]
+  otp_hash text [not null]
+  expires_at timestamptz [not null]
+  attempts int2 [not null]
+  requested_at timestamptz [not null]
+}
+
+Table parent_password_reset_rate_limits {
+  subject_hash text [pk, not null]
+  window_started_at timestamptz [not null]
+  request_count int4 [not null]
+}
+
+Table login_attempt_guards {
+  role text [pk, not null]
+  subject_hash text [pk, not null]
+  failed_attempts int4 [not null]
+  locked_until timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  scope text [pk, not null]
+  lockout_level int4 [not null]
+  last_failed_at timestamptz
+}
+
+// Application-level logical references (not enforced database foreign keys).
+Ref: parents.student_id > students.student_id
+Ref: parent_student_links.parent_id > parents.id
+Ref: parent_student_links.student_id > students.student_id
+Ref: student_family_members.student_db_id > students.id
+Ref: attendance_logs.student_db_id > students.id
+Ref: attendance_logs.class_session_id > class_sessions.id
+Ref: parent_attendance_notification_reads.parent_id > parents.id
+Ref: parent_attendance_notification_reads.attendance_log_id > attendance_logs.id
+Ref: attendance_email_jobs.parent_id > parents.id
+Ref: attendance_email_jobs.attendance_log_id > attendance_logs.id
+Ref: attendance_sms_jobs.parent_id > parents.id
+Ref: attendance_sms_jobs.attendance_log_id > attendance_logs.id
+Ref: parent_adviser_reports.parent_id > parents.id
+Ref: parent_adviser_reports.student_id > students.student_id
+Ref: parent_adviser_report_messages.report_id > parent_adviser_reports.id
+Ref: parent_report_guidance_tickets.report_id - parent_adviser_reports.id
+Ref: parent_report_guidance_tickets.parent_id > parents.id
+Ref: parent_report_guidance_tickets.student_id > students.student_id
+Ref: parent_announcement_notifications.parent_id > parents.id
+Ref: parent_announcement_notifications.student_id > students.student_id
+Ref: parent_deletion_notifications.parent_id > parents.id
+Ref: parent_deletion_notifications.scheduled_deletion_id > scheduled_deletions.id
+Ref: parent_verification_otps.parent_id > parents.id
+Ref: parent_password_reset_otps.parent_id - parents.id

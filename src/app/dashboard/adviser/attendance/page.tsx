@@ -176,7 +176,6 @@ interface AdviserInfo {
     full_name: string;
 }
 
-type RfidScannerMode = "default" | "rapid";
 type RapidTapResult = {
     id: string;
     outcome: "recorded" | "duplicate" | "out-of-section" | "failed";
@@ -1949,7 +1948,6 @@ export default function AdviserAttendancePage() {
     const [scanValue, setScanValue] = useState("");
     const [activeTopAction, setActiveTopAction] = useState<"history" | null>(null);
     const [scanMessage, setScanMessage] = useState("Waiting for RFID card tap...");
-    const [rfidScannerMode, setRfidScannerMode] = useState<RfidScannerMode>("default");
     const [rapidTapQueue, setRapidTapQueue] = useState<RapidTapQueueItem[]>([]);
     const [rapidTapResults, setRapidTapResults] = useState<RapidTapResult[]>([]);
     const [rapidTapStorageReady, setRapidTapStorageReady] = useState(false);
@@ -2035,7 +2033,6 @@ export default function AdviserAttendancePage() {
     const newRfidInputRef = useRef<HTMLInputElement | null>(null);
     const historyRequestRef = useRef<AbortController | null>(null);
     const scanValueRef = useRef("");
-    const scanInFlightRef = useRef(false);
     const rapidTapQueueRef = useRef<RapidTapQueueItem[]>([]);
     const rapidTapProcessingRef = useRef(false);
     const rapidTapPersistChainRef = useRef(Promise.resolve());
@@ -2055,6 +2052,7 @@ export default function AdviserAttendancePage() {
     const isScanningOpen = Boolean(
         classSession && selectedSectionSession === classSession.session_type
     );
+    const rapidTapScannerReady = isScanningOpen && rapidTapStorageReady;
 
     // This changes only the displayed scan type. The API independently uses
     // the school clock and the saved ICT schedule before it records Time Out.
@@ -2111,7 +2109,7 @@ export default function AdviserAttendancePage() {
         rapidTapManualReviewCount > 0 ? `${rapidTapManualReviewCount} needs review` : "",
     ].filter(Boolean).join(" · ");
     // Only a scan still eligible for automatic processing should prevent an
-    // Adviser from changing scanner modes or closing the browser.
+    // Adviser from closing the browser.
     const hasRapidTapUnsynced = rapidTapPendingCount > 0;
     const hasRapidTapQueueItems = rapidTapQueue.length > 0;
 
@@ -2258,7 +2256,6 @@ export default function AdviserAttendancePage() {
     const processRapidTapQueue = useCallback(async () => {
         if (
             rapidTapProcessingRef.current
-            || rfidScannerMode !== "rapid"
             || !rapidTapStorageReady
         ) return;
 
@@ -2441,12 +2438,12 @@ export default function AdviserAttendancePage() {
         } finally {
             rapidTapProcessingRef.current = false;
         }
-    }, [addRapidTapResult, isScanningOpen, loadTodayLogs, rapidTapStorageReady, replaceRapidTapQueue, rfidScannerMode]);
+    }, [addRapidTapResult, isScanningOpen, loadTodayLogs, rapidTapStorageReady, replaceRapidTapQueue]);
 
     const enqueueRapidTapScan = useCallback((rfidCard: string) => {
         const sessionType = classSession?.session_type;
         const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
-        if (!rapidTapScope || !sessionType || !section) {
+        if (!rapidTapStorageReady || !rapidTapScope || !sessionType || !section) {
             setScanMessage("Rapid Tap is not ready. Check the class session and try again.");
             return;
         }
@@ -2512,7 +2509,7 @@ export default function AdviserAttendancePage() {
                 addRapidTapResult({ id: failedItem.id, outcome: "failed", message: storageMessage });
                 setScanMessage(`⚠ ${storageMessage}`);
             });
-    }, [activeSection, addRapidTapResult, adviser, classSession?.session_type, rapidTapScope, replaceRapidTapQueue]);
+    }, [activeSection, addRapidTapResult, adviser, classSession?.session_type, rapidTapScope, rapidTapStorageReady, replaceRapidTapQueue]);
 
     const retryFailedRapidTapScans = useCallback(() => {
         const retryItems = rapidTapQueueRef.current.map((item) => item.status === "failed" && !item.requiresManualReview
@@ -2695,16 +2692,15 @@ export default function AdviserAttendancePage() {
                 rapidTapHadWorkRef.current = restoredItems.length > 0;
                 replaceRapidTapQueue(restoredItems);
                 if (restoredItems.length > 0) {
-                    // An unfinished queue must resume in the same scan mode;
-                    // silently switching to Default would strand attendance.
-                    setRfidScannerMode("rapid");
                     setScanMessage(`Restored ${restoredItems.length} Rapid Tap scan${restoredItems.length === 1 ? "" : "s"} waiting to save.`);
                 }
+                setRapidTapStorageReady(true);
             } catch (storageError) {
                 console.error("Could not restore Rapid Tap scans:", storageError);
-                if (!cancelled) setScanMessage("Rapid Tap storage is unavailable in this browser. Default scanning is still available.");
-            } finally {
-                if (!cancelled) setRapidTapStorageReady(true);
+                if (!cancelled) {
+                    setRapidTapStorageReady(false);
+                    setScanMessage("Rapid Tap needs browser storage before it can safely record attendance. Check browser storage and reload this page.");
+                }
             }
         })();
 
@@ -2713,8 +2709,7 @@ export default function AdviserAttendancePage() {
 
     useEffect(() => {
         if (
-            rfidScannerMode !== "rapid"
-            || !rapidTapStorageReady
+            !rapidTapStorageReady
             || rapidTapProcessingRef.current
         ) return undefined;
         const nextItem = rapidTapQueue
@@ -2737,7 +2732,7 @@ export default function AdviserAttendancePage() {
                 rapidTapRetryTimerRef.current = null;
             }
         };
-    }, [isScanningOpen, processRapidTapQueue, rapidTapQueue, rapidTapStorageReady, rfidScannerMode]);
+    }, [isScanningOpen, processRapidTapQueue, rapidTapQueue, rapidTapStorageReady]);
 
     useEffect(() => {
         if (!hasRapidTapUnsynced) return undefined;
@@ -2760,60 +2755,28 @@ export default function AdviserAttendancePage() {
         void loadHistory(nextStr);
     }
 
-    async function handleScan(inputValue?: string) {
+    function handleScan(inputValue?: string) {
         // Do not rely solely on scanValue here. Hardware readers can send the
         // final UID character and Enter before React commits onChange, which
         // made the first tap submit a truncated, "not registered" card value.
         const value = resolveRfidScanValue(inputValue, scanValueRef.current);
         if (!value) return;
-        if (rfidScannerMode === "rapid") {
-            clearScannerInput();
-            if (!isScanningOpen) {
-                void loadClassSession();
-                inputRef.current?.focus();
-                return;
-            }
-            // Do not await persistence here. The persistence chain preserves
-            // scan order, while the input is immediately ready for the next
-            // keyboard-emulating RFID card.
-            enqueueRapidTapScan(value);
-            inputRef.current?.focus();
-            return;
-        }
-        if (scanInFlightRef.current) return;
-        scanInFlightRef.current = true;
+        clearScannerInput();
         if (!isScanningOpen) {
-            clearScannerInput();
-            await loadClassSession();
-            scanInFlightRef.current = false;
+            void loadClassSession();
             inputRef.current?.focus();
             return;
         }
-        try {
-            setScanMessage("Processing RFID scan...");
-            const section = activeSection || adviser?.sections?.[0] || adviser?.section || "";
-            const res = await fetch("/api/attendance/scan", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ rfid_card: value, section }),
-            });
-            const data = await res.json();
-            if (data.success) {
-                const newLog: AttendanceLog = data.log;
-                setLastScanned(newLog);
-                setLogs(prev => [newLog, ...prev]);
-                setTodayLogPage(1);
-                setScanMessage(`✓ ${newLog.full_name} recorded as ${newLog.status}`);
-            } else {
-                setScanMessage(`⚠ ${data.message || "Scan failed"}`);
-            }
-        } catch (error) {
-            console.error("Scan failed:", error);
-            setScanMessage("Failed to connect to server");
-        } finally {
-            clearScannerInput();
-            scanInFlightRef.current = false;
+        if (!rapidTapStorageReady) {
+            setScanMessage("Rapid Tap is preparing secure local storage. Please wait a moment.");
             inputRef.current?.focus();
+            return;
         }
+        // Do not await persistence here. The persistence chain preserves scan
+        // order, while the input is immediately ready for the next
+        // keyboard-emulating RFID card.
+        enqueueRapidTapScan(value);
+        inputRef.current?.focus();
     }
 
     async function handleManualSave() {
@@ -3120,10 +3083,10 @@ export default function AdviserAttendancePage() {
     }, [loadClassSession]);
 
     useEffect(() => {
-        if (isScanningOpen) {
+        if (rapidTapScannerReady) {
             setTimeout(() => focusScanner(), 100);
         }
-    }, [isScanningOpen]);
+    }, [rapidTapScannerReady]);
 
     const todayLabel = new Date().toLocaleDateString("en-US", {
         month: "long", day: "numeric", year: "numeric",
@@ -3525,43 +3488,7 @@ export default function AdviserAttendancePage() {
                             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isScanningOpen ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{scannerLabel}</span>
                         </div>
                         <div className="flex flex-col items-center p-4 sm:p-6">
-                            <div className="mb-5 grid w-full grid-cols-2 rounded-xl bg-slate-100 p-1" role="group" aria-label="RFID scanning mode">
-                                <button
-                                    type="button"
-                                    aria-pressed={rfidScannerMode === "default"}
-                                    onClick={() => {
-                                        if (hasRapidTapUnsynced) {
-                                            setScanMessage("Finish or retry the Rapid Tap queue before switching to Default mode.");
-                                            return;
-                                        }
-                                        setRfidScannerMode("default");
-                                        setRapidTapComplete(false);
-                                        window.setTimeout(focusScanner, 0);
-                                    }}
-                                    className={`min-h-10 rounded-lg px-3 text-sm font-bold transition-colors ${rfidScannerMode === "default" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                                >
-                                    Default
-                                </button>
-                                <button
-                                    type="button"
-                                    aria-pressed={rfidScannerMode === "rapid"}
-                                    onClick={() => {
-                                        if (!rapidTapStorageReady) {
-                                            setScanMessage("Preparing Rapid Tap storage. Please wait a moment.");
-                                            return;
-                                        }
-                                        setRfidScannerMode("rapid");
-                                        setRapidTapComplete(false);
-                                        setScanMessage("Rapid Tap is ready. Each RFID is queued immediately and saved in order.");
-                                        window.setTimeout(focusScanner, 0);
-                                    }}
-                                    className={`min-h-10 rounded-lg px-3 text-sm font-bold transition-colors ${rfidScannerMode === "rapid" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                                >
-                                    Rapid Tap
-                                </button>
-                            </div>
-                            {rfidScannerMode === "rapid" && (
-                                <div className="mb-4 w-full space-y-3" aria-live="polite">
+                            <div className="mb-4 w-full space-y-3" aria-live="polite">
                                     {hasRapidTapQueueItems ? (
                                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left text-xs leading-5 text-amber-800">
                                             <p className="font-bold">
@@ -3613,16 +3540,15 @@ export default function AdviserAttendancePage() {
                                             ))}
                                         </div>
                                     )}
-                                </div>
-                            )}
+                            </div>
                             <input ref={inputRef} value={scanValue}
                                 onChange={e => { scanValueRef.current = e.currentTarget.value; setScanValue(e.currentTarget.value); }}
                                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void handleScan(e.currentTarget.value); } }}
                                 className="absolute opacity-0 pointer-events-none" autoFocus />
-                            <button onClick={() => { loadClassSession(); if (isScanningOpen) focusScanner(); }} disabled={!isScanningOpen}
-                                className={`flex h-44 w-44 flex-col items-center justify-center rounded-full border-[3px] border-dashed transition-colors sm:h-52 sm:w-52 ${isScanningOpen ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}`}>
+                            <button onClick={() => { void loadClassSession(); if (rapidTapScannerReady) focusScanner(); }} disabled={!rapidTapScannerReady}
+                                className={`flex h-44 w-44 flex-col items-center justify-center rounded-full border-[3px] border-dashed transition-colors sm:h-52 sm:w-52 ${rapidTapScannerReady ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50" : "border-slate-200 text-slate-400 cursor-not-allowed"}`}>
                                 <CreditCard className="mb-2 h-10 w-10" />
-                                <span className="text-xl font-bold">{isScanningOpen ? "Scan Now" : "Unavailable"}</span>
+                                <span className="text-xl font-bold">{rapidTapScannerReady ? "Scan Now" : "Unavailable"}</span>
                             </button>
                             <p className="mt-4 text-center text-sm text-slate-400">{scanMessage}</p>
                             <div className="mt-4 w-full rounded-xl bg-emerald-50 px-4 py-4 text-center">

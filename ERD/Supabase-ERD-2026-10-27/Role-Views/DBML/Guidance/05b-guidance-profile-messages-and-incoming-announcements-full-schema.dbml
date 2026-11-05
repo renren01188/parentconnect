@@ -1,0 +1,158 @@
+// ParentConnect — Guidance role — Profile, Messages, and Incoming Announcements
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs above the application-level heading are live Supabase foreign-key constraints.
+
+Project guidance_profile_messages_and_incoming_announcements {
+  database_type: 'PostgreSQL'
+  Note: 'Guidance account updates, ICT conversations, notification read records, and incoming Principal/ICT announcements. staff_messages is polymorphic: sender_type and recipient_type determine whether an ID identifies Guidance or ICT.'
+}
+Table guidance_counselors {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  guidance_reports_guide_completed_at timestamptz
+  guidance_dashboard_guide_completed_at timestamptz
+}
+
+Table guidance_change_requests {
+  id int8 [pk, not null]
+  guidance_id int8 [not null]
+  guidance_name text [not null]
+  guidance_email text [not null]
+  guidance_initials text [not null]
+  changes jsonb [not null]
+  note text
+  status text [not null]
+  created_at timestamptz [not null]
+  reviewed_at timestamptz
+  reviewed_by_ict_id int8
+  review_note text
+}
+
+Table guidance_notification_reads {
+  id int4 [pk, not null]
+  guidance_id int4 [not null]
+  notif_key text [not null]
+  created_at timestamptz
+}
+
+Table staff_messages {
+  id int8 [pk, not null]
+  sender_type text [not null]
+  sender_id int8 [not null]
+  sender_name text [not null]
+  sender_email text
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  source_message_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  idempotency_key uuid
+}
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table principals {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [not null]
+  phone text [not null]
+  status text [not null]
+  is_active bool [unique, not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  auth_version uuid [not null]
+  effective_date date
+  succession_reason text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  principal_attendance_summary_guide_completed_at timestamptz
+  principal_reports_guide_completed_at timestamptz
+}
+
+Table principal_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+Table ict_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  sender_name text
+  title text [not null]
+  message text [not null]
+  audience text[] [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+// Live Supabase foreign-key constraints.
+Ref: guidance_change_requests.guidance_id > guidance_counselors.id
+Ref: guidance_change_requests.reviewed_by_ict_id > ict_admins.id
+Ref: guidance_notification_reads.guidance_id > guidance_counselors.id
+Ref: staff_messages.source_message_id > staff_messages.id
+
+// Application-level logical references (not database constraints).
+Ref: staff_messages.sender_id > guidance_counselors.id
+Ref: staff_messages.recipient_id > guidance_counselors.id
+Ref: principal_announcements.sender_id > principals.id

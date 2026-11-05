@@ -61,6 +61,7 @@ export async function PATCH(
         .from("parent_adviser_reports")
         .update({
           status: normalized,
+          ...(normalized === "resolved" ? { resolved_by_role: "Principal" } : {}),
           updated_at: now,
           status_updated_at: now,
         })

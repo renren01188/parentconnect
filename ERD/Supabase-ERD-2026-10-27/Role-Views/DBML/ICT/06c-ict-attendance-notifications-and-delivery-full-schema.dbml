@@ -1,0 +1,239 @@
+// ParentConnect — ICT role — Attendance Notifications and Delivery
+
+// Focused DBML diagram for dbdiagram.io.
+
+
+
+Project ict_attendance_notifications_and_delivery {
+
+  database_type: 'PostgreSQL'
+
+  Note: 'ICT attendance-notification configuration, attendance events, email/SMS jobs, and SMS provider events.'
+
+}
+
+
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table attendance_notification_settings {
+  id bool [pk, not null]
+  sms_enabled bool [not null]
+  email_enabled bool [not null]
+  sms_low_credit_threshold int4 [not null]
+  sms_credit_balance int4
+  sms_credits_checked_at timestamptz
+  sms_credits_check_error text
+  updated_by_ict_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_logs {
+  id int4 [pk, not null]
+  student_db_id int4
+  student_id text
+  attendance_date date [not null]
+  time_logged time [not null]
+  type text
+  status text
+  via text
+  remark text
+  session_type text [not null]
+  class_session_id int4
+  scan_request_id text
+  student_grade_snapshot text
+  student_section_snapshot text
+  parent_recording_source text
+}
+
+Table class_sessions {
+  id int4 [pk, not null]
+  session_date date [not null]
+  session_type text [not null]
+  scheduled_start time [not null]
+  scheduled_end time [not null]
+  status text [not null]
+  actual_start timestamptz
+  actual_end timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  late_after time
+  absent_after time
+  grade text
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table attendance_email_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_email text
+  recipient_key text [not null]
+  subject text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  provider text
+  provider_message_id text
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table attendance_sms_jobs {
+  id uuid [pk, not null]
+  attendance_log_id int8 [not null]
+  parent_id int4
+  recipient_phone text
+  recipient_key text [not null]
+  message text [not null]
+  status text [not null]
+  attempts int4 [not null]
+  available_at timestamptz [not null]
+  locked_at timestamptz
+  sent_at timestamptz
+  delivered_at timestamptz
+  provider text
+  provider_message_id text
+  provider_status text
+  provider_response jsonb
+  last_error text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  provider_requested_at timestamptz
+  provider_accepted_at timestamptz
+  idempotency_key text [not null]
+  reconciliation_required_at timestamptz
+  reconciled_at timestamptz
+  retry_eligible_at timestamptz
+  reconciliation_attempts int4 [not null]
+}
+
+Table attendance_sms_provider_events {
+  id uuid [pk, not null]
+  attendance_sms_job_id uuid [not null]
+  idempotency_key text [not null]
+  event_type text [not null]
+  provider text
+  provider_message_id text
+  provider_status text
+  detail jsonb
+  created_at timestamptz [not null]
+}
+
+Table attendance_sms_dispatch_leases {
+  lease_name text [pk, not null]
+  owner_token uuid
+  locked_until timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+
+
+// Live Supabase foreign-key constraints.
+
+Ref: attendance_notification_settings.updated_by_ict_id > ict_admins.id
+
+Ref: attendance_logs.student_db_id > students.id
+
+Ref: attendance_logs.class_session_id > class_sessions.id
+
+Ref: attendance_email_jobs.parent_id > parents.id
+
+Ref: attendance_email_jobs.attendance_log_id > attendance_logs.id
+
+Ref: attendance_sms_jobs.parent_id > parents.id
+
+Ref: attendance_sms_jobs.attendance_log_id > attendance_logs.id
+
+Ref: attendance_sms_provider_events.attendance_sms_job_id > attendance_sms_jobs.id

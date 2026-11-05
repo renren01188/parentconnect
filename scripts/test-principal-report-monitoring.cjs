@@ -41,8 +41,8 @@ assert.match(page, /\["Date", "From → To", "Student", "Concern", "Category", "
 // Excel and PDF include the exact active scope. Excel has read-friendly
 // columns and a frozen/filterable header; PDF wraps cells and uses bounded
 // multi-line rows instead of overlapping fixed-position text.
-assert.match(page, /function exportMonitoringToExcel\(items: MonitoringEntry\[], filterSummary: string\)/);
-assert.match(page, /function exportMonitoringToPdf\(items: MonitoringEntry\[], filterSummary: string\)/);
+assert.match(page, /function exportMonitoringToExcel\([\s\S]*?items: MonitoringEntry\[],[\s\S]*?filterSummary: string,/);
+assert.match(page, /function exportMonitoringToPdf\([\s\S]*?items: MonitoringEntry\[],[\s\S]*?filterSummary: string,/);
 assert.match(page, /header: "Report ID"/);
 assert.match(page, /header: "Submitted \(PHT\)"/);
 assert.match(page, /sheet\.mergeCells\("A1:K1"\)/);
@@ -55,5 +55,13 @@ assert.match(page, /const rowHeight = 54/);
 assert.match(page, /const rowsPerPage = 7/);
 assert.match(page, /label: "Source -> Recipient"/);
 assert.match(page, /Page \$\{pageIndex \+ 1\} of \$\{pages\.length\}/);
+
+// The shared export modal keeps Principal aligned with Guidance and Adviser:
+// it supports Excel/PDF plus the whole active filtered set or one selected
+// monitoring concern.
+assert.match(page, /<ConcernExportModal/);
+assert.match(page, /theme="violet"/);
+assert.match(page, /scope === "all" \? items : selected \? \[selected\] : \[\]/);
+assert.match(page, /Scope: \$\{scopeLabel\}/);
 
 console.log("principal report monitoring checks passed");

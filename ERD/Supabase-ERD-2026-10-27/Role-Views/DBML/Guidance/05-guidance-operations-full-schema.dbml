@@ -1,0 +1,323 @@
+// ParentConnect — Guidance role — Guidance Operations
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs above the application-level heading are live Supabase foreign-key constraints.
+
+Project guidance_operations {
+  database_type: 'PostgreSQL'
+  Note: 'Core Guidance workflow: case reports, tickets, favorites, read state, profile changes, ICT messages, and Parent announcement delivery. Incoming Principal and ICT announcements are in the separate 05b diagram to keep this master within dbdiagram free-plan limits. staff_messages and parent_announcement_notifications are polymorphic: their type/source columns determine the related role or announcement table.'
+}
+Table guidance_counselors {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  guidance_reports_guide_completed_at timestamptz
+  guidance_dashboard_guide_completed_at timestamptz
+}
+
+Table parent_adviser_reports {
+  id int8 [pk, not null]
+  parent_id int8
+  parent_email text [not null]
+  parent_name text [not null]
+  adviser_id int8
+  adviser_name text [not null]
+  student_id text [not null]
+  student_name text [not null]
+  grade text
+  section text
+  subject text [not null]
+  categories text[] [not null]
+  concern_level int4 [not null]
+  status text [not null]
+  escalated_to_guidance bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  last_message_at timestamptz [not null]
+  parent_seen_at timestamptz
+  status_updated_at timestamptz [not null]
+  escalated_to_principal bool [not null]
+  guidance_seen_at timestamptz
+  allow_history_access bool
+  subject_teacher_email text
+  subject_teacher_report_date_manila date
+  cancelled_at timestamptz
+  cancelled_by_parent_id int8
+  subject_teacher_submission_key uuid
+}
+
+Table parent_adviser_report_messages {
+  id int8 [pk, not null]
+  report_id int8 [not null]
+  sender_role text [not null]
+  sender_name text [not null]
+  body text [not null]
+  created_at timestamptz [not null]
+  read_by_parent bool [not null]
+  read_by_adviser bool [not null]
+  attachments jsonb [not null]
+  thread_type text [not null]
+  idempotency_key uuid
+}
+
+Table parent_report_guidance_tickets {
+  id int8 [pk, not null]
+  report_id int8 [unique, not null]
+  parent_id int8 [not null]
+  student_id text [not null]
+  adviser_id int8
+  concern text [not null]
+  message text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  rejection_reason text
+  assigned_guidance_id int8
+  created_at timestamptz [not null]
+  decided_at timestamptz
+  updated_at timestamptz [not null]
+}
+
+Table guidance_report_favorites {
+  guidance_id int8 [pk, not null]
+  report_id int8 [pk, not null]
+  created_at timestamptz [not null]
+}
+
+Table guidance_ticket_reads {
+  guidance_id int8 [pk, not null]
+  ticket_id int8 [pk, not null]
+  read_at timestamptz [not null]
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table advisers {
+  id int4 [pk, not null]
+  employee_id text [unique]
+  first_name text [not null]
+  last_name text [not null]
+  email text [unique, not null]
+  phone text
+  grade text
+  section text
+  status text
+  password_hash text [not null]
+  created_at timestamptz
+  updated_at timestamptz
+  sections text[] [not null]
+  middle_name text
+  password_set bool
+  suffix text
+  class_session text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  notifications_last_seen_at timestamptz
+  adviser_attendance_guide_completed_at timestamptz
+  adviser_reports_guide_completed_at timestamptz
+  adviser_dashboard_guide_completed_at timestamptz
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table guidance_change_requests {
+  id int8 [pk, not null]
+  guidance_id int8 [not null]
+  guidance_name text [not null]
+  guidance_email text [not null]
+  guidance_initials text [not null]
+  changes jsonb [not null]
+  note text
+  status text [not null]
+  created_at timestamptz [not null]
+  reviewed_at timestamptz
+  reviewed_by_ict_id int8
+  review_note text
+}
+
+Table guidance_notification_reads {
+  id int4 [pk, not null]
+  guidance_id int4 [not null]
+  notif_key text [not null]
+  created_at timestamptz
+}
+
+Table staff_messages {
+  id int8 [pk, not null]
+  sender_type text [not null]
+  sender_id int8 [not null]
+  sender_name text [not null]
+  sender_email text
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  source_message_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  idempotency_key uuid
+}
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+Table guidance_announcements {
+  id int8 [pk, not null]
+  guidance_id int8 [not null]
+  guidance_name text [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  emails_sent bool
+}
+
+Table parent_announcement_notifications {
+  id int8 [pk, not null]
+  announcement_id int8 [not null]
+  parent_id int8 [not null]
+  student_id text
+  grade text
+  section text
+  read_at timestamptz
+  created_at timestamptz [not null]
+  source text
+  title text
+  message text
+  sender_name text
+  unread bool [not null]
+  tab text [not null]
+}
+
+// Live Supabase foreign-key constraints.
+Ref: parent_adviser_report_messages.report_id > parent_adviser_reports.id
+Ref: parent_report_guidance_tickets.report_id > parent_adviser_reports.id
+Ref: parent_report_guidance_tickets.parent_id > parents.id
+Ref: parent_report_guidance_tickets.adviser_id > advisers.id
+Ref: parent_report_guidance_tickets.assigned_guidance_id > guidance_counselors.id
+Ref: guidance_report_favorites.guidance_id > guidance_counselors.id
+Ref: guidance_report_favorites.report_id > parent_adviser_reports.id
+Ref: guidance_ticket_reads.guidance_id > guidance_counselors.id
+Ref: guidance_ticket_reads.ticket_id > parent_report_guidance_tickets.id
+Ref: guidance_change_requests.guidance_id > guidance_counselors.id
+Ref: guidance_change_requests.reviewed_by_ict_id > ict_admins.id
+Ref: guidance_notification_reads.guidance_id > guidance_counselors.id
+Ref: staff_messages.source_message_id > staff_messages.id
+Ref: guidance_announcements.guidance_id > guidance_counselors.id
+Ref: parent_announcement_notifications.parent_id > parents.id
+Ref: parent_announcement_notifications.student_id > students.student_id
+
+// Application-level logical references (not database constraints).
+Ref: parent_adviser_reports.parent_id > parents.id
+Ref: parent_adviser_reports.adviser_id > advisers.id
+Ref: parent_adviser_reports.student_id > students.student_id
+Ref: parent_report_guidance_tickets.student_id > students.student_id
+Ref: staff_messages.sender_id > guidance_counselors.id
+Ref: staff_messages.recipient_id > guidance_counselors.id
+Ref: parent_announcement_notifications.announcement_id > guidance_announcements.id

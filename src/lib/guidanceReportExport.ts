@@ -21,6 +21,12 @@ export type GuidanceReportExportContext = {
   filters: string[];
   generatedAt?: Date;
   schoolName?: string;
+  /** Optional role-specific heading for the shared concerns export. */
+  reportTitle?: string;
+  sheetName?: string;
+  confidentialityLabel?: string;
+  /** ARGB workbook heading color, e.g. FF0F4C81. */
+  accentColor?: string;
 };
 
 const SCHOOL_TIME_ZONE = "Asia/Manila";
@@ -94,6 +100,10 @@ function metadata(context: GuidanceReportExportContext) {
     filters: context.filters.length ? context.filters.join(" | ") : "No filters applied",
     generatedAt: formatGuidanceExportTimestamp(context.generatedAt ?? new Date()),
     schoolName: context.schoolName ?? "Santiago Elementary School - Guidance Office",
+    reportTitle: context.reportTitle ?? "Guidance Reports",
+    sheetName: context.sheetName ?? SHEET_NAME,
+    confidentialityLabel: context.confidentialityLabel ?? "Confidential - Guidance Office use only",
+    accentColor: context.accentColor ?? "FF0F4C81",
   };
 }
 
@@ -107,7 +117,8 @@ export async function createGuidanceReportsExcel(
   workbook.created = context.generatedAt ?? new Date();
   workbook.modified = context.generatedAt ?? new Date();
 
-  const sheet = workbook.addWorksheet(SHEET_NAME, {
+  const { filters, generatedAt, schoolName, reportTitle, sheetName, confidentialityLabel, accentColor } = metadata(context);
+  const sheet = workbook.addWorksheet(sheetName, {
     views: [{ state: "frozen", ySplit: TABLE_HEADER_ROW }],
     pageSetup: {
       orientation: "landscape",
@@ -119,7 +130,6 @@ export async function createGuidanceReportsExcel(
     },
   });
   sheet.columns = EXCEL_COLUMNS.map((column) => ({ ...column }));
-  const { filters, generatedAt, schoolName } = metadata(context);
   const lastColumn = String.fromCharCode(64 + EXCEL_COLUMNS.length);
 
   sheet.mergeCells(`A1:${lastColumn}1`);
@@ -127,7 +137,7 @@ export async function createGuidanceReportsExcel(
   sheet.mergeCells(`A3:${lastColumn}3`);
   sheet.mergeCells(`A4:${lastColumn}4`);
   sheet.mergeCells(`A5:${lastColumn}5`);
-  sheet.getCell("A1").value = "Guidance Reports";
+  sheet.getCell("A1").value = reportTitle;
   sheet.getCell("A2").value = schoolName;
   sheet.getCell("A3").value = `Included records: ${items.length} | Scope: ${context.scopeLabel}`;
   sheet.getCell("A4").value = `Active filters: ${filters}`;
@@ -135,7 +145,7 @@ export async function createGuidanceReportsExcel(
 
   sheet.getRow(1).height = 27;
   sheet.getRow(1).font = { name: "Calibri", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
-  sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F4C81" } };
+  sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: accentColor } };
   sheet.getRow(1).alignment = { vertical: "middle", horizontal: "left" };
   sheet.getRow(2).font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF334155" } };
   sheet.getRow(3).font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF334155" } };
@@ -224,7 +234,7 @@ export function createGuidanceReportsPdf(
     { label: "Submitted", x: 420, width: 96, max: 17 },
     { label: "Level", x: 520, width: 48, max: 7 },
   ];
-  const { filters, generatedAt, schoolName } = metadata(context);
+  const { filters, generatedAt, schoolName, reportTitle, confidentialityLabel } = metadata(context);
   const pages: string[][] = [];
   let commands: string[] = [];
   let y = 0;
@@ -234,7 +244,7 @@ export function createGuidanceReportsPdf(
     pages.push(commands);
     commands.push(makePdfRect(0, pageHeight - 76, pageWidth, 76, 0.94));
     commands.push(makePdfText("ParentConnect", left, 762, 9, true));
-    commands.push(makePdfText("Guidance Reports", left, 742, 17, true));
+    commands.push(makePdfText(reportTitle, left, 742, 17, true));
     commands.push(makePdfText(schoolName, left, 727, 9));
     commands.push(makePdfText(`Generated: ${generatedAt}`, 344, 752, 8));
     commands.push(makePdfText(`Scope: ${context.scopeLabel}`, 344, 738, 8));
@@ -304,7 +314,7 @@ export function createGuidanceReportsPdf(
 
   pages.forEach((page, index) => {
     page.push(makePdfLine(left, 44, right, 44, 0.82));
-    page.push(makePdfText("Confidential - Guidance Office use only", left, 28, 8));
+    page.push(makePdfText(confidentialityLabel, left, 28, 8));
     page.push(makePdfText(`Page ${index + 1} of ${pages.length}`, 504, 28, 8));
   });
 

@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
+const ts = require("typescript");
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
@@ -19,6 +21,9 @@ const resetVerify = read("src/app/api/auth/password-reset/verify/route.ts");
 const resetComplete = read("src/app/api/auth/password-reset/complete/route.ts");
 const resetPage = read("src/app/login/guardian/reset-password/page.tsx");
 const newPasswordPage = read("src/app/login/guardian/reset-password/new-password/page.tsx");
+const setPasswordPage = read("src/app/login/guardian/set-password/page.tsx");
+const setPasswordRoute = read("src/app/api/auth/set-password/route.ts");
+const passwordRequirements = read("src/lib/parentPasswordRequirements.ts");
 const preferenceRoute = read("src/app/api/parents/attendance-notification-preferences/route.ts");
 const profilePage = read("src/app/dashboard/parent/profile/page.tsx");
 const middleware = read("src/middleware.ts");
@@ -40,6 +45,23 @@ assert.match(persistenceMigration, /'locked'::text/);
 assert.match(otpHelper, /getParentOtpLimit/);
 assert.match(otpHelper, /\.eq\("parent_id", parentId\)/);
 assert.match(otpHelper, /\.eq\("purpose", purpose\)/);
+assert.match(passwordRequirements, /password\.length >= 8/);
+assert.match(passwordRequirements, /\[A-Z\]/);
+assert.match(passwordRequirements, /\[a-z\]/);
+assert.match(passwordRequirements, /\\d/);
+const passwordRequirementsModule = { exports: {} };
+vm.runInNewContext(
+  ts.transpileModule(passwordRequirements, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  { exports: passwordRequirementsModule.exports, module: passwordRequirementsModule },
+);
+const { parentPasswordMeetsRequirements } = passwordRequirementsModule.exports;
+assert.equal(parentPasswordMeetsRequirements("SecurePass1"), true, "A valid Parent password must be accepted.");
+assert.equal(parentPasswordMeetsRequirements("lowercase1"), false, "A lowercase-only password must be rejected.");
+assert.equal(parentPasswordMeetsRequirements("UPPERCASE1"), false, "A password without a lowercase letter must be rejected.");
+assert.equal(parentPasswordMeetsRequirements("SecurePass"), false, "A password without a number must be rejected.");
+assert.equal(parentPasswordMeetsRequirements("Pass1"), false, "A password shorter than eight characters must be rejected.");
 
 assert.match(signup, /const verificationMethod = email \? "email" : "sms"/);
 assert.match(signup, /verificationMethod: "sms"/);
@@ -68,6 +90,10 @@ assert.match(resetResend, /getParentOtpLimit\(flow\.parentId, "password_reset"\)
 assert.match(resetVerify, /verifyParentOtp\(flow\.challengeId, "password_reset", otp\)/);
 assert.match(resetComplete, /readVerifiedParentReset/);
 assert.match(resetComplete, /parentPasswordMeetsRequirements\(newPassword\)/);
+assert.ok(
+  resetComplete.indexOf("parentPasswordMeetsRequirements(newPassword)") < resetComplete.indexOf("bcrypt.hash(newPassword"),
+  "The reset API must reject weak passwords before hashing or saving them.",
+);
 assert.match(resetComplete, /redirectTo: "\/dashboard\/parent"/);
 assert.match(resetPage, /Six-digit verification code/);
 assert.match(resetPage, /Enter the code sent to your email/);
@@ -79,6 +105,16 @@ assert.match(newPasswordPage, /New Password/);
 assert.match(newPasswordPage, /Confirm Password/);
 assert.match(newPasswordPage, /EyeOff/);
 assert.match(newPasswordPage, /\/api\/auth\/password-reset\/complete/);
+assert.match(newPasswordPage, /const passwordMeetsRequirements = parentPasswordMeetsRequirements\(newPassword\)/);
+assert.match(newPasswordPage, /const passwordsMatch = newPassword === confirmPassword && confirmPassword !== ""/);
+assert.match(newPasswordPage, /disabled=\{loading \|\| !passwordMeetsRequirements \|\| !passwordsMatch\}/);
+assert.match(setPasswordPage, /parentPasswordMeetsRequirements/);
+assert.match(setPasswordPage, /canSubmit=\{!loading && passwordMeetsRequirements && passwordsMatch\}/);
+assert.match(setPasswordRoute, /parentPasswordMeetsRequirements\(newPassword\)/);
+assert.ok(
+  setPasswordRoute.indexOf("parentPasswordMeetsRequirements(newPassword)") < setPasswordRoute.indexOf("bcrypt.hash(newPassword"),
+  "The Set Password API must reject weak passwords before hashing or saving them.",
+);
 
 assert.match(preferenceRoute, /emailAvailable/);
 assert.match(preferenceRoute, /Add an email address in Account Settings before choosing email notifications/);

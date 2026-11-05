@@ -1,0 +1,229 @@
+// ParentConnect — Adviser role — Student Administration and Deletion Requests
+// This is one focused DBML diagram. It is not the complete application schema.
+// Unlabelled Refs are live Supabase foreign-key constraints. Refs under the application-level heading are documented ID links without a database constraint.
+
+Project adviser_student_administration_and_deletion_requests {
+  database_type: 'PostgreSQL'
+  Note: 'Adviser assignment changes, scheduled adviser transfers, and requested deletion workflows.'
+}
+Table advisers {
+  id int4 [pk, not null]
+  employee_id text [unique]
+  first_name text [not null]
+  last_name text [not null]
+  email text [unique, not null]
+  phone text
+  grade text
+  section text
+  status text
+  password_hash text [not null]
+  created_at timestamptz
+  updated_at timestamptz
+  sections text[] [not null]
+  middle_name text
+  password_set bool
+  suffix text
+  class_session text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  notifications_last_seen_at timestamptz
+  adviser_attendance_guide_completed_at timestamptz
+  adviser_reports_guide_completed_at timestamptz
+  adviser_dashboard_guide_completed_at timestamptz
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table adviser_change_requests {
+  id int8 [pk, not null]
+  adviser_id int4 [not null]
+  adviser_name text [not null]
+  adviser_email text [not null]
+  adviser_initials text [not null]
+  class_grade text [not null]
+  status text [not null]
+  changes jsonb [not null]
+  note text
+  reviewed_at timestamptz
+  review_note text
+  created_at timestamptz [not null]
+  reviewed_by_ict_id int4
+}
+
+Table adviser_assignment_history {
+  id int8 [pk, not null]
+  adviser_id int4 [not null]
+  request_id int8
+  previous_grade text
+  previous_sections text[] [not null]
+  new_grade text
+  new_sections text[] [not null]
+  approved_by_ict_id int4
+  effective_at timestamptz [not null]
+}
+
+Table scheduled_adviser_transfers {
+  id int8 [pk, not null]
+  outgoing_adviser_id int4 [not null]
+  incoming_adviser_id int4 [not null]
+  grade text [not null]
+  section text [not null]
+  effective_at timestamptz [not null]
+  note text
+  status text [not null]
+  failure_reason text
+  requested_by_ict_id int4
+  created_at timestamptz [not null]
+  completed_at timestamptz
+  cancelled_at timestamptz
+  cancelled_by_ict_id int4
+  release_incoming_assignment bool [not null]
+}
+
+Table scheduled_deletions {
+  id int8 [pk, not null]
+  target_type text [not null]
+  target_id text [not null]
+  target_name text [not null]
+  target_email text
+  requested_by_role text [not null]
+  requested_by_id int8 [not null]
+  reason text [not null]
+  status text [not null]
+  requested_at timestamptz [not null]
+  approved_at timestamptz
+  approved_by_ict_id int8
+  delete_after timestamptz
+  restored_at timestamptz
+  notice_sent_at timestamptz
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+}
+
+Table scheduled_deletion_requesters {
+  scheduled_deletion_id int8 [pk, not null]
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table scheduled_deletion_targets {
+  scheduled_deletion_id int8 [pk, not null]
+  student_id int8
+  parent_id int8
+  adviser_id int8
+  ict_admin_id int8
+  created_at timestamptz [not null]
+}
+
+Table ict_admins {
+  id int8 [pk, not null]
+  employee_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  email text [unique, not null]
+  phone text [not null]
+  status text [not null]
+  password_hash text [not null]
+  password_set bool [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  ict_dashboard_guide_completed_at timestamptz
+}
+
+// Live Supabase foreign-key constraints.
+Ref: adviser_assignment_history.adviser_id > advisers.id
+Ref: adviser_assignment_history.request_id > adviser_change_requests.id
+Ref: scheduled_adviser_transfers.outgoing_adviser_id > advisers.id
+Ref: scheduled_adviser_transfers.incoming_adviser_id > advisers.id
+Ref: scheduled_adviser_transfers.requested_by_ict_id > ict_admins.id
+Ref: scheduled_adviser_transfers.cancelled_by_ict_id > ict_admins.id
+Ref: scheduled_deletions.approved_by_ict_id > ict_admins.id
+Ref: scheduled_deletion_requesters.scheduled_deletion_id > scheduled_deletions.id
+Ref: scheduled_deletion_requesters.adviser_id > advisers.id
+Ref: scheduled_deletion_requesters.ict_admin_id > ict_admins.id
+Ref: scheduled_deletion_targets.scheduled_deletion_id > scheduled_deletions.id
+Ref: scheduled_deletion_targets.student_id > students.id
+Ref: scheduled_deletion_targets.parent_id > parents.id
+Ref: scheduled_deletion_targets.adviser_id > advisers.id
+Ref: scheduled_deletion_targets.ict_admin_id > ict_admins.id
+
+// Application-level logical references (not database constraints).
+Ref: adviser_change_requests.adviser_id > advisers.id
+Ref: adviser_assignment_history.approved_by_ict_id > ict_admins.id

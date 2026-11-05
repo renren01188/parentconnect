@@ -43,6 +43,7 @@ const REPORT_SELECT = [
   "concern_level",
   "allow_history_access",
   "status",
+  "resolved_by_role",
   "escalated_to_guidance",
   "escalated_to_principal",
   "cancelled_at",

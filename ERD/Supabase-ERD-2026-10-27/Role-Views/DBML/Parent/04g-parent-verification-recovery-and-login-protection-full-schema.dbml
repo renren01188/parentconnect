@@ -1,0 +1,86 @@
+// ParentConnect — Parent role — Verification, Recovery, and Login Protection
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs describe the Parent workflow relationships. Polymorphic or cross-role identifiers are documented application-level links where the schema has no direct foreign key.
+
+Project parent_verification_recovery_and_login_protection {
+  database_type: 'PostgreSQL'
+  Note: 'Guardian sign-up verification, password-reset OTPs, and hashed rate-limit and lockout guards. Rate-limit and lockout tables retain one-way subject hashes, not parent IDs, so they intentionally have no Ref.'
+}
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table parent_verification_otps {
+  challenge_id uuid [pk, not null]
+  parent_id int4
+  purpose text [not null]
+  channel text [not null]
+  otp_hash text [not null]
+  expires_at timestamptz [not null]
+  resend_available_at timestamptz [not null]
+  attempts int2 [not null]
+  locked_until timestamptz
+  used_at timestamptz
+  requested_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table parent_password_reset_otps {
+  parent_id int4 [pk, not null]
+  otp_hash text [not null]
+  expires_at timestamptz [not null]
+  attempts int2 [not null]
+  requested_at timestamptz [not null]
+}
+
+Table parent_password_reset_rate_limits {
+  subject_hash text [pk, not null]
+  window_started_at timestamptz [not null]
+  request_count int4 [not null]
+}
+
+Table login_attempt_guards {
+  role text [pk, not null]
+  subject_hash text [pk, not null]
+  failed_attempts int4 [not null]
+  locked_until timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  scope text [pk, not null]
+  lockout_level int4 [not null]
+  last_failed_at timestamptz
+}
+
+// Parent workflow relationships.
+Ref: parent_verification_otps.parent_id > parents.id
+Ref: parent_password_reset_otps.parent_id - parents.id

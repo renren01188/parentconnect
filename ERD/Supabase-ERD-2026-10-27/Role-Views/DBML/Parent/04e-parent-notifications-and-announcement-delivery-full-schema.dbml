@@ -1,0 +1,171 @@
+// ParentConnect — Parent role — Notifications and Announcement Delivery
+// This is one focused DBML diagram. It is not the complete application schema.
+// Refs describe the Parent workflow relationships. Polymorphic or cross-role identifiers are documented application-level links where the schema has no direct foreign key.
+
+Project parent_notifications_and_announcement_delivery {
+  database_type: 'PostgreSQL'
+  Note: 'Guardian notification inbox, targeted announcements, and staff-originated direct messages. announcement_id is polymorphic: source determines which of the four announcement tables supplies the record.'
+}
+Table parents {
+  id int4 [pk, not null]
+  student_id text
+  parent_first_name text [not null]
+  parent_middle_name text
+  parent_last_name text [not null]
+  parent_suffix text
+  relationship text
+  contact_number text
+  email text
+  temp_password text
+  password text [not null]
+  password_set int4
+  status text
+  reset_token text
+  reset_token_expiry timestamptz
+  address text
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+  parent_dashboard_guide_completed_at timestamptz
+  parent_attendance_guide_completed_at timestamptz
+  parent_reports_guide_completed_at timestamptz
+  temporary_password_expires_at timestamptz
+  attendance_email_notifications bool [not null]
+  attendance_sms_notifications bool [not null]
+  report_submission_cooldown_until timestamptz
+  attendance_notification_preference text
+  login_contact_number text
+  parent_remarks text
+}
+
+Table parent_announcement_notifications {
+  id int8 [pk, not null]
+  announcement_id int8 [not null]
+  parent_id int8 [not null]
+  student_id text
+  grade text
+  section text
+  read_at timestamptz
+  created_at timestamptz [not null]
+  source text
+  title text
+  message text
+  sender_name text
+  unread bool [not null]
+  tab text [not null]
+}
+
+Table students {
+  id int4 [pk, not null]
+  student_id text [unique, not null]
+  first_name text [not null]
+  middle_name text
+  last_name text [not null]
+  suffix text
+  gender text [not null]
+  grade text
+  section text
+  rfid_card text [unique]
+  created_at timestamptz
+  transfer_status text
+  target_grade text
+  target_section text
+  class_session text
+  birth_date date
+  mother_tongue text
+  ip_ethnic_group text
+  religion text
+  house_street_sitio_purok text
+  barangay text
+  municipality_city text
+  province text
+  learning_modality text
+  age int4
+  archived_at timestamptz
+  archived_by text
+  archive_reason text
+  archive_status text [not null]
+  archive_previous_status text
+}
+
+Table staff_messages {
+  id int8 [pk, not null]
+  sender_type text [not null]
+  sender_id int8 [not null]
+  sender_name text [not null]
+  sender_email text
+  recipient_type text [not null]
+  recipient_id int8 [not null]
+  recipient_name text [not null]
+  recipient_email text
+  subject text [not null]
+  categories text[] [not null]
+  body text [not null]
+  attachments jsonb [not null]
+  status text [not null]
+  source_message_id int8
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  idempotency_key uuid
+}
+
+Table adviser_announcements {
+  id int8 [pk, not null]
+  adviser_id int8 [not null]
+  adviser_name text [not null]
+  grade text
+  sections text[] [not null]
+  title text [not null]
+  message text [not null]
+  created_at timestamptz [not null]
+}
+
+Table guidance_announcements {
+  id int8 [pk, not null]
+  guidance_id int8 [not null]
+  guidance_name text [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  emails_sent bool
+}
+
+Table principal_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  title text [not null]
+  message text [not null]
+  audience text [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+Table ict_announcements {
+  id int8 [pk, not null]
+  sender_id int8 [not null]
+  sender_name text
+  title text [not null]
+  message text [not null]
+  audience text[] [not null]
+  status text [not null]
+  scheduled_at timestamptz
+  created_at timestamptz
+  emails_sent bool
+}
+
+// Parent workflow relationships.
+Ref: parent_announcement_notifications.parent_id > parents.id
+Ref: parent_announcement_notifications.student_id > students.student_id
+Ref: staff_messages.recipient_id > parents.id
+Ref: parent_announcement_notifications.announcement_id > adviser_announcements.id
+Ref: parent_announcement_notifications.announcement_id > guidance_announcements.id
+Ref: parent_announcement_notifications.announcement_id > principal_announcements.id
+Ref: parent_announcement_notifications.announcement_id > ict_announcements.id

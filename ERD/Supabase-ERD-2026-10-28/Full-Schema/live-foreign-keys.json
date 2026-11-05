@@ -1,0 +1,542 @@
+{
+  "generated_at": "2026-10-28",
+  "source": "Supabase public schema",
+  "foreign_keys": [
+    {
+      "constraint_name": "adviser_announcements_adviser_fk",
+      "source_table": "adviser_announcements",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "adviser_assignment_history_adviser_id_fkey",
+      "source_table": "adviser_assignment_history",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "adviser_assignment_history_request_id_fkey",
+      "source_table": "adviser_assignment_history",
+      "source_column": "request_id",
+      "target_table": "adviser_change_requests",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "adviser_notification_reads_adviser_fk",
+      "source_table": "adviser_notification_reads",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "adviser_principal_messages_principal_id_fkey",
+      "source_table": "adviser_principal_messages",
+      "source_column": "principal_id",
+      "target_table": "principals",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "adviser_principal_messages_source_staff_message_id_fkey",
+      "source_table": "adviser_principal_messages",
+      "source_column": "source_staff_message_id",
+      "target_table": "principal_staff_messages",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_email_jobs_attendance_log_id_fkey",
+      "source_table": "attendance_email_jobs",
+      "source_column": "attendance_log_id",
+      "target_table": "attendance_logs",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_email_jobs_parent_id_fkey",
+      "source_table": "attendance_email_jobs",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_logs_class_session_id_fk",
+      "source_table": "attendance_logs",
+      "source_column": "class_session_id",
+      "target_table": "class_sessions",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_logs_student_db_id_fkey",
+      "source_table": "attendance_logs",
+      "source_column": "student_db_id",
+      "target_table": "students",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_notification_settings_updated_by_ict_id_fkey",
+      "source_table": "attendance_notification_settings",
+      "source_column": "updated_by_ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_sms_jobs_attendance_log_id_fkey",
+      "source_table": "attendance_sms_jobs",
+      "source_column": "attendance_log_id",
+      "target_table": "attendance_logs",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_sms_jobs_parent_id_fkey",
+      "source_table": "attendance_sms_jobs",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "attendance_sms_provider_events_attendance_sms_job_id_fkey",
+      "source_table": "attendance_sms_provider_events",
+      "source_column": "attendance_sms_job_id",
+      "target_table": "attendance_sms_jobs",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "deletion_email_job_items_deletion_email_job_id_fkey",
+      "source_table": "deletion_email_job_items",
+      "source_column": "deletion_email_job_id",
+      "target_table": "deletion_email_jobs",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "deletion_email_job_items_scheduled_deletion_id_fkey",
+      "source_table": "deletion_email_job_items",
+      "source_column": "scheduled_deletion_id",
+      "target_table": "scheduled_deletions",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "excuse_letters_student_id_fkey",
+      "source_table": "excuse_letters",
+      "source_column": "student_id",
+      "target_table": "students",
+      "target_column": "student_id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_announcements_guidance_fk",
+      "source_table": "guidance_announcements",
+      "source_column": "guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_change_requests_guidance_id_fkey",
+      "source_table": "guidance_change_requests",
+      "source_column": "guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_change_requests_reviewed_by_ict_id_fkey",
+      "source_table": "guidance_change_requests",
+      "source_column": "reviewed_by_ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_notification_reads_guidance_fk",
+      "source_table": "guidance_notification_reads",
+      "source_column": "guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_report_favorites_guidance_id_fkey",
+      "source_table": "guidance_report_favorites",
+      "source_column": "guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_report_favorites_report_id_fkey",
+      "source_table": "guidance_report_favorites",
+      "source_column": "report_id",
+      "target_table": "parent_adviser_reports",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_ticket_reads_guidance_id_fkey",
+      "source_table": "guidance_ticket_reads",
+      "source_column": "guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "guidance_ticket_reads_ticket_id_fkey",
+      "source_table": "guidance_ticket_reads",
+      "source_column": "ticket_id",
+      "target_table": "parent_report_guidance_tickets",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "ict_announcements_sender_fk",
+      "source_table": "ict_announcements",
+      "source_column": "sender_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "ict_notification_reads_ict_fk",
+      "source_table": "ict_notification_reads",
+      "source_column": "ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_adviser_report_messages_report_id_fkey",
+      "source_table": "parent_adviser_report_messages",
+      "source_column": "report_id",
+      "target_table": "parent_adviser_reports",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_announcement_notifications_parent_fk",
+      "source_table": "parent_announcement_notifications",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_announcement_notifications_student_fk",
+      "source_table": "parent_announcement_notifications",
+      "source_column": "student_id",
+      "target_table": "students",
+      "target_column": "student_id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_attendance_notification_reads_attendance_log_id_fkey",
+      "source_table": "parent_attendance_notification_reads",
+      "source_column": "attendance_log_id",
+      "target_table": "attendance_logs",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_attendance_notification_reads_parent_id_fkey",
+      "source_table": "parent_attendance_notification_reads",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_deletion_notifications_parent_id_fkey",
+      "source_table": "parent_deletion_notifications",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_deletion_notifications_scheduled_deletion_id_fkey",
+      "source_table": "parent_deletion_notifications",
+      "source_column": "scheduled_deletion_id",
+      "target_table": "scheduled_deletions",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_password_reset_otps_parent_id_fkey",
+      "source_table": "parent_password_reset_otps",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_report_guidance_tickets_adviser_id_fkey",
+      "source_table": "parent_report_guidance_tickets",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_report_guidance_tickets_assigned_guidance_id_fkey",
+      "source_table": "parent_report_guidance_tickets",
+      "source_column": "assigned_guidance_id",
+      "target_table": "guidance_counselors",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_report_guidance_tickets_parent_id_fkey",
+      "source_table": "parent_report_guidance_tickets",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_report_guidance_tickets_report_id_fkey",
+      "source_table": "parent_report_guidance_tickets",
+      "source_column": "report_id",
+      "target_table": "parent_adviser_reports",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_student_links_parent_id_fkey",
+      "source_table": "parent_student_links",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_student_links_student_id_fkey",
+      "source_table": "parent_student_links",
+      "source_column": "student_id",
+      "target_table": "students",
+      "target_column": "student_id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parent_verification_otps_parent_id_fkey",
+      "source_table": "parent_verification_otps",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "parents_student_id_fkey",
+      "source_table": "parents",
+      "source_column": "student_id",
+      "target_table": "students",
+      "target_column": "student_id",
+      "position": 1
+    },
+    {
+      "constraint_name": "principal_announcements_sender_fk",
+      "source_table": "principal_announcements",
+      "source_column": "sender_id",
+      "target_table": "principals",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "principal_notification_reads_principal_id_fkey",
+      "source_table": "principal_notification_reads",
+      "source_column": "principal_id",
+      "target_table": "principals",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "principal_staff_messages_principal_id_fkey",
+      "source_table": "principal_staff_messages",
+      "source_column": "principal_id",
+      "target_table": "principals",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "principal_staff_messages_source_adviser_message_id_fkey",
+      "source_table": "principal_staff_messages",
+      "source_column": "source_adviser_message_id",
+      "target_table": "adviser_principal_messages",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_adviser_transfers_cancelled_by_ict_id_fkey",
+      "source_table": "scheduled_adviser_transfers",
+      "source_column": "cancelled_by_ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_adviser_transfers_incoming_adviser_id_fkey",
+      "source_table": "scheduled_adviser_transfers",
+      "source_column": "incoming_adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_adviser_transfers_outgoing_adviser_id_fkey",
+      "source_table": "scheduled_adviser_transfers",
+      "source_column": "outgoing_adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_adviser_transfers_requested_by_ict_id_fkey",
+      "source_table": "scheduled_adviser_transfers",
+      "source_column": "requested_by_ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_requesters_adviser_id_fkey",
+      "source_table": "scheduled_deletion_requesters",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_requesters_ict_admin_id_fkey",
+      "source_table": "scheduled_deletion_requesters",
+      "source_column": "ict_admin_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_requesters_scheduled_deletion_id_fkey",
+      "source_table": "scheduled_deletion_requesters",
+      "source_column": "scheduled_deletion_id",
+      "target_table": "scheduled_deletions",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_targets_adviser_id_fkey",
+      "source_table": "scheduled_deletion_targets",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_targets_ict_admin_id_fkey",
+      "source_table": "scheduled_deletion_targets",
+      "source_column": "ict_admin_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_targets_parent_id_fkey",
+      "source_table": "scheduled_deletion_targets",
+      "source_column": "parent_id",
+      "target_table": "parents",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_targets_scheduled_deletion_id_fkey",
+      "source_table": "scheduled_deletion_targets",
+      "source_column": "scheduled_deletion_id",
+      "target_table": "scheduled_deletions",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletion_targets_student_id_fkey",
+      "source_table": "scheduled_deletion_targets",
+      "source_column": "student_id",
+      "target_table": "students",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "scheduled_deletions_approved_by_ict_fk",
+      "source_table": "scheduled_deletions",
+      "source_column": "approved_by_ict_id",
+      "target_table": "ict_admins",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "staff_messages_source_message_id_fkey",
+      "source_table": "staff_messages",
+      "source_column": "source_message_id",
+      "target_table": "staff_messages",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "student_family_members_student_db_id_fkey",
+      "source_table": "student_family_members",
+      "source_column": "student_db_id",
+      "target_table": "students",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "student_remarks_created_by_adviser_id_fkey",
+      "source_table": "student_remarks",
+      "source_column": "created_by_adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "student_remarks_student_db_id_fkey",
+      "source_table": "student_remarks",
+      "source_column": "student_db_id",
+      "target_table": "students",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "student_reports_adviser_fk",
+      "source_table": "student_reports",
+      "source_column": "adviser_id",
+      "target_table": "advisers",
+      "target_column": "id",
+      "position": 1
+    },
+    {
+      "constraint_name": "students_section_grade_fk",
+      "source_table": "students",
+      "source_column": "grade",
+      "target_table": "sections",
+      "target_column": "grade",
+      "position": 2
+    },
+    {
+      "constraint_name": "students_section_grade_fk",
+      "source_table": "students",
+      "source_column": "section",
+      "target_table": "sections",
+      "target_column": "name",
+      "position": 1
+    }
+  ]
+}
