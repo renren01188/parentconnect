@@ -22,16 +22,32 @@ const subjectTeacherReportsRoute = read("src/app/api/subject-teacher-reports/rou
 assert.match(reportForm, /https:\/\/www\.google\.com\/recaptcha\/api\.js\?render=explicit/);
 assert.match(reportForm, /callback: \(token\) => \{ setRecaptchaToken\(token\);/);
 assert.match(reportForm, /"expired-callback": \(\) => \{ setRecaptchaToken\(""\);/);
-assert.match(reportForm, /const canSubmit = hasRequiredReportDetails && Boolean\(recaptchaToken\) && !loading/);
+assert.match(reportForm, /name="lrn"/);
+assert.match(reportForm, /Learner Reference Number \(LRN\)/);
+assert.match(reportForm, /pattern="\[0-9\]\{12\}"/);
+assert.match(reportForm, /const canSubmit = hasRequiredReportDetails && termsAccepted && Boolean\(recaptchaToken\) && !loading/);
 assert.match(reportForm, /disabled=\{!canSubmit\}/);
 assert.match(reportForm, /Complete the reCAPTCHA verification before submitting your report\./);
 assert.match(reportForm, /typeof window\.grecaptcha\?\.render === "function"\) setRecaptchaLoaded\(true\)/);
 assert.match(reportForm, /Complete the CAPTCHA to enable Submit Report\./);
+assert.match(reportForm, /Terms and Agreement/);
+assert.match(reportForm, /records the submitter&apos;s IP address and device\/browser information/);
+assert.match(reportForm, /function sortGradeLevels/);
 
 // The endpoint remains the security boundary; client-side gating alone must
 // never be enough to save a public report.
 assert.match(studentReportsRoute, /if \(!await verifyGoogleRecaptcha\(recaptchaToken\)\)/);
 assert.match(studentReportsRoute, /The reCAPTCHA verification is invalid, expired, or incomplete/);
+assert.match(studentReportsRoute, /const trimmedLrn = String\(lrn \?\? ""\)\.trim\(\)/);
+assert.match(studentReportsRoute, /!\/\^\\d\{12\}\$\/\.test\(trimmedLrn\)/);
+assert.match(studentReportsRoute, /\.eq\("student_id", trimmedLrn\)/);
+assert.match(studentReportsRoute, /if \(termsAccepted !== true\)/);
+assert.match(studentReportsRoute, /action: "Student Report Submitted"/);
+assert.match(studentReportsRoute, /performedBy: "Student"/);
+assert.match(studentReportsRoute, /performedByRole: "Student"/);
+assert.doesNotMatch(studentReportsRoute, /Subject Teacher/);
+assert.match(studentReportsRoute, /ipAddress: publicReportAuditIp\(req\)/);
+assert.match(studentReportsRoute, /browser: req\.headers\.get\("user-agent"\)/);
 assert.match(studentReportsRoute, /\.insert\(\{[\s\S]*?\.select\("id"\)[\s\S]*?\.single\(\)/);
 
 // Once committed, wake the assigned Adviser and active Principal monitoring

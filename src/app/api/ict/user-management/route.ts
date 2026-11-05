@@ -12,7 +12,8 @@ import {
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
 import { logAudit } from "@/lib/audit";
-import { hasCompletedParentSignup, isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
+import { hasCompletedActiveParentSignup } from "@/lib/parentAccountCompletion";
 import { processDueScheduledDeletions } from "@/lib/processScheduledDeletions";
 import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
 import {
@@ -75,7 +76,7 @@ type UserRow = {
   accountIds?: number[];
   parentAccountPasswordSet?: boolean;
   /** Present only in the student-centred Parents & Students directory. */
-  parentStudentLinkState?: "Already Linked" | "Unlinked";
+  parentStudentLinkState?: "Already Linked" | "Awaiting Signup" | "Not Registered";
   parentStudentLrn?: string;
   linkedParentLabel?: string;
   initials: string;
@@ -643,20 +644,31 @@ export async function GET(request: NextRequest) {
         };
       });
 
-    // Parents & Students is intentionally student-centred. A parent who has
-    // has not completed account setup is not a signed-up parent account, so
-    // it must not make a student appear "Already Linked". Imported accounts
-    // may already have password_set = 1 while their owner/setup step remains
-    // unfinished; check both states. Build this from the visible student
-    // roster and use sets at every relationship boundary: one signed-up
-    // parent linked to multiple students is valid, but never duplicates a
-    // student in the directory or its counts.
+    // Parents & Students is intentionally student-centred. A persisted
+    // import record is an association, not proof that a guardian completed
+    // signup. Build both association and completed-account maps from the
+    // visible roster: one completed parent can validly link several students,
+    // but never duplicates a student in the directory or its counts.
     const signedUpParentsById = new Map<number, (typeof visibleParents)[number]>();
+    const visibleParentsById = new Map<number, (typeof visibleParents)[number]>();
     for (const parent of visibleParents) {
-      if (hasCompletedParentSignup([parent.id], parent.password_set)) {
+      const parentId = Number(parent.id);
+      if (!Number.isSafeInteger(parentId) || parentId <= 0) continue;
+      visibleParentsById.set(parentId, parent);
+      if (hasCompletedActiveParentSignup(parent)) {
         signedUpParentsById.set(Number(parent.id), parent);
       }
     }
+
+    const associatedParentIdsByStudentId = new Map<string, Set<number>>();
+    const addParentAssociation = (studentId: unknown, parentId: unknown) => {
+      const normalizedStudentId = String(studentId ?? "").trim();
+      const normalizedParentId = Number(parentId);
+      if (!normalizedStudentId || !visibleStudentIds.has(normalizedStudentId) || !visibleParentsById.has(normalizedParentId)) return;
+      const parentIds = associatedParentIdsByStudentId.get(normalizedStudentId) ?? new Set<number>();
+      parentIds.add(normalizedParentId);
+      associatedParentIdsByStudentId.set(normalizedStudentId, parentIds);
+    };
 
     const signedUpParentIdsByStudentId = new Map<string, Set<number>>();
     const addSignedUpParentLink = (studentId: unknown, parentId: unknown) => {
@@ -668,12 +680,18 @@ export async function GET(request: NextRequest) {
       signedUpParentIdsByStudentId.set(normalizedStudentId, parentIds);
     };
 
-    for (const link of visibleLinks) addSignedUpParentLink(link.student_id, link.parent_id);
+    for (const link of visibleLinks) {
+      addParentAssociation(link.student_id, link.parent_id);
+      addSignedUpParentLink(link.student_id, link.parent_id);
+    }
     // Keep support for older family records created before parent_student_links
     // existed. reconcileParentStudentLinks will normally have created a link,
     // but reading the direct relation here makes the directory accurate during
     // that transition as well.
-    for (const parent of visibleParents) addSignedUpParentLink(parent.student_id, parent.id);
+    for (const parent of visibleParents) {
+      addParentAssociation(parent.student_id, parent.id);
+      addSignedUpParentLink(parent.student_id, parent.id);
+    }
 
     const parentStudentRows: UserRow[] = visibleStudents
       .map((student: (typeof visibleStudents)[number]) => {
@@ -685,7 +703,10 @@ export async function GET(request: NextRequest) {
           .sort((left, right) => fullName(left).localeCompare(fullName(right), undefined, { sensitivity: "base" }));
         const primaryParent = linkedParents[0];
         const isLinked = linkedParents.length > 0;
-        const parentStudentLinkState: NonNullable<UserRow["parentStudentLinkState"]> = isLinked ? "Already Linked" : "Unlinked";
+        const hasAssociatedParentRecord = (associatedParentIdsByStudentId.get(studentId)?.size ?? 0) > 0;
+        const parentStudentLinkState: NonNullable<UserRow["parentStudentLinkState"]> = isLinked
+          ? "Already Linked"
+          : hasAssociatedParentRecord ? "Awaiting Signup" : "Not Registered";
         const family = familyByStudent.get(student.id) ?? [];
         const father = family.find((item) => item.role === "Father");
         const mother = family.find((item) => item.role === "Mother");
@@ -697,7 +718,7 @@ export async function GET(request: NextRequest) {
         const linkedParentNames = linkedParents.map((parent) => fullName(parent)).filter(Boolean);
         const linkedParentLabel = isLinked
           ? `${linkedParentNames.join(", ")}${linkedParentNames.length > 1 ? ` (${linkedParentNames.length} parent accounts)` : ""}`
-          : "No signed-up parent account";
+          : hasAssociatedParentRecord ? "Parent signup is not complete" : "No parent account registered";
 
         return {
           // The student id is part of the key even when a parent has multiple
@@ -786,12 +807,14 @@ export async function GET(request: NextRequest) {
       const parentStudentCounts = {
         total: inSelectedClass.length,
         alreadyLinked: inSelectedClass.filter((student) => student.parentStudentLinkState === "Already Linked").length,
-        unlinked: inSelectedClass.filter((student) => student.parentStudentLinkState === "Unlinked").length,
+        awaitingSignup: inSelectedClass.filter((student) => student.parentStudentLinkState === "Awaiting Signup").length,
+        notRegistered: inSelectedClass.filter((student) => student.parentStudentLinkState === "Not Registered").length,
       };
       const matchingParentStudents = inSelectedClass.filter((student) => {
         const matchesLinkState = requestedParentLinkState === "all"
           || (requestedParentLinkState === "linked" && student.parentStudentLinkState === "Already Linked")
-          || (requestedParentLinkState === "unlinked" && student.parentStudentLinkState === "Unlinked");
+          || (requestedParentLinkState === "awaiting" && student.parentStudentLinkState === "Awaiting Signup")
+          || (requestedParentLinkState === "not_registered" && student.parentStudentLinkState === "Not Registered");
         const detail = student.studentDetails?.[0];
         return matchesLinkState && matchesSearchQuery(requestedQuery, [
           student.name,

@@ -20,6 +20,7 @@ assert.match(filters, /Subject Teacher OTP CAPTCHA Failed/);
 assert.match(filters, /Subject Teacher OTP Rate Limited/);
 assert.match(filters, /AUDIT_STATUS_OPTIONS/);
 assert.match(filters, /function auditStatusDatabaseValues/);
+assert.match(filters, /Student Report Submitted/);
 assert.match(auditWriter, /action: "Failed Login"/);
 
 const timestamp = new Date("2026-10-13T14:22:25.188Z");
@@ -48,6 +49,11 @@ for (const role of ["principal", "ict"]) {
   assert.match(page, /isSecurityAuditAction\(event\.action\)/);
   assert.match(page, /setSecurityTotal\(json\.securityTotal \?\? 0\)/);
   assert.match(page, /security: securityTotal/);
+  assert.match(page, /Audit Security Details/);
+  assert.match(page, /Recorded IP Address/);
+  assert.match(page, /Recorded Device \/ Browser/);
+  assert.match(page, /event\.ipAddress/);
+  assert.match(page, /event\.browser/);
 }
 
 console.log("audit trail checks passed");

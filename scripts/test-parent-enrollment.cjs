@@ -17,12 +17,18 @@ const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx
 // verification without creating a direct-import-only Parent account.
 assert.match(signup, /verifyGoogleRecaptcha/);
 assert.match(signup, /\.in\("role", \["Father", "Mother", "Guardian"\]\)/);
+assert.match(signup, /RECORDED_CONTACT_NUMBER_MISMATCH_MESSAGE/);
+assert.match(signup, /The contact number does not match the number recorded by the Adviser\./);
+assert.match(signup, /return !normalizedRecorded \|\| normalizedRecorded === claimed/);
+assert.match(signup, /return recordedContactNumberMismatch\(req\)/);
 assert.match(signup, /const verificationMethod = email \? "email" : "sms"/);
 assert.match(signup, /verificationMethod: "sms"/);
 assert.match(signup, /redirectTo: "\/login\/guardian\/send-otp"/);
 assert.match(guardianPage, /fetch\("\/api\/parents\/signup"/);
 assert.match(guardianPage, /relationship: "Father"/);
 assert.match(guardianPage, /GUARDIAN_RELATIONSHIP_OPTIONS/);
+assert.match(guardianPage, /Use the 11-digit number recorded by the Adviser\./);
+assert.match(guardianPage, /If no contact number is recorded in the school file/);
 
 // Phone signup uses the durable OTP table with bounded, one-time verification
 // before the account receives its normal temporary-password session.
@@ -30,6 +36,8 @@ assert.match(signupOtp, /issueParentOtp\(/);
 assert.match(otp, /from\("parent_verification_otps"\)/);
 assert.match(verifyTemporaryPassword, /verifyParentOtp\(signup\.otpChallengeId, "signup", otp\)/);
 assert.match(verifyTemporaryPassword, /redirectTo: "\/login\/guardian\/set-password"/);
+assert.match(verifyTemporaryPassword, /matchesRecordedPhone\(familyMember\.contact_number, signup\.contactNumber\)/);
+assert.match(verifyTemporaryPassword, /contact_number: signup\.contactNumber/);
 
 // Password recovery remains available from the normal guardian entry point.
 assert.match(forgotPasswordPage, /Forgot password\?/);

@@ -12,7 +12,8 @@ const deletionWorker = read("src/lib/processScheduledDeletions.ts");
 const archival = read("src/lib/permanentDeletion.ts");
 const userManagementApi = read("src/app/api/ict/user-management/route.ts");
 const bulkUi = read("src/app/dashboard/ict/user-management/BulkDeletionModal.tsx");
-const migration = read("supabase/migrations/20261020190000_prevent_occupied_section_deletion.sql");
+const migration = read("supabase/migrations/20261105150000_ensure_occupied_sections_cannot_be_deleted.sql");
+const deletionAccess = read("src/lib/deletionAccess.ts");
 
 // The displayed count and server preflight ignore only explicitly archived or
 // deleted students. An occupied section returns a clear conflict before delete.
@@ -29,9 +30,10 @@ assert.match(sectionsApi, /occupiedSectionRaceResponse/);
 // The modal exposes counts and never stages an occupied section for deletion.
 assert.match(sessionsUi, /\{sec\.count\} student/);
 assert.match(sessionsUi, /const hasStudents = sec\.count > 0/);
-assert.match(sessionsUi, /disabled=\{hasStudents\}/);
+assert.match(sessionsUi, /disabled=\{hasStudents \|\| hasStagedRename\}/);
 assert.match(sessionsUi, /Remove or reassign them first/);
 assert.match(sessionsUi, /Remove or reassign students first/);
+assert.match(sessionsUi, /Remove or reassign the students before deleting this section/);
 assert.match(sessionsUi, /requestDeleteSection\(grade, sec\.name, sec\.count\)/);
 
 // PostgreSQL is the final protection against a student assignment racing the
@@ -64,11 +66,28 @@ assert.match(bulkUi, /setKind\("student"\)/);
 assert.match(bulkUi, /const candidateStudents = useMemo/);
 assert.match(bulkUi, /type: "student"/);
 assert.match(deletionApi, /requestedStudentIds/);
+assert.match(deletionApi, /requestedParentIds/);
 assert.match(deletionApi, /from\("students"\)[\s\S]*?archive_status/);
+assert.match(deletionApi, /from\("parents"\)[\s\S]*?archive_status/);
 assert.match(deletionApi, /isActiveArchivableRecord/);
 assert.match(deletionApi, /activeStudentRequests/);
+assert.match(deletionApi, /activeParentRequests/);
 assert.match(deletionApi, /Each record can be selected only once for deletion/);
 assert.match(deletionApi, /student \? studentName\(student\)/);
 assert.match(bulkUi, /onChanged\(\)/);
+
+// ICT schedules independent root targets for a recoverable 30-day archive;
+// it neither permanently deletes history nor silently archives a linked
+// Parent when a Student is selected (or the reverse).
+assert.match(deletionApi, /const deleteAfter = new Date\(Date\.now\(\) \+ THIRTY_DAYS\)\.toISOString\(\)/);
+assert.match(deletionApi, /status: "Scheduled"/);
+assert.match(deletionApi, /action === "restore"/);
+assert.match(deletionApi, /action === "delete-now"/);
+assert.match(deletionWorker, /\.eq\("status", "Scheduled"\)/);
+assert.match(deletionWorker, /\.lte\("delete_after", now\)/);
+assert.match(deletionWorker, /await archiveTarget\(item/);
+assert.match(deletionAccess, /if \(item\.target_type === "parent"\)/);
+assert.match(deletionAccess, /return \[\];/);
+assert.match(archival, /Archives only the selected root record/);
 
 console.log("ICT section and bulk-deletion regression checks passed.");

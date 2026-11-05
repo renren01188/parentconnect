@@ -31,6 +31,7 @@ import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmati
 
 const SECRET = getJwtSecret();
 const ENROLLMENT_ERROR = "We could not verify this enrollment request. Please contact the school office for assistance.";
+const RECORDED_CONTACT_NUMBER_MISMATCH_MESSAGE = "The contact number does not match the number recorded by the Adviser.";
 const CAPTCHA_ERROR = "Security verification is missing, expired, or incorrect. Please complete the CAPTCHA again.";
 const MOBILE_NUMBER_IN_USE_MESSAGE = "This mobile number is already linked to a ParentConnect account. Sign in to that account, or use another verified mobile number.";
 const PHONE_SIGNUP_PENDING_TTL_SECONDS = 30 * 60;
@@ -69,7 +70,12 @@ function normalizePhone(value: unknown) {
   return digits;
 }
 
-/** A staff-recorded phone, when present, must agree with the signup claim. */
+/**
+ * An imported SF1 AP contact number is an enrollment check when it exists.
+ * Older SF1 records may leave AP blank; those retain the normal signup flow
+ * and use the number from a successfully completed ParentConnect signup as the account
+ * contact number.
+ */
 function matchesRecordedPhone(recorded: unknown, claimed: string) {
   const normalizedRecorded = normalizePhone(recorded);
   return !normalizedRecorded || normalizedRecorded === claimed;
@@ -89,6 +95,15 @@ function clientSubject(req: NextRequest) {
 async function enrollmentFailure(req: NextRequest, status = 400) {
   const result = await failedLoginResult("parent", clientSubject(req), req, PARENT_SIGNUP_GUARD_SCOPE);
   return genericEnrollmentError(result.status === 429 ? 429 : status);
+}
+
+async function recordedContactNumberMismatch(req: NextRequest) {
+  const result = await failedLoginResult("parent", clientSubject(req), req, PARENT_SIGNUP_GUARD_SCOPE);
+  if (result.status === 429) return genericEnrollmentError(429);
+  return NextResponse.json({
+    success: false,
+    message: RECORDED_CONTACT_NUMBER_MISMATCH_MESSAGE,
+  }, { status: 403 });
 }
 
 async function enrollmentCaptchaFailure(req: NextRequest) {
@@ -182,14 +197,14 @@ export async function POST(req: NextRequest) {
       currentFamilyMember.relationship || "Guardian",
     )) return enrollmentFailure(req, 403);
     if (!matchesRecordedPhone(currentFamilyMember.contact_number, contactNumber)) {
-      return enrollmentFailure(req, 403);
+      return recordedContactNumberMismatch(req);
     }
 
-    // Ownership is established exclusively from the current SF1 family name,
-    // role, and one child LRN. Email and phone are contact details supplied by
-    // the parent; they are never compared with imported school contact fields.
-    // They are still used as an account identifier so a second account cannot
-    // be created for the same parent.
+    // Ownership is established from the current SF1 family name, role, and
+    // child LRN. When SF1 AP has a contact number, the check above also binds
+    // enrollment to it. When AP is blank, the parent-provided number continues
+    // through the established email/SMS verification path and becomes the
+    // ParentConnect account's contact/login number.
     const { data: links, error: linksError } = await supabase
       .from("parent_student_links")
       .select(`

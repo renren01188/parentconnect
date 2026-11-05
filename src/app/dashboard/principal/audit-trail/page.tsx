@@ -49,6 +49,7 @@ const ACTION_META: Record<string, { label: string; bg: string; text: string; bor
   "Password Reset": { label: "Password Reset", bg: "#fdf4ff", text: "#7c3aed", border: "#ddd6fe", Icon: RefreshCw      },
   Export:           { label: "Export",         bg: "#f0fdf4", text: "#0f766e", border: "#99f6e4", Icon: FileText       },
   "Submit Report":  { label: "Submit Report",  bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText       },
+  "Student Report Submitted": { label: "Student Report Submitted", bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText },
   Approve:          { label: "Approve",        bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", Icon: CheckCircle    },
   Reject:           { label: "Reject",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: AlertTriangle  },
 };
@@ -244,6 +245,23 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
               </div>
             ))}
           </div>
+
+          {(event.ipAddress || event.browser) && (
+            <section className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+              <p className="text-xs font-bold uppercase tracking-wider text-violet-700">Audit Security Details</p>
+              <p className="mt-1 text-xs leading-relaxed text-violet-700">Visible only to authorized ICT and Principal users.</p>
+              <dl className="mt-3 space-y-2 text-sm">
+                <div>
+                  <dt className="text-xs font-semibold text-slate-500">Recorded IP Address</dt>
+                  <dd className="mt-0.5 break-all font-mono text-xs font-semibold text-slate-700">{event.ipAddress || "Not recorded"}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-semibold text-slate-500">Recorded Device / Browser</dt>
+                  <dd className="mt-0.5 break-words text-xs font-semibold leading-relaxed text-slate-700">{event.browser || "Not recorded"}</dd>
+                </div>
+              </dl>
+            </section>
+          )}
 
           {/* Performed by */}
           <div className="flex items-center gap-3 p-4 rounded-xl border border-gray-100 bg-gray-50">

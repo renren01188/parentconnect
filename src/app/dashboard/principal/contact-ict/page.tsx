@@ -512,7 +512,7 @@ export default function ContactICTPage() {
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-x-hidden bg-slate-50">
-            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
+            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 shadow-sm">
                         <Monitor className="h-5 w-5 text-white" />
@@ -536,7 +536,7 @@ export default function ContactICTPage() {
             )}
 
             <div className="flex min-h-0 flex-1 overflow-hidden">
-                <div className={`${mobileConversationOpen ? "hidden" : "flex"} w-full min-w-0 flex-col bg-white md:flex md:max-w-[400px] md:shrink-0 md:border-r md:border-slate-100`}>
+                <div className={`${mobileConversationOpen ? "hidden" : "flex"} w-full min-w-0 flex-col bg-white lg:flex lg:max-w-[400px] lg:shrink-0 lg:border-r lg:border-slate-100`}>
                     <div className="border-b border-slate-100 px-3 py-3">
                         <div className="relative">
                             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -584,7 +584,7 @@ export default function ContactICTPage() {
                     </div>
                 </div>
 
-                <div className={`${mobileConversationOpen ? "flex" : "hidden"} min-w-0 flex-1 flex-col overflow-hidden md:flex`}>
+                <div className={`${mobileConversationOpen ? "flex" : "hidden"} min-w-0 flex-1 flex-col overflow-hidden lg:flex`}>
                     {!selected ? (
                         <div className="flex flex-1 flex-col items-center justify-center text-slate-400">
                             <Monitor className="mb-3 h-10 w-10 opacity-30" />
@@ -598,7 +598,7 @@ export default function ContactICTPage() {
                                         <button
                                             type="button"
                                             onClick={() => setMobileConversationOpen(false)}
-                                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-700 md:hidden"
+                                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-700 lg:hidden"
                                             aria-label="Back to conversation list"
                                         >
                                             <ArrowLeft className="h-4 w-4" />

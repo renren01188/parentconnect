@@ -2,7 +2,7 @@
 
 import { PublicReportPageShell } from "@/components/PublicReportPageShell";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown } from "lucide-react";
+import { ArrowLeft, Send, ArrowRight, AlertCircle, Info, CheckCircle, ChevronDown, X } from "lucide-react";
 import Link from "next/link";
 import Script from "next/script";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -29,6 +29,21 @@ const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? "";
 
 function formatName(value: string) {
   return value.toLocaleUpperCase();
+}
+
+function gradeSortOrder(grade: string) {
+  const normalized = grade.trim().toLocaleLowerCase();
+  if (/(nursery|pre[- ]?k)/.test(normalized)) return -2;
+  if (/(kindergarten|\bkinder\b)/.test(normalized)) return -1;
+  const gradeNumber = normalized.match(/(?:grade\s*)?(\d+)/)?.[1];
+  return gradeNumber ? Number(gradeNumber) : Number.MAX_SAFE_INTEGER;
+}
+
+function sortGradeLevels(grades: string[]) {
+  return [...grades].sort((left, right) => (
+    gradeSortOrder(left) - gradeSortOrder(right)
+    || left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
+  ));
 }
 
 // ─── Custom Select ────────────────────────────────────────────────────────────
@@ -132,14 +147,19 @@ export default function ReportPage() {
   const [recaptchaLoaded, setRecaptchaLoaded] = useState(false);
   const [recaptchaToken, setRecaptchaToken] = useState("");
   const [recaptchaError, setRecaptchaError] = useState("");
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsScrolled, setTermsScrolled] = useState(false);
   const captchaContainerRef = useRef<HTMLDivElement>(null);
   const captchaWidgetIdRef = useRef<number | null>(null);
+  const termsRef = useRef<HTMLDivElement>(null);
 
   const [form, setForm] = useState({
     firstName:  "",
     middleName: "",
     lastName:   "",
     suffix:     "",
+    lrn:        "",
     gradeLevel: "",
     section:    "",
     concern:    "",
@@ -152,14 +172,17 @@ export default function ReportPage() {
   const hasRequiredReportDetails = Boolean(
     form.firstName.trim()
     && form.lastName.trim()
+    && /^\d{12}$/.test(form.lrn)
     && form.gradeLevel
     && form.section
     && form.concern.trim(),
   );
-  const canSubmit = hasRequiredReportDetails && Boolean(recaptchaToken) && !loading;
+  const canSubmit = hasRequiredReportDetails && termsAccepted && Boolean(recaptchaToken) && !loading;
 
   const set = (key: string, value: string) => {
-    if (key === "gradeLevel") {
+    if (key === "lrn") {
+      setForm(prev => ({ ...prev, lrn: value.replace(/\D/g, "").slice(0, 12) }));
+    } else if (key === "gradeLevel") {
       setForm(prev => ({ ...prev, gradeLevel: value, section: "" }));
     } else {
       setForm(prev => ({ ...prev, [key]: value }));
@@ -278,11 +301,48 @@ export default function ReportPage() {
     };
   }, [recaptchaLoaded, renderRecaptcha]);
 
+  useEffect(() => {
+    if (!termsOpen) return;
+
+    const markTermsReadWhenFullyVisible = () => {
+      const terms = termsRef.current;
+      if (terms && terms.scrollHeight <= terms.clientHeight + 4) setTermsScrolled(true);
+    };
+
+    const frame = window.requestAnimationFrame(markTermsReadWhenFullyVisible);
+    window.addEventListener("resize", markTermsReadWhenFullyVisible);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", markTermsReadWhenFullyVisible);
+    };
+  }, [termsOpen]);
+
+  const openTerms = () => {
+    setTermsAccepted(false);
+    setTermsScrolled(false);
+    setTermsOpen(true);
+  };
+
+  const handleTermsScroll = () => {
+    const terms = termsRef.current;
+    if (terms && terms.scrollTop + terms.clientHeight >= terms.scrollHeight - 4) {
+      setTermsScrolled(true);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.gradeLevel || !form.section || !form.concern.trim()) {
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.lrn || !form.gradeLevel || !form.section || !form.concern.trim()) {
       setError("Please complete all required fields before submitting your report.");
+      return;
+    }
+    if (!/^\d{12}$/.test(form.lrn)) {
+      setError("Enter the student's valid 12-digit LRN.");
+      return;
+    }
+    if (!termsAccepted) {
+      setError("Read and agree to the Terms and Agreement before submitting your report.");
       return;
     }
     if (!recaptchaToken) {
@@ -312,7 +372,7 @@ export default function ReportPage() {
     }
   };
 
-  const gradeLevels = Object.keys(gradeSections);
+  const gradeLevels = sortGradeLevels(Object.keys(gradeSections));
   const sections = form.gradeLevel ? gradeSections[form.gradeLevel] ?? [] : [];
 
   return (
@@ -442,6 +502,28 @@ export default function ReportPage() {
                   </p>
                 </div>
 
+                {/* ── Learner Reference Number ── */}
+                <div>
+                  <FieldLabel label="Learner Reference Number (LRN)" required />
+                  <input
+                    type="text"
+                    name="lrn"
+                    value={form.lrn}
+                    onChange={handleChange}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={12}
+                    pattern="[0-9]{12}"
+                    placeholder="Enter the 12-digit LRN"
+                    aria-describedby="report-lrn-help"
+                    required
+                    className={`${inputCls} font-mono tracking-[0.08em]`}
+                  />
+                  <p id="report-lrn-help" className="mt-1.5 text-xs text-slate-400">
+                    Enter the 12-digit LRN exactly as it appears in the school record.
+                  </p>
+                </div>
+
                 {/* ── Grade Level ── */}
                 <div>
                   <FieldLabel label="Grade Level" required />
@@ -498,6 +580,34 @@ export default function ReportPage() {
                   </div>
                 </div>
 
+                <div>
+                  <FieldLabel label="Terms and Agreement" required />
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-700">
+                      Review and agree before submitting
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      For audit and security purposes, ParentConnect records the submitter&apos;s IP address and device/browser information with this report.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={openTerms}
+                      className={`mt-3 inline-flex min-h-11 items-center rounded-lg border px-3 py-2 text-xs font-bold transition ${
+                        termsAccepted
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          : "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"
+                      }`}
+                    >
+                      {termsAccepted ? "Terms accepted — review again" : "Review Terms and Agreement"}
+                    </button>
+                    {termsAccepted && (
+                      <p className="mt-2 text-xs font-medium text-emerald-700">
+                        Terms and Agreement accepted. Complete the CAPTCHA, then submit your report.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
                 {error && (
                   <div role="alert" className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm font-semibold text-red-600">
                     {error}
@@ -537,6 +647,79 @@ export default function ReportPage() {
             </>
           )}
         </div>
+
+      {termsOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="student-report-terms-title"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 backdrop-blur-sm sm:p-4"
+          onClick={() => setTermsOpen(false)}
+        >
+          <div
+            className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[88vh]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-4 sm:p-5">
+              <div>
+                <h2 id="student-report-terms-title" className="text-lg font-extrabold text-slate-800">Terms and Agreement</h2>
+                <p className="mt-1 text-sm text-slate-500">Read to the end before agreeing.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTermsOpen(false)}
+                aria-label="Close Terms and Agreement"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div ref={termsRef} onScroll={handleTermsScroll} className="min-h-0 flex-1 overflow-y-auto p-4 text-sm leading-6 text-slate-600 sm:p-5">
+              <p>
+                By submitting this Student Report, you confirm that the learner details and concern are accurate, necessary, and related to the identified student.
+              </p>
+              <p className="mt-4">
+                ParentConnect records the submitter&apos;s IP address and device/browser information for audit and security purposes. Only authorized ICT and Principal users may view these security details in the Audit Trail event record.
+              </p>
+              <p className="mt-4">
+                Authorized school personnel may review the student details and report to investigate, document, and respond appropriately. Do not include unnecessary sensitive information, threats, or false statements.
+              </p>
+              <p className="mt-4">
+                This form is for school-related concerns. If a student is in immediate danger, contact the school or emergency services directly instead of waiting for a report response.
+              </p>
+              <p className="mt-8 font-semibold text-slate-800">End of Terms and Agreement.</p>
+            </div>
+
+            <div className="border-t border-slate-100 p-4 sm:p-5">
+              <label className={`flex items-start gap-3 text-sm ${termsScrolled ? "text-slate-700" : "text-slate-400"}`}>
+                <input
+                  type="checkbox"
+                  disabled={!termsScrolled}
+                  checked={termsAccepted}
+                  onChange={(event) => setTermsAccepted(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-amber-500 focus:ring-amber-400"
+                />
+                I have read and agree to the Terms and Agreement.
+              </label>
+              {!termsScrolled && <p className="mt-2 text-xs text-amber-700">Scroll to the bottom of the terms to enable the agreement checkbox.</p>}
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
+                <button type="button" onClick={() => setTermsOpen(false)} className="min-h-11 w-full rounded-xl px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 sm:w-auto sm:py-2">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!termsAccepted || !termsScrolled}
+                  onClick={() => setTermsOpen(false)}
+                  className="min-h-11 w-full rounded-xl bg-amber-400 px-4 py-3 text-sm font-bold text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:py-2"
+                >
+                  Agree to Terms
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </PublicReportPageShell>
   );
 }

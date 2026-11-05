@@ -3404,7 +3404,48 @@ export default function AdviserAttendancePage() {
 
                     {!isLoadingHistory && !historyError && (
                         <>
-                        <div className="overflow-x-auto">
+                        <div className="space-y-3 px-4 py-3 xl:hidden">
+                            {filteredHistoryRows.length === 0 ? (
+                                <p className="py-8 text-center text-sm text-slate-400">
+                                    {historySummary.length === 0 ? "No students found for this section." : "No results match your search or filter."}
+                                </p>
+                            ) : (
+                                paginatedHistoryRows.map(row => (
+                                    <article key={row.student_id} className={`rounded-xl border p-3 shadow-sm ${row.is_absent ? "border-red-100 bg-red-50/40" : "border-slate-100 bg-white"}`}>
+                                        <div className="flex items-start gap-3">
+                                            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${row.is_absent ? "bg-red-100 text-red-600" : "bg-emerald-100 text-emerald-700"}`}>
+                                                {getInitials(row.full_name)}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="truncate text-sm font-semibold text-slate-800">{row.full_name}</p>
+                                                <p className="mt-0.5 font-mono text-[11px] text-slate-400">{row.student_id}</p>
+                                            </div>
+                                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(row.time_in_status)}`}>
+                                                {row.time_in_status ?? "No Record"}
+                                            </span>
+                                        </div>
+                                        <dl className="mt-3 grid grid-cols-2 gap-x-4 border-t border-slate-100 pt-3 text-xs">
+                                            <div>
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Time in</dt>
+                                                <dd className="mt-1 font-medium text-slate-700">{formatTime(row.time_in)}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Time out</dt>
+                                                <dd className="mt-1 font-medium text-slate-700">{formatTime(row.time_out)}</dd>
+                                            </div>
+                                            <div className="mt-3">
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Recorded via</dt>
+                                                <dd className="mt-1 flex items-center gap-1.5 font-medium text-slate-700"><IdCard className="h-3.5 w-3.5 text-slate-400" />{row.via || "—"}</dd>
+                                            </div>
+                                            {row.is_absent && row.via === "Auto" && (
+                                                <div className="mt-3 self-end text-right text-[11px] italic text-slate-400">Auto-marked absent</div>
+                                            )}
+                                        </dl>
+                                    </article>
+                                ))
+                            )}
+                        </div>
+                        <div className="hidden overflow-x-auto xl:block">
                             <table className="w-full min-w-[700px] text-sm">
                                 <thead>
                                     <tr className="border-b border-slate-100">
@@ -3459,11 +3500,11 @@ export default function AdviserAttendancePage() {
                             </table>
                         </div>
                         {filteredHistoryRows.length > HISTORY_ROWS_PER_PAGE && (
-                            <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
+                            <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                                 <p className="text-xs text-slate-400">
                                     Showing {(currentHistoryPage - 1) * HISTORY_ROWS_PER_PAGE + 1}-{Math.min(currentHistoryPage * HISTORY_ROWS_PER_PAGE, filteredHistoryRows.length)} of {filteredHistoryRows.length} students
                                 </p>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <button type="button" disabled={currentHistoryPage === 1} onClick={() => setHistoryPage(page => Math.max(1, page - 1))}
                                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
                                     <span className="text-xs text-slate-500">{currentHistoryPage} / {historyPageCount}</span>
@@ -3732,7 +3773,45 @@ export default function AdviserAttendancePage() {
                                 placeholder="Search today's log by student name or LRN..."
                                 className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
                         </div>
-                        <div className="overflow-x-auto">
+                        <div className="space-y-3 px-4 py-3 xl:hidden">
+                            {filteredTodayLogs.length === 0 ? (
+                                <p className="py-8 text-center text-sm text-slate-400">
+                                    {isLoadingLogs ? "Loading attendance logs..." : todayLogSearch ? "No matching attendance records." : "No attendance records for today yet."}
+                                </p>
+                            ) : (
+                                paginatedTodayLogs.map(log => (
+                                    <article key={log.id} className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+                                        <div className="flex items-start gap-3">
+                                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                                                {getInitials(log.full_name)}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="truncate text-sm font-semibold text-slate-800">{log.full_name}</p>
+                                                <p className="mt-0.5 font-mono text-[11px] text-slate-400">{log.student_id}</p>
+                                            </div>
+                                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(log.status)}`}>
+                                                {log.status}
+                                            </span>
+                                        </div>
+                                        <dl className="mt-3 grid grid-cols-3 gap-3 border-t border-slate-100 pt-3 text-xs">
+                                            <div>
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Time</dt>
+                                                <dd className="mt-1 font-medium text-slate-700">{log.status === "Absent" ? "—" : formatTime(log.time_logged)}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Type</dt>
+                                                <dd className="mt-1 font-medium text-slate-700">{log.type}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="font-semibold uppercase tracking-wide text-slate-400">Via</dt>
+                                                <dd className="mt-1 flex items-center gap-1.5 font-medium text-slate-700"><IdCard className="h-3.5 w-3.5 text-slate-400" />{log.via || "—"}</dd>
+                                            </div>
+                                        </dl>
+                                    </article>
+                                ))
+                            )}
+                        </div>
+                        <div className="hidden overflow-x-auto xl:block">
                             <table className="w-full min-w-[600px] text-sm">
                                 <thead>
                                     <tr className="border-b border-slate-100">
@@ -3779,9 +3858,9 @@ export default function AdviserAttendancePage() {
                             </table>
                         </div>
                         {filteredTodayLogs.length > TODAY_LOGS_PER_PAGE && (
-                            <div className="flex items-center justify-between px-5 py-3">
+                            <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                                 <p className="text-xs text-slate-400">Showing {(currentTodayLogPage - 1) * TODAY_LOGS_PER_PAGE + 1}-{Math.min(currentTodayLogPage * TODAY_LOGS_PER_PAGE, filteredTodayLogs.length)} of {filteredTodayLogs.length}</p>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <button type="button" disabled={currentTodayLogPage === 1} onClick={() => setTodayLogPage(page => Math.max(1, page - 1))}
                                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
                                     <span className="text-xs text-slate-500">{currentTodayLogPage} / {todayLogPageCount}</span>

@@ -2451,6 +2451,52 @@ function ReportsPageContent() {
             <GuidanceReportsGuide onStepChange={setGuideTarget} />
 
             <style jsx global>{`
+                /* The persistent Guidance sidebar leaves too little usable width
+                   for the 420px list panel and a report detail panel on tablets.
+                   Keep the established mobile drill-down navigation through
+                   tablet widths instead of squeezing two panels side-by-side. */
+                @media (min-width: 768px) and (max-width: 1199px) {
+                    .guidance-reports-list-panel,
+                    .guidance-reports-sublist-panel,
+                    .guidance-reports-detail-panel {
+                        inset: 0 !important;
+                        width: 100% !important;
+                        max-width: none !important;
+                        border-right: 0 !important;
+                        box-shadow: none !important;
+                    }
+
+                    .guidance-mobile-hide-on-detail {
+                        display: none !important;
+                    }
+                }
+
+                @media (min-width: 768px) and (max-width: 900px) {
+                    .guidance-reports-topbar {
+                        align-items: stretch;
+                        flex-direction: column;
+                        gap: 12px;
+                    }
+
+                    .guidance-reports-actions {
+                        display: grid;
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                        width: 100%;
+                        gap: 8px;
+                    }
+
+                    .guidance-reports-actions > button {
+                        min-width: 0;
+                        justify-content: center;
+                        padding: 10px 8px;
+                        font-size: 12px;
+                    }
+
+                    .guidance-reports-new-action {
+                        grid-column: 1 / -1;
+                    }
+                }
+
                 @media (max-width: 767px) {
                     .guidance-reports-page {
                         height: calc(100dvh - 64px);

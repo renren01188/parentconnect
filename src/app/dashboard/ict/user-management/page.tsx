@@ -62,7 +62,7 @@ interface ScheduledAdviserTransfer {
 interface UserRow {
   id: string; accountIds?: number[]; initials: string; name: string; email: string;
   parentAccountPasswordSet?: boolean;
-  parentStudentLinkState?: "Already Linked" | "Unlinked";
+  parentStudentLinkState?: "Already Linked" | "Awaiting Signup" | "Not Registered";
   parentStudentLrn?: string;
   linkedParentLabel?: string;
   role: Role; classGrade: string; status: Status; students?: string[];
@@ -100,7 +100,13 @@ function displayGuidanceLabel(value: string) {
 interface ParentStudentFilters {
   grades: string[];
   sections: { grade: string; name: string }[];
-  counts: { total: number; alreadyLinked: number; unlinked: number };
+  counts: { total: number; alreadyLinked: number; awaitingSignup: number; notRegistered: number };
+}
+
+function parentStudentLinkBadgeClass(state: UserRow["parentStudentLinkState"]) {
+  if (state === "Already Linked") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (state === "Awaiting Signup") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-gray-200 bg-gray-50 text-gray-600";
 }
 
 // ─── Constants ────────────────────────────────────────────
@@ -2127,11 +2133,11 @@ export default function UserManagementPage() {
   const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent" | "approval">("all");
   const [parentStudentGrade, setParentStudentGrade] = useState("");
   const [parentStudentSection, setParentStudentSection] = useState("");
-  const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "unlinked">("all");
+  const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "awaiting" | "not_registered">("all");
   const [parentStudentFilters, setParentStudentFilters] = useState<ParentStudentFilters>({
     grades: [],
     sections: [],
-    counts: { total: 0, alreadyLinked: 0, unlinked: 0 },
+    counts: { total: 0, alreadyLinked: 0, awaitingSignup: 0, notRegistered: 0 },
   });
   const [showApprovals, setShowApprovals] = useState(false);
   const [dismissedApprovalBadgeCount, setDismissedApprovalBadgeCount] = useState(0);
@@ -2204,7 +2210,7 @@ export default function UserManagementPage() {
         setServerCounts(usersData.counts ?? { total: enriched.length, advisers: 0, ict: 0, guidance: 0, parents: 0 });
         if (filterMode === "parent") {
           setParentStudentFilters(usersData.parentStudentFilters ?? {
-            grades: [], sections: [], counts: { total: 0, alreadyLinked: 0, unlinked: 0 },
+            grades: [], sections: [], counts: { total: 0, alreadyLinked: 0, awaitingSignup: 0, notRegistered: 0 },
           });
         }
       } else throw new Error(usersData.message || "Unable to load users.");
@@ -2460,7 +2466,8 @@ export default function UserManagementPage() {
                         {([
                           { value: "all", label: "All students", count: parentStudentFilters.counts.total },
                           { value: "linked", label: "Already Linked", count: parentStudentFilters.counts.alreadyLinked },
-                          { value: "unlinked", label: "Unlinked", count: parentStudentFilters.counts.unlinked },
+                          { value: "awaiting", label: "Awaiting Signup", count: parentStudentFilters.counts.awaitingSignup },
+                          { value: "not_registered", label: "Not Registered", count: parentStudentFilters.counts.notRegistered },
                         ] as const).map(({ value, label, count }) => (
                           <button
                             key={value}
@@ -2527,7 +2534,7 @@ export default function UserManagementPage() {
                     </td>
                     <td className="px-4 py-3.5">
                       {isParentStudentDirectory
-                        ? <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${u.parentStudentLinkState === "Already Linked" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{u.parentStudentLinkState}</span>
+                        ? <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${parentStudentLinkBadgeClass(u.parentStudentLinkState)}`}>{u.parentStudentLinkState}</span>
                         : <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ROLE_BADGE[u.role]}`}>{u.role}</span>}
                     </td>
                     <td className="px-4 py-3.5 text-sm text-gray-600 whitespace-nowrap">{u.classGrade}</td>
@@ -2579,7 +2586,7 @@ export default function UserManagementPage() {
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {isParentStudentDirectory
-                          ? <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${user.parentStudentLinkState === "Already Linked" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{user.parentStudentLinkState}</span>
+                          ? <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${parentStudentLinkBadgeClass(user.parentStudentLinkState)}`}>{user.parentStudentLinkState}</span>
                           : <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>}
                         {!isParentStudentDirectory && hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
                         {!isParentStudentDirectory && user.status === "Pending Activation" && <span className="rounded-full border border-sky-200 bg-sky-100 px-2 py-1 text-[10px] font-bold text-sky-700">Pending activation</span>}

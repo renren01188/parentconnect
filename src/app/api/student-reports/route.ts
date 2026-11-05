@@ -52,6 +52,18 @@ function manilaDayBounds() {
   return { start: start.toISOString(), end: new Date(start.getTime() + 86_400_000).toISOString() };
 }
 
+function publicReportAuditIp(request: NextRequest) {
+  // The production reverse proxy supplies one of these headers. Keep only the
+  // first address and place a small bound on untrusted request-header input.
+  const forwarded = request.headers.get("cf-connecting-ip")
+    ?? request.headers.get("x-vercel-forwarded-for")
+    ?? request.headers.get("x-forwarded-for")
+    ?? request.headers.get("x-real-ip")
+    ?? "";
+  const ipAddress = forwarded.split(",")[0]?.trim() ?? "";
+  return ipAddress && ipAddress.length <= 64 ? ipAddress : undefined;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const role = req.nextUrl.searchParams.get("role");
@@ -184,11 +196,13 @@ export async function POST(req: NextRequest) {
       middleName,
       lastName,
       suffix,
+      lrn,
       gradeLevel,
       section,
       concern,
       website,
       recaptchaToken,
+      termsAccepted,
     } = await req.json();
 
     // Invisible to genuine users; blocks simple automated form submissions.
@@ -200,12 +214,27 @@ export async function POST(req: NextRequest) {
     const trimmedMiddleName = String(middleName ?? "").trim();
     const trimmedLastName = String(lastName ?? "").trim();
     const trimmedSuffix = String(suffix ?? "").trim();
+    const trimmedLrn = String(lrn ?? "").trim();
     const trimmedGradeLevel = String(gradeLevel ?? "").trim();
     const trimmedSection = String(section ?? "").trim();
     const trimmedConcern = String(concern ?? "").trim();
-    if (!trimmedFirstName || !trimmedLastName || !trimmedGradeLevel || !trimmedSection || !trimmedConcern) {
+    if (!trimmedFirstName || !trimmedLastName || !trimmedLrn || !trimmedGradeLevel || !trimmedSection || !trimmedConcern) {
       return NextResponse.json(
-        { success: false, message: "Enter the student's first name, last name, grade level, section, and report details." },
+        { success: false, message: "Enter the student's first name, last name, 12-digit LRN, grade level, section, and report details." },
+        { status: 400 }
+      );
+    }
+
+    if (!/^\d{12}$/.test(trimmedLrn)) {
+      return NextResponse.json(
+        { success: false, message: "Enter the student's valid 12-digit LRN." },
+        { status: 400 }
+      );
+    }
+
+    if (termsAccepted !== true) {
+      return NextResponse.json(
+        { success: false, message: "You must read and agree to the Terms and Agreement before submitting a report." },
         { status: 400 }
       );
     }
@@ -250,10 +279,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Bind the public request to one exact active record. The LRN is checked
+    // again by matchPublicReportStudent with the supplied name, grade, and
+    // section below; a guessed LRN cannot submit a report for another learner.
     const { data: students, error: studentError } = await supabase
       .from("students")
       .select("id, student_id, first_name, middle_name, last_name, suffix, grade, section")
       .eq("archive_status", "active")
+      .eq("student_id", trimmedLrn)
       .eq("grade", trimmedGradeLevel)
       .eq("section", trimmedSection);
 
@@ -262,6 +295,7 @@ export async function POST(req: NextRequest) {
     const studentMatch = matchPublicReportStudent(
       (students ?? []) as PublicReportStudent[],
       {
+        lrn: trimmedLrn,
         firstName: trimmedFirstName,
         middleName: trimmedMiddleName,
         lastName: trimmedLastName,
@@ -273,7 +307,7 @@ export async function POST(req: NextRequest) {
 
     if (studentMatch.kind === "not-found") {
       return NextResponse.json(
-        { success: false, message: "We could not find a student matching that name, grade level, and section. Please check the student record and try again." },
+        { success: false, message: "We could not validate that LRN with the student's name, grade level, and section. Please check the school record and try again." },
         { status: 404 }
       );
     }
@@ -386,6 +420,29 @@ export async function POST(req: NextRequest) {
       throw insertError;
     }
 
+    await logAudit({
+      action: "Student Report Submitted",
+      performedBy: "Student",
+      performedByRole: "Student",
+      targetUser: studentName,
+      targetRole: "Student",
+      targetEmail: "not-applicable",
+      targetType: "Student Report",
+      targetId: insertedReport?.id,
+      relatedReportId: insertedReport?.id,
+      relatedStudentId: matchingStudent.student_id,
+      newStatus: "new",
+      module: "Student Reports",
+      details: `Student report submitted for ${studentName}; LRN, grade, and section were validated and the Terms and Agreement was accepted.`,
+      ipAddress: publicReportAuditIp(req),
+      browser: req.headers.get("user-agent") ?? undefined,
+      metadata: {
+        lrn_validated: true,
+        terms_accepted: true,
+        report_source: "public_student_report",
+      },
+    });
+
     // The report is committed before the notification is broadcast. The
     // assigned Adviser and Principal monitoring view each re-read only their
     // authorized Student Reports snapshot, so a public submit appears live.
@@ -405,8 +462,6 @@ export async function POST(req: NextRequest) {
         console.error("Unable to send student report adviser email:", emailError);
       }
     }
-
-    await logAudit({ action: "Report Submitted", performedBy: "Subject Teacher", performedByRole: "Subject Teacher", targetUser: studentName, targetRole: "Student", targetType: "Student Report", targetId: insertedReport?.id, relatedReportId: insertedReport?.id, relatedStudentId: matchingStudent.student_id, newStatus: "new", module: "Student Reports", details: `Submitted a student report for ${studentName} (${matchingStudent.student_id}) to ${fullName(adviser)}.` });
 
     return NextResponse.json({
       success: true,

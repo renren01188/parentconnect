@@ -1807,17 +1807,17 @@ function PrincipalReportsPageContent() {
 
   function panelClass(visible: boolean, bg: string, width: string, position = "left-0", mobileVisible = visible) {
     const desktopPosition = position === "left-[420px]"
-      ? "md:left-[420px]"
-      : position === "left-[300px]" ? "md:left-[300px]" : "md:left-0";
+      ? "xl:left-[420px]"
+      : position === "left-[300px]" ? "xl:left-[300px]" : "xl:left-0";
     const desktopWidth = width === "right-0 w-auto"
-      ? "md:right-0 md:w-auto"
+      ? "xl:right-0 xl:w-auto"
       : width.includes("max-w-[860px]")
-        ? "md:w-full md:max-w-[860px]"
+        ? "xl:w-full xl:max-w-[860px]"
         : width.includes("max-w-[300px]")
-          ? "md:w-full md:max-w-[300px]"
-        : "md:w-full md:max-w-[420px]";
+          ? "xl:w-full xl:max-w-[300px]"
+        : "xl:w-full xl:max-w-[420px]";
 
-    return `relative h-full w-full max-w-none flex-col overflow-hidden ${bg} ${mobileVisible ? "flex" : "hidden"} md:absolute md:inset-y-0 ${desktopPosition} ${desktopWidth} md:flex md:border-r md:border-slate-100 md:shadow-sm md:transition-all md:duration-200 md:ease-out ${visible ? "md:opacity-100 md:translate-y-0 md:scale-100 md:pointer-events-auto" : "md:opacity-0 md:translate-y-2 md:scale-[0.99] md:pointer-events-none"
+    return `relative h-full w-full max-w-none flex-col overflow-hidden ${bg} ${mobileVisible ? "flex" : "hidden"} xl:absolute xl:inset-y-0 ${desktopPosition} ${desktopWidth} xl:flex xl:border-r xl:border-slate-100 xl:shadow-sm xl:transition-all xl:duration-200 xl:ease-out ${visible ? "xl:opacity-100 xl:translate-y-0 xl:scale-100 xl:pointer-events-auto" : "xl:opacity-0 xl:translate-y-2 xl:scale-[0.99] xl:pointer-events-none"
       }`;
   }
 
@@ -2149,7 +2149,7 @@ function PrincipalReportsPageContent() {
     return (
       <div
         data-parent-guide="principal-reports-tabs"
-        className={`${mobile ? "flex items-center gap-1 overflow-x-auto px-3 py-2" : "hidden flex-col gap-2 px-3 pb-2 pt-4 md:flex"} ${guideHighlight("principal-reports-tabs")}`}
+        className={`${mobile ? "flex items-center gap-1 overflow-x-auto px-3 py-2" : "hidden flex-col gap-2 px-3 pb-2 pt-4 xl:flex"} ${guideHighlight("principal-reports-tabs")}`}
       >
         <button
           onClick={() => switchMainTab("Escalated")}
@@ -2208,15 +2208,15 @@ function PrincipalReportsPageContent() {
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-slate-100 bg-white md:hidden">
+      <div className="shrink-0 border-b border-slate-100 bg-white xl:hidden">
         {renderTopTabs(true)}
       </div>
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div className="relative h-full min-w-0 w-full">
           {mainTab === "Messages" ? (
-            <div className="grid h-full min-w-0 grid-cols-1 md:grid-cols-[minmax(280px,420px)_minmax(0,1fr)]">
-              <div className={`${mobileConversationOpen ? "hidden" : "flex"} h-full min-w-0 flex-col overflow-hidden bg-white md:flex md:border-r md:border-slate-100 md:shadow-sm`}>
+            <div className="grid h-full min-w-0 grid-cols-1 lg:grid-cols-[minmax(280px,420px)_minmax(0,1fr)]">
+              <div className={`${mobileConversationOpen ? "hidden" : "flex"} h-full min-w-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-slate-100 lg:shadow-sm`}>
                 {renderTopTabs()}
                 <div className="mx-3 h-px bg-slate-100" />
                 <div className="px-4 py-4">
@@ -2273,7 +2273,7 @@ function PrincipalReportsPageContent() {
                 </div>
               </div>
 
-              <div className={`${mobileConversationOpen ? "flex" : "hidden"} h-full min-w-0 w-full flex-col overflow-hidden bg-slate-50 md:flex`}>
+              <div className={`${mobileConversationOpen ? "flex" : "hidden"} h-full min-w-0 w-full flex-col overflow-hidden bg-slate-50 lg:flex`}>
                 {selectedConversation ? (
                   <>
                     <div className="shrink-0 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
@@ -2282,7 +2282,7 @@ function PrincipalReportsPageContent() {
                           <button
                             type="button"
                             onClick={() => setMobileConversationOpen(false)}
-                            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-600 md:hidden"
+                            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-600 lg:hidden"
                             aria-label="Back to messages"
                           >
                             <ChevronRight className="h-4 w-4 rotate-180" />
@@ -2407,8 +2407,8 @@ function PrincipalReportsPageContent() {
               </div>
             </div>
           ) : mainTab === "Monitoring" ? (
-            <div className="grid h-full min-w-0 grid-cols-1 md:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">
-              <aside className="hidden min-w-0 flex-col overflow-hidden border-r border-slate-100 bg-white shadow-sm md:flex">
+            <div className="grid h-full min-w-0 grid-cols-1 xl:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">
+              <aside className="hidden min-w-0 flex-col overflow-hidden border-r border-slate-100 bg-white shadow-sm xl:flex">
                 {renderTopTabs()}
                 <div className="mx-3 h-px bg-slate-100" />
                 <div className="px-4 py-4">

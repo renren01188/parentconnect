@@ -10,6 +10,7 @@ export type PublicReportStudent = {
 };
 
 export type PublicReportStudentIdentity = {
+  lrn: string;
   firstName: string;
   middleName?: string;
   lastName: string;
@@ -29,15 +30,16 @@ function normalize(value: string | null | undefined) {
 
 /**
  * Resolves the public form's student identity without ever making middle name
- * mandatory. First name, last name, grade, and section form the base match.
- * Optional middle name/suffix can only disambiguate duplicate base matches.
+ * mandatory. The LRN must match the supplied name, grade, and section. The
+ * optional middle name/suffix provide an additional safeguard when present.
  */
 export function matchPublicReportStudent(
   students: PublicReportStudent[],
   identity: PublicReportStudentIdentity,
 ): PublicReportStudentMatch {
   const baseMatches = students.filter((student) => (
-    normalize(student.first_name) === normalize(identity.firstName)
+    normalize(student.student_id) === normalize(identity.lrn)
+    && normalize(student.first_name) === normalize(identity.firstName)
     && normalize(student.last_name) === normalize(identity.lastName)
     && normalize(student.grade) === normalize(identity.gradeLevel)
     && normalize(student.section) === normalize(identity.section)

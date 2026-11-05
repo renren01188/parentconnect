@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getActiveIct } from "@/lib/apiAuthorization";
-import { hasCompletedParentSignup } from "@/lib/parentRegistrationState";
+import { hasCompletedActiveParentSignup } from "@/lib/parentAccountCompletion";
 
 // Student/RFID values are shared with the adviser dashboard. Never serve a
 // previously fetched list after an assignment, replacement, or removal.
@@ -15,6 +15,7 @@ type ParentAccountLink = {
   parent_last_name?: string | null;
   parent_suffix?: string | null;
   password_set?: unknown;
+  status?: string | null;
   archive_status?: string | null;
 };
 
@@ -38,11 +39,11 @@ function completedParentLink(parent: ParentAccountLink): DisplayParentLink | nul
   const id = Number(parent.id);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   if (!parentAccountIsVisible(parent)) return null;
-  if (!hasCompletedParentSignup([id], parent.password_set)) return null;
+  if (!hasCompletedActiveParentSignup(parent)) return null;
   return { id, name: parentAccountName(parent) };
 }
 
-// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All&parentLinkStatus=Unlinked
+// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All&parentLinkStatus=Awaiting%20Signup
 export async function GET(req: NextRequest) {
   try {
     const ict = await getActiveIct();
@@ -126,11 +127,11 @@ export async function GET(req: NextRequest) {
 
     // ── 2. Fetch parents via parent_student_links ──────────────
     const studentIds = students.map((s: any) => s.student_id);
-    const parentColumns = "id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, archive_status";
+    const parentColumns = "id, student_id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, status, archive_status";
     const [linksResult, directParentsResult] = await Promise.all([
       supabase
         .from("parent_student_links")
-        .select("student_id, parents!inner(id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, archive_status)")
+        .select("student_id, parents!inner(id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, status, archive_status)")
         .in("student_id", studentIds),
       supabase
         .from("parents")
@@ -141,10 +142,18 @@ export async function GET(req: NextRequest) {
     if (directParentsResult.error) throw directParentsResult.error;
 
     const parentLinksByStudentId = new Map<string, Map<number, DisplayParentLink>>();
+    const associatedParentIdsByStudentId = new Map<string, Set<number>>();
     const addParentLink = (studentId: unknown, parent: ParentAccountLink | null | undefined) => {
       const normalizedStudentId = String(studentId ?? "").trim();
-      const completedLink = parent ? completedParentLink(parent) : null;
-      if (!normalizedStudentId || !completedLink) return;
+      if (!normalizedStudentId || !parent || !parentAccountIsVisible(parent)) return;
+      const parentId = Number(parent.id);
+      if (Number.isSafeInteger(parentId) && parentId > 0) {
+        const associatedParentIds = associatedParentIdsByStudentId.get(normalizedStudentId) ?? new Set<number>();
+        associatedParentIds.add(parentId);
+        associatedParentIdsByStudentId.set(normalizedStudentId, associatedParentIds);
+      }
+      const completedLink = completedParentLink(parent);
+      if (!completedLink) return;
       const linksForStudent = parentLinksByStudentId.get(normalizedStudentId) ?? new Map<number, DisplayParentLink>();
       linksForStudent.set(completedLink.id, completedLink);
       parentLinksByStudentId.set(normalizedStudentId, linksForStudent);
@@ -180,7 +189,10 @@ export async function GET(req: NextRequest) {
     const enriched = students.map((s: any) => {
       const linkedParents = [...(parentLinksByStudentId.get(String(s.student_id).trim())?.values() ?? [])]
         .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
-      const studentParentLinkStatus = linkedParents.length > 0 ? "Already Linked" : "Unlinked";
+      const hasAssociatedParentRecord = (associatedParentIdsByStudentId.get(String(s.student_id).trim())?.size ?? 0) > 0;
+      const studentParentLinkStatus = linkedParents.length > 0
+        ? "Already Linked"
+        : hasAssociatedParentRecord ? "Awaiting Signup" : "Not Registered";
       return {
         ...s,
         parent_link_status: studentParentLinkStatus,
@@ -189,7 +201,9 @@ export async function GET(req: NextRequest) {
         latest_remark: latestRemarkByStudentDbId.get(Number(s.id)) ?? null,
       };
     });
-    const filtered = parentLinkStatus === "Already Linked" || parentLinkStatus === "Unlinked"
+    const filtered = parentLinkStatus === "Already Linked"
+      || parentLinkStatus === "Awaiting Signup"
+      || parentLinkStatus === "Not Registered"
       ? enriched.filter((student) => student.parent_link_status === parentLinkStatus)
       : enriched;
 

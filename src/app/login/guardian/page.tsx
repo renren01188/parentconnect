@@ -489,7 +489,7 @@ function GuardianLoginPageContent() {
               )}
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Your Contact Number</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Contact Number</label>
                 <input
                   required
                   inputMode="numeric"
@@ -499,6 +499,7 @@ function GuardianLoginPageContent() {
                   value={signup.contactNumber}
                   onChange={(e) => setSignup((prev) => ({ ...prev, contactNumber: e.target.value.replace(/\D/g, "") }))}
                 />
+                <p className="mt-1 text-xs text-slate-500">Use the 11-digit number recorded by the Adviser. If no contact number is recorded in the school file, use the number you want for ParentConnect.</p>
               </div>
 
               <div>
@@ -530,7 +531,7 @@ function GuardianLoginPageContent() {
               </div>
 
               <p className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-[11px] leading-relaxed text-blue-700">
-                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. Middle name and suffix are optional. With an email address, you verify a temporary password sent by email. With only a contact number, you send an SMS code yourself and then create your password.
+                Your selected role, first name, last name, and one child&apos;s Student LRN must match the school&apos;s registration record. If the school has a recorded contact number, it must match the number entered above. Middle name and suffix are optional. With an email address, you verify a temporary password sent by email. With only a contact number, you send an SMS code yourself and then create your password.
               </p>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">

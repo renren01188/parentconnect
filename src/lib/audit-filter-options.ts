@@ -38,6 +38,7 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: "Announcement Updated", label: "Announcement Updated", databaseValues: ["Announcement Updated"] },
   { value: "Announcement Deleted", label: "Announcement Deleted", databaseValues: ["Announcement Deleted"] },
   { value: "Submit Report", label: "Submit Report", databaseValues: ["Submit Report", "Report Submitted"] },
+  { value: "Student Report Submitted", label: "Student Report Submitted", databaseValues: ["Student Report Submitted"] },
   { value: "Report Viewed", label: "Report Viewed", databaseValues: ["Report Viewed"] },
   { value: "Report Status Updated", label: "Report Status Updated", databaseValues: ["Report Status Updated"] },
   { value: "Report Resolved", label: "Report Resolved", databaseValues: ["Report Resolved"] },
