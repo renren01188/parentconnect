@@ -48,7 +48,10 @@ export async function POST(req: NextRequest) {
         id, email, password, temp_password, temporary_password_expires_at, password_set, status, archive_status, student_id, contact_number, login_contact_number,
         parent_first_name, parent_last_name,
         students!inner ( first_name, last_name, grade, section )
-      `);
+      `)
+      // Identifier reuse is permitted after an account has been archived.
+      // Never let the historical row participate in a new account's login.
+      .eq("archive_status", "active");
     const { data: parents, error } = mobileNumber
       ? await parentQuery.eq("login_contact_number", mobileNumber).order("password_set", { ascending: false })
       : await parentQuery.eq("email", emailAddress!).order("password_set", { ascending: false });

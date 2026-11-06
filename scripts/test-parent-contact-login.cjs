@@ -42,6 +42,7 @@ assert.match(loginRoute, /const \{ identifier, email, password, captchaToken \}/
 assert.match(loginRoute, /normalizeParentLoginContactNumber\(suppliedIdentifier\)/);
 assert.match(loginRoute, /\.eq\("login_contact_number", mobileNumber\)/);
 assert.match(loginRoute, /\.eq\("email", emailAddress!\)/);
+assert.match(loginRoute, /\.eq\("archive_status", "active"\)/);
 assert.match(loginRoute, /hasAmbiguousMobileAccount/);
 assert.doesNotMatch(loginRoute, /account_owner_role|requires_account_setup|requiresOwnerSelection/);
 assert.match(loginProtection, /Invalid mobile number, email address, or password/);

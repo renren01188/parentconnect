@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const staffRoute = read("src/app/api/reports/staff-messages/route.ts");
+const adviserMessagesRoute = read("src/app/api/reports/adviser-messages/route.ts");
 const typingHook = read("src/hooks/useStaffConversationTyping.ts");
 const realtimeHook = read("src/hooks/useReportMessagesRealtime.ts");
 const adviserContext = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
@@ -23,6 +24,17 @@ assert.match(staffRoute, /\["adviser", "guidance", "principal"\]\.includes\(reci
 assert.match(staffRoute, /\{ role: current\.type, id: current\.id \},[\s\S]*?\{ role: recipientType, id: Number\(rawRecipientId\) \}/);
 assert.match(staffRoute, /"staff-messages"\);/);
 assert.match(staffRoute, /recipient_type: recipientType/);
+
+// Archived accounts retain historical conversations but must not appear in a
+// New Message picker or receive a new direct message through an old thread.
+assert.match(staffRoute, /function parentRecipients\(\)[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+assert.match(staffRoute, /function findParentRecipient[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+assert.match(staffRoute, /function adviserMayMessageParent[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+assert.match(staffRoute, /function participantCanReceiveStaffMessage[\s\S]*?type === "parent"[\s\S]*?type === "adviser"[\s\S]*?type === "guidance"[\s\S]*?type === "principal"/);
+assert.match(staffRoute, /This recipient is no longer available\./);
+assert.match(adviserMessagesRoute, /from\("parents"\)[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)[\s\S]*?\.eq\("students\.grade", adviser\.grade\)/);
+assert.match(adviserMessagesRoute, /async function createParentReport[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+assert.match(adviserMessagesRoute, /async function createPrincipalMessage[\s\S]*?\.eq\("status", "active"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 
 // Direct threads retain inbox state rather than report workflow state.
 assert.match(staffRoute, /const latestOutgoing = last\.sender_type === current\.type/);

@@ -176,12 +176,15 @@ async function finalizePendingSignup(signup: PendingSignup, password: string, ve
     }
   }
 
+  // An archived row is retained for its historic records, but it is not an
+  // available account and cannot reserve an identifier for a new enrollment.
   const emailRows: ParentRow[] = signup.email
     ? await (async () => {
       const { data, error: emailError } = await supabase
         .from("parents")
         .select(parentColumns)
-        .eq("email", signup.email);
+        .eq("email", signup.email)
+        .eq("archive_status", "active");
       if (emailError) throw emailError;
       return (data ?? []) as ParentRow[];
     })()
@@ -198,7 +201,8 @@ async function finalizePendingSignup(signup: PendingSignup, password: string, ve
   const { data: phoneRows, error: phoneError } = await supabase
     .from("parents")
     .select("id")
-    .eq("login_contact_number", signup.contactNumber);
+    .eq("login_contact_number", signup.contactNumber)
+    .eq("archive_status", "active");
   if (phoneError) throw phoneError;
   if ((phoneRows ?? []).some((parent) => Number(parent.id) !== existingParent?.id)) {
     throw new Error(MOBILE_NUMBER_IN_USE_MESSAGE);

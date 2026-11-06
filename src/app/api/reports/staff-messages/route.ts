@@ -1,8 +1,7 @@
 import { after, NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
+import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendStaffMessageEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
@@ -14,10 +13,6 @@ import {
 type StaffRole = "adviser" | "guidance" | "principal" | "ict";
 type ParticipantRole = StaffRole | "parent";
 type MessageAttachment = { name: string; type: string; size: number; dataUrl: string };
-
-const SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
-);
 
 function errorMessage(error: unknown) {
   const databaseError = error as { code?: string; message?: string } | null;
@@ -130,31 +125,14 @@ async function resolveStaffByRole(role: StaffRole) {
     return { type: "principal" as const, id: principal.id, name: principal.name, email: String(data?.email ?? "") };
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("ict_token")?.value;
-  if (token) {
-    try {
-      const verified = await jwtVerify(token, SECRET);
-      if (verified.payload.role === "ict") {
-        const name = fullName([
-          typeof verified.payload.first_name === "string" ? verified.payload.first_name : "",
-          typeof verified.payload.middle_name === "string" ? verified.payload.middle_name : "",
-          typeof verified.payload.last_name === "string" ? verified.payload.last_name : "",
-          typeof verified.payload.suffix === "string" ? verified.payload.suffix : "",
-        ]) || "ICT Admin";
-        return {
-          type: "ict" as const,
-          id: Number(verified.payload.id),
-          name,
-          email: String(verified.payload.email ?? ""),
-        };
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  const ict = await getIctFromToken();
+  if (!ict) return null;
+  return {
+    type: "ict" as const,
+    id: ict.id,
+    name: fullName([ict.first_name, ict.middle_name, ict.last_name, ict.suffix]) || "ICT Admin",
+    email: String(ict.email ?? ""),
+  };
 }
 
 async function currentStaff(preferredRole?: StaffRole | null) {
@@ -179,9 +157,9 @@ async function currentParticipant(preferredRole?: ParticipantRole | null) {
 
 async function staffRecipients(current: NonNullable<Awaited<ReturnType<typeof currentStaff>>>) {
   const [advisers, guidanceRows, principals] = await Promise.all([
-    supabase.from("advisers").select("id, first_name, middle_name, last_name, suffix, email, grade, section").eq("status", "active"),
-    supabase.from("guidance_counselors").select("id, first_name, middle_name, last_name, suffix, email").eq("status", "active"),
-    supabase.from("principals").select("id, first_name, middle_name, last_name, suffix, email").eq("is_active", true),
+    supabase.from("advisers").select("id, first_name, middle_name, last_name, suffix, email, grade, section").eq("status", "active").eq("archive_status", "active"),
+    supabase.from("guidance_counselors").select("id, first_name, middle_name, last_name, suffix, email").eq("status", "active").eq("archive_status", "active"),
+    supabase.from("principals").select("id, first_name, middle_name, last_name, suffix, email").eq("status", "active").eq("is_active", true).eq("archive_status", "active"),
   ]);
   // A school may not have every staff module installed yet. Missing optional
   // staff tables should simply produce no recipients for that role.
@@ -250,8 +228,10 @@ async function parentRecipients() {
     .from("parents")
     .select(`
       id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
     `)
+    .eq("archive_status", "active")
+    .eq("students.archive_status", "active")
     .order("parent_last_name", { ascending: true });
   if (error) throw error;
 
@@ -265,10 +245,12 @@ async function findParentRecipient(parentId: number, studentId: string) {
     .from("parents")
     .select(`
       id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
     `)
     .eq("id", parentId)
     .eq("student_id", studentId)
+    .eq("archive_status", "active")
+    .eq("students.archive_status", "active")
     .limit(1)
     .maybeSingle();
   if (error) throw error;
@@ -287,13 +269,37 @@ async function adviserMayMessageParent(parentId: number, studentId: string) {
   if (!adviser.grade || sections.length === 0) return false;
   const { data, error } = await supabase
     .from("parents")
-    .select("id, students!inner ( student_id, grade, section )")
+    .select("id, students!inner ( student_id, grade, section, archive_status )")
     .eq("id", parentId)
+    .eq("archive_status", "active")
     .eq("students.student_id", studentId)
+    .eq("students.archive_status", "active")
     .eq("students.grade", adviser.grade)
     .in("students.section", sections)
     .limit(1)
     .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+/**
+ * Re-check the destination immediately before a reply is stored. A saved
+ * thread can outlive its recipient's account; archived accounts must retain
+ * history but cannot receive new messages, email, or Realtime events.
+ */
+async function participantCanReceiveStaffMessage(type: ParticipantRole, id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) return false;
+
+  const query = type === "parent"
+    ? supabase.from("parents").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
+    : type === "adviser"
+      ? supabase.from("advisers").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
+      : type === "guidance"
+        ? supabase.from("guidance_counselors").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
+        : type === "principal"
+          ? supabase.from("principals").select("id").eq("id", id).eq("status", "active").eq("is_active", true).eq("archive_status", "active")
+          : supabase.from("ict_admins").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active");
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return Boolean(data);
 }
@@ -712,6 +718,13 @@ export async function PATCH(req: NextRequest) {
       const recipientEmail = root.sender_type === current.type && Number(root.sender_id) === current.id
         ? String(root.recipient_email ?? "")
         : String(root.sender_email ?? "");
+      const recipientParticipantType = parseParticipantRole(recipientType);
+      if (!recipientParticipantType || !await participantCanReceiveStaffMessage(recipientParticipantType, recipientId)) {
+        return NextResponse.json(
+          { success: false, message: "This recipient is no longer available." },
+          { status: 409 }
+        );
+      }
 
       const { data: createdMessage, error } = await supabase.from("staff_messages").insert({
         sender_type: current.type,

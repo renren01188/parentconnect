@@ -224,12 +224,17 @@ export async function POST(req: NextRequest) {
     });
 
     const parentColumns = "id, email, contact_number, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, relationship, password, temp_password, temporary_password_expires_at, password_set, status, archive_status";
+    // Archived accounts are retained as historical records, but their email
+    // and mobile number must not reserve the identifiers for a later signup
+    // for a new active student. Only an active ParentConnect account may be
+    // found or claimed through an account identifier.
     const parentsByEmail: MatchedParent[] = email
       ? await (async () => {
         const { data, error: emailError } = await supabase
           .from("parents")
           .select(parentColumns)
-          .eq("email", email);
+          .eq("email", email)
+          .eq("archive_status", "active");
         if (emailError) throw emailError;
         return (data ?? []) as MatchedParent[];
       })()
@@ -302,15 +307,16 @@ export async function POST(req: NextRequest) {
       return enrollmentFailure(req, 409);
     }
 
-    // Mobile numbers are valid Parent login identifiers and are unique in the
-    // database. Check before emailing a temporary password so a shared or
-    // previously registered number cannot fail later at verification with a
-    // generic database error. A matching legacy placeholder is allowed to be
+    // Mobile numbers are valid Parent login identifiers and are unique among
+    // active accounts. An archived account is historical only, so it cannot
+    // prevent a verified guardian from creating a fresh account for a new
+    // active student. A matching active legacy placeholder is allowed to be
     // claimed because it is the same pending account.
     const { data: phoneRows, error: phoneError } = await supabase
       .from("parents")
       .select("id")
-      .eq("login_contact_number", contactNumber);
+      .eq("login_contact_number", contactNumber)
+      .eq("archive_status", "active");
     if (phoneError) throw phoneError;
     if ((phoneRows ?? []).some((parent) => Number(parent.id) !== matchedParent?.id)) {
       return NextResponse.json({ success: false, message: MOBILE_NUMBER_IN_USE_MESSAGE }, { status: 409 });

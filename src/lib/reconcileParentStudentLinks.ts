@@ -78,14 +78,16 @@ export async function ensureParentStudentLink({ parentId, studentId, relationshi
 }
 
 /**
- * Adds missing links between existing parent accounts and SF1 family records.
+ * Adds missing links between active parent accounts and active students' SF1
+ * family records.
  *
  * Automatic matching requires the same Father/Mother/Guardian role, exact
  * normalized first/last names, and the same valid phone number in the SF1
  * verification record and parent account. Middle names and suffixes are
  * optional in Parent enrollment, so they cannot prevent a legitimate sibling
- * link. This never removes links: a historical link remains valid until staff
- * explicitly remove it through the existing management workflow.
+ * link. Archived accounts and students are intentionally excluded: historic
+ * links remain retained, but an archived family record cannot be attached to
+ * a newly active Parent account.
  */
 export async function reconcileParentStudentLinks({ parentId, studentDbId }: ReconcileOptions) {
   if (!parentId && !studentDbId) {
@@ -97,7 +99,8 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
     const { data, error } = await supabase
       .from("parents")
       .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
-      .eq("id", parentId);
+      .eq("id", parentId)
+      .eq("archive_status", "active");
     if (error) throw error;
     parents = (data ?? []) as ParentRow[];
   }
@@ -132,7 +135,8 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
     const { data, error } = await supabase
       .from("parents")
       .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
-      .in("relationship", familyRoles);
+      .in("relationship", familyRoles)
+      .eq("archive_status", "active");
     if (error) throw error;
     parents = (data ?? []) as ParentRow[];
   }
@@ -141,7 +145,8 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   const { data: studentData, error: studentError } = await supabase
     .from("students")
     .select("id, student_id")
-    .in("id", studentDbIds);
+    .in("id", studentDbIds)
+    .eq("archive_status", "active");
   if (studentError) throw studentError;
   const students = (studentData ?? []) as StudentRow[];
   const studentsByDbId = new Map(students.map((student) => [Number(student.id), student]));

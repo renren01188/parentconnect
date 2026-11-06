@@ -79,6 +79,7 @@ assert.match(forgotPage, /Send OTP/);
 assert.match(forgotPage, /Contact ICT for help/);
 assert.match(forgot, /normalizeParentLoginContactNumber/);
 assert.match(forgot, /normalizeParentLoginEmail/);
+assert.match(forgot, /\.eq\("archive_status", "active"\)/);
 assert.match(forgot, /issueParentOtp/);
 assert.match(forgot, /consumeParentPasswordResetRateLimit/);
 assert.match(forgot, /getParentOtpLimit\(Number\(parent\.id\), "password_reset"\)/);

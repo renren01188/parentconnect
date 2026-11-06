@@ -49,6 +49,9 @@ export async function POST(req: NextRequest) {
     const query = supabase
       .from("parents")
       .select("id, email, contact_number, login_contact_number, parent_first_name, parent_last_name, password_set, status, archive_status")
+      // An archived Parent has no recovery flow and must not shadow a newer
+      // active Parent account that reused the same email or mobile number.
+      .eq("archive_status", "active")
       .limit(1);
     const { data: rows, error } = channel === "sms"
       ? await query.eq("login_contact_number", destination)

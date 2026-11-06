@@ -123,14 +123,18 @@ export async function GET() {
       supabase
         .from("principals")
         .select("id, first_name, middle_name, last_name, suffix, email")
+        .eq("status", "active")
         .eq("is_active", true)
+        .eq("archive_status", "active")
         .order("last_name", { ascending: true }),
       supabase
         .from("parents")
         .select(`
           id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-          students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+          students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
         `)
+        .eq("archive_status", "active")
+        .eq("students.archive_status", "active")
         .eq("students.grade", adviser.grade)
         .in("students.section", adviserSections.length > 0 ? adviserSections : [""])
         .order("parent_last_name", { ascending: true }),
@@ -589,10 +593,12 @@ async function createParentReport({
     .from("parents")
     .select(`
       id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section )
+      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
     `)
     .eq("id", parentId)
     .eq("student_id", studentId)
+    .eq("archive_status", "active")
+    .eq("students.archive_status", "active")
     .limit(1)
     .maybeSingle();
 
@@ -704,7 +710,9 @@ async function createPrincipalMessage({
     .from("principals")
     .select("id, first_name, middle_name, last_name, suffix, email")
     .eq("id", principalId)
+    .eq("status", "active")
     .eq("is_active", true)
+    .eq("archive_status", "active")
     .limit(1)
     .maybeSingle();
 

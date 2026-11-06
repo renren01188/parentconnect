@@ -18,6 +18,7 @@ const parentMeRoute = read("src/app/api/parents/me/route.ts");
 // submitted LRN is linked directly. A duplicate attempt remains idempotent.
 assert.match(signupRoute, /\.eq\("email", email\)/);
 assert.match(signupRoute, /\.eq\("login_contact_number", contactNumber\)/);
+assert.match(signupRoute, /\.eq\("archive_status", "active"\)/);
 assert.match(signupRoute, /await ensureParentStudentLink\(\{[\s\S]*?parentId: matchedParent\.id,[\s\S]*?studentId: student\.student_id,[\s\S]*?relationship,/);
 assert.match(signupRoute, /accountExists: true/);
 assert.match(signupRoute, /Please log in, or use Forgot password/);
@@ -29,6 +30,7 @@ assert.doesNotMatch(signupRoute, /roleRows|parentsByIdentity|identityParent/);
 assert.doesNotMatch(verifyRoute, /roleRows|conflictingIdentity/);
 assert.match(verifyRoute, /\.eq\("email", signup\.email\)/);
 assert.match(verifyRoute, /\.eq\("login_contact_number", signup\.contactNumber\)/);
+assert.match(verifyRoute, /\.eq\("archive_status", "active"\)/);
 assert.match(verifyRoute, /await ensureParentStudentLink\(\{/);
 assert.match(verifyRoute, /await reconcileParentStudentLinks\(\{ parentId: parent\.id \}\)/);
 
@@ -38,6 +40,7 @@ assert.match(verifyRoute, /await reconcileParentStudentLinks\(\{ parentId: paren
 assert.match(links, /function hasSameVerifiedPhone/);
 assert.match(links, /contact_number/);
 assert.match(links, /\.filter\(\(parent\) => hasSameVerifiedPhone\(parent\.contact_number, member\.contact_number\)\)/);
+assert.match(links, /\.from\("students"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 
 // Adviser SF1 imports and ICT User Management continue to use the shared,
 // stricter reconciliation path rather than creating duplicate Parent rows.

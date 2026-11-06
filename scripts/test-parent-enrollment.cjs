@@ -9,6 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const signup = read("src/app/api/parents/signup/route.ts");
 const signupOtp = read("src/app/api/parents/signup-otp/route.ts");
 const verifyTemporaryPassword = read("src/app/api/parents/verify-temp-password/route.ts");
+const archivedIdentifierMigration = read("supabase/migrations/20261106100000_allow_archived_parent_identifier_reuse.sql");
 const otp = read("src/lib/parentVerificationOtp.ts");
 const guardianPage = read("src/app/login/guardian/page.tsx");
 const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx");
@@ -24,6 +25,8 @@ assert.match(signup, /return recordedContactNumberMismatch\(req\)/);
 assert.match(signup, /const verificationMethod = email \? "email" : "sms"/);
 assert.match(signup, /verificationMethod: "sms"/);
 assert.match(signup, /redirectTo: "\/login\/guardian\/send-otp"/);
+assert.match(signup, /\.eq\("email", email\)[\s\S]*?\.eq\("archive_status", "active"\)/);
+assert.match(signup, /\.eq\("login_contact_number", contactNumber\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 assert.match(guardianPage, /fetch\("\/api\/parents\/signup"/);
 assert.match(guardianPage, /relationship: "Father"/);
 assert.match(guardianPage, /GUARDIAN_RELATIONSHIP_OPTIONS/);
@@ -38,6 +41,16 @@ assert.match(verifyTemporaryPassword, /verifyParentOtp\(signup\.otpChallengeId, 
 assert.match(verifyTemporaryPassword, /redirectTo: "\/login\/guardian\/set-password"/);
 assert.match(verifyTemporaryPassword, /matchesRecordedPhone\(familyMember\.contact_number, signup\.contactNumber\)/);
 assert.match(verifyTemporaryPassword, /contact_number: signup\.contactNumber/);
+assert.match(verifyTemporaryPassword, /\.eq\("email", signup\.email\)[\s\S]*?\.eq\("archive_status", "active"\)/);
+assert.match(verifyTemporaryPassword, /\.eq\("login_contact_number", signup\.contactNumber\)[\s\S]*?\.eq\("archive_status", "active"\)/);
+
+// Archived accounts retain their history but no longer reserve an email or
+// mobile identifier that a verified guardian needs for a new active student.
+assert.match(archivedIdentifierMigration, /DROP INDEX IF EXISTS public\.parents_email_normalized_unique_idx/);
+assert.match(archivedIdentifierMigration, /DROP INDEX IF EXISTS public\.parents_login_contact_number_unique/);
+assert.match(archivedIdentifierMigration, /CREATE UNIQUE INDEX IF NOT EXISTS parents_active_email_normalized_unique_idx/);
+assert.match(archivedIdentifierMigration, /CREATE UNIQUE INDEX IF NOT EXISTS parents_active_login_contact_number_unique_idx/);
+assert.match(archivedIdentifierMigration, /archive_status = 'active'/);
 
 // Password recovery remains available from the normal guardian entry point.
 assert.match(forgotPasswordPage, /Forgot password\?/);
