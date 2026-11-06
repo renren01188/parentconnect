@@ -511,7 +511,10 @@ function familyDetailsSignature(family: FamilyDetails) {
 }
 
 function verificationRecordsSignature(students: EditableStudent[]) {
-  return JSON.stringify(students.map((student) => familyDetailsSignature(familyDetailsFromStudent(student))));
+  return JSON.stringify(students.map((student) => [
+    familyDetailsSignature(familyDetailsFromStudent(student)),
+    String(student.contactNumber ?? "").replace(/\D/g, ""),
+  ]));
 }
 
 function applyFamilyDetailsToStudent(student: EditableStudent, family: FamilyDetails) {
@@ -1590,6 +1593,13 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     if (missingVerificationRelationship || missingSharedRelationship) {
       alert("Specify the guardian's relationship when Others is selected."); return;
     }
+    const invalidVerificationContact = editableStudents.some((student) => {
+      const digits = String(student.contactNumber ?? "").replace(/\D/g, "");
+      return Boolean(digits) && digits.length !== 11;
+    });
+    if (invalidVerificationContact) {
+      alert("Each recorded contact number must be exactly 11 digits."); return;
+    }
     const passwordValidation = validateUserManagementPasswordChange(form.newPassword, form.confirmPassword);
     if (!passwordValidation.ok) {
       setPasswordError(passwordValidation.message);
@@ -1704,7 +1714,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                 {isPendingImportedParent ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Pre-sign-up family record</p>
-                    <p className="mt-1 text-xs leading-5 text-amber-700">No parent account exists yet. Update the school family details below; the parent will provide their email and contact number when signing up.</p>
+                    <p className="mt-1 text-xs leading-5 text-amber-700">No parent account exists yet. Update the school verification records below. A saved contact number must be used at signup; if it is blank, the Parent may provide a number during signup.</p>
                   </div>
                 ) : <>
                   <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Parent / Guardian Information</p>
@@ -1757,7 +1767,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                 </div>
                 <div className="space-y-3 border-t border-gray-100 pt-4">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Verification Records</p>
-                  <p className="text-xs leading-5 text-gray-500">These student registration records are the names Parent signup checks with each student&apos;s LRN. They are shared with the Adviser student edit page.</p>
+                  <p className="text-xs leading-5 text-gray-500">These student registration records are the names and recorded contact number Parent signup checks with each student&apos;s LRN. They are shared with the Adviser student edit page.</p>
                   {editableStudents.map((student, index) => (
                     <FamilyInformationCard
                       key={`${student.studentId}-verification-${index}`}
@@ -1766,6 +1776,31 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                       title={`Verification record · ${student.displayName || student.studentId}`}
                       description={`Student LRN: ${student.studentId || "Not assigned"}`}
                     />
+                  ))}
+                  {editableStudents.map((student, index) => (
+                    <div key={`${student.studentId}-verification-contact-${index}`} className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+                      <label className="mb-1 block text-[10px] font-semibold text-gray-500">Recorded Contact Number <span className="text-gray-400">(optional)</span></label>
+                      <div className="relative">
+                        <Phone className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                        <input
+                          value={student.contactNumber ?? ""}
+                          onChange={event => updateStudent(index, {
+                            ...student,
+                            contactNumber: event.target.value.replace(/\D/g, "").slice(0, 11),
+                          })}
+                          placeholder="Optional — e.g. 09171234567"
+                          inputMode="numeric"
+                          maxLength={11}
+                          readOnly={!isPendingImportedParent}
+                          className={`w-full rounded-lg border px-2.5 py-1.5 pl-8 text-xs outline-none transition ${isPendingImportedParent ? "border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#274e13]/20" : "border-gray-100 bg-gray-50 text-gray-500 cursor-not-allowed"}`}
+                        />
+                      </div>
+                      <p className="mt-1 text-[10px] leading-4 text-gray-400">
+                        {isPendingImportedParent
+                          ? "Leave blank when SF1 has no number. Once saved, a Parent must use this 11-digit number when signing up."
+                          : "This follows the active Parent account contact number. Update that account above if the number changes."}
+                      </p>
+                    </div>
                   ))}
                 </div>
                 <div className="space-y-3 border-t border-gray-100 pt-4">

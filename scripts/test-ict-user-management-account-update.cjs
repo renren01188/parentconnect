@@ -15,10 +15,14 @@ const attendanceCreditsRoute = read("src/app/api/ict/attendance-notification-set
 assert.match(userManagementRoute, /await publishAccountChange\(\[\{ role: "adviser", id: Number\(data\.id\) \}\]\)/);
 assert.match(userManagementRoute, /await publishAccountChange\(\[\{ role: "guidance", id: Number\(data\.id\) \}\]\)/);
 assert.match(userManagementRoute, /await Promise\.all\(\[\.\.\.reconciledStudentIds\]\.map\(\(studentDbId\) => publishStudentRealtimeInvalidation\(\{ studentDbId \}\)\)\)/);
+assert.match(userManagementRoute, /Each recorded contact number must be exactly 11 digits\./);
+assert.match(userManagementRoute, /wasPendingParent[\s\S]*?normalizeParentPhone\(student\.contactNumber\)/);
 assert.match(userManagementPage, /event\.scope === "accounts" \|\| event\.scope === "students" \|\| event\.scope === "audit"/);
+assert.match(userManagementPage, /Recorded Contact Number/);
+assert.match(userManagementPage, /Leave blank when SF1 has no number/);
 assert.match(studentProfiles, /event\.scope === "students" \|\| event\.scope === "accounts"/);
 assert.match(studentProfiles, /event\.scope === "dashboard" \|\| event\.scope === "accounts"/);
-assert.match(studentProfiles, /if \(scope === "dashboard"\) void loadSettings\(\)/);
+assert.match(studentProfiles, /if \(!scope \|\| scope === "dashboard"\) void loadSettings\(\)/);
 assert.match(studentProfiles, /referenceRefreshKey/);
 assert.match(realtime, /const ictRecipients = await recipientsForRoles\(\["ict"\]\)/);
 assert.match(attendanceSettingsRoute, /await publishAttendanceSettingsRefresh\(\)/);

@@ -112,6 +112,7 @@ type StudentForm = {
   grade: string; section: string;
   parentFirstName: string; parentMiddleName: string; parentLastName: string; parentSuffix: string;
   relationship: string; contactNumber: string; email: string; address: string;
+  recordedContactNumber: string;
   remarkId: number | null; remarkType: string; remarkDate: string; remarkNote: string; remarkSchoolName: string;
   familyMembers: FamilyMemberForm[];
 };
@@ -138,6 +139,10 @@ const familyFormFrom = (members: Array<{ role: string; first_name: string | null
     guardianRelationshipOther: hasName ? guardianRelationship.other : "",
   };
 });
+
+function recordedContactFromFamilyMembers(members: StudentData["family_members"] | undefined) {
+  return members?.map(member => member.contact_number?.replace(/\D/g, "") || "").find(Boolean) || "";
+}
 
 function ConfirmModal({
   student, form, originalGrade, originalSection, parentAccountLinked, onConfirm, onCancel, saving,
@@ -233,7 +238,7 @@ export default function StudentViewPage() {
     firstName: "", middleName: "", lastName: "", suffix: "", gender: "", studentId: "",
     grade: "", section: "",
     parentFirstName: "", parentMiddleName: "", parentLastName: "", parentSuffix: "",
-    relationship: "", contactNumber: "", email: "",
+    relationship: "", contactNumber: "", email: "", recordedContactNumber: "",
     address: "",   // ← new
     remarkId: null, remarkType: "", remarkDate: "", remarkNote: "", remarkSchoolName: "",
     familyMembers: blankFamilyMembers(),
@@ -278,7 +283,11 @@ export default function StudentViewPage() {
           remarkNote:      d.latest_remark?.note ?? "",
           remarkSchoolName:d.latest_remark?.school_name ?? "",
         };
-        setForm({ ...f, familyMembers: familyFormFrom(d.family_members) });
+        setForm({
+          ...f,
+          recordedContactNumber: recordedContactFromFamilyMembers(d.family_members),
+          familyMembers: familyFormFrom(d.family_members),
+        });
         setOriginalGrade(d.grade   || "");
         setOriginalSection(d.section || "");
       } catch (error: unknown) {
@@ -356,6 +365,9 @@ export default function StudentViewPage() {
     if (!form.email.trim())             E.email = "Email is required.";
     else if (!isValidEmail(form.email)) E.email = "Enter a valid email address.";
   }
+  if (!parentAccountLinked && touched.recordedContactNumber && form.recordedContactNumber.trim() && !isValidContact(form.recordedContactNumber)) {
+    E.recordedContactNumber = "Must be exactly 11 digits.";
+  }
   const guardianVerification = form.familyMembers.find(member => member.role === "Guardian");
   if (guardianVerification && isMissingOtherGuardianRelationship(
     guardianVerification.relationship,
@@ -369,11 +381,13 @@ export default function StudentViewPage() {
       firstName: true, lastName: true, gender: true, studentId: true,
       grade: true, section: true,
       remarkDate: true, remarkNote: true, remarkSchoolName: true,
+      recordedContactNumber: true,
       ...(parentAccountLinked ? {
         parentFirstName: true, parentLastName: true,
         relationship: true, contactNumber: true, email: true,
       } : {}),
     });
+    if (!parentAccountLinked && form.recordedContactNumber.trim() && !isValidContact(form.recordedContactNumber)) return;
     if (Object.keys(E).length > 0) return;
     setShowConfirm(true);
   };
@@ -415,7 +429,7 @@ export default function StudentViewPage() {
             : member.relationship || member.role,
           contact_number: parentAccountLinked
             ? form.contactNumber || null
-            : prev.family_members?.find(current => current.role === member.role)?.contact_number || null,
+            : form.recordedContactNumber || null,
         })),
         remarks: savedRemark
           ? [savedRemark, ...(prev.remarks ?? []).filter(current => current.id !== savedRemark.id)]
@@ -449,6 +463,7 @@ export default function StudentViewPage() {
       parentSuffix:     student.parent_suffix      || "",
       relationship:     student.relationship       || "",
       contactNumber:    student.contact_number     || "",
+      recordedContactNumber: recordedContactFromFamilyMembers(student.family_members),
       email:            student.parent_email       || "",
       address:          student.parent_address     || "",  // ← new
       remarkId:         student.latest_remark?.id ?? null,
@@ -735,7 +750,7 @@ export default function StudentViewPage() {
                   <span className={`ml-auto text-[11px] border px-2 py-0.5 rounded-lg font-semibold ${parentAccountLinked
                     ? "text-emerald-600 bg-emerald-50 border-emerald-200"
                     : "text-slate-500 bg-slate-50 border-slate-200"}`}>
-                    {parentAccountLinked ? "Editable" : "Read-only until Parent signup"}
+                    {parentAccountLinked ? "Editable" : "Verification records editable before signup"}
                   </span>
                 )}
               </div>
@@ -792,7 +807,31 @@ export default function StudentViewPage() {
                   </Field>
                   <div className="border-t border-slate-100 pt-4">
                     <p className="mb-1 text-sm font-bold text-slate-800">Registration verification records</p>
-                    <p className="mb-3 text-xs text-slate-500">These names are saved in the registration record and must match the information used with this student&apos;s LRN when a Father, Mother, or Guardian creates a Parent account.</p>
+                    <p className="mb-3 text-xs text-slate-500">These names and the optional recorded contact number are saved in the registration record and must match the information used with this student&apos;s LRN when a Father, Mother, or Guardian creates a Parent account.</p>
+                    <Field label="Recorded Contact Number" error={E.recordedContactNumber}>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          className={`${parentAccountLinked ? inputView : (E.recordedContactNumber ? inputErr : inputOk)} pl-9`}
+                          placeholder="Optional — e.g. 09171234567"
+                          maxLength={11}
+                          inputMode="numeric"
+                          value={form.recordedContactNumber}
+                          onChange={event => {
+                            const value = event.target.value.replace(/\D/g, "");
+                            setForm(previous => ({ ...previous, recordedContactNumber: value }));
+                            setTouched(previous => ({ ...previous, recordedContactNumber: true }));
+                          }}
+                          onBlur={() => setTouched(previous => ({ ...previous, recordedContactNumber: true }))}
+                          readOnly={parentAccountLinked}
+                        />
+                      </div>
+                      <p className="text-[11px] leading-4 text-slate-400">
+                        {parentAccountLinked
+                          ? "This is the saved school verification number. Update the active Parent account contact number above after signup."
+                          : "Leave blank when SF1 has no number; the Parent may then provide a number at signup. Once saved, the Parent must use this 11-digit number to sign up."}
+                      </p>
+                    </Field>
                     <div className="space-y-4">
                       {form.familyMembers.map(member => <div key={member.role} className="rounded-xl border border-slate-200 p-3">
                         <p className="mb-2 text-xs font-bold text-slate-700">{member.role}</p>
@@ -844,6 +883,7 @@ export default function StudentViewPage() {
                   <ReviewRow label="Relationship" value={student.relationship} />
                   <ReviewRow label="Contact"      value={student.contact_number} />
                   <ReviewRow label="Email"        value={student.parent_email} />
+                  <ReviewRow label="Recorded Contact Number" value={recordedContactFromFamilyMembers(student.family_members) || "Not recorded"} />
                   <ReviewRow label="Account"      value={student.password_set ? "Password created ✓" : "Password setup pending"} />
                 </div>
               )}

@@ -1205,6 +1205,16 @@ export async function PATCH(req: NextRequest) {
       const ids = user.accountIds?.length ? user.accountIds : [Number(user.id.replace("parent-", ""))];
       const parentAccountIds = ids.filter(Number.isFinite);
       const wasPendingParent = isPreSignupParentRecord(parentAccountIds, user.parentAccountPasswordSet);
+      const invalidRecordedContactNumber = (user.studentDetails ?? []).some((student) => {
+        const supplied = typeof student.contactNumber === "string" ? student.contactNumber.trim() : "";
+        return Boolean(supplied) && normalizeParentPhone(supplied).length !== 11;
+      });
+      if (invalidRecordedContactNumber) {
+        return NextResponse.json(
+          { success: false, message: "Each recorded contact number must be exactly 11 digits." },
+          { status: 400 },
+        );
+      }
       if (hasPasswordChange && (wasPendingParent || parentAccountIds.length === 0)) {
         return NextResponse.json({ success: false, message: "A password can be changed only after the Parent account is activated." }, { status: 409 });
       }
@@ -1349,7 +1359,13 @@ export async function PATCH(req: NextRequest) {
         await saveFamilyMembersForStudents(
           [studentRow.id],
           verificationMembers,
-          student.contactNumber?.trim() || null,
+          // Pending family records own their optional school verification
+          // number. A completed Parent account remains the source of truth
+          // for every linked student's verification contact number.
+          (wasPendingParent
+            ? normalizeParentPhone(student.contactNumber)
+            : normalizedParentPhone
+          ) || null,
         );
         completedUpdateSteps.push("student family verification records");
         reconciledStudentIds.add(Number(studentRow.id));

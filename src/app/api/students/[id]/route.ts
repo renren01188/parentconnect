@@ -14,6 +14,13 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
 }
 
+function normalizeRecordedContactNumber(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const contactNumber = value.replace(/\D/g, "");
+  if (contactNumber && contactNumber.length !== 11) return null;
+  return contactNumber;
+}
+
 // ── GET /api/students/[id] ────────────────────────────────────────────────────
 export async function GET(
   req: NextRequest,
@@ -186,7 +193,7 @@ export async function PATCH(
       firstName, middleName, lastName, suffix, gender, studentId,
       grade, section,
       parentFirstName, parentMiddleName, parentLastName, parentSuffix,
-      relationship, contactNumber, email,
+      relationship, contactNumber, email, recordedContactNumber,
       address, // ← new
       familyMembers,
       remark,
@@ -224,6 +231,14 @@ export async function PATCH(
     )) {
       return NextResponse.json(
         { success: false, message: "Specify the guardian's relationship when Others is selected." },
+        { status: 400 },
+      );
+    }
+
+    const normalizedRecordedContactNumber = normalizeRecordedContactNumber(recordedContactNumber);
+    if (normalizedRecordedContactNumber === null) {
+      return NextResponse.json(
+        { success: false, message: "The recorded contact number must be exactly 11 digits." },
         { status: 400 },
       );
     }
@@ -364,9 +379,15 @@ export async function PATCH(
           relationship: member.role === "Guardian"
             ? guardianRelationshipForStorage(member.relationship, member.guardianRelationshipOther)
             : member.role,
-          // Do not erase imported family contact data when only a
-          // pre-sign-up verification name is being corrected.
-          ...(parentId ? { contact_number: contactNumber || null } : {}),
+          // Before signup this is the school verification number that the
+          // selected Father, Mother, or Guardian must supply. Once a Parent
+          // account exists, keep family records synchronized with its active
+          // account contact number instead.
+          ...(parentId
+            ? { contact_number: typeof contactNumber === "string" ? contactNumber.replace(/\D/g, "") || null : null }
+            : normalizedRecordedContactNumber !== undefined
+              ? { contact_number: normalizedRecordedContactNumber || null }
+              : {}),
         }, { onConflict: "student_db_id,role" });
         if (error) throw error;
       }

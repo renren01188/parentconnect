@@ -13,6 +13,8 @@ const archivedIdentifierMigration = read("supabase/migrations/20261106100000_all
 const otp = read("src/lib/parentVerificationOtp.ts");
 const guardianPage = read("src/app/login/guardian/page.tsx");
 const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx");
+const adviserStudentRoute = read("src/app/api/students/[id]/route.ts");
+const adviserStudentPage = read("src/app/dashboard/adviser/students/[id]/page.tsx");
 
 // Normal signup verifies the claimed family role and offers email or SMS
 // verification without creating a direct-import-only Parent account.
@@ -32,6 +34,16 @@ assert.match(guardianPage, /relationship: "Father"/);
 assert.match(guardianPage, /GUARDIAN_RELATIONSHIP_OPTIONS/);
 assert.match(guardianPage, /Use the 11-digit number recorded by the Adviser\./);
 assert.match(guardianPage, /If no contact number is recorded in the school file/);
+
+// An Adviser can correct the optional school verification contact before a
+// Parent account exists. It is stored with every applicable family role and
+// is therefore the exact number the normal guardian signup checks.
+assert.match(adviserStudentRoute, /function normalizeRecordedContactNumber/);
+assert.match(adviserStudentRoute, /recordedContactNumber/);
+assert.match(adviserStudentRoute, /The recorded contact number must be exactly 11 digits\./);
+assert.match(adviserStudentRoute, /normalizedRecordedContactNumber !== undefined/);
+assert.match(adviserStudentPage, /Recorded Contact Number/);
+assert.match(adviserStudentPage, /Leave blank when SF1 has no number/);
 
 // Phone signup uses the durable OTP table with bounded, one-time verification
 // before the account receives its normal temporary-password session.
