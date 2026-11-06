@@ -62,7 +62,7 @@ interface ScheduledAdviserTransfer {
 interface UserRow {
   id: string; accountIds?: number[]; initials: string; name: string; email: string;
   parentAccountPasswordSet?: boolean;
-  parentStudentLinkState?: "Already Linked" | "Awaiting Signup" | "Not Registered";
+  parentStudentLinkState?: "Already Linked" | "Not Registered";
   parentStudentLrn?: string;
   linkedParentLabel?: string;
   role: Role; classGrade: string; status: Status; students?: string[];
@@ -100,12 +100,11 @@ function displayGuidanceLabel(value: string) {
 interface ParentStudentFilters {
   grades: string[];
   sections: { grade: string; name: string }[];
-  counts: { total: number; alreadyLinked: number; awaitingSignup: number; notRegistered: number };
+  counts: { total: number; alreadyLinked: number; notRegistered: number };
 }
 
 function parentStudentLinkBadgeClass(state: UserRow["parentStudentLinkState"]) {
   if (state === "Already Linked") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (state === "Awaiting Signup") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-gray-200 bg-gray-50 text-gray-600";
 }
 
@@ -552,7 +551,7 @@ function StudentInfoCard({ student, index, total, onChange }: {
       </button>
       {open && (
         <div className="px-4 pb-4 pt-3 border-t border-gray-100 bg-gray-50/30">
-          <div className="grid grid-cols-2 gap-x-5 gap-y-3">
+          <div className="grid grid-cols-1 gap-x-5 gap-y-3 md:grid-cols-2">
             <div className="space-y-2.5">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Info</p>
               {[["First Name", "firstName"], ["Middle Name", "middleName"], ["Last Name", "lastName"], ["Student ID", "studentId"]].map(([l, k]) => (
@@ -585,6 +584,23 @@ function StudentInfoCard({ student, index, total, onChange }: {
                 RFID Card <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-400">Read-only</span></label>
                 <div className={ro}><div className="flex items-center gap-1.5"><span className="text-base">💳</span><span className="font-mono font-semibold tracking-wide text-gray-600">{student.rfid || "Not assigned"}</span></div></div>
                 <p className="mt-1 text-[9px] text-gray-400">RFID can only be updated via the RFID Management module.</p>
+              </div>
+            </div>
+            <div className="space-y-2.5 border-t border-gray-200 pt-3 md:col-span-2">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Address</p>
+              <p className="text-[10px] leading-4 text-gray-400">This address belongs to {headerName || `Student ${index + 1}`}.</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {([
+                  ["House # / Street / Sitio / Purok", "houseStreetSitioPurok"],
+                  ["Barangay", "barangay"],
+                  ["Municipality / City", "municipalityCity"],
+                  ["Province", "province"],
+                ] as [string, keyof EditableStudent][]).map(([label, key]) => (
+                  <div key={String(key)}>
+                    <label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label>
+                    <input value={String(student[key] ?? "")} onChange={event => set(key)(event.target.value)} className={inp} />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -642,17 +658,6 @@ function FamilyInformationCard({ family, onChange, title = "Shared family detail
 }
 
 // ─── Delete Approval Modal ────────────────────────────────
-function StudentAddressCard({ student, onChange }: { student: EditableStudent; onChange: (u: EditableStudent) => void }) {
-  const set = (key: keyof EditableStudent) => (value: string) => onChange({ ...student, [key]: value });
-  const inp = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#274e13]/20 transition bg-white text-gray-900";
-  const studentName = [student.firstName, student.lastName].filter(Boolean).join(" ") || student.displayName;
-  const fields: [string, keyof EditableStudent][] = [
-    ["House # / Street / Sitio / Purok", "houseStreetSitioPurok"], ["Barangay", "barangay"],
-    ["Municipality / City", "municipalityCity"], ["Province", "province"],
-  ];
-  return <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3"><p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-gray-400">Address for {studentName}</p><div className="grid grid-cols-1 gap-3">{fields.map(([label, key]) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(student[key] ?? "")} onChange={e => set(key)(e.target.value)} className={inp} /></div>)}</div></section>;
-}
-
 type DeleteStep = "confirm" | "sending" | "sent";
 
 async function verifyIctPassword(password: string) {
@@ -1484,10 +1489,11 @@ function AdviserTransferQueueModal({ configured, transfers, onClose, onChanged }
   );
 }
 
-function EditParentModal({ user, onClose, onSave, onAudit }: {
+function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
   user: UserRow; onClose: () => void;
   onSave: (u: UserRow) => void;
   onAudit: (e: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) => void;
+  onLinked: () => void | Promise<void>;
 }) {
   const [step, setStep] = useState<EditStep>("edit");
   const [saving, setSaving] = useState(false);
@@ -1532,6 +1538,20 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   const [familyDetails, setFamilyDetails] = useState<FamilyDetails>(() =>
     normalizeFamilyDetails(user.familyDetails ?? familyDetailsFromStudent(user.studentDetails?.[0])),
   );
+  const [newlyLinkedStudents, setNewlyLinkedStudents] = useState<EditableStudent[]>([]);
+  const [linkLrn, setLinkLrn] = useState("");
+  const [linkCandidate, setLinkCandidate] = useState<EditableStudent | null>(null);
+  const [linkFamilyDetails, setLinkFamilyDetails] = useState<FamilyDetails>({});
+  const [linkLookupLoading, setLinkLookupLoading] = useState(false);
+  const [linkSaving, setLinkSaving] = useState(false);
+  const [linkConfirmed, setLinkConfirmed] = useState(false);
+  const [linkMessage, setLinkMessage] = useState("");
+  const parentAccountId = Number(user.accountIds?.[0]);
+  // ICT can correct a link to a saved pre-sign-up or inactive record. The
+  // record receives no Parent dashboard access until normal signup completes.
+  const canCorrectStudentLink = Number.isSafeInteger(parentAccountId)
+    && parentAccountId > 0;
+  const baselineStudents = [...(user.studentDetails ?? []), ...newlyLinkedStudents];
   const updateStudent = (i: number, updated: EditableStudent) =>
     setEditableStudents(prev => prev.map((s, idx) => idx === i ? updated : s));
   const accountHolderFields = (family: FamilyDetails, relationship: string) => {
@@ -1555,6 +1575,85 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     const fields = accountHolderFields(familyDetails, relationship);
     if (fields) setForm(prev => ({ ...prev, ...fields, relationship }));
   };
+  async function findStudentToLink() {
+    if (!canCorrectStudentLink) {
+      setLinkMessage("Choose a saved Parent or Guardian record before moving a student.");
+      return;
+    }
+    if (!/^\d{12}$/.test(linkLrn)) {
+      setLinkMessage("Enter the student's 12-digit LRN.");
+      return;
+    }
+
+    setLinkLookupLoading(true);
+    setLinkMessage("");
+    setLinkCandidate(null);
+    setLinkConfirmed(false);
+    try {
+      const response = await fetch(`/api/ict/parent-student-links?parentId=${encodeURIComponent(String(parentAccountId))}&lrn=${encodeURIComponent(linkLrn)}`, {
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || "Unable to find the student.");
+      const candidate = data.student as EditableStudent;
+      setLinkCandidate(candidate);
+      setLinkFamilyDetails(normalizeFamilyDetails(familyDetailsFromStudent(candidate)));
+      setLinkMessage(data.alreadyLinked
+        ? `${candidate.displayName || candidate.studentId} is already linked to this Parent or Guardian. Confirm the move to apply the updated verification record.`
+        : `Confirm that ${candidate.displayName || candidate.studentId} belongs to this Parent or Guardian.`);
+    } catch (error) {
+      setLinkMessage(error instanceof Error ? error.message : "Unable to find the student.");
+    } finally {
+      setLinkLookupLoading(false);
+    }
+  }
+
+  async function correctAndLinkStudent() {
+    if (!linkCandidate || !canCorrectStudentLink) return;
+    if (!linkConfirmed) {
+      setLinkMessage("Confirm that this student belongs to the selected Parent or Guardian before moving the record.");
+      return;
+    }
+    if (isMissingOtherGuardianRelationship(linkFamilyDetails.guardianRelationship, linkFamilyDetails.guardianRelationshipOther)) {
+      setLinkMessage("Specify the guardian's relationship when Others is selected.");
+      return;
+    }
+
+    setLinkSaving(true);
+    setLinkMessage("");
+    try {
+      const response = await fetch("/api/ict/parent-student-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parentId: parentAccountId,
+          studentLrn: linkCandidate.studentId,
+          familyDetails: linkFamilyDetails,
+          confirmed: true,
+          replaceExistingRoleLink: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || "Unable to link the student.");
+
+      const linkedStudent = data.student as EditableStudent;
+      setEditableStudents(previous => previous.some(student => student.studentDbId === linkedStudent.studentDbId)
+        ? previous.map(student => student.studentDbId === linkedStudent.studentDbId ? linkedStudent : student)
+        : [...previous, linkedStudent]);
+      setNewlyLinkedStudents(previous => previous.some(student => student.studentDbId === linkedStudent.studentDbId)
+        ? previous.map(student => student.studentDbId === linkedStudent.studentDbId ? linkedStudent : student)
+        : [...previous, linkedStudent]);
+      setLinkCandidate(null);
+      setLinkConfirmed(false);
+      setLinkLrn("");
+      setLinkMessage(data.message || "The student is now linked to this Parent account.");
+      await onLinked();
+    } catch (error) {
+      setLinkMessage(error instanceof Error ? error.message : "Unable to link the student.");
+    } finally {
+      setLinkSaving(false);
+    }
+  }
 
   const changes: { field: string; from: string; to: string }[] = [];
   if (fullName !== user.name) changes.push({ field: "Name", from: user.name, to: fullName });
@@ -1562,10 +1661,10 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   if (form.phone !== (user.phone || "")) changes.push({ field: "Phone", from: user.phone || "—", to: form.phone });
   if (form.relationship !== (user.relationship || "")) changes.push({ field: "Relationship", from: user.relationship || "—", to: form.relationship });
   if (form.address !== (user.address || "")) changes.push({ field: "Address", from: user.address || "—", to: form.address });
-  if (studentEditSignature(editableStudents) !== studentEditSignature(user.studentDetails ?? [])) {
+  if (studentEditSignature(editableStudents) !== studentEditSignature(baselineStudents)) {
     changes.push({ field: "Student records", from: "Current school record", to: "Updated" });
   }
-  if (verificationRecordsSignature(editableStudents) !== verificationRecordsSignature(user.studentDetails ?? [])) {
+  if (verificationRecordsSignature(editableStudents) !== verificationRecordsSignature(baselineStudents)) {
     changes.push({ field: "Verification records", from: "Current registration record", to: "Updated for the selected student" });
   }
   const sharedFamilyDetailsChanged = !isPendingImportedParent
@@ -1709,7 +1808,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
 
         {step === "edit" && (
           <div className="overflow-y-auto flex-1">
-            <div className="grid grid-cols-2 divide-x divide-gray-100">
+            <div className="grid grid-cols-1 divide-y divide-gray-100 md:grid-cols-2 md:divide-x md:divide-y-0">
               <div className="p-6 space-y-4">
                 {isPendingImportedParent ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -1792,12 +1891,72 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                     </div>
                   ))}
                 </div>
-                <div className="space-y-3 border-t border-gray-100 pt-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Student Address</p>
-                  {editableStudents.map((student, index) => (
-                    <StudentAddressCard key={`${student.studentId}-address-${index}`} student={student} onChange={updated => updateStudent(index, updated)} />
-                  ))}
-                </div>
+                {canCorrectStudentLink && (
+                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Move Student to This Parent</p>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">Enter the student&apos;s LRN, find the student, then confirm the move. The correct Parent or Guardian details are applied automatically. This works before signup or while the record is inactive.</p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        value={linkLrn}
+                        onChange={event => {
+                          setLinkLrn(event.target.value.replace(/\D/g, "").slice(0, 12));
+                          setLinkMessage("");
+                        }}
+                        inputMode="numeric"
+                        maxLength={12}
+                        placeholder="Enter the 12-digit LRN"
+                        className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={findStudentToLink}
+                        disabled={linkLookupLoading || linkSaving}
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-[#274e13]/20 bg-[#274e13]/5 px-3.5 py-2.5 text-sm font-bold text-[#274e13] transition hover:bg-[#274e13]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {linkLookupLoading ? "Finding…" : <><Search className="h-4 w-4" />Find student</>}
+                      </button>
+                    </div>
+                    {linkCandidate && (
+                      <div className="space-y-3 rounded-xl border border-[#274e13]/20 bg-[#f7fbf4] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-bold text-[#274e13]">{linkCandidate.displayName || linkCandidate.studentId}</p>
+                            <p className="text-[11px] text-gray-500">LRN: {linkCandidate.studentId} · {linkCandidate.grade}{linkCandidate.section ? ` – ${linkCandidate.section}` : ""}</p>
+                          </div>
+                          <span className="rounded-full bg-[#274e13]/10 px-2 py-0.5 text-[10px] font-bold text-[#274e13]">Ready to move</span>
+                        </div>
+                        <FamilyInformationCard
+                          family={linkFamilyDetails}
+                          onChange={updated => {
+                            setLinkFamilyDetails(updated);
+                            setLinkConfirmed(false);
+                          }}
+                          title="Existing verification record"
+                          description="These are this student's existing school verification fields. The Parent or Guardian name for this correction is taken from the saved account record."
+                        />
+                        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Recorded contact number</p>
+                          <p className="mt-1 text-xs text-gray-600">If this Parent or Guardian record has a valid contact number, it becomes the recorded number for their role. A blank record does not erase another saved family contact number.</p>
+                        </div>
+                        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                          <input type="checkbox" checked={linkConfirmed} onChange={event => setLinkConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#274e13]" />
+                          <span>I confirm that this student belongs to this Parent or Guardian. Move the student here and automatically replace any incorrect link for the same family role. Other valid Father, Mother, or Guardian links remain unchanged.</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={correctAndLinkStudent}
+                          disabled={!linkConfirmed || linkSaving}
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#274e13] px-3.5 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {linkSaving ? "Moving student…" : <><UserCheck className="h-4 w-4" />Move Student to This Parent</>}
+                        </button>
+                      </div>
+                    )}
+                    {linkMessage && <p className={`text-[11px] leading-4 ${linkCandidate || /linked|Review/.test(linkMessage) ? "text-[#274e13]" : "text-red-600"}`}>{linkMessage}</p>}
+                  </div>
+                )}
                 {!isPendingImportedParent && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
                   <div className="space-y-3">
@@ -2157,11 +2316,11 @@ export default function UserManagementPage() {
   const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent" | "approval">("all");
   const [parentStudentGrade, setParentStudentGrade] = useState("");
   const [parentStudentSection, setParentStudentSection] = useState("");
-  const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "awaiting" | "not_registered">("all");
+  const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "not_registered">("all");
   const [parentStudentFilters, setParentStudentFilters] = useState<ParentStudentFilters>({
     grades: [],
     sections: [],
-    counts: { total: 0, alreadyLinked: 0, awaitingSignup: 0, notRegistered: 0 },
+    counts: { total: 0, alreadyLinked: 0, notRegistered: 0 },
   });
   const [showApprovals, setShowApprovals] = useState(false);
   const [dismissedApprovalBadgeCount, setDismissedApprovalBadgeCount] = useState(0);
@@ -2234,7 +2393,7 @@ export default function UserManagementPage() {
         setServerCounts(usersData.counts ?? { total: enriched.length, advisers: 0, ict: 0, guidance: 0, parents: 0 });
         if (filterMode === "parent") {
           setParentStudentFilters(usersData.parentStudentFilters ?? {
-            grades: [], sections: [], counts: { total: 0, alreadyLinked: 0, awaitingSignup: 0, notRegistered: 0 },
+            grades: [], sections: [], counts: { total: 0, alreadyLinked: 0, notRegistered: 0 },
           });
         }
       } else throw new Error(usersData.message || "Unable to load users.");
@@ -2490,7 +2649,6 @@ export default function UserManagementPage() {
                         {([
                           { value: "all", label: "All students", count: parentStudentFilters.counts.total },
                           { value: "linked", label: "Already Linked", count: parentStudentFilters.counts.alreadyLinked },
-                          { value: "awaiting", label: "Awaiting Signup", count: parentStudentFilters.counts.awaitingSignup },
                           { value: "not_registered", label: "Not Registered", count: parentStudentFilters.counts.notRegistered },
                         ] as const).map(({ value, label, count }) => (
                           <button
@@ -2524,11 +2682,11 @@ export default function UserManagementPage() {
 
           {loadError && <div className="m-4 flex flex-col items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between"><p>{loadError}</p><button onClick={() => void loadData()} className="min-h-10 rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold">Try again</button></div>}
           {loading && users.length === 0 ? <div className="space-y-3 p-5" aria-live="polite"><p className="text-sm font-semibold text-gray-500">Loading users…</p><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /><div className="h-16 animate-pulse rounded-xl bg-gray-100" /></div> : <>
-          <table className="hidden w-full md:table">
+          <table className="hidden w-full lg:table">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
                 {(isParentStudentDirectory
-                  ? ["Student", "Link status", "Class / Grade", "Signed-up parent account", ""]
+                  ? ["Student", "Link status", "Class / Grade", "Parents / Guardian", ""]
                   : ["User", "Role", "Class / Grade", "Student(s)", ""]
                 ).map(h => (
                   <th key={h} className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3">{h}</th>
@@ -2558,13 +2716,13 @@ export default function UserManagementPage() {
                     </td>
                     <td className="px-4 py-3.5">
                       {isParentStudentDirectory
-                        ? <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${parentStudentLinkBadgeClass(u.parentStudentLinkState)}`}>{u.parentStudentLinkState}</span>
+                        ? <span className={`inline-flex w-fit shrink-0 whitespace-nowrap text-xs font-semibold px-2.5 py-1 rounded-full border ${parentStudentLinkBadgeClass(u.parentStudentLinkState)}`}>{u.parentStudentLinkState}</span>
                         : <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${ROLE_BADGE[u.role]}`}>{u.role}</span>}
                     </td>
                     <td className="px-4 py-3.5 text-sm text-gray-600 whitespace-nowrap">{u.classGrade}</td>
                     <td className="px-4 py-3.5">
                       {isParentStudentDirectory
-                        ? <span className={`text-xs ${u.parentStudentLinkState === "Already Linked" ? "text-gray-700" : "italic text-gray-400"}`}>{u.linkedParentLabel}</span>
+                        ? <span className={`block max-w-[18rem] break-words text-xs ${u.parentStudentLinkState === "Already Linked" ? "text-gray-700" : "text-gray-600"}`}>{u.linkedParentLabel}</span>
                         : u.role === "Parent" && u.students?.length
                         ? <div className="flex flex-col gap-1">{u.students.map((s, i) => <span key={i} className="text-xs text-gray-700 truncate">{s}</span>)}</div>
                         : u.role === "Adviser" ? <span className="text-xs text-gray-400 italic">Class adviser</span>
@@ -2595,7 +2753,7 @@ export default function UserManagementPage() {
             </tbody>
           </table>
 
-          <div className="divide-y divide-gray-100 md:hidden">
+          <div className="divide-y divide-gray-100 lg:hidden">
             {rows.map((user) => {
               const deleteCountdown = getDeleteCountdown(user.deleteSchedule);
               const hasPendingApproval = approvals.some((approval) => approval.adviserEmail === user.email && approval.status === "Pending");
@@ -2610,7 +2768,7 @@ export default function UserManagementPage() {
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {isParentStudentDirectory
-                          ? <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${parentStudentLinkBadgeClass(user.parentStudentLinkState)}`}>{user.parentStudentLinkState}</span>
+                          ? <span className={`inline-flex w-fit shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold ${parentStudentLinkBadgeClass(user.parentStudentLinkState)}`}>{user.parentStudentLinkState}</span>
                           : <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[user.role]}`}>{user.role}</span>}
                         {!isParentStudentDirectory && hasPendingApproval && <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Pending</span>}
                         {!isParentStudentDirectory && user.status === "Pending Activation" && <span className="rounded-full border border-sky-200 bg-sky-100 px-2 py-1 text-[10px] font-bold text-sky-700">Pending activation</span>}
@@ -2618,7 +2776,7 @@ export default function UserManagementPage() {
                       </div>
                       <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                         <div><dt className="text-gray-400">{user.role === "ICT" ? "Department" : "Class / Grade"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{user.classGrade || "—"}</dd></div>
-                        <div><dt className="text-gray-400">{isParentStudentDirectory ? "Signed-up parent account" : "Student(s)"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{isParentStudentDirectory ? user.linkedParentLabel : user.students?.length ? user.students.join(", ") : user.role === "Adviser" ? "Class adviser" : user.role === "ICT" ? "System administration" : "—"}</dd></div>
+                        <div><dt className="text-gray-400">{isParentStudentDirectory ? "Parents / Guardian" : "Student(s)"}</dt><dd className="mt-0.5 break-words font-semibold text-gray-700">{isParentStudentDirectory ? user.linkedParentLabel : user.students?.length ? user.students.join(", ") : user.role === "Adviser" ? "Class adviser" : user.role === "ICT" ? "System administration" : "—"}</dd></div>
                       </dl>
                     </div>
                   </div>
@@ -2695,7 +2853,8 @@ export default function UserManagementPage() {
       )}
       {editUser && editUser.role === "Parent" && (
         <EditParentModal user={editUser} onClose={() => setEditUser(null)} onAudit={addAudit}
-          onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }} />
+          onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }}
+          onLinked={() => loadData({ background: true })} />
       )}
       {showBulkDeletion && <BulkDeletionModal users={users} candidates={bulkDeletionCandidates} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
       {showAdviserTransfers && <AdviserTransferQueueModal configured={adviserTransfersConfigured} transfers={scheduledAdviserTransfers} onClose={() => setShowAdviserTransfers(false)} onChanged={loadData} />}

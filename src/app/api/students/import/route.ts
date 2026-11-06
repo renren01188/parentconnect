@@ -202,7 +202,8 @@ export async function PUT(request: NextRequest) {
     // Recompute choices from normalized server data. Browser preview IDs are
     // never trusted: a selected Parent must still be an active exact match.
     // More than one same-name account is deliberately blocked until the
-    // Adviser selects the account or explicitly leaves it Awaiting Signup.
+    // Adviser selects the account or explicitly confirms that no existing
+    // Parent account should be linked.
     const selectedParentLinks: Array<{ lrn: string; parentId: number; relationship: ParentFamilyRole }> = [];
     for (const row of normalizedRows) {
       for (const identity of familyIdentities(row)) {
@@ -212,7 +213,7 @@ export async function PUT(request: NextRequest) {
           const candidates = await findActiveParentLinkCandidates(identity);
           if (candidates.length > 1) {
             return NextResponse.json(
-              { success: false, message: `Choose the correct ${identity.role} account or select Awaiting Signup for LRN ${row.lrn}.` },
+              { success: false, message: `Choose the correct ${identity.role} account or choose no existing Parent account for LRN ${row.lrn}.` },
               { status: 400 },
             );
           }
@@ -221,7 +222,7 @@ export async function PUT(request: NextRequest) {
           }
           continue;
         }
-        if (requestedValue === "awaiting") continue;
+        if (requestedValue === "no_link") continue;
         const selected = await assertSelectedActiveParentLink(identity, requestedValue);
         selectedParentLinks.push({ lrn: row.lrn, parentId: selected.id, relationship: identity.role });
       }

@@ -42,7 +42,7 @@ interface Student {
   gender: "Male" | "Female";
   grade: string;
   section: string;
-  parentLinkStatus: "Already Linked" | "Awaiting Signup" | "Not Registered";
+  parentLinkStatus: "Already Linked" | "Not Registered";
   linkedParent: string | null;
   parentInitials: string;
   parentColor: string;
@@ -74,9 +74,7 @@ type AuditAction = "registered" | "revoked" | "replaced" | "assigned";
 function ParentLinkBadge({ status }: { status: Student["parentLinkStatus"] }) {
   const style = status === "Already Linked"
     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-    : status === "Awaiting Signup"
-      ? "border-amber-200 bg-amber-50 text-amber-700"
-      : "border-gray-200 bg-gray-50 text-gray-600";
+    : "border-gray-200 bg-gray-50 text-gray-600";
 
   return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${style}`}><WifiOff className="h-3 w-3" />{status}</span>;
 }
@@ -2204,7 +2202,7 @@ function mapStudent(row: Record<string, any>): Student {
     section: row.section ?? "",
     parentLinkStatus: row.parent_link_status === "Already Linked"
       ? "Already Linked"
-      : row.parent_link_status === "Awaiting Signup" ? "Awaiting Signup" : "Not Registered",
+      : "Not Registered",
     linkedParent: linkedParentNames.join(", ") || null,
     parentInitials,
     parentColor: pi,
@@ -2472,7 +2470,7 @@ export default function StudentManagementPage() {
   const [query, setQuery] = useState("");
   const [gradeFilter, setGradeFilter] = useState("");
   const [sectionFilter, setSectionFilter] = useState("");
-  const [parentLinkFilter, setParentLinkFilter] = useState<"All" | "Already Linked" | "Awaiting Signup" | "Not Registered">("All");
+  const [parentLinkFilter, setParentLinkFilter] = useState<"All" | "Already Linked" | "Not Registered">("All");
   const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
   const [viewStudent, setViewStudent] = useState<Student | null>(null);
@@ -2807,7 +2805,6 @@ export default function StudentManagementPage() {
                 className="w-full appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-8 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 sm:min-w-[145px]">
                 <option value="All">All Parent Links</option>
                 <option value="Already Linked">Already Linked</option>
-                <option value="Awaiting Signup">Awaiting Signup</option>
                 <option value="Not Registered">Not Registered</option>
               </select>
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />

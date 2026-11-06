@@ -14,6 +14,7 @@ const importRoute = read("src/app/api/students/import/route.ts");
 const manualStudentRoute = read("src/app/api/students/route.ts");
 const manualRegistration = read("src/components/student-parent-registration/StudentParentRegistration.tsx");
 const candidateRoute = read("src/app/api/parents/active-link-candidates/route.ts");
+const middleware = read("src/middleware.ts");
 const ictUsersRoute = read("src/app/api/ict/user-management/route.ts");
 const parentMeRoute = read("src/app/api/parents/me/route.ts");
 
@@ -52,6 +53,9 @@ assert.match(links, /\.from\("students"\)[\s\S]*?\.eq\("archive_status", "active
 assert.match(manualRegistration, /active-link-candidates/);
 assert.match(manualRegistration, /ParentNameSuggestions/);
 assert.match(manualRegistration, /Suggested active Parent names/);
+assert.match(manualRegistration, /Father:[\s\S]*?border-blue-100 bg-blue-50\/60/);
+assert.match(manualRegistration, /Mother:[\s\S]*?border-pink-100 bg-pink-50\/60/);
+assert.match(manualRegistration, /Guardian:[\s\S]*?border-emerald-100 bg-emerald-50\/60/);
 assert.match(manualStudentRoute, /assertSelectedActiveParentLink/);
 assert.match(manualStudentRoute, /reconcileParentStudentLinks\(\{ studentDbId: createdStudent\.id \}\)/);
 assert.match(candidateRoute, /getActiveIct/);
@@ -59,13 +63,27 @@ assert.match(candidateRoute, /findActiveParentNameSuggestions/);
 assert.match(candidateRoute, /findLinkedFamilyNameSuggestions/);
 assert.match(manualRegistration, /selectedParentId/);
 assert.match(manualRegistration, /selectSuggestedParent/);
+// Add Another Student is deliberately a single household registration: a
+// selected Parent and every verification field are shared by all child
+// drafts, while LRN/grade/RFID stay child-specific.
+assert.match(manualRegistration, /const sharedVerificationFields = \[/);
+assert.match(manualRegistration, /function sharedVerificationFrom/);
+assert.match(manualRegistration, /setStudents\(prev => \[\.\.\.prev, \{ \.\.\.emptyForm, \.\.\.sharedVerification \}\]\)/);
+assert.match(manualRegistration, /if \(isSharedVerificationField\(field\)\) \{[\s\S]*?setSharedVerification\(applyField\)/);
+assert.match(manualRegistration, /setSharedVerification\(\(student\) => fillVerificationName/);
+assert.match(manualRegistration, /This is one shared verification record for every student added here/);
+assert.match(manualRegistration, /every matching child from this registration is linked to the Parent dashboard/);
+// This staff-only route lives below `/api/parents`, but must bypass the
+// Parent session middleware so its own Adviser/ICT authorization can run.
+assert.match(middleware, /isStaffParentLinkCandidateApi = pathname === "\/api\/parents\/active-link-candidates"/);
+assert.match(middleware, /!isPublicParentApi && !isStaffParentLinkCandidateApi/);
 
 // SF1 preview shows automated/ambiguous decisions and the save endpoint
 // recomputes those candidates before linking, never trusting a browser ID.
 assert.match(importRoute, /provisionParentForStudent/);
 assert.match(importRoute, /getParentLinkSuggestions/);
 assert.match(importRoute, /assertSelectedActiveParentLink/);
-assert.match(importRoute, /Choose the correct \$\{identity\.role\} account or select Awaiting Signup/);
+assert.match(importRoute, /Choose the correct \$\{identity\.role\} account or choose no existing Parent account/);
 assert.match(importRoute, /ensureParentStudentLink/);
 assert.match(importRoute, /reconcileParentStudentLinks\(\{ studentDbId: student\.id \}\)/);
 assert.match(ictUsersRoute, /reconcileParentStudentLinks\(\{ studentDbId: id \}\)/);

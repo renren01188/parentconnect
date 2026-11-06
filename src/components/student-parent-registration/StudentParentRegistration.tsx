@@ -75,8 +75,32 @@ type LinkedFamilyNameSuggestion = {
   suffix: string | null;
 };
 type ParentCandidateMap = Record<ParentRole, ParentCandidate[]>;
+type ParentLookupErrorMap = Record<ParentRole, string>;
 
 const emptyParentCandidateMap = (): ParentCandidateMap => ({ Father: [], Mother: [], Guardian: [] });
+const emptyParentLookupErrorMap = (): ParentLookupErrorMap => ({ Father: "", Mother: "", Guardian: "" });
+
+// Add Another Student creates several children for one household. These
+// fields are therefore one shared registration record, rather than separate
+// Parent/Guardian details for each child tab.
+const sharedVerificationFields = [
+  "fatherFirstName", "fatherMiddleName", "fatherLastName", "fatherSuffix", "fatherParentId",
+  "motherFirstName", "motherMiddleName", "motherLastName", "motherParentId",
+  "guardianFirstName", "guardianMiddleName", "guardianLastName", "guardianSuffix",
+  "guardianRelationship", "guardianRelationshipOther", "guardianParentId",
+] as const satisfies readonly (keyof FormData)[];
+
+type SharedVerificationField = typeof sharedVerificationFields[number];
+
+function isSharedVerificationField(field: keyof FormData): field is SharedVerificationField {
+  return (sharedVerificationFields as readonly (keyof FormData)[]).includes(field);
+}
+
+function sharedVerificationFrom(student: FormData) {
+  return Object.fromEntries(
+    sharedVerificationFields.map((field) => [field, student[field]]),
+  ) as Pick<FormData, SharedVerificationField>;
+}
 
 type VerificationName = Pick<LinkedFamilyNameSuggestion, "firstName" | "middleName" | "lastName" | "suffix">;
 
@@ -157,6 +181,7 @@ function ParentNameSuggestions({
   role,
   candidates,
   loading,
+  lookupError,
   visible,
   value,
   onSelect,
@@ -164,17 +189,53 @@ function ParentNameSuggestions({
   role: ParentRole;
   candidates: ParentCandidate[];
   loading: boolean;
+  lookupError: string;
   visible: boolean;
   value: string;
   onSelect: (candidate: ParentCandidate | null) => void;
 }) {
   if (!visible) return null;
   const hasResult = candidates.length > 0;
+  const roleColors = {
+    Father: {
+      panel: "border-blue-100 bg-blue-50/60",
+      title: "text-blue-900",
+      copy: "text-blue-700",
+      button: "border-blue-200 bg-white text-blue-800 hover:border-blue-400 hover:bg-blue-100",
+      selected: "border-blue-600 bg-blue-600 text-white shadow-sm",
+      detail: "text-blue-500",
+      selectedDetail: "text-blue-100",
+      confirmation: "text-blue-700",
+    },
+    Mother: {
+      panel: "border-pink-100 bg-pink-50/60",
+      title: "text-pink-900",
+      copy: "text-pink-700",
+      button: "border-pink-200 bg-white text-pink-800 hover:border-pink-400 hover:bg-pink-100",
+      selected: "border-pink-600 bg-pink-600 text-white shadow-sm",
+      detail: "text-pink-500",
+      selectedDetail: "text-pink-100",
+      confirmation: "text-pink-700",
+    },
+    Guardian: {
+      panel: "border-emerald-100 bg-emerald-50/60",
+      title: "text-emerald-900",
+      copy: "text-emerald-700",
+      button: "border-emerald-200 bg-white text-emerald-800 hover:border-emerald-400 hover:bg-emerald-100",
+      selected: "border-emerald-600 bg-emerald-600 text-white shadow-sm",
+      detail: "text-emerald-600",
+      selectedDetail: "text-emerald-100",
+      confirmation: "text-emerald-700",
+    },
+  }[role];
+  const hasLookupError = Boolean(lookupError);
   return (
-    <div className="mt-4 rounded-xl border border-violet-100 bg-violet-50/60 p-3">
-      <p className="text-xs font-bold text-violet-900">Suggested active Parent names</p>
-      <p className="mt-1 text-[11px] leading-relaxed text-violet-700">
-        {loading
+    <div className={`mt-4 rounded-xl border p-3 ${hasLookupError ? "border-amber-200 bg-amber-50/70" : roleColors.panel}`}>
+      <p className={`text-xs font-bold ${hasLookupError ? "text-amber-900" : roleColors.title}`}>Suggested active Parent names</p>
+      <p className={`mt-1 text-[11px] leading-relaxed ${hasLookupError ? "text-amber-800" : roleColors.copy}`}>
+        {hasLookupError
+          ? lookupError
+          : loading
           ? "Checking active Parent accounts with this verification name…"
           : hasResult
             ? `Click the correct ${role} name to link this student immediately.`
@@ -192,12 +253,12 @@ function ParentNameSuggestions({
                 aria-pressed={selected}
                 onClick={() => onSelect(selected ? null : candidate)}
                 className={`rounded-lg border px-3 py-2 text-left text-xs font-semibold transition ${selected
-                  ? "border-violet-600 bg-violet-600 text-white shadow-sm"
-                  : "border-violet-200 bg-white text-violet-800 hover:border-violet-400 hover:bg-violet-100"}`}
+                  ? roleColors.selected
+                  : roleColors.button}`}
               >
                 <span className="block">{candidate.displayName}</span>
                 {candidate.maskedContactNumber && (
-                  <span className={`mt-0.5 block text-[10px] font-medium ${selected ? "text-violet-100" : "text-violet-500"}`}>
+                  <span className={`mt-0.5 block text-[10px] font-medium ${selected ? roleColors.selectedDetail : roleColors.detail}`}>
                     {candidate.maskedContactNumber}
                   </span>
                 )}
@@ -223,10 +284,10 @@ function ParentNameSuggestions({
         </select>
       )}
       {!loading && candidates.length === 1 && !value && (
-        <p className="mt-2 text-[11px] font-medium text-emerald-700">You may click the suggested name. If it remains unselected, the same unique first and last name will still link automatically when saved.</p>
+        <p className={`mt-2 text-[11px] font-medium ${roleColors.confirmation}`}>You may click the suggested name. If it remains unselected, the same unique first and last name will still link automatically when saved.</p>
       )}
       {!loading && candidates.length > 1 && !value && (
-        <p className="mt-2 text-[11px] font-medium text-amber-700">More than one active Parent has this name. Click the correct suggested name; otherwise the child remains awaiting signup.</p>
+        <p className="mt-2 text-[11px] font-medium text-amber-700">More than one active Parent has this name. Click the correct suggested name; otherwise the child remains Not Registered until Guardian signup is completed.</p>
       )}
     </div>
   );
@@ -512,6 +573,7 @@ export function StudentParentRegistration({
     Mother: false,
     Guardian: false,
   });
+  const [parentLookupErrors, setParentLookupErrors] = useState<ParentLookupErrorMap>(emptyParentLookupErrorMap);
 
   const form = students[activeStudentIndex] ?? students[0] ?? emptyForm;
   // The date input and validation use the same school-local calendar day as
@@ -524,23 +586,20 @@ export function StudentParentRegistration({
     }));
   };
 
-  function updateStudentAt(index: number, updater: (student: FormData) => FormData) {
-    setStudents((previous) => previous.map((student, studentIndex) => (
-      studentIndex === index ? updater(student) : student
-    )));
-  }
+  const setSharedVerification = (updater: (student: FormData) => FormData) => {
+    setStudents((previous) => previous.map(updater));
+  };
 
   async function selectSuggestedParent(role: ParentRole, candidate: ParentCandidate | null) {
-    const studentIndex = activeStudentIndex;
     if (!candidate) {
-      updateStudentAt(studentIndex, (student) => clearSuggestedParent(student, role));
+      setSharedVerification((student) => clearSuggestedParent(student, role));
       return;
     }
 
     // Clicking the name completes that person's verification fields. This is
     // intentional: the server later validates that exact chosen account again
     // before creating its Parent/student link.
-    updateStudentAt(studentIndex, (student) => fillVerificationName(student, role, candidate, String(candidate.id), true));
+    setSharedVerification((student) => fillVerificationName(student, role, candidate, String(candidate.id), true));
 
     try {
       const response = await fetch(`/api/parents/active-link-candidates?selectedParentId=${encodeURIComponent(String(candidate.id))}`);
@@ -548,7 +607,7 @@ export function StudentParentRegistration({
       if (!response.ok || !payload.success || !Array.isArray(payload.familySuggestions)) return;
 
       const suggestions = payload.familySuggestions as LinkedFamilyNameSuggestion[];
-      updateStudentAt(studentIndex, (student) => {
+      setSharedVerification((student) => {
         let next = student;
         (["Father", "Mother", "Guardian"] as ParentRole[]).forEach((otherRole) => {
           if (otherRole === role || hasVerificationName(next, otherRole)) return;
@@ -612,10 +671,12 @@ export function StudentParentRegistration({
         if (!record.firstName.trim() && !record.lastName.trim()) {
           setParentCandidates((previous) => ({ ...previous, [record.role]: [] }));
           setParentLookupLoading((previous) => ({ ...previous, [record.role]: false }));
+          setParentLookupErrors((previous) => ({ ...previous, [record.role]: "" }));
           return;
         }
 
         setParentLookupLoading((previous) => ({ ...previous, [record.role]: true }));
+        setParentLookupErrors((previous) => ({ ...previous, [record.role]: "" }));
         try {
           const params = new URLSearchParams({
             role: record.role,
@@ -623,14 +684,27 @@ export function StudentParentRegistration({
             middleName: record.middleName.trim(),
             lastName: record.lastName.trim(),
           });
-          const response = await fetch(`/api/parents/active-link-candidates?${params}`, { signal: abortController.signal });
-          const payload = await response.json();
+          const response = await fetch(`/api/parents/active-link-candidates?${params}`, {
+            cache: "no-store",
+            signal: abortController.signal,
+          });
+          const payload = await response.json().catch(() => null);
           if (!abortController.signal.aborted && response.ok && payload.success) {
             setParentCandidates((previous) => ({ ...previous, [record.role]: payload.candidates ?? [] }));
+          } else if (!abortController.signal.aborted) {
+            setParentCandidates((previous) => ({ ...previous, [record.role]: [] }));
+            setParentLookupErrors((previous) => ({
+              ...previous,
+              [record.role]: payload?.message || "Could not look up active Parent accounts. Please try again.",
+            }));
           }
         } catch (error) {
           if (!abortController.signal.aborted) {
             setParentCandidates((previous) => ({ ...previous, [record.role]: [] }));
+            setParentLookupErrors((previous) => ({
+              ...previous,
+              [record.role]: "Could not look up active Parent accounts. Check your connection and try again.",
+            }));
           }
         } finally {
           if (!abortController.signal.aborted) {
@@ -670,7 +744,11 @@ export function StudentParentRegistration({
   }
 
   function addAnotherStudent() {
-    setStudents(prev => [...prev, emptyForm]);
+    // Every child in this flow belongs to the same Parent/Guardian
+    // verification record. Preserve it while leaving student-specific fields
+    // (LRN, grade, RFID, etc.) blank for the next child.
+    const sharedVerification = sharedVerificationFrom(form);
+    setStudents(prev => [...prev, { ...emptyForm, ...sharedVerification }]);
     setActiveStudentIndex(students.length);
     setTouched({});
     setTryNext(false);
@@ -714,18 +792,23 @@ export function StudentParentRegistration({
       guardianFirstName: "guardianParentId", guardianMiddleName: "guardianParentId", guardianLastName: "guardianParentId", guardianSuffix: "guardianParentId",
     };
     const linkedParentIdField = parentLinkFieldByName[field];
-    setForm(prev => field === "religion"
-      ? { ...prev, religion: value, religionOther: value === "Others" ? prev.religionOther : "" }
+    const applyField = (previous: FormData) => field === "religion"
+      ? { ...previous, religion: value, religionOther: value === "Others" ? previous.religionOther : "" }
       : field === "remarkType"
         ? {
-          ...prev,
+          ...previous,
           remarkType: value,
-          remarkNote: value === "Dropped out" ? prev.remarkNote : "",
-          remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? prev.remarkSchoolName : "",
+          remarkNote: value === "Dropped out" ? previous.remarkNote : "",
+          remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? previous.remarkSchoolName : "",
         }
         : linkedParentIdField
-          ? { ...prev, [field]: value, [linkedParentIdField]: "" }
-          : { ...prev, [field]: value });
+          ? { ...previous, [field]: value, [linkedParentIdField]: "" }
+          : { ...previous, [field]: value };
+    if (isSharedVerificationField(field)) {
+      setSharedVerification(applyField);
+    } else {
+      setForm(applyField);
+    }
     setTouched(prev => ({ ...prev, [field]: true }));
     if (apiError) setApiError("");
   };
@@ -1517,7 +1600,7 @@ export function StudentParentRegistration({
                     <h2 className="font-bold text-slate-800">Parent / Guardian Verification Records</h2>
                   </div>
                   <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-relaxed text-blue-700">
-                    Record at least one complete Father, Mother, or Guardian name. These records verify the parent during Guardian Sign Up; email and contact number are entered by the parent at sign-up.
+                    Record at least one complete Father, Mother, or Guardian name. This is one shared verification record for every student added here. It verifies the parent during Guardian Sign Up; email and contact number are entered by the parent at sign-up.
                   </p>
                   {apiError && (
                     <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3">
@@ -1568,12 +1651,12 @@ export function StudentParentRegistration({
                   <section className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Father&apos;s Information <span className="font-normal text-slate-400">(if available)</span></h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><Field label="Last Name" error={E.fatherLastName}><input className={E.fatherLastName ? inputErr : inputOk} value={form.fatherLastName} onChange={e => set("fatherLastName", e.target.value)} /></Field><Field label="First Name" error={E.fatherFirstName}><input className={E.fatherFirstName ? inputErr : inputOk} value={form.fatherFirstName} onChange={e => set("fatherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.fatherMiddleName} onChange={e => set("fatherMiddleName", e.target.value)} /></Field><Field label="Suffix" hint="Optional"><select className={inputOk} value={form.fatherSuffix} onChange={e => set("fatherSuffix", e.target.value)}><option value="">None</option>{SUFFIX_OPTIONS.map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field></div>
-                    <ParentNameSuggestions role="Father" candidates={parentCandidates.Father} loading={parentLookupLoading.Father} visible={Boolean(form.fatherFirstName.trim() || form.fatherLastName.trim())} value={form.fatherParentId} onSelect={candidate => void selectSuggestedParent("Father", candidate)} />
+                    <ParentNameSuggestions role="Father" candidates={parentCandidates.Father} loading={parentLookupLoading.Father} lookupError={parentLookupErrors.Father} visible={Boolean(form.fatherFirstName.trim() || form.fatherLastName.trim())} value={form.fatherParentId} onSelect={candidate => void selectSuggestedParent("Father", candidate)} />
                   </section>
                   <section className="rounded-2xl border border-pink-100 bg-pink-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Mother&apos;s Maiden Information <span className="font-normal text-slate-400">(if available)</span></h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3"><Field label="Last Name" error={E.motherLastName}><input className={E.motherLastName ? inputErr : inputOk} value={form.motherLastName} onChange={e => set("motherLastName", e.target.value)} /></Field><Field label="First Name" error={E.motherFirstName}><input className={E.motherFirstName ? inputErr : inputOk} value={form.motherFirstName} onChange={e => set("motherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.motherMiddleName} onChange={e => set("motherMiddleName", e.target.value)} /></Field></div>
-                    <ParentNameSuggestions role="Mother" candidates={parentCandidates.Mother} loading={parentLookupLoading.Mother} visible={Boolean(form.motherFirstName.trim() || form.motherLastName.trim())} value={form.motherParentId} onSelect={candidate => void selectSuggestedParent("Mother", candidate)} />
+                    <ParentNameSuggestions role="Mother" candidates={parentCandidates.Mother} loading={parentLookupLoading.Mother} lookupError={parentLookupErrors.Mother} visible={Boolean(form.motherFirstName.trim() || form.motherLastName.trim())} value={form.motherParentId} onSelect={candidate => void selectSuggestedParent("Mother", candidate)} />
                   </section>
                   <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                     <h3 className="mb-1 text-sm font-bold text-slate-800">Guardian Information</h3>
@@ -1597,7 +1680,7 @@ export function StudentParentRegistration({
                         </Field>
                       </div>
                     )}
-                    <ParentNameSuggestions role="Guardian" candidates={parentCandidates.Guardian} loading={parentLookupLoading.Guardian} visible={Boolean(form.guardianFirstName.trim() || form.guardianLastName.trim())} value={form.guardianParentId} onSelect={candidate => void selectSuggestedParent("Guardian", candidate)} />
+                    <ParentNameSuggestions role="Guardian" candidates={parentCandidates.Guardian} loading={parentLookupLoading.Guardian} lookupError={parentLookupErrors.Guardian} visible={Boolean(form.guardianFirstName.trim() || form.guardianLastName.trim())} value={form.guardianParentId} onSelect={candidate => void selectSuggestedParent("Guardian", candidate)} />
                   </section>
                 </div>
               )}
@@ -1629,13 +1712,10 @@ export function StudentParentRegistration({
                       </div>
                     ))}
                     <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 sm:col-span-2">
-                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Parent / Guardian</p>
-                      {students.map((student, index) => (
-                        <div key={index} className="mb-3 last:mb-0">
-                          <ReviewRow label={`${studentName(student, index)} verification`} value={verificationSummary(student)} />
-                        </div>
-                      ))}
-                      <ReviewRow label="Account linking" value="Completed by the parent in Guardian Sign Up" />
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Shared Parent / Guardian</p>
+                      <ReviewRow label="Verification record" value={verificationSummary(form)} />
+                      <ReviewRow label="Linked students" value={`${students.length} ${students.length === 1 ? "student" : "students"} will use this same verification record.`} />
+                      <ReviewRow label="Account linking" value="When the Parent completes Guardian Sign Up with any child’s LRN, every matching child from this registration is linked to the Parent dashboard." />
                     </div>
                   </div>
                   {apiError && (

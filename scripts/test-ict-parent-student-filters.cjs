@@ -21,10 +21,12 @@ assert.match(route, /parentGrade/);
 assert.match(route, /parentSection/);
 assert.match(route, /parentLinkState/);
 assert.match(route, /hasCompletedActiveParentSignup\(parent\)/);
+assert.match(route, /const verificationParent = father \?\? mother \?\? guardian/);
+assert.match(route, /const preSignupParent = visibleLinks/);
+assert.match(route, /No Parent \/ Guardian recorded/);
 assert.doesNotMatch(route, /requires_account_setup/);
 assert.match(route, /new Map<string, Set<number>>\(\)/);
-assert.match(route, /associatedParentIdsByStudentId/);
-assert.match(route, /"Awaiting Signup"/);
+assert.doesNotMatch(route, /Awaiting Signup/);
 assert.match(route, /"Not Registered"/);
 assert.match(completion, /hasCompletedActiveParentSignup/);
 assert.match(completion, /isImportedParentPlaceholder/);
@@ -33,17 +35,16 @@ assert.match(completion, /parentAccountCanAccess/);
 // Student Profiles uses the same completed-account definition and must never
 // turn a placeholder association into an owner name in the profile table.
 assert.match(studentProfilesRoute, /hasCompletedActiveParentSignup\(parent\)/);
-assert.match(studentProfilesRoute, /associatedParentIdsByStudentId/);
-assert.match(studentProfilesRoute, /"Awaiting Signup"/);
+assert.doesNotMatch(studentProfilesRoute, /Awaiting Signup/);
 assert.match(studentProfilesRoute, /"Not Registered"/);
 assert.match(studentProfilesPage, /ParentLinkBadge/);
-assert.match(studentProfilesPage, /Awaiting Signup/);
+assert.doesNotMatch(studentProfilesPage, /Awaiting Signup/);
 assert.match(studentProfilesPage, /Not Registered/);
 
 // Simulate the database relationship model. The same signed-up parent is
-// linked to two children and an unsigned parent has a relation to a third.
+// linked to two children and an unsigned Parent has a relation to a third.
 // Counts remain student counts, every student appears once, and only the
-// parent with a completed normal signup makes a child "Already Linked".
+// Parent with a completed normal signup makes a child "Already Linked".
 const students = [
   { studentId: "1001", grade: "Grade 1", section: "Gold" },
   { studentId: "1002", grade: "Grade 1", section: "Gold" },
@@ -53,8 +54,8 @@ const students = [
 const parents = [
   { id: 7, passwordSet: true, active: true, placeholder: false },
   { id: 8, passwordSet: false, active: true, placeholder: false },
-  // Imported rows may have a legacy password value, but remain awaiting
-  // signup until a real guardian has claimed the account.
+  // Imported rows may have a legacy password value, but remain not
+  // registered until a real guardian has claimed the account.
   { id: 9, passwordSet: true, active: true, placeholder: true },
 ];
 const links = [
@@ -70,12 +71,8 @@ const signedUpParentIds = new Set(
     .filter((parent) => parent.passwordSet && parent.active && !parent.placeholder)
     .map((parent) => parent.id),
 );
-const associatedParentIdsByStudent = new Map();
 const signedUpParentIdsByStudent = new Map();
 for (const link of links) {
-  const relatedIds = associatedParentIdsByStudent.get(link.studentId) ?? new Set();
-  relatedIds.add(link.parentId);
-  associatedParentIdsByStudent.set(link.studentId, relatedIds);
   if (!signedUpParentIds.has(link.parentId)) continue;
   const ids = signedUpParentIdsByStudent.get(link.studentId) ?? new Set();
   ids.add(link.parentId);
@@ -85,15 +82,15 @@ const directory = students.map((student) => ({
   ...student,
   state: (signedUpParentIdsByStudent.get(student.studentId)?.size ?? 0) > 0
     ? "Already Linked"
-    : (associatedParentIdsByStudent.get(student.studentId)?.size ?? 0) > 0 ? "Awaiting Signup" : "Not Registered",
+    : "Not Registered",
 }));
 const gradeOneGold = directory.filter((student) => student.grade === "Grade 1" && student.section === "Gold");
 
 assert.equal(directory.length, 4, "the directory has one row per student");
 assert.equal(new Set(directory.map((student) => student.studentId)).size, 4, "no student is duplicated by parent links");
-assert.deepEqual(gradeOneGold.map((student) => student.state), ["Already Linked", "Already Linked", "Awaiting Signup"]);
+assert.deepEqual(gradeOneGold.map((student) => student.state), ["Already Linked", "Already Linked", "Not Registered"]);
 assert.equal(gradeOneGold.filter((student) => student.state === "Already Linked").length, 2);
-assert.equal(gradeOneGold.filter((student) => student.state === "Awaiting Signup").length, 1);
+assert.equal(gradeOneGold.filter((student) => student.state === "Not Registered").length, 1);
 assert.equal(directory.find((student) => student.studentId === "2001").state, "Not Registered");
 
 // The UI sends cascading selections to the same API branch and retains the
@@ -103,10 +100,14 @@ assert.match(page, /userParams\.set\("parentGrade", parentStudentGrade\)/);
 assert.match(page, /userParams\.set\("parentSection", parentStudentSection\)/);
 assert.match(page, /disabled=\{!parentStudentGrade\}/);
 assert.match(page, /Already Linked/);
-assert.match(page, /Awaiting Signup/);
+assert.match(page, /Parents \/ Guardian/);
+assert.doesNotMatch(page, /Signed-up parent account/);
+assert.match(page, /whitespace-nowrap text-xs font-semibold/);
+assert.match(page, /Student Address/);
+assert.doesNotMatch(page, /StudentAddressCard/);
+assert.doesNotMatch(page, /Awaiting Signup/);
 assert.match(page, /Not Registered/);
 assert.match(page, /parentStudentFilters\.counts\.alreadyLinked/);
-assert.match(page, /parentStudentFilters\.counts\.awaitingSignup/);
 assert.match(page, /parentStudentFilters\.counts\.notRegistered/);
 
 console.log("ICT Parents & Students cascading-filter checks passed.");

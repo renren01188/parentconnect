@@ -75,6 +75,7 @@
     "test:excuse-letter-attachments": "node scripts/test-excuse-letter-attachments.cjs",
     "test:excuse-letter-approval": "node scripts/test-excuse-letter-approval.cjs",
     "test:ict-user-management-account-update": "node scripts/test-ict-user-management-account-update.cjs",
+    "test:ict-parent-student-link-correction": "node scripts/test-ict-parent-student-link-correction.cjs",
     "test:ict-parent-student-filters": "node scripts/test-ict-parent-student-filters.cjs",
     "test:staff-employee-id-uniqueness": "node scripts/test-staff-employee-id-uniqueness.cjs",
     "test:guidance-reports-export": "node scripts/test-guidance-reports-export.cjs",

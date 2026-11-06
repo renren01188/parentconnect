@@ -42,7 +42,7 @@ function ParentLinkReview({
         {suggestions.map((suggestion) => {
           const selectedValue = selections[row.lrn]?.[suggestion.role] ?? "";
           if (suggestion.state === "none") {
-            return <p key={suggestion.role} className="text-[11px] text-slate-600"><strong>{suggestion.role}:</strong> No completed active Parent account matched. This record will remain <strong>Awaiting Signup</strong>.</p>;
+            return <p key={suggestion.role} className="text-[11px] text-slate-600"><strong>{suggestion.role}:</strong> No completed active Parent account matched. The student will remain <strong>Not Registered</strong> until Guardian signup is completed.</p>;
           }
           if (suggestion.state === "auto") {
             const candidate = suggestion.candidates[0];
@@ -62,7 +62,7 @@ function ParentLinkReview({
                     {candidate.displayName}{candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""}
                   </option>
                 ))}
-                <option value="awaiting">Leave Awaiting Signup</option>
+                <option value="no_link">Do not link an existing Parent account</option>
               </select>
             </label>
           );
@@ -201,11 +201,11 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
               </div>
               {errors.map(error => <p key={error} className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>)}
               {existing.length > 0 && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">Already registered LRN(s): {existing.join(", ")}.</p>}
-              {unresolvedParentLinks && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Choose an account or explicitly leave Awaiting Signup for each ambiguous Parent name before importing.</p>}
+              {unresolvedParentLinks && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Choose an account or confirm that no existing Parent account should be linked for each ambiguous Parent name before importing.</p>}
 
               <section className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
                 <h3 className="text-sm font-extrabold text-slate-800">Parent account linking</h3>
-                <p className="mt-1 text-xs leading-5 text-slate-600">An exact active Parent account is linked automatically. If the same verification name belongs to more than one active account, choose the correct one or leave the student awaiting Guardian Sign Up. Archived accounts are never listed.</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">An exact active Parent account is linked automatically. If the same verification name belongs to more than one active account, choose the correct one or confirm that none should be linked. Otherwise, the student remains Not Registered until Guardian signup is completed. Archived accounts are never listed.</p>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                   {rows.map((row) => (
                     <div key={row.lrn} className="rounded-xl border border-violet-100 bg-white p-3">

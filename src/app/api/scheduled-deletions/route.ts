@@ -5,6 +5,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { getIctFromToken } from "@/lib/getIctFromToken";
 import { archiveTarget, restoreArchivedTarget } from "@/lib/permanentDeletion";
 import { restoreDeletionTarget, suspendDeletionTarget } from "@/lib/deletionAccess";
+import { isValidEmail } from "@/lib/deletionEmailQueue";
 import { sendAccountDeletionRevertedEmail, sendAccountDeletionScheduledEmail, sendIctDeletionRequestEmail, sendStudentDeletionRevertedEmail, sendStudentDeletionScheduledEmail } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import {
@@ -340,8 +341,15 @@ export async function POST(req: NextRequest) {
         module: "User Management",
         details: `Submitted a deletion request for ${rows.length} account${rows.length === 1 ? "" : "s"}. Reason: ${reason.trim()}`,
       });
-      await Promise.all((ictAdmins ?? []).filter(admin => admin.email).map(async admin => {
-        try { await sendIctDeletionRequestEmail({ recipientEmail: admin.email, adviserName, requestCount: rows.length }); }
+      // An empty or malformed ICT address must never turn a successfully
+      // recorded deletion request into a noisy Brevo delivery failure. The
+      // in-app approval request is still published below; valid addresses
+      // continue receiving the supplementary email exactly once.
+      const ictRecipientEmails = [...new Set((ictAdmins ?? [])
+        .map((admin) => typeof admin.email === "string" ? admin.email.trim().toLowerCase() : "")
+        .filter(isValidEmail))];
+      await Promise.all(ictRecipientEmails.map(async (recipientEmail) => {
+        try { await sendIctDeletionRequestEmail({ recipientEmail, adviserName, requestCount: rows.length }); }
         catch (mailError) { console.error("ICT deletion-request email failed:", mailError); }
       }));
       await publishScheduledDeletionInvalidations(data ?? []);

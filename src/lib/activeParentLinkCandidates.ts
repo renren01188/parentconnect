@@ -189,7 +189,7 @@ export async function findActiveParentLinkCandidates(identity: ParentLinkIdentit
 export async function assertSelectedActiveParentLink(identity: ParentLinkIdentity, parentId: unknown) {
   const parsedParentId = Number(parentId);
   if (!Number.isSafeInteger(parsedParentId) || parsedParentId <= 0) {
-    throw new Error("Choose a valid active Parent account or leave the record awaiting signup.");
+    throw new Error("Choose a valid active Parent account or leave the student unlinked until Guardian signup is completed.");
   }
 
   const candidates = await findActiveParentLinkCandidates(identity);

@@ -91,8 +91,8 @@ export async function ensureParentStudentLink({ parentId, studentId, relationshi
  * normalized first/last names. A valid SF1 contact number is an additional,
  * required verifier whenever it is available. When no number was recorded,
  * the name can link only if it identifies exactly one active Parent account;
- * multiple matches intentionally remain Awaiting Signup until an Adviser
- * chooses the correct account. Middle names and suffixes are optional in
+ * multiple matches intentionally remain unlinked until an Adviser chooses
+ * the correct account. Middle names and suffixes are optional in
  * Parent enrollment, so they cannot prevent a legitimate sibling link.
  * Archived accounts and students are intentionally excluded: historic links
  * remain retained, but an archived family record cannot be attached to a

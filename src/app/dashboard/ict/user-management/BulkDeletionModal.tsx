@@ -73,6 +73,43 @@ type BulkDeletionResult = {
   failed: number;
 };
 
+function DeletionScopeNotice({
+  kind,
+  step,
+}: {
+  kind: "" | "adviser" | "guidance" | "parent" | "student";
+  step: 1 | 2 | 3;
+}) {
+  if (!kind || step === 1) return null;
+
+  if (kind === "student") {
+    return (
+      <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm leading-relaxed text-blue-800">
+        <strong>Student selection affects only the selected student records.</strong>{" "}
+        No Parent account is scheduled, suspended, or archived. An active Parent
+        account can therefore remain available and link a later matching child.
+      </div>
+    );
+  }
+
+  if (kind === "parent") {
+    return (
+      <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900">
+        <strong>Parent Account selection affects only the selected account.</strong>{" "}
+        Its linked students are not scheduled or archived. When the account is
+        archived, its Parent dashboard access is revoked while student history remains.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900">
+      Scheduling this account archives only the selected account after the waiting
+      period. Related history is retained.
+    </div>
+  );
+}
+
 export function BulkDeletionModal({
   users,
   candidates,
@@ -420,6 +457,7 @@ export function BulkDeletionModal({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-4 pb-4 sm:px-7 sm:pb-7">
+          {tab === "create" && !operationResult && <DeletionScopeNotice kind={kind} step={step} />}
           {tab === "pending" || tab === "waiting" ? (
             <>
               <div className="relative mb-4">
@@ -591,11 +629,11 @@ export function BulkDeletionModal({
             </>
           ) : operationResult ? (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
-              <h3 className="font-extrabold">Bulk deletion scheduled</h3>
-              <p className="mt-1 text-emerald-800">Scheduled Parent accounts receive an in-app notification. No Parent deletion email is sent.</p>
+              <h3 className="font-extrabold">Bulk archive scheduled</h3>
+              <p className="mt-1 text-emerald-800">Each selected record is archived after its recovery period. Student and Parent selections are independent; scheduled Parent accounts receive an in-app notification.</p>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion successful</span><strong>{operationResult.successful}</strong></div>
-                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Deletion failed</span><strong>{operationResult.failed}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Archive scheduled</span><strong>{operationResult.successful}</strong></div>
+                <div className="rounded-xl bg-white p-3"><span className="block text-xs font-semibold text-slate-500">Could not schedule</span><strong>{operationResult.failed}</strong></div>
               </div>
             </div>
           ) : (
@@ -917,12 +955,17 @@ export function BulkDeletionModal({
                   ? "Confirm rejection"
                   : authorization.action === "restore"
                     ? "Confirm revert"
-                    : "Confirm immediate deletion"}
+                    : "Confirm immediate archive"}
             </h3>
             <p className="mt-2 text-sm text-slate-600">
               This action applies to {authorization.ids.length} selected request
               {authorization.ids.length === 1 ? "" : "s"}.
             </p>
+            {authorization.action === "delete-now" && (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900">
+                This archives the selected record now and revokes its dashboard access. It does not permanently delete the record or cascade to a separately selected Parent or student.
+              </p>
+            )}
             {["approve", "restore", "delete-now"].includes(authorization.action) && (
               <div className="relative mt-4">
                 <LockKeyhole className="absolute left-3 top-3 h-4 w-4 text-slate-400" />

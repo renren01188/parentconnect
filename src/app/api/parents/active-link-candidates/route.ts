@@ -7,6 +7,12 @@ import {
 } from "@/lib/activeParentLinkCandidates";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 
+export const dynamic = "force-dynamic";
+
+const noStoreHeaders = {
+  "Cache-Control": "no-store, max-age=0",
+};
+
 /**
  * Returns minimally identifying active Parent-name suggestions while an
  * Adviser types, or family names already recorded for a selected Parent.
@@ -16,7 +22,10 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 export async function GET(request: NextRequest) {
   const [adviser, ict] = await Promise.all([getAdviserFromToken(), getActiveIct()]);
   if (!adviser && !ict) {
-    return NextResponse.json({ success: false, message: "Adviser or ICT authorization is required." }, { status: 401 });
+    return NextResponse.json(
+      { success: false, message: "Adviser or ICT authorization is required." },
+      { status: 401, headers: noStoreHeaders },
+    );
   }
 
   try {
@@ -28,19 +37,19 @@ export async function GET(request: NextRequest) {
 
     if (selectedParentId) {
       const familySuggestions = await findLinkedFamilyNameSuggestions(selectedParentId);
-      return NextResponse.json({ success: true, familySuggestions });
+      return NextResponse.json({ success: true, familySuggestions }, { headers: noStoreHeaders });
     }
 
     if (!isParentFamilyRole(role) || (!firstName && !lastName)) {
-      return NextResponse.json({ success: true, candidates: [] });
+      return NextResponse.json({ success: true, candidates: [] }, { headers: noStoreHeaders });
     }
 
     const candidates = await findActiveParentNameSuggestions({ role, firstName, lastName });
-    return NextResponse.json({ success: true, candidates });
+    return NextResponse.json({ success: true, candidates }, { headers: noStoreHeaders });
   } catch (error) {
     return NextResponse.json(
       { success: false, message: error instanceof Error ? error.message : "Could not look up active Parent accounts." },
-      { status: 500 },
+      { status: 500, headers: noStoreHeaders },
     );
   }
 }

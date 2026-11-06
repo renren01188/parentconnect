@@ -43,7 +43,7 @@ function completedParentLink(parent: ParentAccountLink): DisplayParentLink | nul
   return { id, name: parentAccountName(parent) };
 }
 
-// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All&parentLinkStatus=Awaiting%20Signup
+// GET /api/ict/students?grade=Grade 6&section=Malvar&search=&rfidStatus=All&parentLinkStatus=Not%20Registered
 export async function GET(req: NextRequest) {
   try {
     const ict = await getActiveIct();
@@ -142,16 +142,9 @@ export async function GET(req: NextRequest) {
     if (directParentsResult.error) throw directParentsResult.error;
 
     const parentLinksByStudentId = new Map<string, Map<number, DisplayParentLink>>();
-    const associatedParentIdsByStudentId = new Map<string, Set<number>>();
     const addParentLink = (studentId: unknown, parent: ParentAccountLink | null | undefined) => {
       const normalizedStudentId = String(studentId ?? "").trim();
       if (!normalizedStudentId || !parent || !parentAccountIsVisible(parent)) return;
-      const parentId = Number(parent.id);
-      if (Number.isSafeInteger(parentId) && parentId > 0) {
-        const associatedParentIds = associatedParentIdsByStudentId.get(normalizedStudentId) ?? new Set<number>();
-        associatedParentIds.add(parentId);
-        associatedParentIdsByStudentId.set(normalizedStudentId, associatedParentIds);
-      }
       const completedLink = completedParentLink(parent);
       if (!completedLink) return;
       const linksForStudent = parentLinksByStudentId.get(normalizedStudentId) ?? new Map<number, DisplayParentLink>();
@@ -189,10 +182,9 @@ export async function GET(req: NextRequest) {
     const enriched = students.map((s: any) => {
       const linkedParents = [...(parentLinksByStudentId.get(String(s.student_id).trim())?.values() ?? [])]
         .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
-      const hasAssociatedParentRecord = (associatedParentIdsByStudentId.get(String(s.student_id).trim())?.size ?? 0) > 0;
       const studentParentLinkStatus = linkedParents.length > 0
         ? "Already Linked"
-        : hasAssociatedParentRecord ? "Awaiting Signup" : "Not Registered";
+        : "Not Registered";
       return {
         ...s,
         parent_link_status: studentParentLinkStatus,
@@ -202,7 +194,6 @@ export async function GET(req: NextRequest) {
       };
     });
     const filtered = parentLinkStatus === "Already Linked"
-      || parentLinkStatus === "Awaiting Signup"
       || parentLinkStatus === "Not Registered"
       ? enriched.filter((student) => student.parent_link_status === parentLinkStatus)
       : enriched;

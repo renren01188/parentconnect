@@ -196,12 +196,18 @@ export async function middleware(req: NextRequest) {
     // A pending signup has no parent session yet. This endpoint validates its
     // signed, short-lived cookie before it reveals or sends a replacement.
     || pathname === "/api/parents/resend-temp-password";
+  // This is a staff-only lookup used while an Adviser or ICT user registers
+  // a student. It deliberately lives under `/api/parents` because it reads
+  // Parent account candidates, but it must not be authenticated as the
+  // Parent whose account is being suggested. Its route handler verifies the
+  // Adviser or ICT session before returning any result.
+  const isStaffParentLinkCandidateApi = pathname === "/api/parents/active-link-candidates";
   // Only the parent-facing collection endpoint belongs to the parent session.
   // Adviser approval endpoints share the `/api/excuse-letters` namespace but
   // authenticate with `getAdviserFromToken` in their route handlers. Guarding
   // the whole namespace here caused those requests to be rejected as parents
   // before the adviser authorization and class-scope checks could run.
-  const isParentFeatureApi = (pathname.startsWith("/api/parents/") && !isPublicParentApi)
+  const isParentFeatureApi = (pathname.startsWith("/api/parents/") && !isPublicParentApi && !isStaffParentLinkCandidateApi)
     || pathname === "/api/excuse-letters"
     || pathname === "/api/attendance/parent-history";
   if (isParentFeatureApi) {
