@@ -1,5 +1,5 @@
 export type SmsProviderName = "semaphore" | "unisms";
-export type SemaphoreSmsRoute = "regular" | "priority";
+export type SemaphoreSmsRoute = "regular" | "priority" | "otp";
 
 export type SmsSendResult = {
   provider: SmsProviderName;
@@ -227,6 +227,7 @@ export async function sendSms({
   queueId,
   idempotencyKey,
   semaphoreRoute = "regular",
+  semaphoreOtpCode,
 }: {
   recipient: string;
   message: string;
@@ -236,17 +237,48 @@ export async function sendSms({
   // also receives it as non-sensitive metadata for traceability.
   idempotencyKey?: string;
   semaphoreRoute?: SemaphoreSmsRoute;
+  // ParentConnect generates, hashes, expires, and verifies this code in its
+  // own OTP flow. Semaphore's OTP endpoint receives the same code only to
+  // deliver it through its dedicated OTP route; it is never logged or stored
+  // in an SMS result.
+  semaphoreOtpCode?: string;
 }): Promise<SmsSendResult> {
   const provider = configuredProvider();
+  const otpCode = semaphoreOtpCode?.trim();
+  if (semaphoreRoute === "otp") {
+    if (!/^\d{6}$/.test(otpCode ?? "")) {
+      throw new SmsProviderError("Semaphore OTP delivery requires a six-digit code.", false);
+    }
+    if (!message.includes("{otp}")) {
+      throw new SmsProviderError("Semaphore OTP delivery requires the {otp} placeholder in the message.", false);
+    }
+  } else if (otpCode) {
+    throw new SmsProviderError("An OTP code can only be sent through the Semaphore OTP route.", false);
+  }
+
+  // UniSMS has no dedicated OTP endpoint. Render ParentConnect's verified
+  // code for that provider so a provider switch cannot send a literal {otp}
+  // token. Semaphore receives the placeholder and code separately as its API
+  // requires.
+  const outboundMessage = provider === "semaphore" && semaphoreRoute === "otp"
+    ? message
+    : otpCode
+      ? message.replaceAll("{otp}", otpCode)
+      : message;
   let response: Response;
 
   try {
     if (provider === "semaphore") {
       const apiKey = process.env.SEMAPHORE_API_KEY;
       if (!apiKey) throw new SmsProviderError("SEMAPHORE_API_KEY is not configured.", false);
-      const form = new URLSearchParams({ apikey: apiKey, number: recipient, message });
+      const form = new URLSearchParams({ apikey: apiKey, number: recipient, message: outboundMessage });
       if (process.env.SEMAPHORE_SENDER_NAME) form.set("sendername", process.env.SEMAPHORE_SENDER_NAME);
-      const endpoint = semaphoreRoute === "priority" ? "priority" : "messages";
+      if (semaphoreRoute === "otp" && otpCode) form.set("code", otpCode);
+      const endpoint = semaphoreRoute === "priority"
+        ? "priority"
+        : semaphoreRoute === "otp"
+          ? "otp"
+          : "messages";
       response = await fetch(`https://api.semaphore.co/api/v4/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -265,7 +297,7 @@ export async function sendSms({
         },
         body: JSON.stringify({
           recipient: e164(recipient),
-          content: message,
+          content: outboundMessage,
           sender_id: senderId,
           metadata: {
             attendance_sms_job_id: queueId,

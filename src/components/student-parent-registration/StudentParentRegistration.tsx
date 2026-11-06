@@ -45,14 +45,83 @@ const emptyForm = {
   grade: "", classSession: "", section: "", rfidCard: "",
   address: "", barangay: "", municipalityCity: "", province: "",
   fatherFirstName: "", fatherMiddleName: "", fatherLastName: "", fatherSuffix: "",
+  fatherParentId: "",
   motherFirstName: "", motherMiddleName: "", motherLastName: "",
+  motherParentId: "",
   guardianFirstName: "", guardianMiddleName: "", guardianLastName: "", guardianSuffix: "", guardianRelationship: "", guardianRelationshipOther: "",
+  guardianParentId: "",
 };
 
 type FormData = typeof emptyForm;
 type FormUpdater = FormData | ((prev: FormData) => FormData);
 type ClassSession = "Morning" | "Afternoon";
 type SectionOption = { name: string; count: number; class_session?: ClassSession | null };
+type ParentRole = "Father" | "Mother" | "Guardian";
+type ParentCandidate = {
+  id: number;
+  role: ParentRole;
+  displayName: string;
+  maskedContactNumber: string | null;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  suffix: string | null;
+};
+type LinkedFamilyNameSuggestion = {
+  role: ParentRole;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  suffix: string | null;
+};
+type ParentCandidateMap = Record<ParentRole, ParentCandidate[]>;
+
+const emptyParentCandidateMap = (): ParentCandidateMap => ({ Father: [], Mother: [], Guardian: [] });
+
+type VerificationName = Pick<LinkedFamilyNameSuggestion, "firstName" | "middleName" | "lastName" | "suffix">;
+
+function hasVerificationName(student: FormData, role: ParentRole) {
+  if (role === "Father") return Boolean(student.fatherFirstName.trim() || student.fatherLastName.trim());
+  if (role === "Mother") return Boolean(student.motherFirstName.trim() || student.motherLastName.trim());
+  return Boolean(student.guardianFirstName.trim() || student.guardianLastName.trim());
+}
+
+function fillVerificationName(student: FormData, role: ParentRole, name: VerificationName, parentId?: string, force = false): FormData {
+  if (!force && hasVerificationName(student, role)) return student;
+  if (role === "Father") {
+    return {
+      ...student,
+      fatherFirstName: name.firstName,
+      fatherMiddleName: name.middleName ?? "",
+      fatherLastName: name.lastName,
+      fatherSuffix: name.suffix ?? "",
+      ...(parentId === undefined ? {} : { fatherParentId: parentId }),
+    };
+  }
+  if (role === "Mother") {
+    return {
+      ...student,
+      motherFirstName: name.firstName,
+      motherMiddleName: name.middleName ?? "",
+      motherLastName: name.lastName,
+      ...(parentId === undefined ? {} : { motherParentId: parentId }),
+    };
+  }
+  return {
+    ...student,
+    guardianFirstName: name.firstName,
+    guardianMiddleName: name.middleName ?? "",
+    guardianLastName: name.lastName,
+    guardianSuffix: name.suffix ?? "",
+    ...(parentId === undefined ? {} : { guardianParentId: parentId }),
+  };
+}
+
+function clearSuggestedParent(student: FormData, role: ParentRole): FormData {
+  if (role === "Father") return { ...student, fatherParentId: "" };
+  if (role === "Mother") return { ...student, motherParentId: "" };
+  return { ...student, guardianParentId: "" };
+}
 
 function hasCompleteStudentRemark(student: FormData) {
   if (!student.remarkType) return true;
@@ -80,6 +149,85 @@ function Field({ label, required, error, hint, children }: {
       ) : hint ? (
         <p className="text-[11px] text-slate-400">{hint}</p>
       ) : null}
+    </div>
+  );
+}
+
+function ParentNameSuggestions({
+  role,
+  candidates,
+  loading,
+  visible,
+  value,
+  onSelect,
+}: {
+  role: ParentRole;
+  candidates: ParentCandidate[];
+  loading: boolean;
+  visible: boolean;
+  value: string;
+  onSelect: (candidate: ParentCandidate | null) => void;
+}) {
+  if (!visible) return null;
+  const hasResult = candidates.length > 0;
+  return (
+    <div className="mt-4 rounded-xl border border-violet-100 bg-violet-50/60 p-3">
+      <p className="text-xs font-bold text-violet-900">Suggested active Parent names</p>
+      <p className="mt-1 text-[11px] leading-relaxed text-violet-700">
+        {loading
+          ? "Checking active Parent accounts with this verification name…"
+          : hasResult
+            ? `Click the correct ${role} name to link this student immediately.`
+            : "No completed active Parent account matches this name yet. Leave this unselected for Guardian Sign Up."}
+      </p>
+      {hasResult && (
+        <div className="mt-2 flex flex-wrap gap-2" role="list" aria-label={`Suggested ${role} accounts`}>
+          {candidates.map((candidate) => {
+            const selected = value === String(candidate.id);
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                role="listitem"
+                aria-pressed={selected}
+                onClick={() => onSelect(selected ? null : candidate)}
+                className={`rounded-lg border px-3 py-2 text-left text-xs font-semibold transition ${selected
+                  ? "border-violet-600 bg-violet-600 text-white shadow-sm"
+                  : "border-violet-200 bg-white text-violet-800 hover:border-violet-400 hover:bg-violet-100"}`}
+              >
+                <span className="block">{candidate.displayName}</span>
+                {candidate.maskedContactNumber && (
+                  <span className={`mt-0.5 block text-[10px] font-medium ${selected ? "text-violet-100" : "text-violet-500"}`}>
+                    {candidate.maskedContactNumber}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {hasResult && (
+        <select
+          value={value}
+          onChange={(event) => onSelect(candidates.find((candidate) => String(candidate.id) === event.target.value) ?? null)}
+          className="sr-only"
+          aria-hidden="true"
+          tabIndex={-1}
+        >
+          <option value="">Do not choose an account — use safe automatic matching</option>
+          {candidates.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.displayName}{candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {!loading && candidates.length === 1 && !value && (
+        <p className="mt-2 text-[11px] font-medium text-emerald-700">You may click the suggested name. If it remains unselected, the same unique first and last name will still link automatically when saved.</p>
+      )}
+      {!loading && candidates.length > 1 && !value && (
+        <p className="mt-2 text-[11px] font-medium text-amber-700">More than one active Parent has this name. Click the correct suggested name; otherwise the child remains awaiting signup.</p>
+      )}
     </div>
   );
 }
@@ -358,6 +506,12 @@ export function StudentParentRegistration({
   const [rfidConflict,    setRfidConflict]    = useState("");
   const [pendingManualRfid, setPendingManualRfid] = useState("");
   const [registeredCount, setRegisteredCount] = useState(0);
+  const [parentCandidates, setParentCandidates] = useState<ParentCandidateMap>(emptyParentCandidateMap);
+  const [parentLookupLoading, setParentLookupLoading] = useState<Record<ParentRole, boolean>>({
+    Father: false,
+    Mother: false,
+    Guardian: false,
+  });
 
   const form = students[activeStudentIndex] ?? students[0] ?? emptyForm;
   // The date input and validation use the same school-local calendar day as
@@ -369,6 +523,46 @@ export function StudentParentRegistration({
       return typeof updater === "function" ? updater(student) : updater;
     }));
   };
+
+  function updateStudentAt(index: number, updater: (student: FormData) => FormData) {
+    setStudents((previous) => previous.map((student, studentIndex) => (
+      studentIndex === index ? updater(student) : student
+    )));
+  }
+
+  async function selectSuggestedParent(role: ParentRole, candidate: ParentCandidate | null) {
+    const studentIndex = activeStudentIndex;
+    if (!candidate) {
+      updateStudentAt(studentIndex, (student) => clearSuggestedParent(student, role));
+      return;
+    }
+
+    // Clicking the name completes that person's verification fields. This is
+    // intentional: the server later validates that exact chosen account again
+    // before creating its Parent/student link.
+    updateStudentAt(studentIndex, (student) => fillVerificationName(student, role, candidate, String(candidate.id), true));
+
+    try {
+      const response = await fetch(`/api/parents/active-link-candidates?selectedParentId=${encodeURIComponent(String(candidate.id))}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.success || !Array.isArray(payload.familySuggestions)) return;
+
+      const suggestions = payload.familySuggestions as LinkedFamilyNameSuggestion[];
+      updateStudentAt(studentIndex, (student) => {
+        let next = student;
+        (["Father", "Mother", "Guardian"] as ParentRole[]).forEach((otherRole) => {
+          if (otherRole === role || hasVerificationName(next, otherRole)) return;
+          const matches = suggestions.filter((suggestion) => suggestion.role === otherRole);
+          if (matches.length !== 1) return;
+          next = fillVerificationName(next, otherRole, matches[0]);
+        });
+        return next;
+      });
+    } catch {
+      // The selected Parent link still works. Household prefilling is only a
+      // convenience and must never block ordinary student registration.
+    }
+  }
 
   // ── LRN duplicate check (stored as student_id in the database) ──
   const [studentIdTaken,    setStudentIdTaken]    = useState(false);
@@ -400,6 +594,61 @@ export function StudentParentRegistration({
     }
     loadSections();
   }, [form.grade]);
+
+  useEffect(() => {
+    const records: Array<{
+      role: ParentRole;
+      firstName: string;
+      middleName: string;
+      lastName: string;
+    }> = [
+      { role: "Father", firstName: form.fatherFirstName, middleName: form.fatherMiddleName, lastName: form.fatherLastName },
+      { role: "Mother", firstName: form.motherFirstName, middleName: form.motherMiddleName, lastName: form.motherLastName },
+      { role: "Guardian", firstName: form.guardianFirstName, middleName: form.guardianMiddleName, lastName: form.guardianLastName },
+    ];
+    const abortController = new AbortController();
+    const timer = window.setTimeout(async () => {
+      await Promise.all(records.map(async (record) => {
+        if (!record.firstName.trim() && !record.lastName.trim()) {
+          setParentCandidates((previous) => ({ ...previous, [record.role]: [] }));
+          setParentLookupLoading((previous) => ({ ...previous, [record.role]: false }));
+          return;
+        }
+
+        setParentLookupLoading((previous) => ({ ...previous, [record.role]: true }));
+        try {
+          const params = new URLSearchParams({
+            role: record.role,
+            firstName: record.firstName.trim(),
+            middleName: record.middleName.trim(),
+            lastName: record.lastName.trim(),
+          });
+          const response = await fetch(`/api/parents/active-link-candidates?${params}`, { signal: abortController.signal });
+          const payload = await response.json();
+          if (!abortController.signal.aborted && response.ok && payload.success) {
+            setParentCandidates((previous) => ({ ...previous, [record.role]: payload.candidates ?? [] }));
+          }
+        } catch (error) {
+          if (!abortController.signal.aborted) {
+            setParentCandidates((previous) => ({ ...previous, [record.role]: [] }));
+          }
+        } finally {
+          if (!abortController.signal.aborted) {
+            setParentLookupLoading((previous) => ({ ...previous, [record.role]: false }));
+          }
+        }
+      }));
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+      abortController.abort();
+    };
+  }, [
+    form.fatherFirstName, form.fatherMiddleName, form.fatherLastName,
+    form.motherFirstName, form.motherMiddleName, form.motherLastName,
+    form.guardianFirstName, form.guardianMiddleName, form.guardianLastName,
+  ]);
 
   const sessionSections = sections.filter(section =>
     !form.classSession || !section.class_session || section.class_session === form.classSession
@@ -459,6 +708,12 @@ export function StudentParentRegistration({
     const value = suffixFields.includes(field)
       ? canonicalSuffix(normalizedRaw)
       : uppercaseFields.includes(field) ? capitalize(normalizedRaw) : normalizedRaw;
+    const parentLinkFieldByName: Partial<Record<keyof FormData, keyof FormData>> = {
+      fatherFirstName: "fatherParentId", fatherMiddleName: "fatherParentId", fatherLastName: "fatherParentId", fatherSuffix: "fatherParentId",
+      motherFirstName: "motherParentId", motherMiddleName: "motherParentId", motherLastName: "motherParentId",
+      guardianFirstName: "guardianParentId", guardianMiddleName: "guardianParentId", guardianLastName: "guardianParentId", guardianSuffix: "guardianParentId",
+    };
+    const linkedParentIdField = parentLinkFieldByName[field];
     setForm(prev => field === "religion"
       ? { ...prev, religion: value, religionOther: value === "Others" ? prev.religionOther : "" }
       : field === "remarkType"
@@ -468,7 +723,9 @@ export function StudentParentRegistration({
           remarkNote: value === "Dropped out" ? prev.remarkNote : "",
           remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? prev.remarkSchoolName : "",
         }
-        : { ...prev, [field]: value });
+        : linkedParentIdField
+          ? { ...prev, [field]: value, [linkedParentIdField]: "" }
+          : { ...prev, [field]: value });
     setTouched(prev => ({ ...prev, [field]: true }));
     if (apiError) setApiError("");
   };
@@ -730,6 +987,11 @@ export function StudentParentRegistration({
             religionSelection: student.religion,
             registrationMode,
             fullName: studentFullName,
+            parentLinks: {
+              Father: student.fatherParentId || undefined,
+              Mother: student.motherParentId || undefined,
+              Guardian: student.guardianParentId || undefined,
+            },
           }),
         });
         const data = await res.json();
@@ -1306,10 +1568,12 @@ export function StudentParentRegistration({
                   <section className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Father&apos;s Information <span className="font-normal text-slate-400">(if available)</span></h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><Field label="Last Name" error={E.fatherLastName}><input className={E.fatherLastName ? inputErr : inputOk} value={form.fatherLastName} onChange={e => set("fatherLastName", e.target.value)} /></Field><Field label="First Name" error={E.fatherFirstName}><input className={E.fatherFirstName ? inputErr : inputOk} value={form.fatherFirstName} onChange={e => set("fatherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.fatherMiddleName} onChange={e => set("fatherMiddleName", e.target.value)} /></Field><Field label="Suffix" hint="Optional"><select className={inputOk} value={form.fatherSuffix} onChange={e => set("fatherSuffix", e.target.value)}><option value="">None</option>{SUFFIX_OPTIONS.map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></Field></div>
+                    <ParentNameSuggestions role="Father" candidates={parentCandidates.Father} loading={parentLookupLoading.Father} visible={Boolean(form.fatherFirstName.trim() || form.fatherLastName.trim())} value={form.fatherParentId} onSelect={candidate => void selectSuggestedParent("Father", candidate)} />
                   </section>
                   <section className="rounded-2xl border border-pink-100 bg-pink-50/40 p-4">
                     <h3 className="mb-4 text-sm font-bold text-slate-800">Mother&apos;s Maiden Information <span className="font-normal text-slate-400">(if available)</span></h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3"><Field label="Last Name" error={E.motherLastName}><input className={E.motherLastName ? inputErr : inputOk} value={form.motherLastName} onChange={e => set("motherLastName", e.target.value)} /></Field><Field label="First Name" error={E.motherFirstName}><input className={E.motherFirstName ? inputErr : inputOk} value={form.motherFirstName} onChange={e => set("motherFirstName", e.target.value)} /></Field><Field label="Middle Name" hint="Optional"><input className={inputOk} value={form.motherMiddleName} onChange={e => set("motherMiddleName", e.target.value)} /></Field></div>
+                    <ParentNameSuggestions role="Mother" candidates={parentCandidates.Mother} loading={parentLookupLoading.Mother} visible={Boolean(form.motherFirstName.trim() || form.motherLastName.trim())} value={form.motherParentId} onSelect={candidate => void selectSuggestedParent("Mother", candidate)} />
                   </section>
                   <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                     <h3 className="mb-1 text-sm font-bold text-slate-800">Guardian Information</h3>
@@ -1333,6 +1597,7 @@ export function StudentParentRegistration({
                         </Field>
                       </div>
                     )}
+                    <ParentNameSuggestions role="Guardian" candidates={parentCandidates.Guardian} loading={parentLookupLoading.Guardian} visible={Boolean(form.guardianFirstName.trim() || form.guardianLastName.trim())} value={form.guardianParentId} onSelect={candidate => void selectSuggestedParent("Guardian", candidate)} />
                   </section>
                 </div>
               )}

@@ -1506,7 +1506,6 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
     phone: user.phone || "",
     relationship: user.relationship || "",
     address: user.address || "",
-    parentRemarks: user.parentRemarks || "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -1563,7 +1562,6 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   if (form.phone !== (user.phone || "")) changes.push({ field: "Phone", from: user.phone || "—", to: form.phone });
   if (form.relationship !== (user.relationship || "")) changes.push({ field: "Relationship", from: user.relationship || "—", to: form.relationship });
   if (form.address !== (user.address || "")) changes.push({ field: "Address", from: user.address || "—", to: form.address });
-  if (form.parentRemarks !== (user.parentRemarks || "")) changes.push({ field: "Parent account remarks", from: user.parentRemarks || "—", to: form.parentRemarks || "—" });
   if (studentEditSignature(editableStudents) !== studentEditSignature(user.studentDetails ?? [])) {
     changes.push({ field: "Student records", from: "Current school record", to: "Updated" });
   }
@@ -1579,8 +1577,11 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
   const hasChanges = changes.length > 0;
 
   async function handleReview() {
-    if (!isPendingImportedParent && (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim())) {
-      alert("First name, last name, and email are required."); return;
+    if (!isPendingImportedParent && (!form.firstName.trim() || !form.lastName.trim())) {
+      alert("First name and last name are required."); return;
+    }
+    if (!isPendingImportedParent && !/^09\d{9}$/.test(form.phone.replace(/\D/g, ""))) {
+      alert("The Parent contact number must be a valid 11-digit mobile number."); return;
     }
     const missingVerificationRelationship = editableStudents.some((student) => {
       const family = familyDetailsFromStudent(student);
@@ -1638,7 +1639,6 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
         phone: form.phone,
         relationship: form.relationship,
         address: form.address,
-        parentRemarks: form.parentRemarks,
         initials: `${form.firstName[0] || ""}${form.lastName[0] || ""}`.toUpperCase(),
         name: fullName,
         familyDetails,
@@ -1718,7 +1718,7 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                   </div>
                 ) : <>
                   <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Parent / Guardian Information</p>
-                  <FInput label="Email Address" required value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
+                  <FInput label="Email Address" value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
                   <div>
                     <FLabel required>Contact Number</FLabel>
                     <div className="relative">
@@ -1741,17 +1741,6 @@ function EditParentModal({ user, onClose, onSave, onAudit }: {
                       <option value="Guardian">Guardian</option>
                     </select>
                     <p className="mt-1 text-[11px] text-gray-400">This chooses which current family record may claim the school-verified email and phone.</p>
-                  </div>
-                  <div>
-                    <FLabel>Remarks</FLabel>
-                    <textarea
-                      rows={3}
-                      value={form.parentRemarks}
-                      onChange={event => setForm(previous => ({ ...previous, parentRemarks: event.target.value }))}
-                      placeholder="Parent account note"
-                      className="w-full resize-y rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20"
-                    />
-                    <p className="mt-1 text-[11px] leading-4 text-gray-400">This note belongs only to the Parent account. It never changes a linked student&apos;s SF2 remarks or export totals.</p>
                   </div>
                 </>}
                 <div className="space-y-3 border-t border-gray-100 pt-4">

@@ -37,6 +37,11 @@ import { normalizeStudentAge } from "@/lib/studentAge";
 import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 import { resolveTodayAttendanceStatus } from "@/lib/todayAttendanceStatus";
+import {
+  assertSelectedActiveParentLink,
+  type ParentFamilyRole,
+} from "@/lib/activeParentLinkCandidates";
+import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 
 const STUDENT_RELIGION_OPTIONS = ["Catholic", "Christian", "Muslim", "INC", "Others"] as const;
 
@@ -253,6 +258,7 @@ export async function POST(req: NextRequest) {
       fatherFirstName, fatherMiddleName, fatherLastName, fatherSuffix,
       motherFirstName, motherMiddleName, motherLastName, motherSuffix,
       guardianFirstName, guardianMiddleName, guardianLastName, guardianSuffix, guardianRelationship, guardianRelationshipOther,
+      parentLinks,
     } = body;
 
     const selectedReligion = typeof religionSelection === "string" ? religionSelection.trim() : "";
@@ -407,6 +413,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // A chosen suggestion is only a convenience in the UI. Re-check it on
+    // the server before creating the student, so a stale, archived, or
+    // altered Parent ID can never attach a child to the wrong account.
+    const requestedParentLinks = parentLinks && typeof parentLinks === "object"
+      ? parentLinks as Partial<Record<ParentFamilyRole, unknown>>
+      : {};
+    const selectedParentLinks: Array<{ parentId: number; relationship: ParentFamilyRole }> = [];
+    for (const familyRecord of completeFamilyRecords) {
+      const requestedParentId = requestedParentLinks[familyRecord.role];
+      if (requestedParentId === undefined || requestedParentId === null || requestedParentId === "") continue;
+      const selected = await assertSelectedActiveParentLink({
+        role: familyRecord.role,
+        firstName: familyRecord.first_name,
+        middleName: familyRecord.middle_name,
+        lastName: familyRecord.last_name,
+      }, requestedParentId);
+      selectedParentLinks.push({ parentId: selected.id, relationship: familyRecord.role });
+    }
+    if (new Set(selectedParentLinks.map((link) => link.parentId)).size !== selectedParentLinks.length) {
+      return NextResponse.json(
+        { success: false, message: "Choose a Parent account for only its matching Father, Mother, or Guardian role." },
+        { status: 400 },
+      );
+    }
+
     const { data: createdStudent, error: studentError } = await supabase.from("students").insert({
       student_id: normalizedStudentId,
       first_name: firstName,
@@ -446,6 +477,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    for (const link of selectedParentLinks) {
+      await ensureParentStudentLink({
+        parentId: link.parentId,
+        studentId: normalizedStudentId,
+        relationship: link.relationship,
+      });
+    }
+    // If no account was explicitly selected, an unambiguous completed Parent
+    // account may still be linked automatically. The shared matcher refuses
+    // ambiguous same-name records and never considers archived accounts.
+    const reconciledLinks = await reconcileParentStudentLinks({ studentDbId: createdStudent.id });
+
     if (normalizedRemark.value) {
       const { error: remarkError } = await supabase.from("student_remarks").insert({
         student_db_id: createdStudent.id,
@@ -464,14 +507,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Student lists and dashboard totals can change for the assigned adviser,
-    // principal, and ICT staff. There is no linked parent until Guardian Sign
-    // Up, so the shared per-student event remains correctly scoped at this point.
+    // Publish only after links are saved so a matching Parent dashboard gets
+    // the new child without a manual refresh.
     await publishStudentRealtimeInvalidation({ studentDbId: createdStudent.id });
 
     return NextResponse.json({
       success: true,
-      message: `Student ${firstName} ${lastName} registered successfully. The parent or guardian can now create and link their account through Guardian Sign Up.`,
+      message: selectedParentLinks.length || reconciledLinks.linksAddedOrAlreadyPresent
+        ? `Student ${firstName} ${lastName} registered and linked to the matching Parent account.`
+        : `Student ${firstName} ${lastName} registered successfully. The parent or guardian can now create and link their account through Guardian Sign Up.`,
     });
   } catch (error: unknown) {
     console.error("POST /api/students error:", error);

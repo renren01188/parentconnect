@@ -6,6 +6,8 @@ import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { logAudit } from "@/lib/audit";
 import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/dashboardIdleSession";
+import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
+import { synchronizeParentContactForActiveStudents } from "@/lib/parentContactSync";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -197,17 +199,25 @@ export async function PATCH(req: NextRequest) {
       currentPassword,
     } = await req.json();
 
-    if (!firstName || !lastName || !email || !currentPassword) {
+    if (!firstName || !lastName || !currentPassword) {
       return NextResponse.json(
-        { success: false, message: "First name, last name, email, and current password are required." },
+        { success: false, message: "First name, last name, and current password are required." },
         { status: 400 }
       );
     }
 
-    if (!/\S+@\S+\.\S+/.test(email)) {
+    const normalizedEmail = typeof email === "string" ? email.toLowerCase().trim() : "";
+    const normalizedPhone = normalizeParentLoginContactNumber(phone);
+    if (normalizedEmail && !/\S+@\S+\.\S+/.test(normalizedEmail)) {
       return NextResponse.json(
         { success: false, message: "Enter a valid email address." },
         { status: 400 }
+      );
+    }
+    if (!normalizedPhone) {
+      return NextResponse.json(
+        { success: false, message: "Enter a valid 11-digit contact number." },
+        { status: 400 },
       );
     }
 
@@ -236,12 +246,12 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
     if (normalizedEmail !== currentEmail) {
       const { data: existingEmail, error: existingError } = await supabase
         .from("parents")
         .select("id")
         .eq("email", normalizedEmail)
+        .eq("archive_status", "active")
         .neq("id", parentId)
         .limit(1);
 
@@ -254,13 +264,29 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    const { data: existingPhone, error: existingPhoneError } = await supabase
+      .from("parents")
+      .select("id")
+      .eq("login_contact_number", normalizedPhone)
+      .eq("archive_status", "active")
+      .neq("id", parentId)
+      .limit(1);
+    if (existingPhoneError) throw existingPhoneError;
+    if (existingPhone && existingPhone.length > 0) {
+      return NextResponse.json(
+        { success: false, message: "This contact number is already in use by another Parent account." },
+        { status: 409 },
+      );
+    }
+
     const updatePayload = {
       parent_first_name: firstName.trim(),
       parent_middle_name: middleName?.trim() || null,
       parent_last_name: lastName.trim(),
       parent_suffix: suffix?.trim() || null,
-      email: normalizedEmail,
-      contact_number: phone?.trim() || "",
+      email: normalizedEmail || null,
+      contact_number: normalizedPhone,
+      login_contact_number: normalizedPhone,
       address: address?.trim() || null,
     };
 
@@ -270,6 +296,11 @@ export async function PATCH(req: NextRequest) {
       .eq("id", parentId);
 
     if (updateError) throw updateError;
+
+    // The Parent account is the current attendance recipient after signup.
+    // Keep its active children's school verification records in step so a
+    // later LRN-based action never leaves an old contact number behind.
+    await synchronizeParentContactForActiveStudents(parentId, normalizedPhone);
 
     // Reports store a snapshot for staff rendering. Update only rows owned by
     // this account; never use a shared email address as an ownership key.
@@ -284,17 +315,17 @@ export async function PATCH(req: NextRequest) {
       action: "Update",
       performedBy: updatedParentName || "Parent",
       performedByRole: "Parent",
-      performedByEmail: normalizedEmail,
+      performedByEmail: normalizedEmail || undefined,
       targetUser: updatedParentName || "Parent",
       targetRole: "Parent",
-      targetEmail: normalizedEmail,
+      targetEmail: normalizedEmail || "not-applicable",
       module: "Profile",
       details: "Updated their profile.",
     });
 
     const { data: linkedReports, error: reportsError } = await supabase
       .from("parent_adviser_reports")
-      .update({ parent_name: updatedParentName, parent_email: normalizedEmail })
+      .update({ parent_name: updatedParentName, parent_email: normalizedEmail || null })
       .eq("parent_id", parentId)
       .select("id");
 
@@ -315,7 +346,7 @@ export async function PATCH(req: NextRequest) {
 
     const newPayload = {
       ...verified.payload,
-      email: normalizedEmail,
+      email: normalizedEmail || null,
       parentName: updatedParentName,
     };
 
@@ -330,7 +361,7 @@ export async function PATCH(req: NextRequest) {
         lastName: updatePayload.parent_last_name,
         suffix: updatePayload.parent_suffix ?? "",
         email: normalizedEmail,
-        phone: updatePayload.contact_number,
+        phone: normalizedPhone,
         address: updatePayload.address ?? "",
       },
       message: "Profile updated successfully.",

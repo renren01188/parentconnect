@@ -53,6 +53,42 @@ const timeOutMessage = smsQueue.buildAttendanceSmsMessage({
   attendanceType: "Time Out",
 });
 
+function queryResult(result) {
+  const query = {
+    select: () => query,
+    eq: () => query,
+    in: () => query,
+    maybeSingle: () => Promise.resolve(result),
+    then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
+  };
+  return query;
+}
+
+function attendanceQueueSupabase({ parents = [], links = [], student = null, familyMembers = [] } = {}) {
+  const insertedJobs = [];
+  return {
+    insertedJobs,
+    client: {
+      from(table) {
+        if (table === "parents") return queryResult({ data: parents, error: null });
+        if (table === "parent_student_links") return queryResult({ data: links, error: null });
+        if (table === "students") return queryResult({ data: student, error: null });
+        if (table === "student_family_members") return queryResult({ data: familyMembers, error: null });
+        if (table === "attendance_sms_jobs") {
+          return {
+            upsert(rows) {
+              insertedJobs.push(...rows);
+              return Promise.resolve({ error: null });
+            },
+            update: () => ({ eq: () => ({ in: () => ({ eq: () => Promise.resolve({ error: null }) }) }) }),
+          };
+        }
+        throw new Error(`Unexpected table: ${table}`);
+      },
+    },
+  };
+}
+
 assert.equal(
   timeInMessage,
   "PConnect: Good Day! DAVID DAVID DAVID scanned their RFID tag upon entering the classroom on October 19, 2026, at 7:05 AM.",
@@ -72,6 +108,51 @@ let capturedRequest = null;
 
 void (async () => {
 try {
+  // A pre-signup SF1 number is a one-purpose attendance recipient. It does
+  // not need a parents row and produces a parent_id = null queue job.
+  const pendingFixture = attendanceQueueSupabase({
+    student: { id: 123 },
+    familyMembers: [{ contact_number: "09171234567" }, { contact_number: "09171234567" }],
+  });
+  const pendingQueue = loadTypeScriptModule("src/lib/attendanceSmsQueue.ts", {
+    "@/lib/supabase": { supabase: pendingFixture.client },
+    "@/lib/attendanceNotificationSettings": { isAttendanceSmsEnabled: async () => true },
+    "@/lib/parentAccountAccess": { parentAccountCanAccess: () => true },
+  });
+  const pendingOutcome = await pendingQueue.enqueueAttendanceSms({
+    attendanceLogId: 77,
+    studentId: "123456789012",
+    studentName,
+    attendanceDate: "2026-10-19",
+    timeLogged: "07:05:00",
+    attendanceType: "Time In",
+  });
+  assert.equal(pendingOutcome.queued, 1);
+  assert.equal(pendingFixture.insertedJobs.length, 1);
+  assert.equal(pendingFixture.insertedJobs[0].parent_id, null);
+  assert.equal(pendingFixture.insertedJobs[0].recipient_phone, "09171234567");
+
+  // Once a completed Parent exists, their SMS preference owns delivery. A
+  // disabled preference must not fall back to the historical SF1 number.
+  const optedOutFixture = attendanceQueueSupabase({
+    parents: [{ id: 4, contact_number: "09171234567", password_set: 1, status: "active", archive_status: "active", attendance_sms_notifications: false }],
+  });
+  const optedOutQueue = loadTypeScriptModule("src/lib/attendanceSmsQueue.ts", {
+    "@/lib/supabase": { supabase: optedOutFixture.client },
+    "@/lib/attendanceNotificationSettings": { isAttendanceSmsEnabled: async () => true },
+    "@/lib/parentAccountAccess": { parentAccountCanAccess: () => true },
+  });
+  const optedOutOutcome = await optedOutQueue.enqueueAttendanceSms({
+    attendanceLogId: 78,
+    studentId: "123456789012",
+    studentName,
+    attendanceDate: "2026-10-19",
+    timeLogged: "07:05:00",
+    attendanceType: "Time In",
+  });
+  assert.equal(optedOutOutcome.queued, 0);
+  assert.equal(optedOutFixture.insertedJobs.length, 0);
+
   process.env.SMS_PROVIDER = "semaphore";
   process.env.SEMAPHORE_API_KEY = "test-semaphore-key";
   delete process.env.SEMAPHORE_SENDER_NAME;
@@ -154,6 +235,12 @@ for (const source of [queueSource, workerSource, unismsStatusSource]) {
 }
 assert.match(queueSource, /\.update\(\{ message \}\)[\s\S]*?\.eq\("status", "pending"\)/);
 assert.match(queueSource, /attendanceSmsIdempotencyKey/);
+assert.match(queueSource, /pendingVerificationSmsIdempotencyKey/);
+assert.match(queueSource, /pendingSchoolVerificationPhones/);
+assert.match(queueSource, /parent_id: null/);
+assert.match(queueSource, /school-verification/);
+assert.match(queueSource, /login_contact_number and cannot use it/);
+assert.match(queueSource, /completedParents\(parentRows\)\.length > 0/);
 assert.match(queueSource, /onConflict: "idempotency_key"/);
 assert.match(
   workerSource,

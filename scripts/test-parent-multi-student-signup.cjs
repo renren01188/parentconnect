@@ -11,6 +11,9 @@ const verifyRoute = read("src/app/api/parents/verify-temp-password/route.ts");
 const guardianPage = read("src/app/login/guardian/page.tsx");
 const links = read("src/lib/reconcileParentStudentLinks.ts");
 const importRoute = read("src/app/api/students/import/route.ts");
+const manualStudentRoute = read("src/app/api/students/route.ts");
+const manualRegistration = read("src/components/student-parent-registration/StudentParentRegistration.tsx");
+const candidateRoute = read("src/app/api/parents/active-link-candidates/route.ts");
 const ictUsersRoute = read("src/app/api/ict/user-management/route.ts");
 const parentMeRoute = read("src/app/api/parents/me/route.ts");
 
@@ -34,17 +37,36 @@ assert.match(verifyRoute, /\.eq\("archive_status", "active"\)/);
 assert.match(verifyRoute, /await ensureParentStudentLink\(\{/);
 assert.match(verifyRoute, /await reconcileParentStudentLinks\(\{ parentId: parent\.id \}\)/);
 
-// Background reconciliation is stricter than a name match: it requires a
-// role, normalized name, and identical stored phone number before linking
-// another sibling automatically.
+// Background reconciliation uses a role/name match plus a valid recorded
+// phone whenever one exists. When SF1 has no number, the same-name result
+// must be unique; multiple matches stay unlinked for staff review.
 assert.match(links, /function hasSameVerifiedPhone/);
 assert.match(links, /contact_number/);
-assert.match(links, /\.filter\(\(parent\) => hasSameVerifiedPhone\(parent\.contact_number, member\.contact_number\)\)/);
+assert.match(links, /const matchingParents = normalizePhone\(member\.contact_number\)/);
+assert.match(links, /identityCandidates\.length === 1/);
+assert.match(links, /String\(parent\.status \?\? ""\)\.trim\(\)\.toLowerCase\(\) === "active"/);
 assert.match(links, /\.from\("students"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 
-// Adviser SF1 imports and ICT User Management continue to use the shared,
-// stricter reconciliation path rather than creating duplicate Parent rows.
+// Adviser can intentionally select an existing active account in the manual
+// form. The server repeats the match validation before it writes any link.
+assert.match(manualRegistration, /active-link-candidates/);
+assert.match(manualRegistration, /ParentNameSuggestions/);
+assert.match(manualRegistration, /Suggested active Parent names/);
+assert.match(manualStudentRoute, /assertSelectedActiveParentLink/);
+assert.match(manualStudentRoute, /reconcileParentStudentLinks\(\{ studentDbId: createdStudent\.id \}\)/);
+assert.match(candidateRoute, /getActiveIct/);
+assert.match(candidateRoute, /findActiveParentNameSuggestions/);
+assert.match(candidateRoute, /findLinkedFamilyNameSuggestions/);
+assert.match(manualRegistration, /selectedParentId/);
+assert.match(manualRegistration, /selectSuggestedParent/);
+
+// SF1 preview shows automated/ambiguous decisions and the save endpoint
+// recomputes those candidates before linking, never trusting a browser ID.
 assert.match(importRoute, /provisionParentForStudent/);
+assert.match(importRoute, /getParentLinkSuggestions/);
+assert.match(importRoute, /assertSelectedActiveParentLink/);
+assert.match(importRoute, /Choose the correct \$\{identity\.role\} account or select Awaiting Signup/);
+assert.match(importRoute, /ensureParentStudentLink/);
 assert.match(importRoute, /reconcileParentStudentLinks\(\{ studentDbId: student\.id \}\)/);
 assert.match(ictUsersRoute, /reconcileParentStudentLinks\(\{ studentDbId: id \}\)/);
 

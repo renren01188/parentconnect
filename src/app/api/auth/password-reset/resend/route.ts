@@ -39,7 +39,13 @@ export async function POST() {
     if (flow.channel === "sms") {
       const contactNumber = normalizeParentLoginContactNumber(parent.contact_number);
       if (!contactNumber) return NextResponse.json({ success: false, message: "This account has no valid contact number. Contact ICT for help." }, { status: 400 });
-      await sendSms({ recipient: contactNumber, queueId: flow.challengeId, message: `ParentConnect password-reset code: ${issued.otp}. It expires in 10 minutes. Do not share this code.` });
+      await sendSms({
+        recipient: contactNumber,
+        queueId: flow.challengeId,
+        message: "ParentConnect password-reset code: {otp}. It expires in 10 minutes. Do not share this code.",
+        semaphoreRoute: "otp",
+        semaphoreOtpCode: issued.otp,
+      });
     } else {
       const email = normalizeParentLoginEmail(parent.email);
       if (!email) return NextResponse.json({ success: false, message: "This account has no email address. Use the contact-number option or contact ICT." }, { status: 400 });

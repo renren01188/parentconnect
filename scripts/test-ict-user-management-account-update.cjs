@@ -16,6 +16,9 @@ assert.match(userManagementRoute, /await publishAccountChange\(\[\{ role: "advis
 assert.match(userManagementRoute, /await publishAccountChange\(\[\{ role: "guidance", id: Number\(data\.id\) \}\]\)/);
 assert.match(userManagementRoute, /await Promise\.all\(\[\.\.\.reconciledStudentIds\]\.map\(\(studentDbId\) => publishStudentRealtimeInvalidation\(\{ studentDbId \}\)\)\)/);
 assert.match(userManagementRoute, /Each recorded contact number must be exactly 11 digits\./);
+assert.match(userManagementRoute, /login_contact_number: normalizedParentPhone/);
+assert.doesNotMatch(userManagementPage, /<FLabel>Remarks<\/FLabel>/);
+assert.doesNotMatch(userManagementRoute, /parent_remarks: user\.parentRemarks/);
 assert.match(userManagementRoute, /wasPendingParent[\s\S]*?normalizeParentPhone\(student\.contactNumber\)/);
 assert.match(userManagementPage, /event\.scope === "accounts" \|\| event\.scope === "students" \|\| event\.scope === "audit"/);
 assert.match(userManagementPage, /Recorded Contact Number/);

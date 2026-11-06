@@ -11,6 +11,7 @@ import {
 } from "@/lib/mailer";
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
+import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
 import { logAudit } from "@/lib/audit";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import { hasCompletedActiveParentSignup } from "@/lib/parentAccountCompletion";
@@ -1219,7 +1220,29 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ success: false, message: "A password can be changed only after the Parent account is activated." }, { status: 409 });
       }
       const normalizedParentEmail = normalizeParentEmail(user.email);
-      const normalizedParentPhone = normalizeParentPhone(user.phone);
+      const normalizedParentPhone = normalizeParentLoginContactNumber(user.phone) ?? "";
+      if (!wasPendingParent && !normalizedParentPhone) {
+        return NextResponse.json(
+          { success: false, message: "The Parent contact number must be a valid 11-digit mobile number." },
+          { status: 400 },
+        );
+      }
+      if (!wasPendingParent && normalizedParentPhone && parentAccountIds.length > 0) {
+        const { data: phoneConflict, error: phoneConflictError } = await supabase
+          .from("parents")
+          .select("id")
+          .eq("login_contact_number", normalizedParentPhone)
+          .eq("archive_status", "active")
+          .not("id", "in", `(${parentAccountIds.join(",")})`)
+          .limit(1);
+        if (phoneConflictError) throw phoneConflictError;
+        if (phoneConflict && phoneConflict.length > 0) {
+          return NextResponse.json(
+            { success: false, message: "This contact number is already in use by another Parent account." },
+            { status: 409 },
+          );
+        }
+      }
       const sharedFamilyMembers = !wasPendingParent && user.sharedFamilyDetailsChanged && user.familyDetails
         ? familyMembersFromDetails(user.familyDetails)
         : null;
@@ -1256,13 +1279,11 @@ export async function PATCH(req: NextRequest) {
               parent_middle_name: sharedAccountHolder?.middle_name ?? (user.middleName?.trim() || null),
               parent_last_name: sharedAccountHolder?.last_name ?? (user.lastName?.trim() || ""),
               parent_suffix: sharedAccountHolder?.suffix ?? (user.suffix && user.suffix !== "None" ? user.suffix : null),
-              email: normalizedParentEmail,
+              email: normalizedParentEmail || null,
               contact_number: normalizedParentPhone,
+              login_contact_number: normalizedParentPhone,
               relationship: user.relationship?.trim() || "Guardian",
               address: user.address?.trim() || "",
-              ...(typeof user.parentRemarks === "string"
-                ? { parent_remarks: user.parentRemarks.trim() || null }
-                : {}),
               status: toDbStatus(user.status),
               ...parentPasswordPatch,
             })

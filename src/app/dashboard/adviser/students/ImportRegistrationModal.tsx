@@ -5,6 +5,11 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, Upload, X } from
 
 type Name = { firstName: string | null; middleName: string | null; lastName: string | null; suffix: string | null };
 type Row = { lrn: string; firstName: string; middleName: string | null; lastName: string; suffix: string | null; sex: string; birthDate: string | null; age: number | null; motherTongue: string | null; ipEthnicGroup: string | null; religion: string | null; houseStreetSitioPurok: string | null; barangay: string | null; municipalityCity: string | null; province: string | null; father: Name; mother: Name; guardian: Name & { relationship: string | null }; contactNumber: string | null; learningModality: string | null };
+type ParentRole = "Father" | "Mother" | "Guardian";
+type ParentCandidate = { id: number; role: ParentRole; displayName: string; maskedContactNumber: string | null };
+type ParentLinkSuggestion = { role: ParentRole; state: "auto" | "ambiguous" | "none"; candidates: ParentCandidate[] };
+type ParentLinkSuggestions = Record<string, ParentLinkSuggestion[]>;
+type ParentLinkSelections = Record<string, Partial<Record<ParentRole, string>>>;
 
 const name = (person: Name) => [person.lastName, person.firstName, person.middleName, person.suffix].filter(Boolean).join(", ") || "—";
 const date = (value: string | null) => value ? new Date(`${value}T00:00:00`).toLocaleDateString("en-US") : "—";
@@ -18,12 +23,63 @@ function PreviewField({ label, children }: { label: string; children: ReactNode 
   );
 }
 
+function ParentLinkReview({
+  row,
+  suggestions,
+  selections,
+  onChange,
+}: {
+  row: Row;
+  suggestions: ParentLinkSuggestion[];
+  selections: ParentLinkSelections;
+  onChange: (lrn: string, role: ParentRole, value: string) => void;
+}) {
+  if (!suggestions.length) return null;
+  return (
+    <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
+      <p className="text-xs font-bold text-violet-900">Existing Parent account review</p>
+      <div className="mt-2 space-y-2">
+        {suggestions.map((suggestion) => {
+          const selectedValue = selections[row.lrn]?.[suggestion.role] ?? "";
+          if (suggestion.state === "none") {
+            return <p key={suggestion.role} className="text-[11px] text-slate-600"><strong>{suggestion.role}:</strong> No completed active Parent account matched. This record will remain <strong>Awaiting Signup</strong>.</p>;
+          }
+          if (suggestion.state === "auto") {
+            const candidate = suggestion.candidates[0];
+            return <p key={suggestion.role} className="text-[11px] text-emerald-700"><strong>{suggestion.role}:</strong> {candidate.displayName}{candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""} will be linked automatically.</p>;
+          }
+          return (
+            <label key={suggestion.role} className="block text-[11px] font-medium text-slate-700">
+              {suggestion.role}: multiple active accounts share this verification name
+              <select
+                value={selectedValue}
+                onChange={(event) => onChange(row.lrn, suggestion.role, event.target.value)}
+                className="mt-1 block w-full rounded-lg border border-violet-200 bg-white px-2.5 py-2 text-xs outline-none focus:ring-2 focus:ring-violet-400"
+              >
+                <option value="">Choose the correct Parent account</option>
+                {suggestion.candidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.displayName}{candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""}
+                  </option>
+                ))}
+                <option value="awaiting">Leave Awaiting Signup</option>
+              </select>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ImportRegistrationModal({ sections, onClose, onImported }: { sections: string[]; onClose: () => void; onImported: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [section, setSection] = useState(sections.length === 1 ? sections[0] : "");
   const [errors, setErrors] = useState<string[]>([]);
   const [existing, setExisting] = useState<string[]>([]);
+  const [parentLinkSuggestions, setParentLinkSuggestions] = useState<ParentLinkSuggestions>({});
+  const [parentLinks, setParentLinks] = useState<ParentLinkSelections>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -32,6 +88,8 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
     setRows(null);
     setErrors([]);
     setExisting([]);
+    setParentLinkSuggestions({});
+    setParentLinks({});
     setMessage("");
   };
 
@@ -49,6 +107,14 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
       setRows(json.rows);
       setErrors(json.errors ?? []);
       setExisting(json.existingLrns ?? []);
+      const suggestions = (json.parentLinkSuggestions ?? {}) as ParentLinkSuggestions;
+      setParentLinkSuggestions(suggestions);
+      setParentLinks(Object.fromEntries(Object.entries(suggestions).map(([lrn, records]) => [
+        lrn,
+        Object.fromEntries(records
+          .filter((record) => record.state === "auto")
+          .map((record) => [record.role, String(record.candidates[0]?.id ?? "")])),
+      ])));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not analyze the file.");
     } finally {
@@ -65,7 +131,7 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
       const response = await fetch("/api/students/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows, section }),
+        body: JSON.stringify({ rows, section, parentLinks }),
       });
       const json = await response.json();
       if (!json.success) throw new Error(json.message);
@@ -77,7 +143,16 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
     }
   }
 
-  const blocked = errors.length > 0 || existing.length > 0;
+  const unresolvedParentLinks = Object.entries(parentLinkSuggestions).some(([lrn, records]) =>
+    records.some((record) => record.state === "ambiguous" && !parentLinks[lrn]?.[record.role]),
+  );
+  const blocked = errors.length > 0 || existing.length > 0 || unresolvedParentLinks;
+  const updateParentLink = (lrn: string, role: ParentRole, value: string) => {
+    setParentLinks((previous) => ({
+      ...previous,
+      [lrn]: { ...previous[lrn], [role]: value },
+    }));
+  };
 
   return (
     <div
@@ -126,6 +201,20 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
               </div>
               {errors.map(error => <p key={error} className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>)}
               {existing.length > 0 && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">Already registered LRN(s): {existing.join(", ")}.</p>}
+              {unresolvedParentLinks && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Choose an account or explicitly leave Awaiting Signup for each ambiguous Parent name before importing.</p>}
+
+              <section className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
+                <h3 className="text-sm font-extrabold text-slate-800">Parent account linking</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-600">An exact active Parent account is linked automatically. If the same verification name belongs to more than one active account, choose the correct one or leave the student awaiting Guardian Sign Up. Archived accounts are never listed.</p>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  {rows.map((row) => (
+                    <div key={row.lrn} className="rounded-xl border border-violet-100 bg-white p-3">
+                      <p className="text-xs font-bold text-slate-800">{name(row)} <span className="font-mono font-normal text-slate-400">· {row.lrn}</span></p>
+                      <ParentLinkReview row={row} suggestions={parentLinkSuggestions[row.lrn] ?? []} selections={parentLinks} onChange={updateParentLink} />
+                    </div>
+                  ))}
+                </div>
+              </section>
 
               <div className="space-y-3 xl:hidden">
                 <p className="text-xs leading-5 text-slate-500">Review each student below. The compact layout keeps every SF1 field readable on phones and tablets.</p>

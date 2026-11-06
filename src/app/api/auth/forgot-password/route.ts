@@ -22,7 +22,9 @@ async function deliverCode(input: { channel: Channel; destination: string; otp: 
     await sendSms({
       recipient: input.destination,
       queueId: input.challengeId,
-      message: `ParentConnect password-reset code: ${input.otp}. It expires in 10 minutes. Do not share this code.`,
+      message: "ParentConnect password-reset code: {otp}. It expires in 10 minutes. Do not share this code.",
+      semaphoreRoute: "otp",
+      semaphoreOtpCode: input.otp,
     });
     return;
   }

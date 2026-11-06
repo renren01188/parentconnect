@@ -219,6 +219,9 @@ async function finalizePendingSignup(signup: PendingSignup, password: string, ve
     relationship: signup.relationship,
     email: signup.email || null,
     contact_number: signup.contactNumber,
+    // The school verification number becomes a login/recovery identifier
+    // only after this LRN/name/OTP-or-email verification has succeeded.
+    login_contact_number: signup.contactNumber,
     password: temporaryPasswordHash,
     temp_password: null,
     temporary_password_expires_at: verificationExpiresAt,

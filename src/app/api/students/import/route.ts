@@ -2,11 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
-import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
+import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { normalizeSf1Name, parseSf1Name, type Sf1Name } from "@/lib/sf1Name";
 import { logAudit } from "@/lib/audit";
 import { isFamilyRole, normalizeParentPhone, provisionParentForStudent } from "@/lib/parentEnrollment";
 import { publishAccountRealtimeInvalidation, publishStudentsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  assertSelectedActiveParentLink,
+  findActiveParentLinkCandidates,
+  type ActiveParentLinkCandidate,
+  type ParentFamilyRole,
+  type ParentLinkIdentity,
+} from "@/lib/activeParentLinkCandidates";
 
 type ImportRow = {
   lrn: string; firstName: string; middleName: string | null; lastName: string; suffix: string | null;
@@ -19,6 +26,13 @@ type ImportRow = {
   parentEmail: string | null; parentRole: "Father" | "Mother" | "Guardian" | null;
 };
 type Name = Sf1Name;
+type ParentLinkState = "auto" | "ambiguous" | "none";
+type ParentLinkSuggestion = {
+  role: ParentFamilyRole;
+  state: ParentLinkState;
+  candidates: ActiveParentLinkCandidate[];
+};
+type ParentLinkSelections = Record<string, Partial<Record<ParentFamilyRole, string | number | null>>>;
 
 const text = (value: unknown) => String(value ?? "").trim() || null;
 function cell(sheet: XLSX.WorkSheet, row: number, col: number) { return sheet[XLSX.utils.encode_cell({ r: row, c: col })]; }
@@ -38,6 +52,54 @@ function optionalMasterlistColumn(sheet: XLSX.WorkSheet, range: XLSX.Range, matc
     }
   }
   return null;
+}
+
+function familyIdentities(row: ImportRow): ParentLinkIdentity[] {
+  return ([
+    { role: "Father" as const, name: row.father },
+    { role: "Mother" as const, name: row.mother },
+    { role: "Guardian" as const, name: row.guardian },
+  ]).flatMap(({ role, name }) => (
+    name.firstName && name.lastName
+      ? [{
+          role,
+          firstName: name.firstName,
+          middleName: name.middleName,
+          lastName: name.lastName,
+          contactNumber: row.contactNumber,
+        }]
+      : []
+  ));
+}
+
+async function getParentLinkSuggestions(rows: ImportRow[]) {
+  const candidateCache = new Map<string, Promise<ActiveParentLinkCandidate[]>>();
+  const candidatesFor = (identity: ParentLinkIdentity) => {
+    const key = [
+      identity.role,
+      identity.firstName?.trim().toLocaleLowerCase(),
+      identity.middleName?.trim().toLocaleLowerCase(),
+      identity.lastName?.trim().toLocaleLowerCase(),
+      normalizeParentPhone(identity.contactNumber ?? ""),
+    ].join("|");
+    const existing = candidateCache.get(key);
+    if (existing) return existing;
+    const next = findActiveParentLinkCandidates(identity);
+    candidateCache.set(key, next);
+    return next;
+  };
+
+  return Object.fromEntries(await Promise.all(rows.map(async (row) => {
+    const suggestions = await Promise.all(familyIdentities(row).map(async (identity) => {
+      const candidates = await candidatesFor(identity);
+      return {
+        role: identity.role,
+        state: candidates.length === 1 ? "auto" : candidates.length > 1 ? "ambiguous" : "none",
+        candidates,
+      } satisfies ParentLinkSuggestion;
+    }));
+    return [row.lrn, suggestions] as const;
+  }))) as Record<string, ParentLinkSuggestion[]>;
 }
 
 function parseSheet(buffer: ArrayBuffer) {
@@ -98,7 +160,8 @@ export async function POST(request: NextRequest) {
     const { data: existing, error } = lrns.length ? await supabase.from("students").select("student_id").in("student_id", lrns) : { data: [], error: null };
     if (error) throw error;
     const existingLrns = (existing ?? []).map(row => row.student_id);
-    return NextResponse.json({ success: true, ...result, existingLrns });
+    const parentLinkSuggestions = await getParentLinkSuggestions(result.rows);
+    return NextResponse.json({ success: true, ...result, existingLrns, parentLinkSuggestions });
   } catch (error) { return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Could not analyze the file." }, { status: 500 }); }
 }
 
@@ -106,7 +169,11 @@ export async function PUT(request: NextRequest) {
   const adviser = await getAdviserFromToken();
   if (!adviser?.grade) return NextResponse.json({ success: false, message: "Unauthorized." }, { status: 401 });
   try {
-    const { rows, section } = await request.json() as { rows: ImportRow[]; section: string };
+    const { rows, section, parentLinks } = await request.json() as {
+      rows: ImportRow[];
+      section: string;
+      parentLinks?: ParentLinkSelections;
+    };
     if (!adviser.sections.includes(section) || !Array.isArray(rows) || rows.length === 0) return NextResponse.json({ success: false, message: "Invalid import request." }, { status: 400 });
     // Preview data returns from the browser. Normalize again so altered or
     // stale preview data cannot save commas or formatting artifacts.
@@ -121,6 +188,7 @@ export async function PUT(request: NextRequest) {
         father: normalizeSf1Name(row.father),
         mother: normalizeSf1Name(row.mother),
         guardian: { ...normalizeSf1Name(row.guardian), relationship: text(row.guardian?.relationship) },
+        contactNumber: text(row.contactNumber),
         parentEmail: text(row.parentEmail),
         parentRole: isFamilyRole(row.parentRole) ? row.parentRole : null,
       };
@@ -130,6 +198,41 @@ export async function PUT(request: NextRequest) {
     if (new Set(lrns).size !== lrns.length) return NextResponse.json({ success: false, message: "The preview contains duplicate LRNs." }, { status: 400 });
     const { data: existing } = await supabase.from("students").select("student_id").in("student_id", lrns);
     if (existing?.length) return NextResponse.json({ success: false, message: `These LRNs already exist: ${existing.map(s => s.student_id).join(", ")}.` }, { status: 409 });
+
+    // Recompute choices from normalized server data. Browser preview IDs are
+    // never trusted: a selected Parent must still be an active exact match.
+    // More than one same-name account is deliberately blocked until the
+    // Adviser selects the account or explicitly leaves it Awaiting Signup.
+    const selectedParentLinks: Array<{ lrn: string; parentId: number; relationship: ParentFamilyRole }> = [];
+    for (const row of normalizedRows) {
+      for (const identity of familyIdentities(row)) {
+        const requested = parentLinks?.[row.lrn]?.[identity.role];
+        const requestedValue = String(requested ?? "").trim();
+        if (!requestedValue) {
+          const candidates = await findActiveParentLinkCandidates(identity);
+          if (candidates.length > 1) {
+            return NextResponse.json(
+              { success: false, message: `Choose the correct ${identity.role} account or select Awaiting Signup for LRN ${row.lrn}.` },
+              { status: 400 },
+            );
+          }
+          if (candidates.length === 1) {
+            selectedParentLinks.push({ lrn: row.lrn, parentId: candidates[0].id, relationship: identity.role });
+          }
+          continue;
+        }
+        if (requestedValue === "awaiting") continue;
+        const selected = await assertSelectedActiveParentLink(identity, requestedValue);
+        selectedParentLinks.push({ lrn: row.lrn, parentId: selected.id, relationship: identity.role });
+      }
+    }
+    if (new Set(selectedParentLinks.map((link) => `${link.lrn}:${link.parentId}`)).size !== selectedParentLinks.length) {
+      return NextResponse.json(
+        { success: false, message: "The same Parent account cannot be selected for multiple family roles of one student." },
+        { status: 400 },
+      );
+    }
+
     const { data: created, error: insertError } = await supabase.from("students").insert(normalizedRows.map(row => ({
       student_id: row.lrn, first_name: row.firstName, middle_name: row.middleName, last_name: row.lastName, suffix: row.suffix, gender: row.sex, grade: adviser.grade, section,
       class_session: "Morning", birth_date: row.birthDate, age: row.age, mother_tongue: row.motherTongue, ip_ethnic_group: row.ipEthnicGroup, religion: row.religion,
@@ -144,6 +247,14 @@ export async function PUT(request: NextRequest) {
         .map(([role, name, relationship]) => ({ student_db_id, role, first_name: name.firstName, middle_name: name.middleName, last_name: name.lastName, suffix: name.suffix, relationship, contact_number: row.contactNumber }));
     });
     if (contacts.length) { const { error } = await supabase.from("student_family_members").insert(contacts); if (error) throw error; }
+
+    for (const link of selectedParentLinks) {
+      await ensureParentStudentLink({
+        parentId: link.parentId,
+        studentId: link.lrn,
+        relationship: link.relationship,
+      });
+    }
 
     // Parent/student masterlists may include the school-verified email and a
     // declared account-holder role. Only then can an adviser safely provision
@@ -177,7 +288,8 @@ export async function PUT(request: NextRequest) {
     });
     const provisionedParents = await Promise.all(parentProvisioning);
     // A new SF1 import can complete an existing parent's sibling match.
-    // Reconciliation only adds missing links; it never removes a staff-created link.
+    // Reconciliation only adds missing, unambiguous links; it never removes a
+    // staff-created link or includes an archived account/student.
     await Promise.all((created ?? []).map((student) => reconcileParentStudentLinks({ studentDbId: student.id })));
     await logAudit({ action: "Students Imported", performedById: adviser.id, performedBy: `${adviser.first_name} ${adviser.last_name}`, performedByRole: "Adviser", targetUser: `${created?.length ?? 0} students`, targetRole: "Student", targetType: "Student Import", targetId: section, relatedStudentId: (created ?? []).map(student => student.student_id).join(","), newStatus: "Imported", module: "Students", details: `Imported ${created?.length ?? 0} student record(s) from SF1 into ${adviser.grade} ${section}.` });
     await Promise.all([

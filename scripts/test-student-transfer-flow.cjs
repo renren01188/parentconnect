@@ -13,6 +13,8 @@ const receiveSingleRoute = read("src/app/api/students/transfer-assign-rfid/route
 const studentsPage = read("src/app/dashboard/adviser/students/page.tsx");
 const transferPage = read("src/app/dashboard/adviser/transfer-level/page.tsx");
 const receiveModal = read("src/app/dashboard/adviser/students/TransferFromStandbyModal.tsx");
+const adviserStudentEditRoute = read("src/app/api/students/[id]/route.ts");
+const ictStudentEditRoute = read("src/app/api/ict/students/[id]/route.ts");
 const adviserSidebar = read("src/app/dashboard/adviser/components/Sidebar.tsx");
 const adviserNotificationContext = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
 const mailer = read("src/lib/mailer.ts");
@@ -42,7 +44,8 @@ assert.match(adviserNotificationContext, /transferUnreadCount/);
 assert.match(adviserNotificationContext, /fetchJsonWithRetry<ReadyTransferSummaryResponse>\([\s\S]*?"\/api\/students\/standby-summary"/);
 assert.match(adviserNotificationContext, /scope === "reports" \|\| scope === "students"[\s\S]*?loadTransferCount\(\)/);
 assert.match(adviserSidebar, /Students", icon: Users, href: "\/dashboard\/adviser\/students", badgeKey: "transfers"/);
-assert.match(adviserSidebar, /pathname\.startsWith\("\/dashboard\/adviser\/students"\).*?dismissBadge\("transfers"\)/s);
+assert.match(adviserSidebar, /NAV_ITEMS\.find\([\s\S]*?pathname\.startsWith\(href\)/);
+assert.match(adviserSidebar, /dismissBadge\(badgeKey\)/);
 
 // A receiving Adviser email is sent only after every conditional standby
 // update succeeds. Re-submitting that batch cannot reach this code again.
@@ -62,5 +65,24 @@ assert.match(receiveBatchRoute, /grade: student\.target_grade,[\s\S]*?section: s
 assert.match(receiveBatchRoute, /TransferStateConflict/);
 assert.match(receiveSingleRoute, /student\.target_grade !== adviser\.grade/);
 assert.match(receiveSingleRoute, /\.eq\("transfer_status", "standby"\)[\s\S]*?\.eq\("target_grade", student\.target_grade\)[\s\S]*?\.eq\("target_section", student\.target_section\)/);
+
+// An Adviser may directly move a learner they currently own to any valid
+// grade/section. This is an immediate reassignment, not the separate
+// standby-transfer workflow above: the destination section is validated,
+// controls the future attendance session, and the action is audited.
+assert.doesNotMatch(adviserStudentEditRoute, /grade && grade !== adviser\.grade/);
+assert.match(adviserStudentEditRoute, /\.from\("sections"\)[\s\S]*?\.eq\("grade", targetGrade\)[\s\S]*?\.eq\("name", targetSection\)/);
+assert.match(adviserStudentEditRoute, /assignmentChanged && existing\.transfer_status/);
+assert.match(adviserStudentEditRoute, /class_session: targetClass\.class_session/);
+assert.match(adviserStudentEditRoute, /action: assignmentChanged \? "Student Transferred" : "Student Profile Updated"/);
+assert.match(adviserStudentEditRoute, /adviserRecipientsForClass\(existing\.grade, existing\.section\)/);
+assert.match(adviserStudentEditRoute, /publishRealtimeInvalidation\(previousClassAdvisers, "students"\)/);
+
+// ICT has the same immediate reassignment safeguards for the Class & RFID
+// editor: an existing target section, no pending transfer, and a session
+// aligned to the chosen section.
+assert.match(ictStudentEditRoute, /\.from\("sections"\)[\s\S]*?\.eq\("grade", grade\)[\s\S]*?\.eq\("name", section\)/);
+assert.match(ictStudentEditRoute, /assignmentChanged && existing\.transfer_status/);
+assert.match(ictStudentEditRoute, /class_session: validSection\.class_session/);
 
 console.log("Student transfer pending/receipt flow checks passed.");

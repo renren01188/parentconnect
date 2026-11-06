@@ -179,7 +179,8 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
         const e: typeof pErr = {};
         if (!pForm.firstName.trim())            e.firstName = "First name is required";
         if (!pForm.lastName.trim())             e.lastName  = "Last name is required";
-        if (!/\S+@\S+\.\S+/.test(pForm.email)) e.email     = "Enter a valid email address";
+        if (pForm.email.trim() && !/\S+@\S+\.\S+/.test(pForm.email)) e.email = "Enter a valid email address";
+        if (!/^09\d{9}$/.test(pForm.phone.replace(/\D/g, ""))) e.phone = "Enter a valid 11-digit contact number";
         setPErr(e);
         return Object.keys(e).length === 0;
     }
@@ -321,8 +322,8 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                                 <SuffixSelect value={pForm.suffix} onChange={setP("suffix")} />
                             </div>
 
-                            <EditField label="Email Address *" icon={Mail}   value={pForm.email}   onChange={setP("email")}   type="email" error={pErr.email} />
-                            <EditField label="Phone Number"    icon={Phone}  value={pForm.phone}   onChange={setP("phone")}   hint="Format: 09XX XXX XXXX" />
+                            <EditField label="Email Address" icon={Mail} value={pForm.email} onChange={setP("email")} type="email" error={pErr.email} optional />
+                            <EditField label="Phone Number *" icon={Phone} value={pForm.phone} onChange={setP("phone")} error={pErr.phone} hint="Format: 09XX XXX XXXX" />
                             <div>
                                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Address</label>
                                 <div className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">

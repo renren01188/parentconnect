@@ -15,6 +15,8 @@ const guardianPage = read("src/app/login/guardian/page.tsx");
 const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx");
 const adviserStudentRoute = read("src/app/api/students/[id]/route.ts");
 const adviserStudentPage = read("src/app/dashboard/adviser/students/[id]/page.tsx");
+const setPassword = read("src/app/api/auth/set-password/route.ts");
+const parentProfileRoute = read("src/app/api/parents/me/route.ts");
 
 // Normal signup verifies the claimed family role and offers email or SMS
 // verification without creating a direct-import-only Parent account.
@@ -44,17 +46,25 @@ assert.match(adviserStudentRoute, /The recorded contact number must be exactly 1
 assert.match(adviserStudentRoute, /normalizedRecordedContactNumber !== undefined/);
 assert.match(adviserStudentPage, /Recorded Contact Number/);
 assert.match(adviserStudentPage, /Leave blank when SF1 has no number/);
+assert.match(adviserStudentRoute, /login_contact_number: normalizedAccountContactNumber/);
+assert.match(parentProfileRoute, /login_contact_number: normalizedPhone/);
+assert.match(parentProfileRoute, /synchronizeParentContactForActiveStudents/);
 
 // Phone signup uses the durable OTP table with bounded, one-time verification
 // before the account receives its normal temporary-password session.
 assert.match(signupOtp, /issueParentOtp\(/);
+assert.match(signupOtp, /message: "ParentConnect verification code: \{otp\}/);
+assert.match(signupOtp, /semaphoreRoute: "otp"/);
+assert.match(signupOtp, /semaphoreOtpCode: issued\.otp/);
 assert.match(otp, /from\("parent_verification_otps"\)/);
 assert.match(verifyTemporaryPassword, /verifyParentOtp\(signup\.otpChallengeId, "signup", otp\)/);
 assert.match(verifyTemporaryPassword, /redirectTo: "\/login\/guardian\/set-password"/);
 assert.match(verifyTemporaryPassword, /matchesRecordedPhone\(familyMember\.contact_number, signup\.contactNumber\)/);
 assert.match(verifyTemporaryPassword, /contact_number: signup\.contactNumber/);
+assert.match(verifyTemporaryPassword, /login_contact_number: signup\.contactNumber/);
 assert.match(verifyTemporaryPassword, /\.eq\("email", signup\.email\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 assert.match(verifyTemporaryPassword, /\.eq\("login_contact_number", signup\.contactNumber\)[\s\S]*?\.eq\("archive_status", "active"\)/);
+assert.match(setPassword, /login_contact_number: loginContactNumber/);
 
 // Archived accounts retain their history but no longer reserve an email or
 // mobile identifier that a verified guardian needs for a new active student.

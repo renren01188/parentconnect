@@ -7,8 +7,15 @@ import {
   guardianRelationshipForStorage,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
-import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import {
+  adviserRecipientsForClass,
+  publishRealtimeInvalidation,
+  publishStudentRealtimeInvalidation,
+} from "@/lib/realtimeInvalidation";
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
+import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
+import { synchronizeParentContactForActiveStudents } from "@/lib/parentContactSync";
+import { logAudit } from "@/lib/audit";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
@@ -199,12 +206,14 @@ export async function PATCH(
       remark,
     } = body;
 
-    if ((grade && grade !== adviser.grade) || (section && !adviserSections.includes(section))) {
-      return NextResponse.json({ success: false, message: "You can only edit students in your assigned class." }, { status: 403 });
+    const targetGrade = typeof grade === "string" ? grade.trim() : "";
+    const targetSection = typeof section === "string" ? section.trim() : "";
+    if (!targetGrade || !targetSection) {
+      return NextResponse.json({ success: false, message: "Select a grade level and section for the student." }, { status: 400 });
     }
 
     const { data: existing, error: fetchError } = await supabase
-      .from("students").select("id, student_id")
+      .from("students").select("id, student_id, grade, section, class_session, transfer_status")
       .eq("id", id)
       .eq("grade", adviser.grade)
       .in("section", adviserSections)
@@ -213,7 +222,41 @@ export async function PATCH(
     if (fetchError || !existing)
       return NextResponse.json({ success: false, message: "Student not found." }, { status: 404 });
 
+    const { data: targetClass, error: targetClassError } = await supabase
+      .from("sections")
+      .select("class_session")
+      .eq("grade", targetGrade)
+      .eq("name", targetSection)
+      .maybeSingle();
+    if (targetClassError) throw targetClassError;
+    if (!targetClass) {
+      return NextResponse.json({ success: false, message: "Select an existing section for the selected grade level." }, { status: 400 });
+    }
+
+    const assignmentChanged = existing.grade !== targetGrade || existing.section !== targetSection;
+    if (assignmentChanged && existing.transfer_status) {
+      return NextResponse.json(
+        { success: false, message: "This student has a pending transfer. Complete or cancel that transfer before changing the grade level or section." },
+        { status: 409 },
+      );
+    }
+
+    // Resolve the source roster before changing the class fields. The normal
+    // post-save student invalidation resolves the destination roster, while
+    // this extra target makes the source Adviser's list drop the moved learner
+    // immediately too.
+    const previousClassAdvisers = assignmentChanged
+      ? await adviserRecipientsForClass(existing.grade, existing.section)
+      : [];
+
     const currentStudentId = existing.student_id;
+    const { data: existingLinks, error: existingLinksError } = await supabase
+      .from("parent_student_links")
+      .select("parent_id")
+      .eq("student_id", currentStudentId)
+      .limit(1);
+    if (existingLinksError) throw existingLinksError;
+    const linkedParentId = existingLinks?.[0]?.parent_id as number | undefined;
 
     if (studentId && studentId !== currentStudentId) {
       const { data: idCheck } = await supabase
@@ -242,6 +285,31 @@ export async function PATCH(
         { status: 400 },
       );
     }
+    const normalizedAccountContactNumber = typeof contactNumber === "string"
+      ? normalizeParentLoginContactNumber(contactNumber)
+      : null;
+    if (linkedParentId && !normalizedAccountContactNumber) {
+      return NextResponse.json(
+        { success: false, message: "The Parent contact number must be a valid 11-digit mobile number." },
+        { status: 400 },
+      );
+    }
+    if (linkedParentId && normalizedAccountContactNumber) {
+      const { data: phoneConflict, error: phoneConflictError } = await supabase
+        .from("parents")
+        .select("id")
+        .eq("login_contact_number", normalizedAccountContactNumber)
+        .eq("archive_status", "active")
+        .neq("id", linkedParentId)
+        .limit(1);
+      if (phoneConflictError) throw phoneConflictError;
+      if (phoneConflict && phoneConflict.length > 0) {
+        return NextResponse.json(
+          { success: false, message: "This contact number is already in use by another Parent account." },
+          { status: 409 },
+        );
+      }
+    }
 
     const normalizedRemark = remark === undefined || remark === null
       ? { value: null, error: null }
@@ -264,8 +332,12 @@ export async function PATCH(
         suffix:      suffix      ?? null,
         gender:      gender      || undefined,
         student_id:  studentId   || undefined,
-        grade:       grade       || undefined,
-        section:     section     || undefined,
+        grade:       targetGrade,
+        section:     targetSection,
+        // Match ICT Student Profiles: the destination section owns the
+        // student's future morning/afternoon attendance session. Historical
+        // attendance logs keep their existing class-session snapshots.
+        class_session: targetClass.class_session ?? existing.class_session ?? null,
       })
       .eq("id", id);
     if (studentUpdateError) throw studentUpdateError;
@@ -327,17 +399,10 @@ export async function PATCH(
       if (linkStudentError) throw linkStudentError;
     }
 
-    const { data: linkRows, error: linkFetchError } = await supabase
-      .from("parent_student_links")
-      .select("parent_id")
-      .eq("student_id", newStudentId)
-      .limit(1);
-    if (linkFetchError) throw linkFetchError;
-
     // Imported school email/contact data is not proof of ownership. Only a
     // pre-existing link may update an account or preserve account behavior.
     // SF1 records below remain editable before Parent signup.
-    const parentId = linkRows?.[0]?.parent_id as number | undefined;
+    const parentId = linkedParentId;
 
     if (parentId) {
       const { error: parentUpdateError } = await supabase
@@ -347,12 +412,17 @@ export async function PATCH(
         parent_middle_name: parentMiddleName ?? null,
         parent_last_name:   parentLastName   || undefined,
         parent_suffix:      parentSuffix     ?? null,
-        contact_number:     contactNumber    || undefined,
+        contact_number:     normalizedAccountContactNumber ?? undefined,
+        login_contact_number: normalizedAccountContactNumber ?? undefined,
         email:              typeof email === "string" ? email.trim().toLowerCase() || undefined : undefined,
         address:            address          ?? null,    // ← new
       })
       .eq("id", parentId);
       if (parentUpdateError) throw parentUpdateError;
+
+      if (normalizedAccountContactNumber) {
+        await synchronizeParentContactForActiveStudents(parentId, normalizedAccountContactNumber);
+      }
 
     }
 
@@ -384,7 +454,7 @@ export async function PATCH(
           // account exists, keep family records synchronized with its active
           // account contact number instead.
           ...(parentId
-            ? { contact_number: typeof contactNumber === "string" ? contactNumber.replace(/\D/g, "") || null : null }
+            ? { contact_number: normalizedAccountContactNumber }
             : normalizedRecordedContactNumber !== undefined
               ? { contact_number: normalizedRecordedContactNumber || null }
               : {}),
@@ -405,7 +475,28 @@ export async function PATCH(
     }
 
     await reconcileParentStudentLinks({ studentDbId: Number(existing.id) });
+    await logAudit({
+      action: assignmentChanged ? "Student Transferred" : "Student Profile Updated",
+      performedById: adviser.id,
+      performedBy: `${adviser.first_name} ${adviser.last_name}`.trim(),
+      performedByRole: "Adviser",
+      performedByEmail: adviser.email,
+      targetUser: [firstName, middleName, lastName, suffix].filter(Boolean).join(" "),
+      targetRole: "Student",
+      targetType: "student",
+      targetId: Number(existing.id),
+      relatedStudentId: studentId || currentStudentId,
+      previousStatus: assignmentChanged ? `${existing.grade} — ${existing.section}` : undefined,
+      newStatus: assignmentChanged ? `${targetGrade} — ${targetSection}` : undefined,
+      module: "Students",
+      details: assignmentChanged
+        ? `Transferred student ${studentId || currentStudentId} from ${existing.grade} — ${existing.section} to ${targetGrade} — ${targetSection}.`
+        : `Updated the student profile for LRN ${studentId || currentStudentId}.`,
+    });
     await publishStudentRealtimeInvalidation({ studentDbId: Number(existing.id) });
+    if (previousClassAdvisers.length > 0) {
+      await publishRealtimeInvalidation(previousClassAdvisers, "students");
+    }
 
     return NextResponse.json({ success: true, message: "Student updated successfully.", remark: savedRemark });
 

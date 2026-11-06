@@ -92,7 +92,9 @@ export async function POST(request: NextRequest) {
     await sendSms({
       recipient: pending.signup.contactNumber,
       queueId: pending.signup.challengeId,
-      message: `ParentConnect verification code: ${issued.otp}. It expires in 10 minutes. Do not share this code.`,
+      message: "ParentConnect verification code: {otp}. It expires in 10 minutes. Do not share this code.",
+      semaphoreRoute: "otp",
+      semaphoreOtpCode: issued.otp,
     });
     return NextResponse.json({
       success: true,

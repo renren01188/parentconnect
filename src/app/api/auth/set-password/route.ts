@@ -13,6 +13,7 @@ import {
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
 import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
+import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
 
 const SECRET = getJwtSecret();
 
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
 
     const { data: parent, error: parentError } = await supabase
       .from("parents")
-      .select("email, password_set, status, archive_status, temporary_password_expires_at")
+      .select("email, contact_number, password_set, status, archive_status, temporary_password_expires_at")
       .eq("id", parentId)
       .maybeSingle();
     if (parentError) throw parentError;
@@ -134,12 +135,26 @@ export async function POST(req: NextRequest) {
     if (temporaryPasswordExpirySeconds * 1_000 <= Date.now()) return temporaryPasswordExpired();
 
     const hashed = await bcrypt.hash(newPassword, 10);
+    const loginContactNumber = normalizeParentLoginContactNumber(parent.contact_number);
+    if (!loginContactNumber) {
+      return NextResponse.json(
+        { success: false, message: "This signup record has no valid contact number. Contact ICT for help." },
+        { status: 409 },
+      );
+    }
 
     if (temporaryPasswordExpirySeconds * 1_000 <= Date.now()) return temporaryPasswordExpired();
 
     const { data: activatedParent, error } = await supabase
       .from("parents")
-      .update({ password: hashed, password_set: 1, temp_password: null, temporary_password_expires_at: null, status: "active" })
+      .update({
+        password: hashed,
+        password_set: 1,
+        temp_password: null,
+        temporary_password_expires_at: null,
+        status: "active",
+        login_contact_number: loginContactNumber,
+      })
       .eq("id", parentId)
       .eq("password_set", 0)
       .select("id")

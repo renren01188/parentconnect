@@ -23,6 +23,8 @@ type ParentRow = {
   parent_last_name: string | null;
   relationship: string | null;
   contact_number: string | null;
+  status: string | null;
+  password_set: boolean | number | null;
 };
 
 type StudentRow = {
@@ -59,6 +61,10 @@ function hasSameVerifiedPhone(left: unknown, right: unknown) {
   return !!leftPhone && leftPhone === rightPhone;
 }
 
+function hasCompletedParentAccount(parent: ParentRow) {
+  return parent.password_set === true || Number(parent.password_set) === 1;
+}
+
 /**
  * Adds the one student link that was just verified by the guardian's LRN
  * enrollment flow. This deliberately does not infer siblings from a name.
@@ -81,13 +87,16 @@ export async function ensureParentStudentLink({ parentId, studentId, relationshi
  * Adds missing links between active parent accounts and active students' SF1
  * family records.
  *
- * Automatic matching requires the same Father/Mother/Guardian role, exact
- * normalized first/last names, and the same valid phone number in the SF1
- * verification record and parent account. Middle names and suffixes are
- * optional in Parent enrollment, so they cannot prevent a legitimate sibling
- * link. Archived accounts and students are intentionally excluded: historic
- * links remain retained, but an archived family record cannot be attached to
- * a newly active Parent account.
+ * Automatic matching requires the same Father/Mother/Guardian role and exact
+ * normalized first/last names. A valid SF1 contact number is an additional,
+ * required verifier whenever it is available. When no number was recorded,
+ * the name can link only if it identifies exactly one active Parent account;
+ * multiple matches intentionally remain Awaiting Signup until an Adviser
+ * chooses the correct account. Middle names and suffixes are optional in
+ * Parent enrollment, so they cannot prevent a legitimate sibling link.
+ * Archived accounts and students are intentionally excluded: historic links
+ * remain retained, but an archived family record cannot be attached to a
+ * newly active Parent account.
  */
 export async function reconcileParentStudentLinks({ parentId, studentDbId }: ReconcileOptions) {
   if (!parentId && !studentDbId) {
@@ -98,7 +107,7 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   if (parentId) {
     const { data, error } = await supabase
       .from("parents")
-      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number, status, password_set")
       .eq("id", parentId)
       .eq("archive_status", "active");
     if (error) throw error;
@@ -110,6 +119,22 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   )];
   if (parentId && parentRoles.length === 0) {
     return { parentIds: [], studentIds: [], linksAddedOrAlreadyPresent: 0 };
+  }
+
+  // When reconciling from a newly verified Parent, keep that Parent as the
+  // only account we can link, but load other active accounts in the same
+  // roles as a comparison set. Without this check, a same-name account could
+  // make an ambiguous no-phone sibling look unique merely because the query
+  // was narrowed to one parent ID.
+  let comparisonParents = parents;
+  if (parentId) {
+    const { data, error } = await supabase
+      .from("parents")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number, status, password_set")
+      .in("relationship", parentRoles)
+      .eq("archive_status", "active");
+    if (error) throw error;
+    comparisonParents = (data ?? []) as ParentRow[];
   }
 
   const familyResult = studentDbId
@@ -134,11 +159,12 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
   if (!parentId) {
     const { data, error } = await supabase
       .from("parents")
-      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number")
+      .select("id, parent_first_name, parent_middle_name, parent_last_name, relationship, contact_number, status, password_set")
       .in("relationship", familyRoles)
       .eq("archive_status", "active");
     if (error) throw error;
     parents = (data ?? []) as ParentRow[];
+    comparisonParents = parents;
   }
 
   const studentDbIds = [...new Set(familyMembers.map((member) => member.student_db_id))];
@@ -156,7 +182,12 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
     const student = studentsByDbId.get(Number(member.student_db_id));
     if (!student?.student_id) return [];
 
-    return parents
+    const identityCandidates = comparisonParents
+      .filter((parent) => String(parent.status ?? "").trim().toLowerCase() === "active")
+      // A student being added must not be linked to an unfinished placeholder.
+      // During Guardian Sign Up the caller supplies that one pending Parent ID,
+      // so it may be linked after the LRN/role verification succeeds.
+      .filter((parent) => parentId ? true : hasCompletedParentAccount(parent))
       .filter((parent) => parent.relationship === member.role)
       .filter((parent) => sameParentEnrollmentName(
         {
@@ -169,8 +200,12 @@ export async function reconcileParentStudentLinks({ parentId, studentDbId }: Rec
           middleName: member.middle_name,
           lastName: member.last_name,
         }
-      ))
-      .filter((parent) => hasSameVerifiedPhone(parent.contact_number, member.contact_number))
+      ));
+    const matchingParents = normalizePhone(member.contact_number)
+      ? identityCandidates.filter((parent) => hasSameVerifiedPhone(parent.contact_number, member.contact_number))
+      : identityCandidates.length === 1 ? identityCandidates : [];
+
+    return (parentId ? matchingParents.filter((parent) => parent.id === parentId) : matchingParents)
       .map((parent) => ({
         parent_id: parent.id,
         student_id: student.student_id,
