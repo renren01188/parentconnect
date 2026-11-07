@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function PrincipalLoginPage() {
   const [identifier, setIdentifier] = useState("");
@@ -53,7 +54,7 @@ export default function PrincipalLoginPage() {
       } else {
         // Load the dashboard only after the login response's role cookie is
         // visible to the protected Realtime channel endpoint.
-        window.location.assign("/dashboard/principal");
+        window.location.assign(dashboardPath("principal"));
         return;
       }
       router.refresh();

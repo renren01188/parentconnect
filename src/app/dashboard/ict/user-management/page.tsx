@@ -15,6 +15,7 @@ import {
   validateUserManagementPasswordChange,
 } from "@/lib/ictUserManagementAccountUpdate";
 import { buildIctAccountEditConfirmation } from "@/lib/ictUserManagementEditConfirmation";
+import { dashboardPath } from "@/lib/routeAliases";
 import { BulkDeletionModal } from "./BulkDeletionModal";
 import {
   Search, ChevronDown, Pencil, MoreHorizontal,
@@ -2531,7 +2532,7 @@ export default function UserManagementPage() {
           <p className="text-sm text-gray-400 mt-0.5">Manage advisers, parents, and system accounts</p>
         </div>
         <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:items-center sm:gap-2">
-          <button onClick={() => router.push("/dashboard/ict/user-management/create-user")} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
+          <button onClick={() => router.push(dashboardPath("ict", "/user-management/create-user"))} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]">
             <UserPlus className="w-4 h-4" /> Create User
           </button>
           <button onClick={() => setShowAdviserTransfers(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]"><Clock className="w-4 h-4" /> Adviser Transfers{scheduledTransferCount > 0 && <span className="-mr-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-extrabold text-white">{scheduledTransferCount}</span>}</button>

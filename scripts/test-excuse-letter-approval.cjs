@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
 const adviserListRoute = read("src/app/api/excuse-letters/adviser/route.ts");
 const decisionRoute = read("src/app/api/excuse-letters/[id]/route.ts");
 const parentRoute = read("src/app/api/excuse-letters/route.ts");

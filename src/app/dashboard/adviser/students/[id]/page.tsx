@@ -9,6 +9,7 @@ import {
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { dashboardPath } from "@/lib/routeAliases";
 import { getStudentAge } from "@/lib/studentAge";
 import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
@@ -488,7 +489,7 @@ export default function StudentViewPage() {
         />
       )}
 
-      <Link href="/dashboard/adviser/students"
+      <Link href={dashboardPath("adviser", "/students")}
         className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-sm font-medium transition-colors mb-6">
         <ArrowLeft className="w-4 h-4" /> Back to Students
       </Link>

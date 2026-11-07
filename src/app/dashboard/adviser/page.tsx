@@ -10,6 +10,7 @@ import Link from "next/link";
 import AdviserDashboardGuide from "./components/AdviserDashboardGuide";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { dashboardPath } from "@/lib/routeAliases";
 
 interface RfidLog {
   id: number;
@@ -232,7 +233,7 @@ export default function AdviserDashboardPage() {
         <div data-parent-guide="adviser-dashboard-rfid-log" className={`xl:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${guideHighlight("adviser-dashboard-rfid-log")}`}>
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
             <h2 className="text-base font-bold text-slate-800">Today&apos;s RFID Log</h2>
-            <Link href="/dashboard/adviser/attendance"
+            <Link href={dashboardPath("adviser", "/attendance")}
               className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors">
               <ScanIcon className="w-3.5 h-3.5" /> Take Attendance
             </Link>
@@ -312,7 +313,7 @@ export default function AdviserDashboardPage() {
               )}
             </div>
             <div className="px-5 py-3 border-t border-slate-100">
-              <Link href="/dashboard/adviser/reports"
+              <Link href={dashboardPath("adviser", "/reports")}
                 className="block text-center text-sm font-semibold text-emerald-600 hover:text-emerald-700 transition-colors">
                 View All Reports
               </Link>

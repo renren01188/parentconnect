@@ -7,12 +7,13 @@ import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import {
   getAttendanceDetailStatus,
-  getSf2StatusCode,
   isAttendedExportStatus,
   toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
+import { writeSf2DailyMark } from "@/lib/sf2DailyMark";
 import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
+import type { Sf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
 
 
 // ─── Color Palette ────────────────────────────────────────────────
@@ -63,6 +64,7 @@ interface Section {
   name: string;
   adviser: string;
   students: StudentRecord[];
+  sf2EnrollmentSummary: Sf2EnrollmentSummary;
 }
 
 interface GradeLevel {
@@ -188,6 +190,15 @@ function getTemplateWorksheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet {
 
 function setCellValue(ws: ExcelJS.Worksheet, ref: string, value: string | number | null) {
   ws.getCell(ref).value = value;
+}
+
+// The official template's Male enrolment cell uses `#.###`, which displays
+// zero as `.`. Make all summary counts explicit whole numbers while retaining
+// the supplied worksheet's structure, formatting, and percentage cells.
+function setSf2SummaryCount(ws: ExcelJS.Worksheet, ref: string, value: number) {
+  const cell = ws.getCell(ref);
+  cell.value = value;
+  cell.numFmt = "0";
 }
 
 function escapePrintHtml(value: unknown): string {
@@ -468,7 +479,7 @@ function populateSF2Worksheet(
         const [col0] = SF2_DAY_SLOTS[slotIdx];
         if (iso < st.active_from) return;
         if (holidaySet.has(iso)) {
-          setCellValue(ws, col0ToRef(col0, row), getSf2StatusCode(null, true));
+          writeSf2DailyMark(ws, col0ToRef(col0, row), null, true);
           return;
         }
         if (!schoolDaySet.has(iso)) return;
@@ -476,8 +487,7 @@ function populateSF2Worksheet(
         // day. A missing value stays blank/No Record; it is never assumed
         // Present merely because it is a class day.
         const savedStatus = toAttendanceExportStatus(st.dailyStatuses?.[day]);
-        const code = getSf2StatusCode(savedStatus);
-        if (code) setCellValue(ws, col0ToRef(col0, row), code);
+        writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
         if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
         if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
       });
@@ -532,18 +542,23 @@ function populateSF2Worksheet(
   });
 
   const enrollmentRow = summaryStartRow + 2;
+  const lateEnrollmentRow = summaryStartRow + 4;
   const registeredRow = summaryStartRow + 8;
   const enrollmentPctRow = summaryStartRow + 10;
   const dailyAttendanceRow = summaryStartRow + 12;
   const attendancePctRow = summaryStartRow + 14;
   setCellValue(ws, `AM${summaryStartRow}`, `Month : ${month.toUpperCase()} ${year}`);
   setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${schoolDays}`);
-  setCellValue(ws, `AR${enrollmentRow}`, maleStudents.length);
-  setCellValue(ws, `AS${enrollmentRow}`, femaleStudents.length);
-  setCellValue(ws, `AT${enrollmentRow}`, section.students.length);
-  setCellValue(ws, `AR${registeredRow}`, maleStudents.length);
-  setCellValue(ws, `AS${registeredRow}`, femaleStudents.length);
-  setCellFormula(ws, `AT${registeredRow}`, `AR${registeredRow}+AS${registeredRow}`);
+  setCellValue(ws, `AM${enrollmentRow}`, section.sf2EnrollmentSummary.enrollmentLabel);
+  setSf2SummaryCount(ws, `AR${enrollmentRow}`, section.sf2EnrollmentSummary.enrolmentAtCutoff.male);
+  setSf2SummaryCount(ws, `AS${enrollmentRow}`, section.sf2EnrollmentSummary.enrolmentAtCutoff.female);
+  setSf2SummaryCount(ws, `AT${enrollmentRow}`, section.sf2EnrollmentSummary.enrolmentAtCutoff.total);
+  setSf2SummaryCount(ws, `AR${lateEnrollmentRow}`, section.sf2EnrollmentSummary.lateEnrolment.male);
+  setSf2SummaryCount(ws, `AS${lateEnrollmentRow}`, section.sf2EnrollmentSummary.lateEnrolment.female);
+  setSf2SummaryCount(ws, `AT${lateEnrollmentRow}`, section.sf2EnrollmentSummary.lateEnrolment.total);
+  setSf2SummaryCount(ws, `AR${registeredRow}`, section.sf2EnrollmentSummary.registeredAtMonthEnd.male);
+  setSf2SummaryCount(ws, `AS${registeredRow}`, section.sf2EnrollmentSummary.registeredAtMonthEnd.female);
+  setSf2SummaryCount(ws, `AT${registeredRow}`, section.sf2EnrollmentSummary.registeredAtMonthEnd.total);
   setCellFormula(ws, `AR${enrollmentPctRow}`, `IF(AR${enrollmentRow}=0,0,AR${registeredRow}/AR${enrollmentRow})`);
   setCellFormula(ws, `AS${enrollmentPctRow}`, `IF(AS${enrollmentRow}=0,0,AS${registeredRow}/AS${enrollmentRow})`);
   setCellFormula(ws, `AT${enrollmentPctRow}`, `IF(AT${enrollmentRow}=0,0,AT${registeredRow}/AT${enrollmentRow})`);
@@ -556,9 +571,10 @@ function populateSF2Worksheet(
 
   const remarkSummary = calculateRemarkSummary(section.students);
   const setRemarkSummary = (row: number, summary: { male: number; female: number; total: number }) => {
-    setCellValue(ws, `AR${row}`, summary.male);
-    setCellValue(ws, `AS${row}`, summary.female);
+    setSf2SummaryCount(ws, `AR${row}`, summary.male);
+    setSf2SummaryCount(ws, `AS${row}`, summary.female);
     setCellFormula(ws, `AT${row}`, `AR${row}+AS${row}`, summary.total);
+    ws.getCell(`AT${row}`).numFmt = "0";
   };
   setRemarkSummary(summaryStartRow + 16, remarkSummary["Dropped out"]);
   setRemarkSummary(summaryStartRow + 18, remarkSummary["Transferred Out"]);
@@ -569,7 +585,7 @@ function populateSF2Worksheet(
     .slice(0, 31) || "Attendance Detail";
   const detailWs = workbook.addWorksheet(detailSheetName);
   detailWs.addRow([`Attendance detail — ${gradeLabel} ${section.name} — ${month} ${year}`]);
-  detailWs.addRow(["SF2 marks: ✓ = Present or Late, X = Absent, H = Holiday, E = approved excuse. No Record means no saved Time In status."]);
+  detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = Cutting Classes when separately recorded; H = Holiday. No Record means no saved Time In status."]);
   detailWs.addRow([]);
   detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status"]);
   const detailHeader = detailWs.getRow(4);
@@ -711,24 +727,96 @@ interface SF2ExportModalProps {
 }
 
 function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, configuredHolidayDates, schoolYearLabel, onClose }: SF2ExportModalProps) {
+  const [exportMonth, setExportMonth] = useState(month);
+  const [exportYear, setExportYear] = useState(year);
+  const [exportSection, setExportSection] = useState(section);
+  const [exportSchoolDayDates, setExportSchoolDayDates] = useState(schoolDayDates);
+  const [exportConfiguredHolidayDates, setExportConfiguredHolidayDates] = useState(configuredHolidayDates);
+  const [exportSchoolYearLabel, setExportSchoolYearLabel] = useState(schoolYearLabel);
+  const [periodLoading, setPeriodLoading] = useState(false);
+  const [periodError, setPeriodError] = useState<string | null>(null);
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<"sf2" | "print" | null>(null);
 
-  const availableWeekdays = schoolDayDates;
-  const configuredHolidaySet = new Set(configuredHolidayDates);
-  const exportHolidayDates = Array.from(new Set([...configuredHolidayDates, ...holidayDates])).sort();
   const now = new Date();
+  const exportYearOptions = Array.from(
+    { length: Math.max(1, Math.max(now.getFullYear() + 1, exportYear) - Math.min(2020, exportYear) + 1) },
+    (_, index) => Math.min(2020, exportYear) + index,
+  );
+  const selectedPeriodKey = `${exportYear}-${MONTHS.indexOf(exportMonth) + 1}`;
+  const initialPeriodKey = `${year}-${MONTHS.indexOf(month) + 1}`;
+
+  useEffect(() => {
+    if (selectedPeriodKey === initialPeriodKey) {
+      setExportSection(section);
+      setExportSchoolDayDates(schoolDayDates);
+      setExportConfiguredHolidayDates(configuredHolidayDates);
+      setExportSchoolYearLabel(schoolYearLabel);
+      setPeriodError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const monthIndex = MONTHS.indexOf(exportMonth) + 1;
+
+    async function loadExportPeriod() {
+      setPeriodLoading(true);
+      setPeriodError(null);
+      setHolidayDates([]);
+      setExported(null);
+
+      try {
+        const response = await fetch(
+          `/api/attendance/monthly-summary?year=${exportYear}&month=${monthIndex}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.message ?? "Unable to load the selected attendance period.");
+        }
+
+        const matchingGrade = (Array.isArray(data.gradeData) ? data.gradeData : []).find(
+          (candidate: GradeLevel) => candidate.label === gradeLabel || candidate.grade === gradeLabel,
+        ) as GradeLevel | undefined;
+        const matchingSection = matchingGrade?.sections.find(
+          (candidate) => candidate.id === section.id || candidate.name === section.name,
+        );
+        if (!matchingSection) {
+          throw new Error(`No ${gradeLabel} · Section ${section.name} data is available for ${exportMonth} ${exportYear}.`);
+        }
+        if (controller.signal.aborted) return;
+
+        setExportSection(matchingSection);
+        setExportSchoolDayDates(Array.isArray(data.schoolDays) ? data.schoolDays : []);
+        setExportConfiguredHolidayDates(Array.isArray(data.holidayDates) ? data.holidayDates : []);
+        setExportSchoolYearLabel(typeof data.schoolYearLabel === "string" ? data.schoolYearLabel : null);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setPeriodError(error instanceof Error ? error.message : "Unable to load the selected attendance period.");
+      } finally {
+        if (!controller.signal.aborted) setPeriodLoading(false);
+      }
+    }
+
+    void loadExportPeriod();
+    return () => controller.abort();
+  }, [configuredHolidayDates, exportMonth, exportYear, gradeLabel, initialPeriodKey, month, schoolDayDates, schoolYearLabel, section, selectedPeriodKey, year]);
+
+  const availableWeekdays = exportSchoolDayDates;
+  const configuredHolidaySet = new Set(exportConfiguredHolidayDates);
+  const exportHolidayDates = Array.from(new Set([...exportConfiguredHolidayDates, ...holidayDates])).sort();
   const isFuture =
-    year > now.getFullYear() ||
-    (year === now.getFullYear() && MONTHS.indexOf(month) > now.getMonth());
+    exportYear > now.getFullYear() ||
+    (exportYear === now.getFullYear() && MONTHS.indexOf(exportMonth) > now.getMonth());
 
   const classDays = availableWeekdays.filter((date) => !exportHolidayDates.includes(date)).length;
 
   async function handleExportSF2() {
+    if (periodLoading || periodError) return;
     setExporting(true);
     try {
-      await exportSF2(section, gradeLabel, month, year, exportHolidayDates, schoolDayDates, schoolYearLabel);
+      await exportSF2(exportSection, gradeLabel, exportMonth, exportYear, exportHolidayDates, exportSchoolDayDates, exportSchoolYearLabel);
       setExported("sf2");
       setTimeout(() => setExported(null), 2500);
     } catch (e) {
@@ -740,17 +828,18 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, conf
   }
 
   function handlePrint() {
-    const maleStudents = section.students.filter(s => s.gender === "M");
-    const femaleStudents = section.students.filter(s => s.gender === "F");
+    if (periodLoading || periodError) return;
+    const maleStudents = exportSection.students.filter(s => s.gender === "M");
+    const femaleStudents = exportSection.students.filter(s => s.gender === "F");
     const mPresent = maleStudents.reduce((a, s) => a + s.present, 0);
     const mAbsent = maleStudents.reduce((a, s) => a + s.absent, 0);
     const fPresent = femaleStudents.reduce((a, s) => a + s.present, 0);
     const fAbsent = femaleStudents.reduce((a, s) => a + s.absent, 0);
-    const totalPresent = section.students.reduce((s, r) => s + r.present, 0);
-    const totalAbsent = section.students.reduce((s, r) => s + r.absent, 0);
+    const totalPresent = exportSection.students.reduce((s, r) => s + r.present, 0);
+    const totalAbsent = exportSection.students.reduce((s, r) => s + r.absent, 0);
 
     const printContent = `
-      <html><head><title>SF2 – ${escapePrintHtml(section.name)} – ${escapePrintHtml(month)} ${year}</title>
+      <html><head><title>SF2 – ${escapePrintHtml(exportSection.name)} – ${escapePrintHtml(exportMonth)} ${exportYear}</title>
       <style>
         body { font-family: Arial, sans-serif; padding: 18px; color: #1f2937; font-size: 11px; }
         h2 { color: #522081; margin-bottom: 2px; font-size: 14px; }
@@ -770,8 +859,8 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, conf
       </style></head><body>
       <h2>School Form 2 (SF2) Daily Attendance Report</h2>
       <div class="meta">
-        School: Santiago Elementary School &nbsp;|&nbsp; ${escapePrintHtml(gradeLabel)} – Section ${escapePrintHtml(section.name)}
-        &nbsp;|&nbsp; Adviser: ${escapePrintHtml(section.adviser)} &nbsp;|&nbsp; Month: ${escapePrintHtml(month)} ${year}
+        School: Santiago Elementary School &nbsp;|&nbsp; ${escapePrintHtml(gradeLabel)} – Section ${escapePrintHtml(exportSection.name)}
+        &nbsp;|&nbsp; Adviser: ${escapePrintHtml(exportSection.adviser)} &nbsp;|&nbsp; Month: ${escapePrintHtml(exportMonth)} ${exportYear}
         &nbsp;|&nbsp; Class Days: ${classDays}
       </div>
       ${exportHolidayDates.length > 0 ? `<div class="holiday-note">Holidays (marked H in SF2): ${exportHolidayDates.map(d => formatDateLabel(d)).join(", ")}</div>` : ""}
@@ -803,7 +892,7 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, conf
         </table>
       </div>
       <div class="sig-area">
-        <div class="sig-line"><div class="sig-name">${escapePrintHtml(section.adviser)}</div>(Signature of Adviser over Printed Name)</div>
+        <div class="sig-line"><div class="sig-name">${escapePrintHtml(exportSection.adviser)}</div>(Signature of Adviser over Printed Name)</div>
         <div class="sig-line"><div class="sig-name">&nbsp;</div>(Signature of School Head over Printed Name)</div>
       </div>
       </body></html>
@@ -847,18 +936,47 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, conf
           {/* Section info pill */}
           <div style={{ marginBottom: 18, display: "flex", alignItems: "center", gap: 8, background: GRAY_50, border: `1px solid ${GRAY_100}`, borderRadius: 12, padding: "10px 14px" }}>
             <ExcelIcon />
-            <span style={{ fontSize: 12, fontWeight: 600, color: GRAY_600 }}>{gradeLabel} · Section {section.name}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: GRAY_600 }}>{gradeLabel} · Section {exportSection.name}</span>
             <span style={{ color: GRAY_400, margin: "0 2px" }}>·</span>
-            <span style={{ fontSize: 12, color: GRAY_400 }}>{section.adviser}</span>
+            <span style={{ fontSize: 12, color: GRAY_400 }}>{exportSection.adviser}</span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(120px, 0.7fr)", gap: 10, marginBottom: 18 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 11, fontWeight: 700, color: GRAY_600 }}>
+              Month
+              <select
+                aria-label="Export month"
+                value={exportMonth}
+                onChange={(event) => setExportMonth(event.target.value)}
+                disabled={periodLoading}
+                style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, color: GRAY_800, background: WHITE, fontSize: 13, fontWeight: 600, cursor: periodLoading ? "wait" : "pointer" }}
+              >
+                {MONTHS.map((monthName) => <option key={monthName} value={monthName}>{monthName}</option>)}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 11, fontWeight: 700, color: GRAY_600 }}>
+              Year
+              <select
+                aria-label="Export year"
+                value={exportYear}
+                onChange={(event) => setExportYear(Number(event.target.value))}
+                disabled={periodLoading}
+                style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, border: `1.5px solid ${GRAY_200}`, color: GRAY_800, background: WHITE, fontSize: 13, fontWeight: 600, cursor: periodLoading ? "wait" : "pointer" }}
+              >
+                {exportYearOptions.map((optionYear) => <option key={optionYear} value={optionYear}>{optionYear}</option>)}
+              </select>
+            </label>
           </div>
 
           {/* Selected period display */}
           <div style={{ marginBottom: 18, borderRadius: 14, background: "#ede9fe", border: `1px solid #c4b5fd`, padding: "14px 18px", textAlign: "center" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: PRIMARY, opacity: 0.75, marginBottom: 4 }}>Selected Period</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: PRIMARY }}>{month} {year}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: PRIMARY }}>{exportMonth} {exportYear}</div>
             <div style={{ fontSize: 11, color: PRIMARY, opacity: 0.65, marginTop: 4 }}>
               {availableWeekdays.length} school days · <strong>{classDays} class days</strong>{exportHolidayDates.length > 0 ? ` · ${exportHolidayDates.length} holiday${exportHolidayDates.length > 1 ? "s" : ""}` : ""}
             </div>
+            {periodLoading && <div style={{ marginTop: 8, fontSize: 11, color: PRIMARY }}>Loading the selected period…</div>}
+            {periodError && <div role="alert" style={{ marginTop: 8, fontSize: 11, color: URGENT_RED }}>{periodError}</div>}
             {isFuture && (
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, fontSize: 11, color: WARNING_AMBER }}>
                 <AlertIcon /> This month is in the future
@@ -930,26 +1048,27 @@ function SF2ExportModal({ section, gradeLabel, month, year, schoolDayDates, conf
           <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={handleExportSF2}
-              disabled={exporting}
+              disabled={exporting || periodLoading || Boolean(periodError)}
               style={{
                 flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
                 padding: "12px 16px", borderRadius: 12, border: "none",
                 background: exported === "sf2" ? "#047857" : SUCCESS_GREEN,
-                color: WHITE, fontWeight: 700, fontSize: 13, cursor: exporting ? "not-allowed" : "pointer",
-                boxShadow: "0 3px 10px rgba(16,185,129,0.3)", opacity: exporting ? 0.7 : 1, transition: "all 0.15s"
+                color: WHITE, fontWeight: 700, fontSize: 13, cursor: exporting || periodLoading || periodError ? "not-allowed" : "pointer",
+                boxShadow: "0 3px 10px rgba(16,185,129,0.3)", opacity: exporting || periodLoading || periodError ? 0.7 : 1, transition: "all 0.15s"
               }}
             >
               <ExcelIcon />
-              {exporting ? "Generating..." : exported === "sf2" ? "✓ Downloaded!" : "Export SF2 (.xlsx)"}
+              {periodLoading ? "Loading period..." : exporting ? "Generating..." : exported === "sf2" ? "✓ Downloaded!" : "Export SF2 (.xlsx)"}
             </button>
             <button
               onClick={handlePrint}
+              disabled={periodLoading || Boolean(periodError)}
               style={{
                 flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
                 padding: "12px 16px", borderRadius: 12, border: "none",
                 background: `linear-gradient(135deg, ${PRIMARY} 0%, ${PRIMARY_LIGHT} 100%)`,
-                color: WHITE, fontWeight: 700, fontSize: 13, cursor: "pointer",
-                boxShadow: "0 3px 10px rgba(82,32,129,0.3)", opacity: exported === "print" ? 0.65 : 1, transition: "all 0.15s"
+                color: WHITE, fontWeight: 700, fontSize: 13, cursor: periodLoading || periodError ? "not-allowed" : "pointer",
+                boxShadow: "0 3px 10px rgba(82,32,129,0.3)", opacity: periodLoading || periodError || exported === "print" ? 0.65 : 1, transition: "all 0.15s"
               }}
             >
               <PrintIcon /> Print PDF

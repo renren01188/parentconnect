@@ -5,6 +5,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { AlertCircle, KeyRound, Mail, Phone, Send } from "lucide-react";
 import Link from "next/link";
 import { LoginLandingHeader } from "@/components/LoginLandingHeader";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 type ResetMethod = "email" | "sms";
 
@@ -43,7 +44,7 @@ export default function ForgotPasswordPage() {
         setError(data?.message || "Unable to send a verification code.");
         return;
       }
-      router.push(data.redirectTo || "/login/guardian/reset-password");
+      router.push(data.redirectTo || PUBLIC_ROUTE_ALIASES.parentRecovery.resetOtp);
     } catch {
       setError("Cannot connect to send a verification code. Please try again.");
     } finally {

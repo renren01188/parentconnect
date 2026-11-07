@@ -14,7 +14,7 @@ const importRoute = read("src/app/api/students/import/route.ts");
 const manualStudentRoute = read("src/app/api/students/route.ts");
 const manualRegistration = read("src/components/student-parent-registration/StudentParentRegistration.tsx");
 const candidateRoute = read("src/app/api/parents/active-link-candidates/route.ts");
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
 const ictUsersRoute = read("src/app/api/ict/user-management/route.ts");
 const parentMeRoute = read("src/app/api/parents/me/route.ts");
 

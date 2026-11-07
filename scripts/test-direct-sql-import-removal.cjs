@@ -9,7 +9,7 @@ const exists = (relative) => fs.existsSync(path.join(root, relative));
 
 const loginRoute = read("src/app/api/auth/login/route.ts");
 const loginPage = read("src/app/login/guardian/page.tsx");
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
 const parentState = read("src/lib/parentRegistrationState.ts");
 const migration = read("supabase/migrations/20261027120000_remove_direct_parent_account_owner_feature.sql");
 const packageJson = read("package.json");
@@ -18,8 +18,8 @@ const packageJson = read("package.json");
 // completed accounts land directly on the Parent dashboard.
 assert.match(loginRoute, /temporaryPasswordExpiryEpochSeconds/);
 assert.match(loginRoute, /passwordSet/);
-assert.match(loginPage, /\/login\/guardian\/verify-temp-password/);
-assert.match(loginPage, /window\.location\.assign\("\/dashboard\/parent"\)/);
+assert.match(loginPage, /PUBLIC_ROUTE_ALIASES\.parentRecovery\.verifyTemporaryPassword/);
+assert.match(loginPage, /window\.location\.assign\(dashboardPath\("parent"\)\)/);
 assert.match(middleware, /\/login\/guardian\/set-password/);
 assert.match(parentState, /return !isPreSignupParentRecord\(accountIds, passwordSet\);/);
 

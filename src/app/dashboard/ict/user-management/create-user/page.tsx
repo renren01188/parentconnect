@@ -11,6 +11,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { StudentParentRegistration } from "@/components/student-parent-registration/StudentParentRegistration";
+import { dashboardPath } from "@/lib/routeAliases";
 
 type AccountType = "adviser" | "ict" | "student" | "succession" | "guidance" | null;
 type AdviserStep = "form" | "review" | "sent";
@@ -1756,7 +1757,7 @@ export default function CreateUserPage() {
       {/* Page header */}
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <button onClick={() => router.push("/dashboard/ict/user-management")}
+          <button onClick={() => router.push(dashboardPath("ict", "/user-management"))}
             className="flex items-center justify-center w-9 h-9 rounded-xl border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition shadow-sm">
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -1830,7 +1831,7 @@ export default function CreateUserPage() {
               {accountType === "ict" && <ICTAdminForm key={`ict-${formKey}`} onDone={handleDone} onSummaryChange={setSummaryRows} />}
               {accountType === "student" && (
                 <StudentParentRegistration key={`stu-${formKey}`} variant="ict" embedded
-                  studentsListHref="/dashboard/ict/StudentProfiles"
+                  studentsListHref={dashboardPath("ict", "/StudentProfiles")}
                   registrationMode="student-roster"
                   onSummaryChange={setSummaryRows} onSuccess={handleDone} />
               )}

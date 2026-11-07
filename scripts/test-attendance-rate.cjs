@@ -38,7 +38,7 @@ assert.match(parentAttendance, /calculateAttendanceRate\(/, "Parent Attendance m
 assert.match(parentAttendance, /attendedDayCount\(/, "Parent Attendance total days must include late arrivals.");
 assert.match(parentDashboard, /calculateAttendanceRate\(/, "Parent dashboard must use the shared attendance-rate rule.");
 assert.match(parentDashboard, /attendedDayCount\(/, "Parent dashboard days present must include late arrivals.");
-assert.match(adviserStudentsApi, /isAttendedAttendanceStatus\(log\.status\)/, "Adviser student rates must count Late as attended.");
+assert.match(adviserStudentsApi, /isAttendedAttendanceStatus\(status\)/, "Adviser student rates must count Late as attended after resolving the final daily status.");
 assert.match(principalDashboardApi, /isAttendedAttendanceStatus\(record\.status\)/, "Principal attendance percentage must use the shared attended-status rule.");
 
 console.log("Attendance-rate rules passed: Present and Late attended; Absent and Excused counted; no records 0%.");

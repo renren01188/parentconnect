@@ -3,6 +3,7 @@ import { jwtVerify } from "jose";
 import { getJwtSecret } from "@/lib/authSecret";
 import { dashboardSessionCookies, DashboardRole, isCurrentDashboardIdleSession } from "@/lib/dashboardIdleSession";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { dashboardPath, internalPathnameForOpaqueRoute, PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 import {
   PASSWORD_SESSION_REVOCATION_ACTIONS,
   isTokenRevokedByPasswordChange,
@@ -15,31 +16,31 @@ const SECRET = getJwtSecret();
 const dashboardRoutes: Record<DashboardRole, { cookie: string; dashboard: string; login: string; setPassword: string }> = {
   adviser: {
     cookie: "adviser_token",
-    dashboard: "/dashboard/adviser",
+    dashboard: dashboardPath("adviser"),
     login: "/login/adviser",
     setPassword: "/set-password/adviser",
   },
   guidance: {
     cookie: "guidance_token",
-    dashboard: "/dashboard/guidance",
+    dashboard: dashboardPath("guidance"),
     login: "/login/guidance",
     setPassword: "/set-password/guidance",
   },
   principal: {
     cookie: "principal_token",
-    dashboard: "/dashboard/principal",
+    dashboard: dashboardPath("principal"),
     login: "/login/principal",
     setPassword: "/set-password/principal",
   },
   ict: {
     cookie: "ict_token",
-    dashboard: "/dashboard/ict",
+    dashboard: dashboardPath("ict"),
     login: "/login/ict",
     setPassword: "/set-password/ict",
   },
   parent: {
     cookie: "parent_token",
-    dashboard: "/dashboard/parent",
+    dashboard: dashboardPath("parent"),
     login: "/login/guardian",
     setPassword: "/login/guardian/set-password",
   },
@@ -63,7 +64,7 @@ async function getAuthorizedDashboard(req: NextRequest, excludedRole?: Dashboard
 
       if (verified.payload.passwordSet === false) {
         if (role === "parent" && verified.payload.temporaryPasswordVerified !== true) {
-          return "/login/guardian/verify-temp-password";
+          return PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword;
         }
         return route.setPassword;
       }
@@ -164,8 +165,11 @@ async function passwordSessionCanAccess(
   }
 }
 
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+export async function proxy(req: NextRequest) {
+  // Rewrites run after this request proxy. Normalize the alias here so the
+  // established dashboard role/session checks still protect the underlying
+  // route before it is served.
+  const pathname = internalPathnameForOpaqueRoute(req.nextUrl.pathname);
 
   // Login and signup routes must remain reachable even if a browser still
   // carries an expired cookie that will be replaced by a successful sign-in.
@@ -245,7 +249,7 @@ export async function middleware(req: NextRequest) {
       if (adviserPasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
-          : NextResponse.redirect(new URL("/dashboard/adviser", req.url));
+          : NextResponse.redirect(new URL(dashboardPath("adviser"), req.url));
       }
       if (verified.payload.passwordSet === false) {
         return NextResponse.redirect(new URL("/set-password/adviser", req.url));
@@ -273,7 +277,7 @@ export async function middleware(req: NextRequest) {
       if (guidancePasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
-          : NextResponse.redirect(new URL("/dashboard/guidance", req.url));
+          : NextResponse.redirect(new URL(dashboardPath("guidance"), req.url));
       }
       if (verified.payload.passwordSet === false) {
         return NextResponse.redirect(new URL("/set-password/guidance", req.url));
@@ -296,7 +300,7 @@ export async function middleware(req: NextRequest) {
       const verified = await jwtVerify(token, SECRET);
       if (verified.payload.role !== "principal" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       if (principalPasswordSetup && verified.payload.passwordSet !== false) {
-        return NextResponse.redirect(new URL("/dashboard/principal", req.url));
+        return NextResponse.redirect(new URL(dashboardPath("principal"), req.url));
       }
       if (verified.payload.passwordSet === false) {
         return principalPasswordSetup
@@ -350,7 +354,7 @@ export async function middleware(req: NextRequest) {
       if (ictPasswordSetup) {
         return verified.payload.passwordSet === false
           ? NextResponse.next()
-          : NextResponse.redirect(new URL("/dashboard/ict", req.url));
+          : NextResponse.redirect(new URL(dashboardPath("ict"), req.url));
       }
       if (verified.payload.passwordSet === false) {
         return NextResponse.redirect(new URL("/set-password/ict", req.url));
@@ -373,7 +377,7 @@ export async function middleware(req: NextRequest) {
       if (verified.payload.role !== "parent" || !isCurrentDashboardIdleSession(verified.payload)) throw new Error("Invalid role");
       if (verified.payload.passwordSet === false) {
         if (verified.payload.temporaryPasswordVerified !== true) {
-          return NextResponse.redirect(new URL("/login/guardian/verify-temp-password", req.url));
+          return NextResponse.redirect(new URL(PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword, req.url));
         }
         return NextResponse.redirect(new URL("/login/guardian/set-password", req.url));
       }
@@ -392,5 +396,23 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/adviser/:path*", "/dashboard/guidance/:path*", "/dashboard/principal/:path*", "/dashboard/ict/:path*", "/dashboard/parent/:path*", "/set-password/adviser/:path*", "/set-password/guidance/:path*", "/set-password/principal/:path*", "/set-password/ict/:path*", "/api/:path*"],
+  matcher: [
+    "/a/5qN8vK2x/:path*",
+    "/a/9mR3tC7w/:path*",
+    "/a/4yH6pL1d/:path*",
+    "/a/8fB2zW5n/:path*",
+    "/a/1kD7sV4r/:path*",
+    // Keep the retired paths guarded too. Config redirects run first, but
+    // this prevents a future routing change from accidentally exposing them.
+    "/dashboard/adviser/:path*",
+    "/dashboard/guidance/:path*",
+    "/dashboard/principal/:path*",
+    "/dashboard/ict/:path*",
+    "/dashboard/parent/:path*",
+    "/set-password/adviser/:path*",
+    "/set-password/guidance/:path*",
+    "/set-password/principal/:path*",
+    "/set-password/ict/:path*",
+    "/api/:path*",
+  ],
 };

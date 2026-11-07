@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle, KeyRound, Mail, Phone, Send } from "lucide-react";
 import { LoginLandingHeader } from "@/components/LoginLandingHeader";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 type ResetStatus = { channel: "email" | "sms"; canUseEmail: boolean; resendAvailableAt?: string; lockedUntil?: string | null };
 
@@ -30,7 +31,7 @@ export default function VerifyResetCodePage() {
       const response = await fetch("/api/auth/password-reset/status", { cache: "no-store" });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.success) {
-        router.replace("/login/guardian/forgot-password");
+        router.replace(PUBLIC_ROUTE_ALIASES.parentRecovery.forgotPassword);
         return;
       }
       setStatus(data);
@@ -63,7 +64,7 @@ export default function VerifyResetCodePage() {
         if (Number(data?.retryAfterSeconds) > 0) setLockedUntil(Date.now() + Number(data.retryAfterSeconds) * 1_000);
         return;
       }
-      router.push(data.redirectTo || "/login/guardian/reset-password/new-password");
+      router.push(data.redirectTo || PUBLIC_ROUTE_ALIASES.parentRecovery.resetNewPassword);
     } catch {
       setError("Cannot connect to verify the code. Please try again.");
     } finally {
@@ -104,7 +105,7 @@ export default function VerifyResetCodePage() {
       <LoginLandingHeader />
       <section className="mx-auto flex w-full max-w-md flex-1 items-center px-4 py-10">
         <div className="w-full rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
-          <Link href="/login/guardian/forgot-password" className="text-sm font-semibold text-slate-500 hover:text-[#1a2035]">← Start again</Link>
+          <Link href={PUBLIC_ROUTE_ALIASES.parentRecovery.forgotPassword} className="text-sm font-semibold text-slate-500 hover:text-[#1a2035]">← Start again</Link>
           <div className="mt-5 text-center">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#e0e7ff] text-[#2d3a5e]"><KeyRound className="h-7 w-7" /></div>
             <h1 className="mt-4 text-2xl font-extrabold text-slate-900">Verify reset code</h1>
@@ -118,8 +119,8 @@ export default function VerifyResetCodePage() {
             <button type="submit" disabled={verifying || code.length !== 6 || lockedSeconds > 0} className="w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>{verifying ? "Checking…" : lockedSeconds > 0 ? `Try again in ${lockedSeconds}s` : "Verify code"}</button>
           </form>
           <button type="button" onClick={() => void resend()} disabled={resending || seconds > 0 || lockedSeconds > 0} className="mt-5 flex w-full items-center justify-center gap-2 text-sm font-bold text-[#4f5fa3] hover:text-[#1a2035] disabled:text-slate-400"><Send className="h-4 w-4" />{resending ? "Sending…" : lockedSeconds > 0 ? `Try again in ${lockedSeconds}s` : seconds > 0 ? `Resend OTP in ${seconds}s` : "Resend OTP"}</button>
-          {!isEmail && status?.canUseEmail && <Link className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-[#4f5fa3] underline hover:text-[#1a2035]" href="/login/guardian/forgot-password?method=email"><Mail className="h-3.5 w-3.5" />Switch to Email</Link>}
-          {isEmail && <Link className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-[#4f5fa3] underline hover:text-[#1a2035]" href="/login/guardian/forgot-password?method=sms"><Phone className="h-3.5 w-3.5" />Switch to Contact Number</Link>}
+          {!isEmail && status?.canUseEmail && <Link className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-[#4f5fa3] underline hover:text-[#1a2035]" href={`${PUBLIC_ROUTE_ALIASES.parentRecovery.forgotPassword}?method=email`}><Mail className="h-3.5 w-3.5" />Switch to Email</Link>}
+          {isEmail && <Link className="mt-4 flex items-center justify-center gap-2 text-xs font-bold text-[#4f5fa3] underline hover:text-[#1a2035]" href={`${PUBLIC_ROUTE_ALIASES.parentRecovery.forgotPassword}?method=sms`}><Phone className="h-3.5 w-3.5" />Switch to Contact Number</Link>}
           <p className="mt-5 text-center text-xs text-slate-500">Contact ICT for help if you need assistance.</p>
         </div>
       </section>

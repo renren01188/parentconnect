@@ -7,6 +7,7 @@ import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 import Link from "next/link";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function ICTLoginPage() {
   const router = useRouter();
@@ -54,7 +55,7 @@ export default function ICTLoginPage() {
       } else {
         // A clean post-login navigation prevents the Inbox from requesting an
         // authorized Realtime topic against a stale pre-login client state.
-        window.location.assign("/dashboard/ict");
+        window.location.assign(dashboardPath("ict"));
         return;
       }
       router.refresh();

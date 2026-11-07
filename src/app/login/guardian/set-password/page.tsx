@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
 import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
 
@@ -93,7 +94,7 @@ export default function SetPasswordPage() {
       } catch {
         // Storage cleanup must not block a completed registration.
       }
-      setTimeout(() => router.push("/dashboard/parent"), 2000);
+      setTimeout(() => router.push(dashboardPath("parent")), 2000);
     } catch {
       setError("Cannot connect to server. Please try again.");
       setLoading(false);

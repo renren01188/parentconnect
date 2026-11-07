@@ -113,6 +113,7 @@ export async function GET(req: NextRequest) {
             attendance_date: string;
             time_in: string | null;
             time_out: string | null;
+            time_out_status: string | null;
             status: string;
             via: string;
             rfid_scan: boolean;
@@ -126,6 +127,7 @@ export async function GET(req: NextRequest) {
                     attendance_date: date,
                     time_in: null,
                     time_out: null,
+                    time_out_status: null,
                     status: log.status,
                     via: log.via,
                     rfid_scan: false,
@@ -141,6 +143,14 @@ export async function GET(req: NextRequest) {
                 entry.via = log.via;
             } else if (log.type === "Time Out") {
                 entry.time_out = log.time_logged;
+                entry.time_out_status = log.status;
+                // A saved Auto Time Out with Absent status is the learner's
+                // final daily attendance result. The Time In remains intact
+                // as the arrival record.
+                if (log.status === "Absent") {
+                    entry.status = "Absent";
+                    entry.via = log.via;
+                }
             }
         }
 

@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const PRINCIPAL_THEME = {
   canvas: "#f5f3ff",
@@ -68,7 +69,7 @@ export default function PrincipalSetPasswordPage() {
 
       setDone(true);
       setTimeout(() => {
-        router.push("/dashboard/principal");
+        router.push(dashboardPath("principal"));
         router.refresh();
       }, 1500);
     } catch {

@@ -28,6 +28,7 @@ import {
   temporaryPasswordExpiryEpochSeconds,
 } from "@/lib/parentTemporaryPassword";
 import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 const SECRET = getJwtSecret();
 const ENROLLMENT_ERROR = "We could not verify this enrollment request. Please contact the school office for assistance.";
@@ -423,7 +424,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         verificationMethod: "sms",
-        redirectTo: "/login/guardian/send-otp",
+        redirectTo: PUBLIC_ROUTE_ALIASES.parentRecovery.signupOtp,
         message: "Your enrollment details are ready. Send a verification code to your contact number to continue.",
       });
     }
@@ -442,7 +443,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         deliveryPending: true,
-        redirectTo: "/login/guardian/verify-temp-password",
+        redirectTo: PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword,
         expiresAt: temporaryPasswordExpiresAt!.toISOString(),
         resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
         message: "We could not confirm email delivery. Please check your inbox and spam folder, then request a new temporary password when it becomes available.",
@@ -451,7 +452,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      redirectTo: "/login/guardian/verify-temp-password",
+      redirectTo: PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword,
       expiresAt: temporaryPasswordExpiresAt!.toISOString(),
       resendAvailableAt: temporaryPasswordResendAvailableAt.toISOString(),
       message: PARENT_SIGNUP_CONFIRMATION_MESSAGE,

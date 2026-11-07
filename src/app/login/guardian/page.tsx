@@ -15,6 +15,7 @@ import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
+import { dashboardPath, PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 import {
   acceptGuardianTerms,
   canAcceptGuardianTerms,
@@ -217,14 +218,14 @@ function GuardianLoginPageContent() {
       if (!data.passwordSet) {
         const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt : "";
         router.push(expiresAt
-          ? `/login/guardian/verify-temp-password?expiresAt=${encodeURIComponent(expiresAt)}`
-          : "/login/guardian/verify-temp-password");
+          ? `${PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword}?expiresAt=${encodeURIComponent(expiresAt)}`
+          : PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword);
       } else {
         // Start the dashboard from a new document after the server has set
         // the parent session cookie. App-router navigation can otherwise mount
         // the Reports client before its Realtime capability request sees this
         // just-created cookie.
-        window.location.assign("/dashboard/parent");
+        window.location.assign(dashboardPath("parent"));
       }
     } catch {
       setError("Cannot connect to server. Please check your connection.");
@@ -301,7 +302,7 @@ function GuardianLoginPageContent() {
       } catch {
         // The parent can still use Back and enter the form again manually.
       }
-      const redirectTo = data.redirectTo || "/login/guardian/verify-temp-password";
+      const redirectTo = data.redirectTo || PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword;
       const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt : "";
       const query = new URLSearchParams();
       if (expiresAt) query.set("expiresAt", expiresAt);
@@ -403,7 +404,7 @@ function GuardianLoginPageContent() {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-sm font-semibold text-slate-700">Password</label>
-                  <Link href="/login/guardian/forgot-password" className="text-xs font-medium transition-colors" style={{ color: "#4f5fa3" }}>
+                  <Link href={PUBLIC_ROUTE_ALIASES.parentRecovery.forgotPassword} className="text-xs font-medium transition-colors" style={{ color: "#4f5fa3" }}>
                     Forgot password?
                   </Link>
                 </div>

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function GuidanceLoginPage() {
   const router = useRouter();
@@ -62,7 +63,7 @@ export default function GuidanceLoginPage() {
         // Avoid mounting an authenticated dashboard against the client-side
         // router's pre-login cache; this guarantees the Realtime capability
         // request observes the fresh role cookie.
-        window.location.assign("/dashboard/guidance");
+        window.location.assign(dashboardPath("guidance"));
         return;
       }
       router.refresh();

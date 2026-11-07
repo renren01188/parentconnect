@@ -5,12 +5,13 @@ import type ExcelJS from "exceljs";
 import { resolveRfidScanValue } from "@/lib/rfid";
 import {
     getAttendanceDetailStatus,
-    getSf2StatusCode,
     isAttendedExportStatus,
     toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
+import { writeSf2DailyMark } from "@/lib/sf2DailyMark";
 import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
+import type { Sf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import {
@@ -83,6 +84,7 @@ type HistorySummaryRow = {
     time_out: string | null;
     time_in_status: AttendanceStatus | null;
     time_out_status: AttendanceStatus | null;
+    attendance_status: AttendanceStatus | null;
     via: AttendanceVia | null;
     remark: string | null;
     is_absent: boolean;
@@ -147,7 +149,20 @@ type MonthlyAttendanceData = {
     remarksByStudentId: Record<string, MonthlyStudentRemark[]>;
     remarkSummary: MonthlyRemarkSummary;
     schoolYearLabel: string | null;
+    sf2EnrollmentSummary: Sf2EnrollmentSummary;
 };
+
+function emptySf2EnrollmentSummary(year: number, month: number): Sf2EnrollmentSummary {
+    const totals = { male: 0, female: 0, total: 0 };
+    const monthName = MONTH_NAMES[month - 1] ?? "January";
+    return {
+        cutoffDate: `${year}-${String(month).padStart(2, "0")}-01`,
+        enrollmentLabel: `* Enrolment as of (1st Friday of ${monthName})`,
+        enrolmentAtCutoff: totals,
+        lateEnrolment: { ...totals },
+        registeredAtMonthEnd: { ...totals },
+    };
+}
 
 type HistoryStats = { total: number; present: number; late: number; absent: number; excused?: number };
 
@@ -244,6 +259,15 @@ function getStatusClass(status: AttendanceStatus | null) {
     return "bg-slate-100 text-slate-400";
 }
 
+function finalMonthlyAttendanceStatus(record?: MonthlyAttendanceRow): AttendanceStatus | null {
+    if (!record) return null;
+    if (record.is_excused) return "Excused";
+    // A saved Auto Time Out with Absent status is the student's final result
+    // for the day. The Time In remains visible as the arrival record.
+    if (record.is_absent) return "Absent";
+    return record.time_in_status;
+}
+
 function getInitials(name: string) {
     const parts = name.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) return "?";
@@ -283,14 +307,14 @@ const MONTH_NAMES = [
 
 // ── Daily Export Helpers ───────────────────────────────────────────────────────
 function exportToCSV(rows: HistorySummaryRow[], dateStr: string, sectionLabel: string) {
-    const headers = ["Student ID", "Full Name", "Grade", "Section", "Time In", "Time In Status", "Time Out", "Time Out Status", "Via", "Remark"];
+    const headers = ["Student ID", "Full Name", "Grade", "Section", "Time In", "Final Status", "Time Out", "Time Out Status", "Via", "Remark"];
     const csvRows = rows.map(row => [
         row.student_id,
         `"${row.full_name}"`,
         row.grade,
         row.section,
         formatTime(row.time_in),
-        row.time_in_status ?? "No Record",
+        row.attendance_status ?? "No Record",
         formatTime(row.time_out),
         row.time_out_status ?? "No Record",
         row.via ?? "—",
@@ -316,12 +340,12 @@ function printAttendance(rows: HistorySummaryRow[], dateStr: string, sectionLabe
             <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(formatTime(row.time_in))}</td>
             <td style="padding:8px 10px;font-size:12px;text-align:center;">
                 <span style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;
-                    ${row.time_in_status === "On Time" ? "background:#d1fae5;color:#065f46;" :
-            row.time_in_status === "Late" ? "background:#fef3c7;color:#92400e;" :
-                row.time_in_status === "Excused" ? "background:#e0f2fe;color:#0369a1;" :
+                    ${row.attendance_status === "On Time" ? "background:#d1fae5;color:#065f46;" :
+            row.attendance_status === "Late" ? "background:#fef3c7;color:#92400e;" :
+                row.attendance_status === "Excused" ? "background:#e0f2fe;color:#0369a1;" :
                     row.is_absent ? "background:#fee2e2;color:#991b1b;" :
                         "background:#f1f5f9;color:#64748b;"}">
-                    ${escapePrintHtml(row.time_in_status ?? "No Record")}
+                    ${escapePrintHtml(row.attendance_status ?? "No Record")}
                 </span>
             </td>
             <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${escapePrintHtml(formatTime(row.time_out))}</td>
@@ -611,6 +635,15 @@ function setCellValue(ws: ExcelJS.Worksheet, ref: string, value: string | number
     ws.getCell(ref).value = value;
 }
 
+// The supplied SF2 template formats its Male enrolment cell as `#.###`,
+// which renders a real zero as just `.` in Excel. Summary counts must always
+// be unambiguous whole numbers without changing the official layout.
+function setSf2SummaryCount(ws: ExcelJS.Worksheet, ref: string, value: number) {
+    const cell = ws.getCell(ref);
+    cell.value = value;
+    cell.numFmt = "0";
+}
+
 function setSf2DateHeader(ws: ExcelJS.Worksheet, col0: number, day: number) {
     const cell = ws.getCell(col0ToRef(col0, 6));
     // The official workbook already defines the day-cell number format,
@@ -668,6 +701,7 @@ async function exportMonthlySF2(
     year: number,
     month: number,
     sectionLabel: string,
+    sf2EnrollmentSummary: Sf2EnrollmentSummary,
     holidayDates: string[] = [],
     schoolDayDates: string[] = [],
     schoolYearLabel: string | null = null,
@@ -793,7 +827,7 @@ async function exportMonthlySF2(
 
                 if (iso < student.activeFrom) return;
                 if (holidaySet.has(iso)) {
-                    setCellValue(ws, col0ToRef(col0, row), getSf2StatusCode(null, true));
+                    writeSf2DailyMark(ws, col0ToRef(col0, row), null, true);
                     return;
                 }
 
@@ -808,9 +842,10 @@ async function exportMonthlySF2(
                 // Time In is the daily attendance event. Do not treat a
                 // missing Time In record—or a Time Out status—as evidence of
                 // presence. This preserves the saved Present/Late/Absent value.
-                const savedStatus = toAttendanceExportStatus(rec?.time_in_status);
-                const code = getSf2StatusCode(savedStatus);
-                if (code) setCellValue(ws, col0ToRef(col0, row), code);
+                // A Time In records the learner's arrival. A saved Absent
+                // Time Out is the final daily status after session end.
+                const savedStatus = toAttendanceExportStatus(finalMonthlyAttendanceStatus(rec));
+                writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
                 if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
                 if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
             });
@@ -869,30 +904,36 @@ async function exportMonthlySF2(
     const pastClassDaysCount = classPlacements.filter(({ date }) => date <= todayIso).length;
     setCellValue(ws, `AP${summaryStartRow}`, `No. of Days of Classes: ${pastClassDaysCount}`);
     const enrollmentRow = summaryStartRow + 2;
-    const attendanceRow = summaryStartRow + 8;
+    const lateEnrollmentRow = summaryStartRow + 4;
+    const registeredRow = summaryStartRow + 8;
     const enrollmentPercentageRow = summaryStartRow + 10;
     const totalPresentRow = summaryStartRow + 12;
     const attendanceRateRow = summaryStartRow + 14;
-    setCellValue(ws, `AR${enrollmentRow}`, maleStudents.length);
-    setCellValue(ws, `AS${enrollmentRow}`, femaleStudents.length);
-    setCellValue(ws, `AT${enrollmentRow}`, students.length);
-    setCellValue(ws, `AR${attendanceRow}`, maleStudents.length);
-    setCellValue(ws, `AS${attendanceRow}`, femaleStudents.length);
-    setCellFormula(ws, `AT${attendanceRow}`, `AR${attendanceRow}+AS${attendanceRow}`);
-    setCellFormula(ws, `AR${enrollmentPercentageRow}`, `IF(AR${enrollmentRow}=0,0,AR${attendanceRow}/AR${enrollmentRow})`);
-    setCellFormula(ws, `AS${enrollmentPercentageRow}`, `IF(AS${enrollmentRow}=0,0,AS${attendanceRow}/AS${enrollmentRow})`);
-    setCellFormula(ws, `AT${enrollmentPercentageRow}`, `IF(AT${enrollmentRow}=0,0,AT${attendanceRow}/AT${enrollmentRow})`);
+    setCellValue(ws, `AM${enrollmentRow}`, sf2EnrollmentSummary.enrollmentLabel);
+    setSf2SummaryCount(ws, `AR${enrollmentRow}`, sf2EnrollmentSummary.enrolmentAtCutoff.male);
+    setSf2SummaryCount(ws, `AS${enrollmentRow}`, sf2EnrollmentSummary.enrolmentAtCutoff.female);
+    setSf2SummaryCount(ws, `AT${enrollmentRow}`, sf2EnrollmentSummary.enrolmentAtCutoff.total);
+    setSf2SummaryCount(ws, `AR${lateEnrollmentRow}`, sf2EnrollmentSummary.lateEnrolment.male);
+    setSf2SummaryCount(ws, `AS${lateEnrollmentRow}`, sf2EnrollmentSummary.lateEnrolment.female);
+    setSf2SummaryCount(ws, `AT${lateEnrollmentRow}`, sf2EnrollmentSummary.lateEnrolment.total);
+    setSf2SummaryCount(ws, `AR${registeredRow}`, sf2EnrollmentSummary.registeredAtMonthEnd.male);
+    setSf2SummaryCount(ws, `AS${registeredRow}`, sf2EnrollmentSummary.registeredAtMonthEnd.female);
+    setSf2SummaryCount(ws, `AT${registeredRow}`, sf2EnrollmentSummary.registeredAtMonthEnd.total);
+    setCellFormula(ws, `AR${enrollmentPercentageRow}`, `IF(AR${enrollmentRow}=0,0,AR${registeredRow}/AR${enrollmentRow})`);
+    setCellFormula(ws, `AS${enrollmentPercentageRow}`, `IF(AS${enrollmentRow}=0,0,AS${registeredRow}/AS${enrollmentRow})`);
+    setCellFormula(ws, `AT${enrollmentPercentageRow}`, `IF(AT${enrollmentRow}=0,0,AT${registeredRow}/AT${enrollmentRow})`);
     setCellFormula(ws, `AR${totalPresentRow}`, `AO${maleTotalRow}/${pastClassDaysCount || 1}`);
     setCellFormula(ws, `AS${totalPresentRow}`, `AO${femaleTotalRow}/${pastClassDaysCount || 1}`);
     setCellFormula(ws, `AT${totalPresentRow}`, `AO${combinedRow}/${pastClassDaysCount || 1}`);
-    setCellFormula(ws, `AR${attendanceRateRow}`, `IF(AR${attendanceRow}=0,0,AR${totalPresentRow}/AR${attendanceRow})`);
-    setCellFormula(ws, `AS${attendanceRateRow}`, `IF(AS${attendanceRow}=0,0,AS${totalPresentRow}/AS${attendanceRow})`);
-    setCellFormula(ws, `AT${attendanceRateRow}`, `IF(AT${attendanceRow}=0,0,AT${totalPresentRow}/AT${attendanceRow})`);
+    setCellFormula(ws, `AR${attendanceRateRow}`, `IF(AR${registeredRow}=0,0,AR${totalPresentRow}/AR${registeredRow})`);
+    setCellFormula(ws, `AS${attendanceRateRow}`, `IF(AS${registeredRow}=0,0,AS${totalPresentRow}/AS${registeredRow})`);
+    setCellFormula(ws, `AT${attendanceRateRow}`, `IF(AT${registeredRow}=0,0,AT${totalPresentRow}/AT${registeredRow})`);
 
     const setRemarkSummary = (row: number, summary: { male: number; female: number; total: number }) => {
-        setCellValue(ws, `AR${row}`, summary.male);
-        setCellValue(ws, `AS${row}`, summary.female);
+        setSf2SummaryCount(ws, `AR${row}`, summary.male);
+        setSf2SummaryCount(ws, `AS${row}`, summary.female);
         setCellFormula(ws, `AT${row}`, `AR${row}+AS${row}`, summary.total);
+        ws.getCell(`AT${row}`).numFmt = "0";
     };
     setRemarkSummary(summaryStartRow + 16, remarkSummary["Dropped out"]);
     setRemarkSummary(summaryStartRow + 18, remarkSummary["Transferred Out"]);
@@ -906,7 +947,7 @@ async function exportMonthlySF2(
 
     const detailWs = workbook.addWorksheet("Attendance Detail");
     detailWs.addRow([`Attendance detail — ${sectionLabel} — ${monthName} ${year}`]);
-    detailWs.addRow(["SF2 marks: ✓ = Present or Late, X = Absent, H = Holiday, E = approved excuse. No Record means no saved Time In status."]);
+    detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = Cutting Classes when separately recorded; H = Holiday. No Record means no saved final attendance status."]);
     detailWs.addRow([]);
     detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status", "Time In", "Time Out", "Via", "Remark"]);
     const detailHeader = detailWs.getRow(4);
@@ -925,7 +966,7 @@ async function exportMonthlySF2(
                 date,
                 holidaySet.has(date)
                     ? "Holiday"
-                    : getAttendanceDetailStatus(toAttendanceExportStatus(detailRow?.time_in_status)),
+                    : getAttendanceDetailStatus(toAttendanceExportStatus(finalMonthlyAttendanceStatus(detailRow))),
                 detailRow?.time_in ?? "",
                 detailRow?.time_out ?? "",
                 detailRow?.via ?? "",
@@ -973,9 +1014,9 @@ function printMonthlyAttendance(
     let sectionAbsent = 0;
 
     const studentRows = Array.from(studentMap.entries()).map(([sid, info], idx) => {
-        const present = info.days.filter(d => d.time_in_status === "On Time").length;
-        const late = info.days.filter(d => d.time_in_status === "Late").length;
-        const absent = info.days.filter(d => d.is_absent).length;
+        const present = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "On Time").length;
+        const late = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "Late").length;
+        const absent = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "Absent").length;
 
         sectionPresent += present;
         sectionLate += late;
@@ -1233,6 +1274,9 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
                             "Transferred Out": { male: 0, female: 0, total: 0 },
                         },
                     schoolYearLabel: typeof data.schoolYearLabel === "string" ? data.schoolYearLabel : null,
+                    sf2EnrollmentSummary: data.sf2EnrollmentSummary && typeof data.sf2EnrollmentSummary === "object"
+                        ? data.sf2EnrollmentSummary as Sf2EnrollmentSummary
+                        : emptySf2EnrollmentSummary(selectedYear, selectedMonth),
                 };
                 setAvailableHolidayDates(monthlyData.schoolDays);
                 return monthlyData;
@@ -1282,7 +1326,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
         const holidaySet = new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates]);
         const countableRows = monthlyData.rows.filter((row) => !holidaySet.has(row.date));
         const present = countableRows.filter((row) =>
-            isAttendedExportStatus(toAttendanceExportStatus(row.time_in_status))
+            isAttendedExportStatus(toAttendanceExportStatus(finalMonthlyAttendanceStatus(row)))
         ).length;
         const pct = countableRows.length > 0 ? Math.round((present / countableRows.length) * 100) : 0;
         setPreview({
@@ -1303,6 +1347,7 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
             selectedYear,
             selectedMonth,
             sectionLabel,
+            monthlyData.sf2EnrollmentSummary,
             Array.from(new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates])).sort(),
             monthlyData.schoolDays,
             monthlyData.schoolYearLabel,
@@ -3116,9 +3161,9 @@ export default function AdviserAttendancePage() {
             row.student_id.toLowerCase().includes(historySearch.toLowerCase());
         const matchFilter =
             historyFilter === "All" ? true :
-                historyFilter === "Present" ? row.time_in_status === "On Time" :
-                    historyFilter === "Late" ? row.time_in_status === "Late" :
-                        historyFilter === "Excused" ? row.time_in_status === "Excused" :
+                historyFilter === "Present" ? row.attendance_status === "On Time" :
+                    historyFilter === "Late" ? row.attendance_status === "Late" :
+                        historyFilter === "Excused" ? row.attendance_status === "Excused" :
                             row.is_absent;
         return matchSearch && matchFilter;
     });
@@ -3420,8 +3465,8 @@ export default function AdviserAttendancePage() {
                                                 <p className="truncate text-sm font-semibold text-slate-800">{row.full_name}</p>
                                                 <p className="mt-0.5 font-mono text-[11px] text-slate-400">{row.student_id}</p>
                                             </div>
-                                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(row.time_in_status)}`}>
-                                                {row.time_in_status ?? "No Record"}
+                                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(row.attendance_status)}`}>
+                                                {row.attendance_status ?? "No Record"}
                                             </span>
                                         </div>
                                         <dl className="mt-3 grid grid-cols-2 gap-x-4 border-t border-slate-100 pt-3 text-xs">
@@ -3476,8 +3521,8 @@ export default function AdviserAttendancePage() {
                                                 </td>
                                                 <td className="px-5 py-3 text-sm text-slate-600 font-medium">{formatTime(row.time_in)}</td>
                                                 <td className="px-5 py-3">
-                                                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(row.time_in_status)}`}>
-                                                        {row.time_in_status ?? "No Record"}
+                                                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(row.attendance_status)}`}>
+                                                        {row.attendance_status ?? "No Record"}
                                                     </span>
                                                     {row.is_absent && row.via === "Auto" && (
                                                         <span className="ml-1.5 text-[10px] text-slate-400 italic">auto</span>

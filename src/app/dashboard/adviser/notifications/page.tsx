@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { type NotificationType } from "../data";
+import { dashboardPath } from "@/lib/routeAliases";
 
 interface Notification {
     id: string;        // now a string like "report-2-new"
@@ -476,10 +477,10 @@ export default function NotificationsPage() {
 
         void markOne(n.id);
         switch (n.type) {
-            case "absence": router.push(`/dashboard/adviser/students?status=Absent&section=${encodeURIComponent(n.section ?? "")}&from=notification`); break;
-            case "excused": router.push(`/dashboard/adviser/students?status=Excused&section=${encodeURIComponent(n.section ?? "")}&from=notification`); break;
-            case "report": router.push(n.parentName ? `/dashboard/adviser/reports?parent=${encodeURIComponent(n.parentName)}` : "/dashboard/adviser/reports"); break;
-            case "resolved": router.push(n.parentName ? `/dashboard/adviser/reports?parent=${encodeURIComponent(n.parentName)}&status=Resolved` : "/dashboard/adviser/reports?status=Resolved"); break;
+            case "absence": router.push(dashboardPath("adviser", `/students?status=Absent&section=${encodeURIComponent(n.section ?? "")}&from=notification`)); break;
+            case "excused": router.push(dashboardPath("adviser", `/students?status=Excused&section=${encodeURIComponent(n.section ?? "")}&from=notification`)); break;
+            case "report": router.push(n.parentName ? dashboardPath("adviser", `/reports?parent=${encodeURIComponent(n.parentName)}`) : dashboardPath("adviser", "/reports")); break;
+            case "resolved": router.push(n.parentName ? dashboardPath("adviser", `/reports?parent=${encodeURIComponent(n.parentName)}&status=Resolved`) : dashboardPath("adviser", "/reports?status=Resolved")); break;
         }
     }, [markOne, router]);
 
@@ -640,7 +641,7 @@ export default function NotificationsPage() {
                                 <span className="flex items-center gap-2"><Send className="w-3.5 h-3.5" /> Send Announcement</span>
                                 <ChevronRight className="w-4 h-4" />
                             </button>
-                            <button onClick={() => router.push("/dashboard/adviser/attendance")}
+                            <button onClick={() => router.push(dashboardPath("adviser", "/attendance"))}
                                 className="flex min-h-11 w-full items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-100 bg-slate-50 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100">
                                 <span className="flex items-center gap-2"><UserCheck className="w-3.5 h-3.5" /> Take Attendance</span>
                                 <ChevronRight className="w-4 h-4 text-slate-400" />

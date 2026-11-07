@@ -16,6 +16,7 @@ import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import GuidanceDashboardGuide from "./components/GuidanceDashboardGuide";
+import { dashboardPath } from "@/lib/routeAliases";
 
 
 
@@ -92,7 +93,7 @@ export default function GuidanceDashboard() {
             Start with high-priority cases, coordinate with advisers, and move resolved concerns out of the active queue.
           </p>
         </div>
-        <Link href="/dashboard/guidance/reports" className="hero-action">
+        <Link href={dashboardPath("guidance", "/reports")} className="hero-action">
           Review Reports
           <ArrowUpRight size={17} />
         </Link>
@@ -127,7 +128,7 @@ export default function GuidanceDashboard() {
               <h2>Escalated Concerns</h2>
               <p>Students currently in the guidance review queue</p>
             </div>
-            <Link href="/dashboard/guidance/reports" className="view-all-link">
+            <Link href={dashboardPath("guidance", "/reports")} className="view-all-link">
               View All <ChevronRight size={15} />
             </Link>
           </div>
@@ -164,7 +165,7 @@ export default function GuidanceDashboard() {
                     <td data-label="Status"><span className={`badge ${badgeClass(report.status)}`}>{report.status}</span></td>
                     <td data-label="Date" className="date-cell">{report.date}</td>
                     <td data-label="Open">
-                      <Link href="/dashboard/guidance/reports" className="row-action-btn" aria-label="Open report">
+                      <Link href={dashboardPath("guidance", "/reports")} className="row-action-btn" aria-label="Open report">
                         <ArrowUpRight size={15} />
                       </Link>
                     </td>

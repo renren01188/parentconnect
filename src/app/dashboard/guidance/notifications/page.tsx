@@ -15,6 +15,7 @@ import { useNotifContext } from "../context/NotificationContext";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { mergeNotificationFeed } from "@/lib/notificationFeed";
+import { dashboardPath } from "@/lib/routeAliases";
 
 type GuidanceNotification = {
   id: string;
@@ -203,8 +204,8 @@ export default function GuidanceNotificationsPage() {
       markOne(notification.id);
       router.push(
         notification.parentName
-          ? `/dashboard/guidance/reports?parent=${encodeURIComponent(notification.parentName)}`
-          : "/dashboard/guidance/reports",
+          ? dashboardPath("guidance", `/reports?parent=${encodeURIComponent(notification.parentName)}`)
+          : dashboardPath("guidance", "/reports"),
       );
     },
     [markOne, router],
@@ -315,7 +316,7 @@ export default function GuidanceNotificationsPage() {
           </div>
 
           <button
-            onClick={() => router.push("/dashboard/guidance/reports")}
+            onClick={() => router.push(dashboardPath("guidance", "/reports"))}
             className="guidance-review-reports flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-extrabold text-white transition-colors hover:bg-sky-600"
           >
             <FileText className="h-4 w-4" />

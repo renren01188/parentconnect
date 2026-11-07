@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
-import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import {
+  attendanceReportDaysForMonth,
+  monthEndDate,
+  monthStartDate,
+} from "@/lib/attendanceReportingCalendar";
+import { calculateSf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
 
 type StudentRow = {
   id: number;
@@ -26,6 +31,8 @@ type LogRow = {
   status: "Present" | "On Time" | "Late" | "Absent" | "Excused";
   via: "RFID" | "Manual" | "Auto";
   remark: string | null;
+  student_grade_snapshot?: string | null;
+  student_section_snapshot?: string | null;
 };
 
 type MonthlyAttendanceRow = {
@@ -61,38 +68,6 @@ function buildFullName(row: Pick<StudentRow, "first_name" | "middle_name" | "las
   return [row.first_name, row.middle_name, row.last_name, row.suffix]
     .filter(Boolean)
     .join(" ");
-}
-
-function getScheduledDaysInMonth(
-  year: number,
-  month: number,
-  startDate: string,
-  endDate: string,
-  attendanceWeekdays: unknown,
-): string[] {
-  const days: string[] = [];
-  const daysInMonth = new Date(year, month, 0).getDate(); // month is 1-based
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    if (isScheduledAttendanceDate(dateStr, startDate, endDate, attendanceWeekdays)) {
-      days.push(dateStr);
-    }
-  }
-  return days;
-}
-
-function getToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${year}-${month}-${day}`;
 }
 
 function registrationDate(createdAt?: string | null) {
@@ -159,21 +134,42 @@ export async function GET(req: NextRequest) {
 
     // Attendance days must be inside the active School Year and on an enabled
     // weekday (Monday–Friday by default; weekends only when selected by ICT).
-    const schoolDays = activeSY
-      ? getScheduledDaysInMonth(
-        year,
-        month,
-        activeSY.start_date,
-        activeSY.end_date,
-        activeSY.attendance_weekdays,
-      )
-      : [];
+    const monthStart = monthStartDate(year, month);
+    const monthEnd = monthEndDate(year, month);
+    const logs: LogRow[] = [];
+    const pageSize = 1000;
 
+    // Read durable records for the selected month before applying the live
+    // school-year range. The live range gates new scans, not history.
+    for (let from = 0; ; from += pageSize) {
+      let logsQuery = supabase
+        .from("attendance_logs")
+        .select("id, student_id, student_db_id, attendance_date, time_logged, type, status, via, remark, student_grade_snapshot, student_section_snapshot")
+        .gte("attendance_date", monthStart)
+        .lte("attendance_date", monthEnd)
+        .order("attendance_date", { ascending: true })
+        .order("time_logged", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (activeSection) logsQuery = logsQuery.eq("student_section_snapshot", activeSection);
+      if (adviser?.grade) logsQuery = logsQuery.eq("student_grade_snapshot", adviser.grade);
 
+      const { data: logRows, error: logError } = await logsQuery;
+      if (logError) throw logError;
+      const page = (logRows ?? []) as LogRow[];
+      logs.push(...page);
+      if (page.length < pageSize) break;
+    }
 
-    // Only consider days up to today (can't have records for the future)
-    const today = getToday();
-    const validDays = schoolDays.filter((date) => date <= today);
+    const recordedDates = logs.map((log) => log.attendance_date);
+    const schoolDays = attendanceReportDaysForMonth({
+      year,
+      month,
+      schoolYearStart: activeSY?.start_date,
+      schoolYearEnd: activeSY?.end_date,
+      attendanceWeekdays: activeSY?.attendance_weekdays,
+      recordedDates,
+    });
 
     let holidayDates: string[] = [];
     if (activeSY) {
@@ -181,18 +177,16 @@ export async function GET(req: NextRequest) {
         .from("school_holidays")
         .select("holiday_date")
         .eq("school_year_config_id", activeSY.id)
-        .gte("holiday_date", `${year}-${String(month).padStart(2, "0")}-01`)
-        .lte("holiday_date", `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`);
+        .gte("holiday_date", monthStart)
+        .lte("holiday_date", monthEnd);
       // Existing installations can export before the optional holidays
       // migration has been applied.
       if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
       holidayDates = (holidays ?? []).map((holiday) => String(holiday.holiday_date));
     }
 
-    const startDate = validDays[0];
-    const endDate = validDays[validDays.length - 1];
-
-    // Fetch all students in adviser's section
+    // Keep the current roster for blank rows, then append learners found in
+    // the saved section history after a later transfer.
     let studentsQuery = supabase
       .from("students")
       .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at")
@@ -204,29 +198,58 @@ export async function GET(req: NextRequest) {
     const { data: studentRows, error: studentError } = await studentsQuery;
     if (studentError) throw studentError;
 
-    const students = (studentRows ?? []) as StudentRow[];
+    const studentsById = new Map<number, StudentRow>(
+      ((studentRows ?? []) as StudentRow[]).map((student) => [student.id, student]),
+    );
+    const missingHistoricalIds = [...new Set(logs.map((log) => log.student_db_id))]
+      .filter((studentId) => !studentsById.has(studentId));
+    for (let offset = 0; offset < missingHistoricalIds.length; offset += 250) {
+      const { data: historicalStudents, error: historicalStudentError } = await supabase
+        .from("students")
+        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, created_at")
+        .in("id", missingHistoricalIds.slice(offset, offset + 250));
+      if (historicalStudentError) throw historicalStudentError;
+      for (const student of (historicalStudents ?? []) as StudentRow[]) {
+        studentsById.set(student.id, student);
+      }
+    }
+
+    const students = [...studentsById.values()];
+    const firstRecordedDateByStudent = new Map<number, string>();
+    const recordedScopeByStudent = new Map<number, { grade: string; section: string }>();
+    for (const log of logs) {
+      const firstRecorded = firstRecordedDateByStudent.get(log.student_db_id);
+      if (!firstRecorded || log.attendance_date < firstRecorded) {
+        firstRecordedDateByStudent.set(log.student_db_id, log.attendance_date);
+      }
+      if (log.student_grade_snapshot && log.student_section_snapshot) {
+        recordedScopeByStudent.set(log.student_db_id, {
+          grade: log.student_grade_snapshot,
+          section: log.student_section_snapshot,
+        });
+      }
+    }
+
     const eligibleStudents = students.flatMap((student) => {
       const registeredOn = registrationDate(student.created_at);
-      // Imports can lack created_at. They are not silently removed from an
-      // export; use the school-year start (or requested range) until a known
-      // later registration date says otherwise.
-      const activeFrom = activeSY
+      const recordedOn = firstRecordedDateByStudent.get(student.id) ?? null;
+      const configuredActiveFrom = activeSY
         ? (registeredOn && registeredOn > activeSY.start_date ? registeredOn : activeSY.start_date)
-        : (registeredOn ?? validDays[0] ?? null);
-      return activeFrom && schoolDays.some((date) => date >= activeFrom)
+        : (registeredOn ?? schoolDays[0] ?? recordedOn);
+      const activeFrom = recordedOn && (!configuredActiveFrom || recordedOn < configuredActiveFrom)
+        ? recordedOn
+        : configuredActiveFrom;
+      return activeFrom && (schoolDays.some((date) => date >= activeFrom) || recordedOn)
         ? [{ student, activeFrom }]
         : [];
     });
     const studentDbIds = eligibleStudents.map(({ student }) => student.id);
 
-    const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
-    const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
     const { data: remarkRows, error: remarkError } = studentDbIds.length > 0
       ? await supabase
         .from("student_remarks")
         .select("id, student_db_id, remark_type, effectivity_date, note, school_name")
         .in("student_db_id", studentDbIds)
-        .gte("effectivity_date", monthStart)
         .lte("effectivity_date", monthEnd)
         .order("effectivity_date", { ascending: true })
         .order("id", { ascending: true })
@@ -245,9 +268,15 @@ export async function GET(req: NextRequest) {
       "Transferred In": { male: 0, female: 0, total: 0 },
       "Transferred Out": { male: 0, female: 0, total: 0 },
     };
+    const allRemarksByStudentDbId = new Map<number, StudentRemarkRow[]>();
     for (const remark of (remarkRows ?? []) as StudentRemarkRow[]) {
       const student = studentByDbId.get(remark.student_db_id);
       if (!student) continue;
+      allRemarksByStudentDbId.set(
+        remark.student_db_id,
+        [...(allRemarksByStudentDbId.get(remark.student_db_id) ?? []), remark],
+      );
+      if (remark.effectivity_date < monthStart) continue;
       (remarksByStudentId[student.student_id] ??= []).push(remark);
       const counted = countedStudents.get(remark.remark_type);
       if (!counted || counted.has(student.id)) continue;
@@ -258,31 +287,17 @@ export async function GET(req: NextRequest) {
       remarkSummary[remark.remark_type].total += 1;
     }
 
-    // Fetch logs only for students in the active section. This avoids a costly
-    // attendance_logs -> students join over the whole monthly date range.
-    const logs: LogRow[] = [];
-    if (studentDbIds.length > 0 && startDate && endDate) {
-      // A full class-month can exceed Supabase's response limit. Read every
-      // page so later students/dates cannot disappear from the export.
-      const pageSize = 1000;
-      for (let from = 0; ; from += pageSize) {
-        const { data: logRows, error: logError } = await supabase
-          .from("attendance_logs")
-          .select("id, student_id, student_db_id, attendance_date, time_logged, type, status, via, remark")
-          .in("student_db_id", studentDbIds)
-          .gte("attendance_date", startDate)
-          .lte("attendance_date", endDate)
-          .order("attendance_date", { ascending: true })
-          .order("time_logged", { ascending: true })
-          .order("id", { ascending: true })
-          .range(from, from + pageSize - 1);
-
-        const page = (logRows ?? []) as LogRow[];
-        if (logError) throw logError;
-        logs.push(...page);
-        if (page.length < pageSize) break;
-      }
-    }
+    const sf2EnrollmentSummary = calculateSf2EnrollmentSummary({
+      schoolYearStart: activeSY?.start_date,
+      selectedYear: year,
+      selectedMonth: month,
+      students: eligibleStudents.map(({ student }) => ({
+        id: student.id,
+        gender: student.gender,
+        registrationDate: registrationDate(student.created_at),
+        remarks: allRemarksByStudentDbId.get(student.id) ?? [],
+      })),
+    });
 
     // Build lookup: student_db_id → date → { time_in_log, time_out_log }
     type LogEntry = {
@@ -323,21 +338,24 @@ export async function GET(req: NextRequest) {
 
     for (const { student, activeFrom } of eligibleStudents) {
       const fullName = buildFullName(student);
+      const recordedScope = recordedScopeByStudent.get(student.id);
       for (const dateStr of schoolDays.filter((date) => date >= activeFrom)) {
         const dayLogs = logMap[student.id]?.[dateStr];
         const timeIn = dayLogs?.timeIn;
         const timeOut = dayLogs?.timeOut;
         const isExcused = !!dayLogs?.isExcused;
-        // Excused remains its own visible category, but it contributes to
-        // official absence totals and attendance-rate denominators.
-        const isAbsent = timeIn?.status === "Absent" || isExcused;
+        // The final daily result is Absent when either the Time In itself is
+        // absent or an Auto Time Out recorded the missing departure. Excused
+        // remains its own visible category but also contributes to official
+        // absence totals and attendance-rate denominators.
+        const isAbsent = timeIn?.status === "Absent" || timeOut?.status === "Absent" || isExcused;
 
         rows.push({
           student_id: student.student_id,
           full_name: fullName,
           gender: student.gender ?? null,
-          grade: student.grade,
-          section: student.section,
+          grade: recordedScope?.grade ?? student.grade,
+          section: recordedScope?.section ?? student.section,
           date: dateStr,
           time_in: timeIn?.time_logged ?? null,
           time_out: timeOut?.time_logged ?? null,
@@ -360,6 +378,7 @@ export async function GET(req: NextRequest) {
       studentCount: eligibleStudents.length,
       remarksByStudentId,
       remarkSummary,
+      sf2EnrollmentSummary,
       schoolYearLabel: activeSY
         ? `${activeSY.start_date.slice(0, 4)} - ${activeSY.end_date.slice(0, 4)}`
         : null,

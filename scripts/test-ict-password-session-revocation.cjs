@@ -8,7 +8,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const userManagement = read("src/app/api/ict/user-management/route.ts");
 const realtime = read("src/lib/realtimeInvalidation.ts");
 const subscriber = read("src/lib/subscribeRealtimeInvalidations.ts");
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
 const helper = read("src/lib/passwordSessionRevocation.ts");
 const store = read("src/lib/passwordSessionRevocationStore.ts");
 const sessionRoute = read("src/app/api/auth/session/route.ts");

@@ -10,6 +10,7 @@ import { consumeParentPasswordResetRateLimit, isParentPasswordResetRateLimitUnav
 import { getParentOtpLimit, issueParentOtp } from "@/lib/parentVerificationOtp";
 import { writeParentResetFlow } from "@/lib/parentPasswordResetFlow";
 import { sendSms } from "@/lib/smsProvider";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 type Channel = "email" | "sms";
 
@@ -118,7 +119,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({
       success: true,
-      redirectTo: "/login/guardian/reset-password",
+      redirectTo: PUBLIC_ROUTE_ALIASES.parentRecovery.resetOtp,
       channel,
       canUseEmail: Boolean(normalizeParentLoginEmail(parent.email)),
       expiresAt: issued.expiresAt,

@@ -13,6 +13,7 @@ import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import { useParentSession } from "./ParentSessionGate";
 import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.cjs";
+import { dashboardPath } from "@/lib/routeAliases";
 
 interface StudentInfo {
     id: string;
@@ -456,14 +457,14 @@ export default function ParentDashboard() {
             ),
         }).catch(() => null);
         if (notif.staffMessageConversationId) {
-            router.push(`/dashboard/parent/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`);
+            router.push(dashboardPath("parent", `/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`));
             return;
         }
         if (notif.reportId) {
-            router.push(`/dashboard/parent/reports?reportId=${notif.reportId}`);
+            router.push(dashboardPath("parent", `/reports?reportId=${notif.reportId}`));
             return;
         }
-        router.push("/dashboard/parent/notifications");
+        router.push(dashboardPath("parent", "/notifications"));
     }
 
     if (profileLoading || !student) {
@@ -737,7 +738,7 @@ export default function ParentDashboard() {
                                 </div>
                             )}
                         </div>
-                        <Link href="/dashboard/parent/notifications"
+                        <Link href={dashboardPath("parent", "/notifications")}
                             className="mt-4 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-3 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50">
                             View All Notifications <span className="text-base">→</span>
                         </Link>

@@ -26,7 +26,8 @@ const setPasswordRoute = read("src/app/api/auth/set-password/route.ts");
 const passwordRequirements = read("src/lib/parentPasswordRequirements.ts");
 const preferenceRoute = read("src/app/api/parents/attendance-notification-preferences/route.ts");
 const profilePage = read("src/app/dashboard/parent/profile/page.tsx");
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
+const routeAliases = read("src/lib/routeAliases.ts");
 
 assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.parent_verification_otps/);
 assert.match(migration, /purpose IN \('signup', 'password_reset'\)/);
@@ -65,8 +66,10 @@ assert.equal(parentPasswordMeetsRequirements("Pass1"), false, "A password shorte
 
 assert.match(signup, /const verificationMethod = email \? "email" : "sms"/);
 assert.match(signup, /verificationMethod: "sms"/);
-assert.match(signup, /redirectTo: "\/login\/guardian\/send-otp"/);
-assert.match(signup, /redirectTo: "\/login\/guardian\/verify-temp-password"/);
+assert.match(routeAliases, /signupOtp: "\/a\/[A-Za-z0-9]+"/);
+assert.match(routeAliases, /verifyTemporaryPassword: "\/a\/[A-Za-z0-9]+"/);
+assert.match(signup, /redirectTo: PUBLIC_ROUTE_ALIASES\.parentRecovery\.signupOtp/);
+assert.match(signup, /redirectTo: PUBLIC_ROUTE_ALIASES\.parentRecovery\.verifyTemporaryPassword/);
 assert.match(signupOtp, /export async function GET\(\)/);
 assert.match(signupOtp, /export async function POST\(request: NextRequest\)/);
 assert.match(signupOtp, /issueParentOtp/);
@@ -104,7 +107,7 @@ assert.ok(
   resetComplete.indexOf("parentPasswordMeetsRequirements(newPassword)") < resetComplete.indexOf("bcrypt.hash(newPassword"),
   "The reset API must reject weak passwords before hashing or saving them.",
 );
-assert.match(resetComplete, /redirectTo: "\/dashboard\/parent"/);
+assert.match(resetComplete, /redirectTo: dashboardPath\("parent"\)/);
 assert.match(resetPage, /Six-digit verification code/);
 assert.match(resetPage, /Enter the code sent to your email/);
 assert.doesNotMatch(resetPage, /Email Address\*|Registered email address/);

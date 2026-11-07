@@ -115,6 +115,28 @@ const repeatRun = absence.studentsMissingSessionAttendance({
 });
 assert.deepEqual(repeatRun, [], "A second run cannot create a duplicate absence.");
 
+const missingTimeOut = absence.studentsMissingSessionTimeOut({
+  students,
+  presentOrLateTimeInStudentDbIds: [1],
+  recordedTimeOutStudentDbIds: [],
+  excusedStudentIds: ["EXCUSED"],
+});
+assert.deepEqual(
+  missingTimeOut.map((student) => student.student_id),
+  ["SCANNED"],
+  "A recorded On Time/Late arrival without a Time Out becomes final Absent after session end.",
+);
+assert.deepEqual(
+  absence.studentsMissingSessionTimeOut({
+    students,
+    presentOrLateTimeInStudentDbIds: [1],
+    recordedTimeOutStudentDbIds: [1],
+    excusedStudentIds: ["EXCUSED"],
+  }),
+  [],
+  "A recorded Time Out prevents a duplicate final-absent record.",
+);
+
 const scheduledSession = {
   isScheduledClassDay: true,
   hasScheduledSession: true,
@@ -147,6 +169,8 @@ const studentPage = read("src/app/dashboard/adviser/students/page.tsx");
 const cronRoute = read("src/app/api/attendance/process-absences/route.ts");
 const manualRoute = read("src/app/api/attendance/manual/route.ts");
 const monthlyExportRoute = read("src/app/api/attendance/monthly/route.ts");
+const historyRoute = read("src/app/api/attendance/history/route.ts");
+const principalSummaryRoute = read("src/app/api/attendance/monthly-summary/route.ts");
 const vercel = JSON.parse(read("vercel.json"));
 
 assert.match(processor, /const absenceDeadline = session\.absent_after \?\? session\.scheduled_end/);
@@ -157,7 +181,9 @@ assert.match(processor, /isStudentInScope/);
 assert.match(processor, /processDueAutomaticAbsences[\s\S]*?activeStudentsForGrade/, "The scheduled worker must reuse its one roster read across due sessions.");
 assert.match(processor, /\.eq\("grade", grade\)/, "An adviser-scope fallback must query only its grade instead of scanning every student.");
 assert.match(processor, /excuse_letters/);
-assert.match(processor, /\.eq\("type", "Time In"\)/, "Only a missing Time In may be automatically marked absent.");
+assert.match(processor, /studentsMissingSessionTimeOut/, "The worker must identify recorded arrivals that still lack a Time Out.");
+assert.match(processor, /hasReachedSessionEnd\(schoolClock\.minutes, session\.scheduled_end\)/, "Final Absent must wait for the actual session end, rather than the no-show cutoff.");
+assert.match(processor, /type: "Time Out" as const/, "The final Absent must preserve the original Time In as a separate event.");
 assert.match(processor, /status: "Absent"/);
 assert.match(processor, /via: "Auto"/);
 assert.match(processor, /rowError\.code === "23505"/, "Overlapping schedule invocations must safely reconcile duplicate writes.");
@@ -167,6 +193,8 @@ assert.match(processor, /school_holidays/);
 assert.match(processor, /sessionEnd: absenceDeadline/, "The absence processor must evaluate same-day enrolment against ICT's saved Absent After time.");
 assert.match(studentRoute, /markAutomaticAbsences\(\{[\s\S]*?scope: \{ grade: adviser\.grade \?\? "", sections: \[activeSection\] \}/);
 assert.match(studentRoute, /resolveTodayAttendanceStatus/, "The adviser panel must render durable Present\/Late records immediately.");
+assert.match(studentRoute, /finalAttendanceBySession/, "The adviser roster must resolve one final status per student, date, and session.");
+assert.match(studentRoute, /log\.type === "Time Out"[\s\S]*?status === "Absent"/, "A final Absent Time Out must override the provisional Time In on the adviser roster.");
 assert.match(studentRoute, /hasReachedSessionEnd\(schoolClock\.minutes, session\.absent_after \?\? session\.scheduled_end\)/, "The adviser panel must defer Absent until ICT's saved Absent After time.");
 assert.doesNotMatch(studentRoute, /registeredTodayIds/, "A student registered today must still display a recorded RFID Time In.");
 assert.doesNotMatch(studentRoute, /hasReachedAbsenceCutoff/);
@@ -179,7 +207,9 @@ assert.ok(
   vercel.crons.some((cron) => cron.path === "/api/attendance/process-absences" && cron.schedule === "*/5 * * * *"),
   "A five-minute scheduler must invoke automatic absence processing without continuously saturating the database.",
 );
-assert.match(monthlyExportRoute, /timeIn\?\.status === "Absent" \|\| isExcused/, "Exports must count Excused records with Absences while retaining their Excused detail status.");
+assert.match(monthlyExportRoute, /timeOut\?\.status === "Absent"/, "Adviser monthly data must use an Absent Time Out as the final daily status.");
+assert.match(historyRoute, /timeOutLog\?\.status === "Absent"/, "Adviser history must show final Absent rather than the provisional Time In status.");
+assert.match(principalSummaryRoute, /autoMissingTimeOuts/, "Principal summaries and exports must use the same final Absent Time Out rule.");
 assert.match(manualRoute, /Time Out requires a recorded On Time or Late Time In/);
 assert.match(manualRoute, /A remark is required when correcting an automatic absence/);
 assert.match(manualRoute, /existingSameType\.via === "Auto"/);

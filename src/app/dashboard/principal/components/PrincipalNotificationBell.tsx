@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Bell, CheckCheck, FileText, Loader2, TicketCheck } from "lucide-react";
 import { useNotifContext, type PrincipalNotification } from "../context/NotificationContext";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const PANEL_ITEM_LIMIT = 8;
 
@@ -73,7 +74,7 @@ export default function PrincipalNotificationBell() {
     if (notification.reportId) {
       void markNotificationsRead([notification]);
       setOpen(false);
-      router.push(`/dashboard/principal/reports?reportId=${notification.reportId}`);
+      router.push(dashboardPath("principal", `/reports?reportId=${notification.reportId}`));
     }
   };
 
@@ -145,7 +146,7 @@ export default function PrincipalNotificationBell() {
           </div>
 
           <Link
-            href="/dashboard/principal/notifications"
+            href={dashboardPath("principal", "/notifications")}
             onClick={() => setOpen(false)}
             className="block border-t border-slate-100 px-4 py-3 text-center text-xs font-extrabold text-violet-700 transition hover:bg-violet-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-400"
           >

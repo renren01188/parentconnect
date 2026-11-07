@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AlertCircle, ArrowLeft, CheckCircle, KeyRound, Send } from "lucide-react";
 import { LoginLandingHeader } from "@/components/LoginLandingHeader";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 function seconds(value: number | null, now: number) {
   return value == null ? 0 : Math.max(0, Math.ceil((value - now) / 1_000));
@@ -124,7 +125,7 @@ export default function SendSignupOtpPage() {
               <input autoComplete="one-time-code" inputMode="numeric" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-center font-mono text-xl tracking-[0.35em] text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#4f5fa3] focus:ring-2 focus:ring-[#dbe3f0]" placeholder="123456" />
               <button type="submit" disabled={verifying || code.length !== 6} className="w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-60" style={{ background: "linear-gradient(135deg, #1a2035 0%, #2d3a5e 100%)", boxShadow: "0 4px 14px rgba(26,32,53,0.3)" }}>{verifying ? "Verifying…" : "Verify and Set Password"}</button>
             </form>}
-            {hasEmail && <p className="mt-5 text-center text-xs text-slate-600">Prefer email? <Link className="font-bold text-[#4f5fa3] underline" href="/login/guardian/verify-temp-password">Switch to email verification</Link></p>}
+            {hasEmail && <p className="mt-5 text-center text-xs text-slate-600">Prefer email? <Link className="font-bold text-[#4f5fa3] underline" href={PUBLIC_ROUTE_ALIASES.parentRecovery.verifyTemporaryPassword}>Switch to email verification</Link></p>}
           </>}
         </section>
       </main>

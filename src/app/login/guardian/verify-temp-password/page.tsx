@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle, Eye, EyeOff, KeyRound, Mail, ShieldCheck } from
 import { useRouter } from "next/navigation";
 import { PARENT_SIGNUP_CONFIRMATION_MESSAGE } from "@/lib/parentSignupConfirmation";
 import { LoginLandingHeader } from "@/components/LoginLandingHeader";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 const INCORRECT_PASSWORD_MESSAGE = "Please check the correct temporary password or check your email address if it is correct.";
 const EXPIRED_SIGNUP_URL = "/login/guardian?signup=1&tempPasswordExpired=1";
@@ -275,7 +276,7 @@ export default function VerifyTemporaryPasswordPage() {
           </p>
           <button
             type="button"
-            onClick={() => router.push("/login/guardian/send-otp")}
+            onClick={() => router.push(PUBLIC_ROUTE_ALIASES.parentRecovery.signupOtp)}
             className="mt-4 text-xs font-bold text-[#4f5fa3] underline underline-offset-2 hover:text-[#1a2035]"
           >
             Switch to SMS OTP

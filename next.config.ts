@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { OPAQUE_ROUTE_REWRITES, READABLE_ROUTE_REDIRECTS } from "./src/lib/routeAliases";
 
 // Do not let production start with the old, source-visible JWT fallback.
 // This runs for builds and server starts, before any route can issue a token.
@@ -20,6 +21,19 @@ const nextConfig: NextConfig = {
   // Keep tracing and Turbopack inside this application when a parent folder
   // also contains a lockfile.
   turbopack: { root: __dirname },
+
+  async redirects() {
+    return READABLE_ROUTE_REDIRECTS;
+  },
+
+  async rewrites() {
+    return {
+      // The request proxy runs first and applies the existing authorization
+      // checks to the normalized internal route. The rewrite then serves the
+      // original page while the opaque URL remains in the address bar.
+      beforeFiles: OPAQUE_ROUTE_REWRITES,
+    };
+  },
 
   webpack(config, { isServer }) {
     if (!isServer) {

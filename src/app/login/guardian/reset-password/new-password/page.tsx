@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { Eye, EyeOff, KeyRound, Lock } from "lucide-react";
 import { LoginLandingHeader } from "@/components/LoginLandingHeader";
 import { PARENT_PASSWORD_REQUIREMENTS_MESSAGE, parentPasswordMeetsRequirements } from "@/lib/parentPasswordRequirements";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function NewResetPasswordPage() {
   const [newPassword, setNewPassword] = useState("");
@@ -28,7 +29,7 @@ export default function NewResetPasswordPage() {
         setError(data?.message || "Unable to save your new password.");
         return;
       }
-      window.location.assign(data.redirectTo || "/dashboard/parent");
+      window.location.assign(data.redirectTo || dashboardPath("parent"));
     } catch {
       setError("Cannot connect to save your new password. Please try again.");
     } finally {

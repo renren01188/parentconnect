@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readParentResetFlow, writeVerifiedParentReset } from "@/lib/parentPasswordResetFlow";
 import { verifyParentOtp } from "@/lib/parentVerificationOtp";
+import { PUBLIC_ROUTE_ALIASES } from "@/lib/routeAliases";
 
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message, retryAfterSeconds: result.retryAfterSeconds }, { status: 400 });
     }
     await writeVerifiedParentReset(cookieStore, flow);
-    return NextResponse.json({ success: true, redirectTo: "/login/guardian/reset-password/new-password" });
+    return NextResponse.json({ success: true, redirectTo: PUBLIC_ROUTE_ALIASES.parentRecovery.resetNewPassword });
   } catch {
     return NextResponse.json({ success: false, message: "Unable to verify the code. Please try again." }, { status: 500 });
   }

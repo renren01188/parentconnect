@@ -9,6 +9,7 @@ import { dashboardSessionCookieOptions, issueDashboardIdleSession } from "@/lib/
 import { logAudit } from "@/lib/audit";
 import { PASSWORD_SESSION_REVOCATION_ACTION } from "@/lib/passwordSessionRevocation";
 import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
       passwordSet: true,
       sessionIssuedAt: Date.now(),
     });
-    const response = NextResponse.json({ success: true, redirectTo: "/dashboard/parent" });
+    const response = NextResponse.json({ success: true, redirectTo: dashboardPath("parent") });
     response.cookies.set("parent_token", token, dashboardSessionCookieOptions);
     response.cookies.delete(PARENT_RESET_FLOW_COOKIE);
     response.cookies.delete(PARENT_RESET_VERIFIED_COOKIE);

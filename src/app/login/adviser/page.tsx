@@ -7,6 +7,7 @@ import { BookOpen, ArrowLeft, ArrowRight, Eye, EyeOff, AlertCircle } from "lucid
 import Link from "next/link";
 import { LoginRecaptcha } from "@/components/LoginRecaptcha";
 import { useLoginProtection } from "@/hooks/useLoginProtection";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function AdviserLoginPage() {
   const router = useRouter();
@@ -56,7 +57,7 @@ export default function AdviserLoginPage() {
       } else {
         // A document navigation starts the Realtime channel only after the
         // new role cookie is available to the Reports and Contact ICT pages.
-        window.location.assign("/dashboard/adviser");
+        window.location.assign(dashboardPath("adviser"));
         return;
       }
       router.refresh();

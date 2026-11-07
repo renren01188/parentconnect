@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { HeartHandshake } from "lucide-react";
 import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const GUIDANCE_THEME = {
   canvas: "#f0f9ff",
@@ -67,7 +68,7 @@ export default function GuidanceSetPasswordPage() {
 
       setDone(true);
       setTimeout(() => {
-        router.push("/dashboard/guidance");
+        router.push(dashboardPath("guidance"));
         router.refresh();
       }, 1500);
     } catch {

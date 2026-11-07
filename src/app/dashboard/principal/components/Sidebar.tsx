@@ -9,6 +9,7 @@ import {
 import LogoutButton from "@/components/LogoutButton";
 import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
 import { useNotifContext } from "../context/NotificationContext";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const NAV_ITEMS: {
   label: string;
@@ -16,13 +17,13 @@ const NAV_ITEMS: {
   href: string;
   badgeKey?: "reports" | "ict" | "announcements";
 }[] = [
-    { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard/principal" },
-    { label: "Reports", icon: FileText, href: "/dashboard/principal/reports", badgeKey: "reports" },
-    { label: "Contact ICT", icon: Monitor, href: "/dashboard/principal/contact-ict", badgeKey: "ict" },
+    { label: "Dashboard", icon: LayoutDashboard, href: dashboardPath("principal") },
+    { label: "Reports", icon: FileText, href: dashboardPath("principal", "/reports"), badgeKey: "reports" },
+    { label: "Contact ICT", icon: Monitor, href: dashboardPath("principal", "/contact-ict"), badgeKey: "ict" },
 
-    { label: "Attendance Summary", icon: CreditCard, href: "/dashboard/principal/AttendanceSummary" },
-    { label: "Audit Trail", icon: Activity, href: "/dashboard/principal/audit-trail" },
-    { label: "Announcements", icon: Bell, href: "/dashboard/principal/announcements", badgeKey: "announcements" },
+    { label: "Attendance Summary", icon: CreditCard, href: dashboardPath("principal", "/AttendanceSummary") },
+    { label: "Audit Trail", icon: Activity, href: dashboardPath("principal", "/audit-trail") },
+    { label: "Announcements", icon: Bell, href: dashboardPath("principal", "/announcements"), badgeKey: "announcements" },
   ];
 
 type PrincipalSummary = {
@@ -56,7 +57,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
   const acknowledgedBadgePathRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const item = NAV_ITEMS.find(({ href, badgeKey }) => badgeKey && (href === "/dashboard/principal" ? pathname === href : pathname.startsWith(href)));
+    const item = NAV_ITEMS.find(({ href, badgeKey }) => badgeKey && (href === dashboardPath("principal") ? pathname === href : pathname.startsWith(href)));
     const badgeKey = item?.badgeKey;
     if (!badgeKey) {
       acknowledgedBadgePathRef.current = null;
@@ -144,7 +145,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
 
         {/* Brand */}
         <div className="px-5 py-5 border-b border-white/10">
-          <Link href="/dashboard/principal" onClick={onClose} aria-label="Go to principal dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70">
+          <Link href={dashboardPath("principal")} onClick={onClose} aria-label="Go to principal dashboard" className="flex items-center gap-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/70">
             <div className="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
               <Shield className="w-4 h-4 text-white" />
             </div>
@@ -158,7 +159,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
         {/* Nav */}
         <nav className="flex shrink-0 flex-col gap-1 px-3 py-4">
           {NAV_ITEMS.map(({ label, icon: Icon, href, badgeKey }) => {
-            const active = href === "/dashboard/principal"
+            const active = href === dashboardPath("principal")
               ? pathname === href
               : pathname.startsWith(href);
             const badge = visibleBadgeCount(badgeKey);
@@ -194,11 +195,11 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
         {/* Profile + Logout */}
         <div className="mt-3 flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 xl:mt-auto xl:pb-4">
           <Link
-            href="/dashboard/principal/profile"
+            href={dashboardPath("principal", "/profile")}
             onClick={onClose}
             className={[
               "flex items-center gap-2.5 px-2 py-2 rounded-xl transition-all",
-              pathname.startsWith("/dashboard/principal/profile")
+              pathname.startsWith(dashboardPath("principal", "/profile"))
                 ? "bg-white/18"
                 : "hover:bg-white/10",
             ].join(" ")}

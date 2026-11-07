@@ -31,7 +31,7 @@ assert.match(activityRoute, /export async function POST/);
 assert.match(activityRoute, /isCurrentDashboardIdleSession/);
 assert.match(activityRoute, /response\.cookies\.set/);
 
-const middleware = read("src/middleware.ts");
+const middleware = read("src/proxy.ts");
 assert.match(middleware, /"\/api\/:path\*"/);
 assert.match(middleware, /expiredDashboardApiSession/);
 assert.match(middleware, /isCurrentDashboardIdleSession/);

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import PrincipalNotificationBell from "./components/PrincipalNotificationBell";
+import { dashboardPath } from "@/lib/routeAliases";
 
 // ─── Color Palette ───────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -440,8 +441,8 @@ export default function Page() {
             className="pd-clickable"
             role="button"
             tabIndex={0}
-            onClick={() => router.push(card.label === "Pending Reports" ? "/dashboard/principal/reports" : card.label === "Announcements Sent" ? "/dashboard/principal/announcements" : "/dashboard/principal/AttendanceSummary")}
-            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(card.label === "Pending Reports" ? "/dashboard/principal/reports" : card.label === "Announcements Sent" ? "/dashboard/principal/announcements" : "/dashboard/principal/AttendanceSummary"); }}
+            onClick={() => router.push(card.label === "Pending Reports" ? dashboardPath("principal", "/reports") : card.label === "Announcements Sent" ? dashboardPath("principal", "/announcements") : dashboardPath("principal", "/AttendanceSummary"))}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(card.label === "Pending Reports" ? dashboardPath("principal", "/reports") : card.label === "Announcements Sent" ? dashboardPath("principal", "/announcements") : dashboardPath("principal", "/AttendanceSummary")); }}
             style={{
             background: card.bg, borderRadius: 16, padding: "18px 20px",
             border: card.light ? `1px solid ${GRAY_200}` : "none",
@@ -464,7 +465,7 @@ export default function Page() {
           <div style={{ background: WHITE, borderRadius: 16, padding: 22, border: `1px solid ${GRAY_200}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: GRAY_800 }}>Attendance Overview</h2>
-              <button onClick={() => router.push("/dashboard/principal/AttendanceSummary")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 500 }}>
+              <button onClick={() => router.push(dashboardPath("principal", "/AttendanceSummary"))} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, border: `1px solid ${GRAY_200}`, background: WHITE, fontSize: 12, color: GRAY_600, cursor: "pointer", fontWeight: 500 }}>
                 <Icons.Calendar /> This Week
               </button>
             </div>
@@ -497,13 +498,13 @@ export default function Page() {
           <div style={{ background: WHITE, borderRadius: 16, padding: 22, border: `1px solid ${GRAY_200}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: GRAY_800 }}>Recent Announcements</h2>
-              <button onClick={() => router.push("/dashboard/principal/announcements")} style={{ fontSize: 12, color: PRIMARY, fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+              <button onClick={() => router.push(dashboardPath("principal", "/announcements"))} style={{ fontSize: 12, color: PRIMARY, fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                 View All <Icons.ArrowRight />
               </button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {announcements.map(ann => (
-                <div key={ann.id} className="pd-list-item pd-clickable" role="button" tabIndex={0} onClick={() => router.push("/dashboard/principal/announcements")} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push("/dashboard/principal/announcements"); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: GRAY_50, border: `1px solid ${GRAY_100}` }}>
+                <div key={ann.id} className="pd-list-item pd-clickable" role="button" tabIndex={0} onClick={() => router.push(dashboardPath("principal", "/announcements"))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(dashboardPath("principal", "/announcements")); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: GRAY_50, border: `1px solid ${GRAY_100}` }}>
                   <div style={{ width: 32, height: 32, borderRadius: 8, background: `${PRIMARY}15`, display: "flex", alignItems: "center", justifyContent: "center", color: PRIMARY, flexShrink: 0 }}>
                     <Icons.Megaphone />
                   </div>
@@ -527,7 +528,7 @@ export default function Page() {
             <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: GRAY_800 }}>Quick Actions</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button
-                onClick={() => router.push("/dashboard/principal/announcements?compose=true")}
+                onClick={() => router.push(dashboardPath("principal", "/announcements?compose=true"))}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderRadius: 12, border: "none",
                   background: `linear-gradient(135deg, ${PRIMARY} 0%, ${PRIMARY_LIGHT} 100%)`,
@@ -543,8 +544,8 @@ export default function Page() {
               </button>
 
               {[
-                { label: "View Reports", sub: loading ? "Loading…" : `${stats.pendingReports} pending escalations`, icon: Icons.Reports, href: "/dashboard/principal/reports" },
-                { label: "Attendance Summary", sub: loading ? "Loading…" : `${stats.totalStudents} students enrolled`, icon: Icons.Users, href: "/dashboard/principal/AttendanceSummary" },
+                { label: "View Reports", sub: loading ? "Loading…" : `${stats.pendingReports} pending escalations`, icon: Icons.Reports, href: dashboardPath("principal", "/reports") },
+                { label: "Attendance Summary", sub: loading ? "Loading…" : `${stats.totalStudents} students enrolled`, icon: Icons.Users, href: dashboardPath("principal", "/AttendanceSummary") },
               ].map(action => (
                 <button key={action.label} onClick={() => router.push(action.href)} style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 12,
@@ -569,7 +570,7 @@ export default function Page() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {escalatedReports.map(r => (
-                <div key={r.id} className="pd-clickable" role="button" tabIndex={0} onClick={() => router.push(`/dashboard/principal/reports?reportId=${r.id}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(`/dashboard/principal/reports?reportId=${r.id}`); }} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div key={r.id} className="pd-clickable" role="button" tabIndex={0} onClick={() => router.push(dashboardPath("principal", `/reports?reportId=${r.id}`))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") router.push(dashboardPath("principal", `/reports?reportId=${r.id}`)); }} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 34, height: 34, borderRadius: "50%", background: `${PRIMARY}18`, display: "flex", alignItems: "center", justifyContent: "center", color: PRIMARY, fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{r.initials}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: GRAY_800 }}>{r.name}</div>
@@ -580,7 +581,7 @@ export default function Page() {
               ))}
               {!loading && escalatedReports.length === 0 && <p className="pd-empty">No escalated reports need review.</p>}
             </div>
-            <button onClick={() => router.push("/dashboard/principal/reports")} style={{
+            <button onClick={() => router.push(dashboardPath("principal", "/reports"))} style={{
               width: "100%", marginTop: 14, padding: "10px", borderRadius: 10,
               border: `1.5px solid ${GRAY_200}`, background: WHITE, color: PRIMARY,
               fontWeight: 600, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,

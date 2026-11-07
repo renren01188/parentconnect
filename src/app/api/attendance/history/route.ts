@@ -45,6 +45,7 @@ type SummaryRow = {
   time_out: string | null;
   time_in_status: "On Time" | "Late" | "Absent" | "Excused" | null;
   time_out_status: "On Time" | "Late" | "Absent" | "Excused" | null;
+  attendance_status: "On Time" | "Late" | "Absent" | "Excused" | null;
   via: "RFID" | "Manual" | "Auto" | null;
   remark: string | null;
   is_absent: boolean;
@@ -223,8 +224,12 @@ export async function GET(req: NextRequest) {
       const isExcused = studentLogs.some((log) => log.status === "Excused");
 
       // Only the Class Session Control cutoff processor writes absences.
-      // History must not infer an absence from a missing record.
+      // History does not infer a missing Time Out: it uses the saved Auto
+      // Time Out record to make the learner's final status Absent.
       const isAutoAbsent = false;
+      const attendanceStatus = timeOutLog?.status === "Absent"
+        ? "Absent"
+        : timeInLog?.status ?? (isAutoAbsent ? "Absent" : null);
 
       return {
         student_id: s.student_id,
@@ -235,19 +240,20 @@ export async function GET(req: NextRequest) {
         time_out: timeOutLog ? timeOutLog.time_logged : null,
         time_in_status: timeInLog ? timeInLog.status : isAutoAbsent ? "Absent" : null,
         time_out_status: timeOutLog ? timeOutLog.status : null,
+        attendance_status: attendanceStatus,
         via: timeInLog ? timeInLog.via : isAutoAbsent ? "Auto" : null,
-        remark: timeInLog ? timeInLog.remark ?? null : null,
+        remark: timeInLog?.remark ?? timeOutLog?.remark ?? null,
         // Excused remains identifiable in details, but it is absent for
         // attendance totals and rates rather than an attended day.
-        is_absent: isAutoAbsent || timeInLog?.status === "Absent" || isExcused,
+        is_absent: attendanceStatus === "Absent" || isExcused,
         logs: studentLogs,
       };
     });
 
-    const present = summary.filter((row) => row.time_in_status === "On Time").length;
-    const late = summary.filter((row) => row.time_in_status === "Late").length;
+    const present = summary.filter((row) => row.attendance_status === "On Time").length;
+    const late = summary.filter((row) => row.attendance_status === "Late").length;
     const absent = summary.filter((row) => row.is_absent).length;
-    const excused = summary.filter((row) => row.time_in_status === "Excused").length;
+    const excused = summary.filter((row) => row.attendance_status === "Excused").length;
 
     return NextResponse.json({
       success: true,

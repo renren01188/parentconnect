@@ -14,6 +14,7 @@ import {
 import Sidebar from "../components/Sidebar";
 import { useNotifContext } from "../context/NotificationContext";
 import { mergeNotificationFeed } from "@/lib/notificationFeed";
+import { dashboardPath } from "@/lib/routeAliases";
 import {
   type FilterTab,
   type Notification,
@@ -219,9 +220,9 @@ function NotificationsPageContent() {
 
     if (notif.type === "alert" && notif.studentName) {
       router.push(
-        `/dashboard/parent/attendance?student=${encodeURIComponent(
+        dashboardPath("parent", `/attendance?student=${encodeURIComponent(
           notif.studentName
-        )}`
+        )}`)
       );
       return;
     }
@@ -232,22 +233,22 @@ function NotificationsPageContent() {
     }
 
     if (notif.reportId) {
-      router.push(`/dashboard/parent/reports?reportId=${notif.reportId}`);
+      router.push(dashboardPath("parent", `/reports?reportId=${notif.reportId}`));
       return;
     }
 
     if (notif.staffMessageConversationId) {
       router.push(
-        `/dashboard/parent/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`
+        dashboardPath("parent", `/reports?conversation=${encodeURIComponent(`staff-message:${notif.staffMessageConversationId}`)}`)
       );
       return;
     }
 
     if (notif.type === "message" && notif.teacherName) {
       router.push(
-        `/dashboard/parent/reports?teacher=${encodeURIComponent(
+        dashboardPath("parent", `/reports?teacher=${encodeURIComponent(
           notif.teacherName
-        )}`
+        )}`)
       );
       return;
     }

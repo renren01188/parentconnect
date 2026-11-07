@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
-import { DEFAULT_ATTENDANCE_WEEKDAYS, isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import {
+    attendanceReportDaysForMonth,
+    monthEndDate,
+    monthStartDate,
+    reportableAttendanceDays,
+} from "@/lib/attendanceReportingCalendar";
+import { calculateSf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
 
 type LogRow = {
     id: number;
@@ -10,6 +16,8 @@ type LogRow = {
     time_logged: string;
     type: "Time In" | "Time Out" | null;
     status: string | null;
+    student_grade_snapshot?: string | null;
+    student_section_snapshot?: string | null;
 };
 
 type StudentRemarkRow = {
@@ -27,26 +35,6 @@ function toAttendanceStatus(status: string | null): AttendanceStatus | null {
     return status === "Present" || status === "On Time" || status === "Late" || status === "Absent" || status === "Excused"
         ? status
         : null;
-}
-
-function getScheduledDaysInMonth(
-    year: number,
-    month: number,
-    startDate?: string,
-    endDate?: string,
-    attendanceWeekdays: unknown = DEFAULT_ATTENDANCE_WEEKDAYS,
-): string[] {
-    const rangeStart = startDate ?? `${year}-01-01`;
-    const rangeEnd = endDate ?? `${year}-12-31`;
-    const days: string[] = [];
-    const daysInMonth = new Date(year, month, 0).getDate(); // month is 1-based
-    for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-        if (isScheduledAttendanceDate(dateStr, rangeStart, rangeEnd, attendanceWeekdays)) {
-            days.push(dateStr);
-        }
-    }
-    return days;
 }
 
 type DayRecord = { status: AttendanceStatus; id: number; timeLogged: string };
@@ -80,14 +68,6 @@ function registrationDate(createdAt?: string | null) {
     const month = parts.find((part) => part.type === "month")?.value;
     const day = parts.find((part) => part.type === "day")?.value;
     return year && month && day ? `${year}-${month}-${day}` : null;
-}
-
-function monthDate(year: number, month: number, day: number) {
-    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-function monthEndDate(year: number, month: number) {
-    return monthDate(year, month, new Date(year, month, 0).getDate());
 }
 
 function assignmentPart(value: string | null | undefined) {
@@ -149,13 +129,39 @@ export async function GET(req: NextRequest) {
             .maybeSingle();
         if (schoolYearError) throw schoolYearError;
 
-        const allSchoolDays = getScheduledDaysInMonth(
+        const monthStart = monthStartDate(year, month);
+        const monthEnd = monthEndDate(year, month);
+        const pageSize = 1000;
+        const logs: LogRow[] = [];
+
+        // Read every saved record in the selected calendar month before using
+        // the live school-year range. Changing that range must only stop new
+        // scans; it cannot remove history from a summary or export.
+        for (let from = 0; ; from += pageSize) {
+            const { data: logRows, error: logError } = await supabase
+                .from("attendance_logs")
+                .select("id, student_db_id, attendance_date, time_logged, type, status, student_grade_snapshot, student_section_snapshot")
+                .gte("attendance_date", monthStart)
+                .lte("attendance_date", monthEnd)
+                .order("attendance_date", { ascending: true })
+                .order("student_db_id", { ascending: true })
+                .order("id", { ascending: true })
+                .range(from, from + pageSize - 1);
+            if (logError) throw logError;
+            const page = (logRows ?? []) as LogRow[];
+            logs.push(...page);
+            if (page.length < pageSize) break;
+        }
+
+        const recordedDates = logs.map((log) => log.attendance_date);
+        const allSchoolDays = attendanceReportDaysForMonth({
             year,
             month,
-            activeSY?.start_date,
-            activeSY?.end_date,
-            activeSY?.attendance_weekdays,
-        );
+            schoolYearStart: activeSY?.start_date,
+            schoolYearEnd: activeSY?.end_date,
+            attendanceWeekdays: activeSY?.attendance_weekdays,
+            recordedDates,
+        });
         const today = getToday();
 
         let holidayDates = new Set<string>();
@@ -164,8 +170,8 @@ export async function GET(req: NextRequest) {
                 .from("school_holidays")
                 .select("holiday_date")
                 .eq("school_year_config_id", activeSY.id)
-                .gte("holiday_date", allSchoolDays[0] ?? `${year}-${String(month).padStart(2, "0")}-01`)
-                .lte("holiday_date", allSchoolDays[allSchoolDays.length - 1] ?? `${year}-${String(month).padStart(2, "0")}-31`);
+                .gte("holiday_date", monthStart)
+                .lte("holiday_date", monthEnd);
             // school_holidays is optional until its migration has been applied.
             if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
             holidayDates = new Set((holidays ?? []).map((holiday) => String(holiday.holiday_date)));
@@ -173,13 +179,12 @@ export async function GET(req: NextRequest) {
 
 
 
-        // Exclude dates outside the configured class-day schedule, future
-        // dates, and holidays. Without an active school year, retain the
-        // weekday-only default so already-recorded attendance remains visible.
-        const validDays = allSchoolDays.filter((date) =>
-            date <= today &&
-            !holidayDates.has(date)
-        );
+        const validDays = reportableAttendanceDays({
+            reportDays: allSchoolDays,
+            today,
+            holidayDates,
+            recordedDates,
+        });
 
         // ── 2. Fetch all sections (all grades) ───────────────────────────────────
         const { data: sectionRows, error: sectionError } = await supabase
@@ -197,7 +202,6 @@ export async function GET(req: NextRequest) {
             last_name: string | null; suffix: string | null; gender: string | null; grade: string;
             section: string | null; created_at: string | null; archive_status: string | null;
         }[] = [];
-        const pageSize = 1000;
         for (let from = 0; ; from += pageSize) {
             const { data, error: studentError } = await supabase
                 .from("students")
@@ -210,7 +214,7 @@ export async function GET(req: NextRequest) {
             studentRows.push(...page);
             if (page.length < pageSize) break;
         }
-        const summaryPeriodStart = activeSY?.start_date ?? monthDate(year, month, 1);
+        const summaryPeriodStart = allSchoolDays[0] ?? monthStart;
         const summaryPeriodEnd = monthEndDate(year, month);
         const students = studentRows.flatMap((student) => {
             if (!isVisibleStudent(student) || !assignmentKey(student.grade, student.section)) return [];
@@ -229,18 +233,68 @@ export async function GET(req: NextRequest) {
                 : [];
         });
 
+        // A monthly report is grouped by the student's recorded assignment.
+        // Keep the live roster for current blank rows, then add a historical
+        // membership when a transfer happened after a saved attendance event.
+        type ReportStudent = (typeof students)[number] & {
+            report_grade: string;
+            report_section: string;
+            report_assignment_key: string;
+        };
+        const sourceStudentByDbId = new Map(studentRows.map((student) => [student.id, student]));
+        const reportStudentsByAssignment = new Map<string, ReportStudent>();
+        const addReportStudent = (
+            student: (typeof students)[number] | (typeof studentRows)[number],
+            grade: string,
+            section: string,
+            recordedOn?: string,
+        ) => {
+            const key = assignmentKey(grade, section);
+            if (!key) return;
+            const reportKey = `${student.id}::${key}`;
+            const registration = registrationDate(student.created_at);
+            const defaultActiveFrom = registration && registration > summaryPeriodStart
+                ? registration
+                : summaryPeriodStart;
+            const activeFrom = recordedOn && recordedOn < defaultActiveFrom
+                ? recordedOn
+                : defaultActiveFrom;
+            const existing = reportStudentsByAssignment.get(reportKey);
+            if (existing) {
+                if (activeFrom < existing.active_from) existing.active_from = activeFrom;
+                return;
+            }
+            reportStudentsByAssignment.set(reportKey, {
+                ...student,
+                active_from: activeFrom,
+                report_grade: grade.trim(),
+                report_section: section.trim(),
+                report_assignment_key: key,
+            });
+        };
+        for (const student of students) {
+            if (student.section) addReportStudent(student, student.grade, student.section);
+        }
+        for (const log of logs) {
+            const student = sourceStudentByDbId.get(log.student_db_id);
+            if (!student) continue;
+            const grade = log.student_grade_snapshot ?? student.grade;
+            const section = log.student_section_snapshot ?? student.section;
+            if (grade && section) addReportStudent(student, grade, section, log.attendance_date);
+        }
+        const reportStudents = [...reportStudentsByAssignment.values()];
+
         // ── 4. Fetch attendance logs for the month (only valid days) ─────────────
         // Remarks are dated SF2 events, not a current student-status field.
-        // Read the selected month from the same source as the Adviser export
-        // and page through it so larger school-wide reports remain complete.
+        // Keep historical events through the selected month for enrolment
+        // status at the cut-off/end date, then expose only this month's rows
+        // in the existing per-student export/display fields.
         const remarks: StudentRemarkRow[] = [];
-        const remarkPeriodStart = monthDate(year, month, 1);
         const remarkPeriodEnd = monthEndDate(year, month);
         for (let from = 0; ; from += pageSize) {
             const { data: remarkRows, error: remarkError } = await supabase
                 .from("student_remarks")
                 .select("id, student_db_id, remark_type, effectivity_date, note, school_name")
-                .gte("effectivity_date", remarkPeriodStart)
                 .lte("effectivity_date", remarkPeriodEnd)
                 .order("effectivity_date", { ascending: true })
                 .order("id", { ascending: true })
@@ -250,43 +304,20 @@ export async function GET(req: NextRequest) {
             remarks.push(...page);
             if (page.length < pageSize) break;
         }
-        const visibleStudentIds = new Set(students.map((student) => student.id));
+        const visibleStudentIds = new Set(reportStudents.map((student) => student.id));
         const remarksByStudentDbId = new Map<number, StudentRemarkRow[]>();
+        const remarkHistoryByStudentDbId = new Map<number, StudentRemarkRow[]>();
         for (const remark of remarks) {
             if (!visibleStudentIds.has(remark.student_db_id)) continue;
+            remarkHistoryByStudentDbId.set(
+                remark.student_db_id,
+                [...(remarkHistoryByStudentDbId.get(remark.student_db_id) ?? []), remark],
+            );
+            if (remark.effectivity_date < monthStart) continue;
             remarksByStudentDbId.set(
                 remark.student_db_id,
                 [...(remarksByStudentDbId.get(remark.student_db_id) ?? []), remark],
             );
-        }
-
-        const logs: LogRow[] = [];
-        if (validDays.length > 0) {
-            // PostgREST caps a response at the project's max row limit (1,000
-            // rows here). A school-wide month can exceed that limit, so fetch
-            // every page before calculating totals. Without this, the summary
-            // could look internally consistent while silently omitting records.
-            const pageSize = 1000;
-            let from = 0;
-
-            while (true) {
-                const { data: logRows, error: logError } = await supabase
-                    .from("attendance_logs")
-                    .select("id, student_db_id, attendance_date, time_logged, type, status")
-                    .gte("attendance_date", validDays[0])
-                    .lte("attendance_date", validDays[validDays.length - 1])
-                    .order("attendance_date", { ascending: true })
-                    .order("student_db_id", { ascending: true })
-                    .order("id", { ascending: true })
-                    .range(from, from + pageSize - 1);
-
-                if (logError) throw logError;
-
-                const page = (logRows ?? []) as LogRow[];
-                logs.push(...page);
-                if (page.length < pageSize) break;
-                from += pageSize;
-            }
         }
 
         // ── 5. Build lookup: studentDbId → date → { hasTimeIn, status } ──────────
@@ -294,18 +325,37 @@ export async function GET(req: NextRequest) {
         // One student/day has one final attendance status. Duplicate Time In
         // rows can exist after corrections, so retain the status with the
         // strongest final classification rather than counting the day twice.
-        const logMap: Record<number, Record<string, DayRecord>> = {};
+        const logMap: Record<string, Record<string, DayRecord>> = {};
+        const autoMissingTimeOuts = new Map<string, DayRecord>();
 
         for (const log of logs) {
-            if (log.type && log.type !== "Time In") continue;
             const dbId = log.student_db_id as number;
+            const student = sourceStudentByDbId.get(dbId);
+            const grade = log.student_grade_snapshot ?? student?.grade;
+            const section = log.student_section_snapshot ?? student?.section;
+            const assignment = assignmentKey(grade, section);
+            if (!assignment) continue;
+            const reportKey = `${dbId}::${assignment}`;
             const date = log.attendance_date as string;
             const status = toAttendanceStatus(log.status);
             if (!status) continue;
-            if (!logMap[dbId]) logMap[dbId] = {};
-            const existing = logMap[dbId][date];
+            if (log.type === "Time Out") {
+                // An automatic missing Time Out sets the learner's final
+                // daily result to Absent while preserving the Time In log.
+                if (status === "Absent") {
+                    autoMissingTimeOuts.set(`${reportKey}::${date}`, {
+                        status,
+                        id: log.id,
+                        timeLogged: log.time_logged,
+                    });
+                }
+                continue;
+            }
+            if (log.type && log.type !== "Time In") continue;
+            if (!logMap[reportKey]) logMap[reportKey] = {};
+            const existing = logMap[reportKey][date];
             const next = { status, id: log.id, timeLogged: log.time_logged };
-            if (shouldReplaceDayRecord(existing, next)) logMap[dbId][date] = next;
+            if (shouldReplaceDayRecord(existing, next)) logMap[reportKey][date] = next;
         }
 
         // ── 6. Build per-student summary ─────────────────────────────────────────
@@ -320,19 +370,24 @@ export async function GET(req: NextRequest) {
             excused: number;
             dailyStatuses: Record<number, AttendanceStatus>;
             active_from: string;
+            registration_date: string | null;
             remarks: StudentRemarkRow[];
+            remark_history: StudentRemarkRow[];
+            assignment_key: string;
             dailyAbsences: Record<number, boolean>;  // day-of-month → true if absent
             dailyExcused: Record<number, boolean>;   // day-of-month → true if excused
         };
 
-        const studentSummaries: StudentSummary[] = students.map((s) => {
+        const studentSummaries: StudentSummary[] = reportStudents.map((s) => {
             let present = 0, absent = 0, late = 0, excused = 0;
             const dailyAbsences: Record<number, boolean> = {};
             const dailyExcused: Record<number, boolean> = {};
             const dailyStatuses: Record<number, AttendanceStatus> = {};
 
             for (const dateStr of validDays.filter((date) => date >= s.active_from)) {
-                const dayRecord = logMap[s.id]?.[dateStr];
+                const reportKey = `${s.id}::${s.report_assignment_key}`;
+                const dayRecord = autoMissingTimeOuts.get(`${reportKey}::${dateStr}`)
+                    ?? logMap[reportKey]?.[dateStr];
                 const dayOfMonth = parseInt(dateStr.split("-")[2], 10);
 
                 if (dayRecord) dailyStatuses[dayOfMonth] = dayRecord.status;
@@ -368,7 +423,10 @@ export async function GET(req: NextRequest) {
                 dailyExcused,
                 dailyStatuses,
                 active_from: s.active_from,
+                registration_date: registrationDate(s.created_at),
                 remarks: remarksByStudentDbId.get(s.id) ?? [],
+                remark_history: remarkHistoryByStudentDbId.get(s.id) ?? [],
+                assignment_key: s.report_assignment_key,
             };
         });
 
@@ -376,11 +434,8 @@ export async function GET(req: NextRequest) {
         // Build roster groups using the student assignment. This avoids losing a
         // student when a section was imported before its catalog row was added.
         const studentsBySectionClean: Record<string, StudentSummary[]> = {};
-        const studentByDbId = new Map(students.map((student) => [student.id, student]));
         for (const st of studentSummaries) {
-            const raw = studentByDbId.get(st.id);
-            const key = raw ? assignmentKey(raw.grade, raw.section) : null;
-            if (!key) continue;
+            const key = st.assignment_key;
             if (!studentsBySectionClean[key]) studentsBySectionClean[key] = [];
             studentsBySectionClean[key].push(st);
         }
@@ -397,10 +452,10 @@ export async function GET(req: NextRequest) {
             const key = assignmentKey(section.grade, section.name);
             if (key) summarySections.set(key, { key, grade: section.grade.trim(), name: section.name.trim() });
         }
-        for (const student of students) {
-            const key = assignmentKey(student.grade, student.section);
+        for (const student of reportStudents) {
+            const key = student.report_assignment_key;
             if (key && !summarySections.has(key)) {
-                summarySections.set(key, { key, grade: student.grade.trim(), name: student.section!.trim() });
+                summarySections.set(key, { key, grade: student.report_grade, name: student.report_section });
             }
         }
 
@@ -430,6 +485,17 @@ export async function GET(req: NextRequest) {
                         name: section.name,
                         adviser: "",      // ← add adviser join here when ready
                         students: sectionStudents,
+                        sf2EnrollmentSummary: calculateSf2EnrollmentSummary({
+                            schoolYearStart: activeSY?.start_date,
+                            selectedYear: year,
+                            selectedMonth: month,
+                            students: sectionStudents.map((student) => ({
+                                id: student.id,
+                                gender: student.gender,
+                                registrationDate: student.registration_date,
+                                remarks: student.remark_history,
+                            })),
+                        }),
                     };
                 });
 

@@ -202,7 +202,6 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
               {errors.map(error => <p key={error} className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>)}
               {existing.length > 0 && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">Already registered LRN(s): {existing.join(", ")}.</p>}
               {unresolvedParentLinks && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Choose an account or confirm that no existing Parent account should be linked for each ambiguous Parent name before importing.</p>}
-
               <section className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
                 <h3 className="text-sm font-extrabold text-slate-800">Parent account linking</h3>
                 <p className="mt-1 text-xs leading-5 text-slate-600">An exact active Parent account is linked automatically. If the same verification name belongs to more than one active account, choose the correct one or confirm that none should be linked. Otherwise, the student remains Not Registered until Guardian signup is completed. Archived accounts are never listed.</p>

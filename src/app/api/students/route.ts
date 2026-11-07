@@ -53,6 +53,7 @@ type AttendanceLog = {
   student_id: string;
   attendance_date: string;
   session_type: string | null;
+  type: "Time In" | "Time Out" | null;
   status: string | null;
 };
 
@@ -139,9 +140,8 @@ async function getScheduledAttendanceLogs(studentIds: string[], startDate?: stri
     for (let from = 0; ; from += pageSize) {
       let query = supabase
         .from("attendance_logs")
-        .select("student_id, attendance_date, session_type, status")
+        .select("student_id, attendance_date, session_type, type, status")
         .in("student_id", studentIdChunk)
-        .eq("type", "Time In")
         .not("session_type", "is", null)
         .order("attendance_date", { ascending: false });
       if (startDate) query = query.gte("attendance_date", startDate);
@@ -678,9 +678,9 @@ export async function GET(req: NextRequest) {
       excusedStudentIds = new Set((approvedExcuses ?? []).map((row) => row.student_id));
     }
 
-    // A valid attendance record is a Time In record tied to an ICT-scheduled
-    // session on the same date. This excludes unscheduled/manual leftovers
-    // from both the Today's status and the attendance percentage.
+    // A valid attendance record is tied to an ICT-scheduled session on the
+    // same date. A Time In establishes arrival; an Auto Time Out with Absent
+    // is the final status after that session ends.
     const attendanceLogs = studentIds.length > 0
       ? await getScheduledAttendanceLogs(studentIds, currentSchoolYear?.start_date, currentSchoolYear?.end_date)
       : [];
@@ -698,15 +698,38 @@ export async function GET(req: NextRequest) {
       && scheduledSessionKeys.has(`${log.attendance_date}|${log.session_type}`)
     );
 
+    // Resolve exactly one final status per learner/date/session. Never count a
+    // Time In and its later Time Out as two attendance days. A saved Absent
+    // Time Out deliberately overrides the provisional On Time/Late Time In.
+    const finalAttendanceBySession = new Map<string, "Present" | "Late" | "Excused" | "Absent">();
+    const statusPriority: Record<"Present" | "Late" | "Excused" | "Absent", number> = {
+      Present: 1, Late: 2, Excused: 3, Absent: 0,
+    };
+    for (const log of validAttendanceLogs) {
+      const status = ATTENDANCE_STATUS.get(log.status ?? "");
+      if (!status) continue;
+      const key = `${log.student_id}|${log.attendance_date}|${log.session_type}`;
+      if (log.type === "Time Out") {
+        if (status === "Absent") finalAttendanceBySession.set(key, status);
+        continue;
+      }
+      if (log.type !== "Time In") continue;
+      const current = finalAttendanceBySession.get(key);
+      if (!current || statusPriority[status] > statusPriority[current]) {
+        finalAttendanceBySession.set(key, status);
+      }
+    }
+
     const attendanceRateByStudentId = new Map<string, number | null>();
     const attendanceTotals = new Map<string, { attended: number; rateEligible: number }>();
-    for (const log of validAttendanceLogs) {
+    for (const [key, status] of finalAttendanceBySession) {
+      const studentId = key.split("|", 1)[0];
       // Excused records are absent for rates; Present and Late are attended.
-      if (!isAttendanceRateEligibleStatus(log.status)) continue;
-      const totals = attendanceTotals.get(log.student_id) ?? { attended: 0, rateEligible: 0 };
+      if (!isAttendanceRateEligibleStatus(status)) continue;
+      const totals = attendanceTotals.get(studentId) ?? { attended: 0, rateEligible: 0 };
       totals.rateEligible += 1;
-      if (isAttendedAttendanceStatus(log.status)) totals.attended += 1;
-      attendanceTotals.set(log.student_id, totals);
+      if (isAttendedAttendanceStatus(status)) totals.attended += 1;
+      attendanceTotals.set(studentId, totals);
     }
     for (const [studentId, totals] of attendanceTotals) {
       attendanceRateByStudentId.set(
@@ -723,17 +746,10 @@ export async function GET(req: NextRequest) {
         .map((session) => [session.session_type, session])
     );
     const todayLogByStudentAndSession = new Map<string, "Present" | "Late" | "Excused" | "Absent">();
-    const statusPriority: Record<"Present" | "Late" | "Excused" | "Absent", number> = {
-      Present: 1, Late: 2, Excused: 3, Absent: 0,
-    };
-    for (const log of validAttendanceLogs) {
-      if (log.attendance_date !== today || !log.session_type) continue;
-      const status = ATTENDANCE_STATUS.get(log.status ?? "");
-      if (!status) continue;
-      const key = `${log.student_id}|${log.session_type}`;
-      const current = todayLogByStudentAndSession.get(key);
-      if (!current || statusPriority[status] > statusPriority[current]) {
-        todayLogByStudentAndSession.set(key, status);
+    for (const [key, status] of finalAttendanceBySession) {
+      const [studentId, attendanceDate, sessionType] = key.split("|");
+      if (attendanceDate === today && sessionType) {
+        todayLogByStudentAndSession.set(`${studentId}|${sessionType}`, status);
       }
     }
 

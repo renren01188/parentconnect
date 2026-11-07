@@ -14,6 +14,7 @@ import {
 import { normalizeStudentAge } from "@/lib/studentAge";
 import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export type StudentParentRegistrationProps = {
   variant?: "adviser" | "ict";
@@ -539,11 +540,11 @@ function RfidScanner({
 export function StudentParentRegistration({
   variant = "adviser",
   embedded = false,
-  backHref = "/dashboard/adviser/students",
+  backHref = dashboardPath("adviser", "/students"),
   backLabel = "Back to Students",
   title = "Add New Student",
   subtitle = "Save the student and family verification records. Parents create their own accounts through Guardian Sign Up.",
-  studentsListHref = "/dashboard/adviser/students",
+  studentsListHref = dashboardPath("adviser", "/students"),
   onSuccess,
   onSummaryChange,
   requirePrincipalApproval = false,

@@ -11,6 +11,7 @@ import {
 import Sidebar from "../components/Sidebar";
 import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { dashboardPath } from "@/lib/routeAliases";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
 // ─── Password input ───────────────────────────────────────────────────────────
@@ -795,7 +796,7 @@ export default function ProfilePage() {
                                 </div>
                             )}
                             {students.map((child, index) => (
-                                <Link key={`${child.id}-${child.lrn}`} href={`/dashboard/parent?student=${child.id}`}
+                                <Link key={`${child.id}-${child.lrn}`} href={dashboardPath("parent", `?student=${child.id}`)}
                                     className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-blue-50 hover:border-blue-200 transition-colors mb-2 last:mb-0">
                                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0"
                                         style={{ background: studentColors[index % studentColors.length] }}>

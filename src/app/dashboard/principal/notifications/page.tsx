@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCheck, FileText, TicketCheck } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
+import { dashboardPath } from "@/lib/routeAliases";
 
 export default function PrincipalNotificationsPage() {
   const {
@@ -47,13 +48,13 @@ export default function PrincipalNotificationsPage() {
               onClick={() => {
                 if (!item.reportId) return;
                 void markNotificationsRead([item]);
-                router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
+                router.push(dashboardPath("principal", `/reports?reportId=${item.reportId}`));
               }}
               onKeyDown={(event) => {
                 if (!item.reportId || (event.key !== "Enter" && event.key !== " ")) return;
                 event.preventDefault();
                 void markNotificationsRead([item]);
-                router.push(`/dashboard/principal/reports?reportId=${item.reportId}`);
+                router.push(dashboardPath("principal", `/reports?reportId=${item.reportId}`));
               }}
               className={`flex min-w-0 gap-3 border-b border-slate-100 p-4 last:border-0 ${item.read ? "" : "bg-violet-50/60"} ${item.reportId ? "cursor-pointer transition hover:bg-sky-50" : ""}`}
             >

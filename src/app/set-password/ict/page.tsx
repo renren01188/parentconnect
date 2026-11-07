@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Monitor } from "lucide-react";
 import { SetPasswordScreen } from "@/components/auth/SetPasswordScreen";
+import { dashboardPath } from "@/lib/routeAliases";
 
 const ICT_THEME = {
   canvas: "#f0fdf4",
@@ -67,7 +68,7 @@ export default function IctSetPasswordPage() {
 
       setDone(true);
       setTimeout(() => {
-        router.push("/dashboard/ict");
+        router.push(dashboardPath("ict"));
         router.refresh();
       }, 1500);
     } catch {

@@ -24,24 +24,46 @@ export function isAttendedExportStatus(status: AttendanceExportStatus | null | u
   return status === "Present" || status === "Late";
 }
 
+export type Sf2TardyHalf = "upper" | "lower";
+
+export type Sf2DailyMark = {
+  /** Text stored in the narrow official SF2 daily cell. */
+  code: "H" | "X" | null;
+  /** A visual half-cell shade used only for Tardy records. */
+  tardyHalf: Sf2TardyHalf | null;
+};
+
 /**
- * Marks fit in the narrow daily cells of the SF2 layout. Excused remains
- * identifiable in Attendance Detail, but the official SF2 daily mark is X:
- * it is an absence, not an attended or neutral day. A holiday has priority
- * because its date is deliberately excluded from the month's totals.
+ * Official SF2 daily marks. Present is deliberately blank; absence (and an
+ * approved excuse, which remains visible in Attendance Detail) is X. Late
+ * arrival uses the upper half of the cell. The lower half is reserved for a
+ * separately recorded Cutting Classes outcome, which ParentConnect does not
+ * currently save, so exports never infer it from an ordinary Time Out.
  */
+export function getSf2DailyMark(
+  status: AttendanceExportStatus | null | undefined,
+  isHoliday = false,
+  tardyHalf: Sf2TardyHalf = "upper",
+): Sf2DailyMark {
+  if (isHoliday) return { code: "H", tardyHalf: null };
+
+  switch (status) {
+    case "Late":
+      return { code: null, tardyHalf };
+    case "Absent":
+    case "Excused":
+      return { code: "X", tardyHalf: null };
+    case "Present":
+    default:
+      return { code: null, tardyHalf: null };
+  }
+}
+
 export function getSf2StatusCode(
   status: AttendanceExportStatus | null | undefined,
   isHoliday = false,
 ) {
-  if (isHoliday) return "H";
-  switch (status) {
-    case "Present":
-    case "Late": return "✓";
-    case "Absent":
-    case "Excused": return "X";
-    default: return null;
-  }
+  return getSf2DailyMark(status, isHoliday).code;
 }
 
 export function getAttendanceDetailStatus(status: AttendanceExportStatus | null | undefined) {

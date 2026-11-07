@@ -14,7 +14,11 @@ type StudentRow = {
   archive_status?: string | null;
 };
 
-type ExistingLogRow = { student_db_id: number };
+type ExistingLogRow = {
+  student_db_id: number;
+  type: "Time In" | "Time Out";
+  status: "Present" | "On Time" | "Late" | "Absent" | "Excused";
+};
 
 type SessionSchedule = {
   id: number;
@@ -122,6 +126,28 @@ export function studentsMissingSessionAttendance<T extends Pick<StudentRow, "id"
   });
 }
 
+/**
+ * A valid arrival is only a provisional daily result until the learner has a
+ * Time Out. Once the session is over, a missing Time Out makes the final
+ * attendance result Absent. An approved Excused record never requires a
+ * Time Out.
+ */
+export function studentsMissingSessionTimeOut<T extends Pick<StudentRow, "id" | "student_id">>(input: {
+  students: T[];
+  presentOrLateTimeInStudentDbIds: Iterable<number>;
+  recordedTimeOutStudentDbIds: Iterable<number>;
+  excusedStudentIds?: Iterable<string>;
+}) {
+  const timeIns = new Set(input.presentOrLateTimeInStudentDbIds);
+  const timeOuts = new Set(input.recordedTimeOutStudentDbIds);
+  const excused = new Set(input.excusedStudentIds ?? []);
+  return input.students.filter((student) =>
+    timeIns.has(student.id)
+    && !timeOuts.has(student.id)
+    && !excused.has(student.student_id),
+  );
+}
+
 async function getOrCreateSessionSnapshot(
   sessionDate: string,
   sessionType: SessionType,
@@ -192,9 +218,10 @@ async function getOrCreateSessionSnapshot(
 }
 
 /**
- * Writes only the missing Time In rows for one session once its configured
- * Absent After cutoff has arrived. It is deliberately idempotent so a cron
- * retry, a duplicate invocation, or an ICT action can never overwrite a scan.
+ * Writes missing Time In rows after ICT's Absent After cutoff and, once the
+ * session itself has ended, missing Time Out rows for learners who did Time
+ * In. Both writes are idempotent so a cron retry, duplicate invocation, or
+ * ICT action can never overwrite a scan.
  */
 type MarkAutomaticAbsencesInput = {
   sessionType: SessionType;
@@ -257,8 +284,10 @@ async function markAutomaticAbsencesForValidatedScope(
   if (!session) return result(false, 409, "ICT has not saved this class schedule.");
 
   const absenceDeadline = session.absent_after ?? session.scheduled_end;
-  if (!hasReachedSessionEnd(schoolClock.minutes, absenceDeadline)) {
-    return result(false, 409, "Students can be marked absent only after ICT's configured Absent After time.");
+  const reachedNoShowDeadline = hasReachedSessionEnd(schoolClock.minutes, absenceDeadline);
+  const reachedSessionEnd = hasReachedSessionEnd(schoolClock.minutes, session.scheduled_end);
+  if (!reachedNoShowDeadline && !reachedSessionEnd) {
+    return result(false, 409, "Students can be finalized only after the scheduled session ends or ICT's Absent After time arrives.");
   }
 
   let students: StudentRow[];
@@ -302,12 +331,26 @@ async function markAutomaticAbsencesForValidatedScope(
 
   const { data: existingLogs, error: logsError } = await supabase
     .from("attendance_logs")
-    .select("student_db_id")
+    .select("student_db_id, type, status")
     .eq("attendance_date", sessionDate)
-    .eq("type", "Time In")
     .eq("session_type", input.sessionType);
   if (logsError) throw logsError;
-  const recordedIds = new Set(((existingLogs ?? []) as ExistingLogRow[]).map((log) => log.student_db_id));
+  const sessionLogs = (existingLogs ?? []) as ExistingLogRow[];
+  const recordedTimeInIds = new Set(
+    sessionLogs
+      .filter((log) => log.type === "Time In")
+      .map((log) => log.student_db_id),
+  );
+  const presentOrLateTimeInIds = new Set(
+    sessionLogs
+      .filter((log) => log.type === "Time In" && ["Present", "On Time", "Late"].includes(log.status))
+      .map((log) => log.student_db_id),
+  );
+  const recordedTimeOutIds = new Set(
+    sessionLogs
+      .filter((log) => log.type === "Time Out")
+      .map((log) => log.student_db_id),
+  );
 
   // An approval normally creates an Excused Time In row. The explicit letter
   // check also prevents a concurrent approval from being overwritten before
@@ -325,14 +368,15 @@ async function markAutomaticAbsencesForValidatedScope(
     excusedStudentIds = new Set((approvedExcuses ?? []).map((letter) => String(letter.student_id)));
   }
 
-  const absentInserts = studentsMissingSessionAttendance({
-    students: sessionStudents,
-    recordedStudentDbIds: recordedIds,
-    excusedStudentIds,
-    sessionDate,
-    sessionEnd: absenceDeadline,
-  })
-    .map((student) => ({
+  const absentTimeInInserts = reachedNoShowDeadline
+    ? studentsMissingSessionAttendance({
+      students: sessionStudents,
+      recordedStudentDbIds: recordedTimeInIds,
+      excusedStudentIds,
+      sessionDate,
+      sessionEnd: absenceDeadline,
+    })
+      .map((student) => ({
       student_db_id: student.id,
       student_id: student.student_id,
       class_session_id: session.id,
@@ -343,8 +387,33 @@ async function markAutomaticAbsencesForValidatedScope(
       status: "Absent",
       via: "Auto",
       remark: `Auto-marked absent after ICT's ${input.sessionType} Absent After cutoff`,
-    }));
-  if (!absentInserts.length) return result(true, 200, "All students already have a Time In record.");
+      }))
+    : [];
+
+  // A missing Time Out changes the learner's final daily attendance to
+  // Absent, but only after the actual session end. `absent_after` can be
+  // earlier than the end because it governs no-show Time In processing.
+  const absentTimeOutInserts = reachedSessionEnd
+    ? studentsMissingSessionTimeOut({
+      students: sessionStudents,
+      presentOrLateTimeInStudentDbIds: presentOrLateTimeInIds,
+      recordedTimeOutStudentDbIds: recordedTimeOutIds,
+      excusedStudentIds,
+    }).map((student) => ({
+      student_db_id: student.id,
+      student_id: student.student_id,
+      class_session_id: session.id,
+      attendance_date: sessionDate,
+      time_logged: schoolClock.time,
+      type: "Time Out" as const,
+      session_type: input.sessionType,
+      status: "Absent" as const,
+      via: "Auto" as const,
+      remark: "Auto-marked absent",
+    }))
+    : [];
+  const absentInserts = [...absentTimeInInserts, ...absentTimeOutInserts];
+  if (!absentInserts.length) return result(true, 200, "All students already have final attendance records.");
 
   let marked = 0;
   let alreadyRecorded = 0;
@@ -387,7 +456,7 @@ async function markAutomaticAbsencesForValidatedScope(
       targetUser: `${grade} ${input.sessionType} session`,
       targetRole: "Class Session",
       newStatus: "Absent",
-      details: `Auto-marked ${marked} student(s) absent after the ${grade} ${input.sessionType} Absent After cutoff.`,
+      details: `Auto-marked ${marked} missing attendance record(s) as Absent for the ${grade} ${input.sessionType} session.`,
     });
   }
 

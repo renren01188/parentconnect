@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
+import { dashboardPath } from "@/lib/routeAliases";
 import type { ReadyTransferSummary } from "./TransferFromStandbyModal";
 
 // These modal workflows are only needed after a user clicks an action. Loading
@@ -591,7 +592,7 @@ function AdviserStudentsPageContent() {
           </button>
 
           <Link
-            href="/dashboard/adviser/students/add"
+            href={dashboardPath("adviser", "/students/add")}
             className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-emerald-200 transition-colors hover:bg-emerald-600"
           >
             <UserPlus className="w-4 h-4" /> Add Student
@@ -735,7 +736,7 @@ function AdviserStudentsPageContent() {
                     <td className="py-3">
                       <div className="flex items-center gap-2 flex-wrap">
                         <Link
-                          href={`/dashboard/adviser/students/${s.id}`}
+                          href={dashboardPath("adviser", `/students/${s.id}`)}
                           className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
                         >
                           View
@@ -784,7 +785,7 @@ function AdviserStudentsPageContent() {
                 <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">RFID Card</dt><dd className="mt-1">{s.rfid_card ? <button onClick={() => setRfidTarget(s)} className="flex min-h-9 items-center gap-1.5 break-all text-left text-xs text-slate-600 hover:text-emerald-700"><CreditCard className="h-3.5 w-3.5 shrink-0 text-emerald-500" />{s.rfid_card}</button> : <button onClick={() => setRfidTarget(s)} className="flex min-h-10 items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-500"><RfidIcon className="h-3 w-3" />Assign RFID</button>}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Today</dt><dd className="mt-1"><StatusBadge status={s.today_status} /></dd></div>
               </dl>
-              <Link href={`/dashboard/adviser/students/${s.id}`} className="mt-4 flex min-h-11 w-full items-center justify-center rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</Link>
+              <Link href={dashboardPath("adviser", `/students/${s.id}`)} className="mt-4 flex min-h-11 w-full items-center justify-center rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">View</Link>
             </article>
           ))}
         </div>

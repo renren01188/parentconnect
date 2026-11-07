@@ -128,6 +128,9 @@ type AttendanceNotificationSettings = {
 type AttendanceSmsJob = {
   id: string;
   attendance_log_id: number;
+  attendance_date: string | null;
+  parent_name: string;
+  student_name: string;
   status: string;
   attempts: number;
   provider: string | null;
@@ -544,6 +547,9 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
   const [saving, setSaving] = useState(false);
   const [checkingCredits, setCheckingCredits] = useState(false);
   const [smsJobs, setSmsJobs] = useState<AttendanceSmsJob[]>([]);
+  const [recentSmsClassDays, setRecentSmsClassDays] = useState<string[]>([]);
+  const [configuredSmsClassDayCount, setConfiguredSmsClassDayCount] = useState(0);
+  const [smsQueueSearch, setSmsQueueSearch] = useState("");
   const [loadingSmsJobs, setLoadingSmsJobs] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -578,6 +584,8 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || "Could not load attendance SMS jobs.");
       setSmsJobs(Array.isArray(data.jobs) ? data.jobs as AttendanceSmsJob[] : []);
+      setRecentSmsClassDays(Array.isArray(data.recentClassDays) ? data.recentClassDays.filter((date: unknown): date is string => typeof date === "string") : []);
+      setConfiguredSmsClassDayCount(Number.isInteger(data.configuredClassDayCount) ? data.configuredClassDayCount : 0);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load attendance SMS jobs.");
     } finally {
@@ -648,10 +656,32 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
     { value: "both", label: "Both SMS and Email", description: "Send both channels for each RFID attendance event." },
     { value: "none", label: "Neither", description: "Record attendance normally without sending parent notifications." },
   ];
-  const attentionSmsJobs = smsJobs.filter((job) => (
-    ["pending", "processing", "failed", "reconciliation_required", "retry_eligible"].includes(job.status)
-    || (job.status === "sent" && ["queued", "pending"].includes((job.provider_status || "").toLowerCase()))
-  ));
+  const smsQueueQuery = smsQueueSearch.trim().toLowerCase();
+  const visibleSmsJobs = smsJobs.filter((job) => !smsQueueQuery || [
+    job.parent_name,
+    job.student_name,
+    job.attendance_date,
+    job.status,
+    job.provider,
+    job.provider_status,
+  ].some((value) => String(value ?? "").toLowerCase().includes(smsQueueQuery)));
+
+  const smsJobPresentation = (job: AttendanceSmsJob) => {
+    const status = String(job.status || "").toLowerCase();
+    const provider = job.provider === "semaphore" ? "Semaphore" : "the SMS provider";
+    if (status === "sent") {
+      // `status` is the durable result of the worker's provider request. A
+      // stale provider snapshot must never make a sent job look Pending.
+      return { label: "Sent", detail: `Accepted by ${provider}.`, tone: "border-emerald-200 bg-emerald-50" };
+    }
+    if (status === "processing") return { label: "Sending", detail: `Sending through ${provider}.`, tone: "border-blue-200 bg-blue-50" };
+    if (status === "pending") return { label: "Pending", detail: "Waiting for the attendance SMS worker.", tone: "border-gray-200 bg-gray-50" };
+    if (status === "retry_eligible") return { label: "Retry eligible", detail: "The provider confirmed the previous request failed or was refunded.", tone: "border-emerald-200 bg-emerald-50" };
+    if (status === "reconciliation_required") return { label: "Provider status needs review", detail: "The provider response needs reconciliation before another send is allowed.", tone: "border-amber-200 bg-amber-50" };
+    if (status === "failed") return { label: "Failed", detail: "The SMS could not be sent.", tone: "border-red-200 bg-red-50" };
+    if (status === "skipped") return { label: "Not sent", detail: "Attendance SMS notifications were disabled or no eligible recipient was available.", tone: "border-gray-200 bg-gray-50" };
+    return { label: status.replace(/_/g, " ") || "Unknown", detail: "SMS status is unavailable.", tone: "border-gray-200 bg-gray-50" };
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
@@ -674,15 +704,17 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
             </section>
             <section className="rounded-xl border border-gray-200 bg-white p-4" aria-label="Attendance SMS delivery queue">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div><p className="text-sm font-bold text-gray-800">SMS delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">Sent means Semaphore accepted the request, not that it has a final delivery result. Pending and Queued statuses are checked again automatically after five minutes; only provider-confirmed Failed or Refunded messages are retried.</p></div>
+                <div><p className="text-sm font-bold text-gray-800">SMS delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">Sent means Semaphore accepted the request, not that it has a final handset delivery result. Pending and queued statuses are checked again automatically; only provider-confirmed Failed or Refunded messages are retried.</p></div>
                 <button type="button" onClick={() => { void loadSmsJobs(); }} disabled={loadingSmsJobs} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${loadingSmsJobs ? "animate-spin" : ""}`} />{loadingSmsJobs ? "Refreshing…" : "Refresh queue"}</button>
               </div>
-              {loadingSmsJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : attentionSmsJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">No recent SMS jobs need review.</p> : <div className="mt-4 space-y-2">{attentionSmsJobs.map(job => {
-                const retryEligible = job.status === "retry_eligible";
-                const review = job.status === "reconciliation_required";
-                const awaitingSemaphore = job.status === "sent" && ["queued", "pending"].includes((job.provider_status || "").toLowerCase());
-                return <div key={job.id} className={`rounded-lg border p-3 ${review ? "border-amber-200 bg-amber-50" : retryEligible ? "border-emerald-200 bg-emerald-50" : "border-gray-200 bg-gray-50"}`}>
-                  <div className="min-w-0"><p className="text-xs font-bold text-gray-800">Attendance #{job.attendance_log_id} · {awaitingSemaphore ? "accepted by Semaphore — awaiting update" : job.status.replace(/_/g, " ")}</p><p className="mt-1 text-[11px] text-gray-600">Semaphore status: {job.provider_status || "not requested"}{awaitingSemaphore ? " · rechecks automatically" : ""} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-[11px] text-gray-500">{recentSmsClassDays.length > 0 ? `Showing notifications for the most recent ${recentSmsClassDays.length} configured class day${recentSmsClassDays.length === 1 ? "" : "s"}.` : configuredSmsClassDayCount > 0 ? "No scheduled class days are available in the active school-year window." : "Configure class days in Edit School Year to view the SMS queue."}</p>
+                <label className="relative block sm:w-56"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" /><span className="sr-only">Search SMS delivery queue</span><input value={smsQueueSearch} onChange={event => setSmsQueueSearch(event.target.value)} placeholder="Search parent or student" className="min-h-10 w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-xs text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" /></label>
+              </div>
+              {loadingSmsJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : visibleSmsJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">{smsQueueQuery ? "No SMS notifications match your search." : "No attendance SMS notifications were queued for these recent class days."}</p> : <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">{visibleSmsJobs.map(job => {
+                const presentation = smsJobPresentation(job);
+                return <div key={job.id} className={`rounded-lg border p-3 ${presentation.tone}`}>
+                  <div className="min-w-0"><p className="truncate text-xs font-bold text-gray-800">{job.parent_name}</p><p className="mt-0.5 truncate text-[11px] font-medium text-gray-600">{job.student_name}</p><p className="mt-2 text-[11px] font-semibold text-gray-700">{presentation.label}{job.attendance_date ? ` · ${formatSchoolDate(job.attendance_date)}` : ""}</p><p className="mt-1 text-[11px] leading-4 text-gray-600">{presentation.detail} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
                 </div>;
               })}</div>}
             </section>

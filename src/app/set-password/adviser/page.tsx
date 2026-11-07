@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Eye, EyeOff, CheckCircle, AlertCircle, BookOpen, ShieldCheck } from "lucide-react";
+import { dashboardPath } from "@/lib/routeAliases";
 
 function getStrength(pwd: string) {
   let score = 0;
@@ -69,7 +70,7 @@ export default function AdviserSetPasswordPage() {
       // Use a document navigation after the response has stored the refreshed
       // Adviser cookie. This avoids retaining the temporary-password route's
       // client-router state during the first authenticated dashboard request.
-      window.setTimeout(() => window.location.replace("/dashboard/adviser"), 1200);
+      window.setTimeout(() => window.location.replace(dashboardPath("adviser")), 1200);
     } catch {
       setError("Cannot connect to server. Please try again.");
     } finally {
