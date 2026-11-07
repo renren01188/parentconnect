@@ -26,16 +26,15 @@ export function isDepEdEmail(value: unknown) {
   return /^[a-z0-9._%+-]+@deped\.gov\.ph$/i.test(email);
 }
 
-/** Allows one configured address to exercise the OTP flow on a local dev server. */
-function isLocalTestEmail(value: unknown) {
-  if (process.env.NODE_ENV !== "development") return false;
+/** Allows one explicitly configured address to exercise the OTP flow. */
+function isConfiguredTestEmail(value: unknown) {
   const configuredEmail = normalizeDepEdEmail(process.env.SUBJECT_TEACHER_TEST_EMAIL);
   return Boolean(configuredEmail) && normalizeDepEdEmail(value) === configuredEmail;
 }
 
-/** Production and preview deployments remain strictly @deped.gov.ph-only. */
+/** Accepts a DepEd email, or the one server-configured test address. */
 export function isAllowedSubjectTeacherEmail(value: unknown) {
-  return isDepEdEmail(value) || isLocalTestEmail(value);
+  return isDepEdEmail(value) || isConfiguredTestEmail(value);
 }
 
 export function otpHash(email: string, otp: string) {
