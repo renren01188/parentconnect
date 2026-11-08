@@ -22,7 +22,7 @@ export function LoginLandingHeader() {
         <div className="flex w-full flex-col items-center justify-between gap-3 px-4 py-3 sm:flex-row sm:px-6 lg:px-8 xl:px-10 2xl:px-12">
           <Link href="/" className="flex min-w-0 items-center gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62]">
             <Image
-              src="/icon.png"
+              src="/santiago-elementary-logo.png"
               alt="Santiago Elementary School seal"
               width={36}
               height={36}

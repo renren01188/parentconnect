@@ -1,11 +1,10 @@
 "use client";
 
-import { SchoolBackground } from "@/components/SchoolBackground";
+import { PublicHeroHeader } from "@/components/PublicHeroHeader";
 import { useRef, useState } from "react";
 import { ArrowLeft, Send, CheckCircle, Phone, Mail, MapPin } from "lucide-react";
 import Link from "next/link";
 import { ContactRecaptcha } from "@/components/ContactRecaptcha";
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 
 const emptyForm = {
   name: "",
@@ -81,52 +80,10 @@ export default function ContactUsPage() {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
 
-      {/* ── Hero Header ── */}
-      <header className="relative w-full h-48 overflow-hidden">
-        <SchoolBackground />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900/85 via-slate-800/75 to-slate-900/70" />
-
-        {/* Top bar */}
-        <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-white/10">
-          <div>
-            <span className="text-white/90 text-sm font-semibold tracking-widest uppercase">
-              Santiago Elementary School
-            </span>
-          </div>
-          <nav className="flex items-center gap-6">
-            <Link
-              href="/contact-us"
-              className="text-white text-sm font-semibold tracking-wide transition-colors duration-200"
-            >
-              Contact us
-            </Link>
-            <Link
-              href="/about"
-              className="text-white/80 hover:text-white text-sm font-medium transition-colors duration-200 tracking-wide"
-            >
-              About
-            </Link>
-          </nav>
-        </div>
-
-        {/* Hero content */}
-        <div className="relative z-10 flex items-center justify-between h-[calc(100%-52px)] px-8">
-          <div className="max-w-xl">
-            <h1 className="text-white font-bold text-2xl md:text-3xl leading-snug drop-shadow-lg">
-              ParentConnect:{" "}
-              <span className="text-sky-300">
-                Parent Communication and RFID Monitoring
-              </span>
-            </h1>
-          </div>
-          <LoginInstitutionLogos className="ml-4" />
-        </div>
-      </header>
-
-      {/* ── Contact Us Banner ── */}
-      <div className="w-full bg-[#0d2d5e] px-8 py-4">
-        <h2 className="text-white font-bold text-xl">Contact us</h2>
-      </div>
+      <PublicHeroHeader
+        title="Contact Us"
+        description="Get in touch with Santiago Elementary School. Send us your questions, feedback, or concerns and we will be glad to help."
+      />
 
       {/* ── Main Content ── */}
       <main className="flex-1 py-10 px-4">

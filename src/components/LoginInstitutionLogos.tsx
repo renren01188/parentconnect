@@ -19,7 +19,7 @@ export function LoginInstitutionLogos({ className = "" }: LoginInstitutionLogosP
       </div>
       <div className="flex flex-col items-center">
         <Image
-          src="/icon.png"
+          src="/santiago-elementary-logo.png"
           alt="Santiago Elementary School seal"
           width={56}
           height={56}

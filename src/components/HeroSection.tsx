@@ -25,7 +25,7 @@ export default function HeroSection() {
         <div className="flex w-full flex-col items-center justify-between gap-3 px-4 py-3 sm:flex-row sm:px-6 lg:px-8 xl:px-10 2xl:px-12">
           <div className="flex min-w-0 items-center gap-3">
             <Image
-              src="/icon.png"
+              src="/santiago-elementary-logo.png"
               alt="Santiago Elementary School seal"
               width={36}
               height={36}
@@ -74,7 +74,7 @@ export default function HeroSection() {
           </div>
           <div className="flex flex-col items-center text-center">
             <Image
-              src="/icon.png"
+              src="/santiago-elementary-logo.png"
               alt="Santiago Elementary School seal"
               width={64}
               height={64}

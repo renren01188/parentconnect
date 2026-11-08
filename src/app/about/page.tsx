@@ -1,7 +1,6 @@
 "use client";
 
-import { SchoolBackground } from "@/components/SchoolBackground";
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
+import { PublicHeroHeader } from "@/components/PublicHeroHeader";
 
 import {
   GraduationCap,
@@ -113,52 +112,10 @@ export default function AboutPage() {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
 
-      {/* ── Hero Header ── */}
-      <header className="relative w-full h-48 overflow-hidden">
-        <SchoolBackground />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-900/85 via-slate-800/75 to-slate-900/70" />
-
-        {/* Top bar */}
-        <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-white/10">
-          <div>
-            <span className="text-white/90 text-sm font-semibold tracking-widest uppercase">
-              Santiago Elementary School
-            </span>
-          </div>
-          <nav className="flex items-center gap-6">
-            <Link
-              href="/contact-us"
-              className="text-white/80 hover:text-white text-sm font-medium transition-colors duration-200 tracking-wide"
-            >
-              Contact us
-            </Link>
-            <Link
-              href="/about"
-              className="text-white text-sm font-semibold tracking-wide transition-colors duration-200"
-            >
-              About
-            </Link>
-          </nav>
-        </div>
-
-        {/* Hero content */}
-        <div className="relative z-10 flex items-center justify-between h-[calc(100%-52px)] px-8">
-          <div className="max-w-xl">
-            <h1 className="text-white font-bold text-2xl md:text-3xl leading-snug drop-shadow-lg">
-              ParentConnect:{" "}
-              <span className="text-sky-300">
-                Parent Communication and RFID Monitoring
-              </span>
-            </h1>
-          </div>
-          <LoginInstitutionLogos className="ml-4" />
-        </div>
-      </header>
-
-      {/* ── About Banner ── */}
-      <div className="w-full bg-[#0d2d5e] px-8 py-4">
-        <h2 className="text-white font-bold text-xl">About ParentConnect</h2>
-      </div>
+      <PublicHeroHeader
+        title="About ParentConnect"
+        description="Learn how ParentConnect helps Santiago Elementary School and families stay informed, connected, and supported."
+      />
 
       {/* ── Main ── */}
       <main className="flex-1 py-10 px-4">
@@ -307,7 +264,7 @@ export default function AboutPage() {
               Contact Us
             </Link>
             <Link
-              href="/"
+              href="/login/guardian"
               className="w-full sm:w-auto text-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold py-3 px-8 rounded-full transition-all duration-200 active:scale-95 shadow-sm text-sm"
             >
               Go to Login
