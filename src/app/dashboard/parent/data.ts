@@ -1,7 +1,7 @@
 // Shared Parent dashboard types and real report-form category definitions.
 // Parent records themselves are always loaded through authorized API routes.
 
-export type MessageStatus = "Pending Response" | "Resolved" | "Read" | "Unread";
+export type MessageStatus = "Pending Response" | "Resolved" | "Cancelled" | "Read" | "Unread";
 
 /** Fine-grained lifecycle status shown in the parent status-tracking UI. */
 export type ReportStatus =
@@ -9,6 +9,7 @@ export type ReportStatus =
   | "In Review"
   | "Replied"
   | "Resolved"
+  | "Cancelled"
   | "Escalated";
 
 export interface ChatMessage {
@@ -74,6 +75,8 @@ export interface Report {
   concernLevel: number;
   escalatedToGuidance?: boolean;
   escalatedToPrincipal?: boolean;
+  /** True when this Parent cancelled the report; its history remains viewable. */
+  cancelledByParent?: boolean;
   guidanceHasReplied?: boolean;
   /** A parent reply after the related handoff permanently acknowledges its banner. */
   parentRepliedAfterPrincipalEscalation?: boolean;

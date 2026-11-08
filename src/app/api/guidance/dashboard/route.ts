@@ -17,6 +17,10 @@ type GuidanceReportRow = {
   last_message_at: string;
 };
 
+type GuidanceTicketRow = {
+  report_id: number;
+};
+
 function normalizedStatus(status: string | null | undefined) {
   return String(status ?? "").trim().toLowerCase();
 }
@@ -52,20 +56,42 @@ export async function GET() {
     if (reportsError) throw reportsError;
 
     const reports = (allReports ?? []) as GuidanceReportRow[];
-    const escalated = reports.filter((report) => normalizedStatus(report.status) === "escalated" && !report.guidance_seen_at).length;
-    const inProgress = reports.filter((report) => ["ongoing", "in progress", "in_review", "in review"].includes(normalizedStatus(report.status))).length;
-    const resolved = reports.filter((report) => normalizedStatus(report.status) === "resolved").length;
+    const reportIds = reports.map((report) => report.id);
+    const { data: acceptedTicketRows, error: acceptedTicketsError } = reportIds.length
+      ? await supabase
+        .from("parent_report_guidance_tickets")
+        .select("report_id")
+        .in("report_id", reportIds)
+        .eq("status", "accepted")
+      : { data: [], error: null };
+    if (acceptedTicketsError) throw acceptedTicketsError;
+
+    // A ticket belongs to its report. Use a set of report IDs, rather than
+    // adding ticket rows into the counters, so an accepted ticket never
+    // creates a duplicate Guidance case.
+    const acceptedTicketReportIds = new Set(
+      ((acceptedTicketRows ?? []) as GuidanceTicketRow[])
+        .map((ticket) => Number(ticket.report_id))
+        .filter((reportId) => Number.isSafeInteger(reportId) && reportId > 0),
+    );
+    const isResolved = (report: GuidanceReportRow) => normalizedStatus(report.status) === "resolved";
+    const isInProgress = (report: GuidanceReportRow) => !isResolved(report) && (
+      acceptedTicketReportIds.has(report.id)
+      || ["ongoing", "in progress", "in_review", "in review"].includes(normalizedStatus(report.status))
+    );
+    const activeReports = reports.filter((report) => !isResolved(report));
+    const escalated = activeReports.length;
+    const inProgress = activeReports.filter(isInProgress).length;
+    const resolved = reports.filter(isResolved).length;
     const studentsMonitored = new Set(
-      reports
-        .filter((report) => normalizedStatus(report.status) !== "resolved")
+      activeReports
         .map((report) => report.student_id || report.student_name)
     ).size;
 
-    const escalatedConcerns = reports
-      .filter((report) => normalizedStatus(report.status) !== "resolved")
+    const escalatedConcerns = activeReports
       .sort((a, b) => {
-        const aNeedsReview = normalizedStatus(a.status) === "escalated" && !a.guidance_seen_at ? 1 : 0;
-        const bNeedsReview = normalizedStatus(b.status) === "escalated" && !b.guidance_seen_at ? 1 : 0;
+        const aNeedsReview = !isInProgress(a) && normalizedStatus(a.status) === "escalated" && !a.guidance_seen_at ? 1 : 0;
+        const bNeedsReview = !isInProgress(b) && normalizedStatus(b.status) === "escalated" && !b.guidance_seen_at ? 1 : 0;
         return bNeedsReview - aNeedsReview || b.concern_level - a.concern_level || new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
       })
       .slice(0, 5)
@@ -77,17 +103,17 @@ export async function GET() {
         section: report.section || "",
         concern: report.subject || "No subject",
         priority: priorityFor(Number(report.concern_level) || 0),
-        status: normalizedStatus(report.status) === "ongoing" ? "In Progress" : report.status ? report.status.charAt(0).toUpperCase() + report.status.slice(1) : "Pending",
+        status: isInProgress(report) ? "In Progress" : report.status ? report.status.charAt(0).toUpperCase() + report.status.slice(1) : "Pending",
         date: new Date(report.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
       }));
 
-    const reportIds = reports.map((report) => String(report.id));
-    const { data: activities, error: activityError } = reportIds.length
+    const reportIdStrings = reports.map((report) => String(report.id));
+    const { data: activities, error: activityError } = reportIdStrings.length
       ? await supabase
         .from("audit_log")
         .select("id, action, details, new_status, created_at")
         .eq("performed_by_role", "Guidance Counselor")
-        .in("related_report_id", reportIds)
+        .in("related_report_id", reportIdStrings)
         .order("created_at", { ascending: false })
         .limit(5)
       : { data: [], error: null };

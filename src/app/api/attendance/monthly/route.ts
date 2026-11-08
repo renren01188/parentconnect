@@ -7,6 +7,7 @@ import {
   monthStartDate,
 } from "@/lib/attendanceReportingCalendar";
 import { calculateSf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
+import { resolveFinalAttendanceExport } from "@/lib/finalAttendanceExport";
 
 type StudentRow = {
   id: number;
@@ -46,10 +47,13 @@ type MonthlyAttendanceRow = {
   time_out: string | null;
   time_in_status: LogRow["status"] | null;
   time_out_status: LogRow["status"] | null;
+  time_out_via: LogRow["via"] | null;
+  time_out_remark: string | null;
   via: LogRow["via"] | null;
   remark: string | null;
   is_absent: boolean;
   is_excused: boolean;
+  is_auto_missing_time_out_absence: boolean;
   active_from: string;
 };
 
@@ -344,11 +348,16 @@ export async function GET(req: NextRequest) {
         const timeIn = dayLogs?.timeIn;
         const timeOut = dayLogs?.timeOut;
         const isExcused = !!dayLogs?.isExcused;
-        // The final daily result is Absent when either the Time In itself is
-        // absent or an Auto Time Out recorded the missing departure. Excused
-        // remains its own visible category but also contributes to official
-        // absence totals and attendance-rate denominators.
-        const isAbsent = timeIn?.status === "Absent" || timeOut?.status === "Absent" || isExcused;
+        const finalAttendance = resolveFinalAttendanceExport({
+          timeInStatus: timeIn?.status,
+          timeOutStatus: timeOut?.status,
+          timeOutVia: timeOut?.via,
+          timeOutRemark: timeOut?.remark,
+          isExcused,
+        });
+        // Excused remains visible as its own saved status, but it and a final
+        // Auto Time Out absence both contribute to official absence totals.
+        const isAbsent = finalAttendance.status === "Absent" || finalAttendance.status === "Excused";
 
         rows.push({
           student_id: student.student_id,
@@ -361,10 +370,13 @@ export async function GET(req: NextRequest) {
           time_out: timeOut?.time_logged ?? null,
           time_in_status: timeIn?.status ?? null,
           time_out_status: timeOut?.status ?? null,
+          time_out_via: timeOut?.via ?? null,
+          time_out_remark: timeOut?.remark ?? null,
           via: timeIn?.via ?? null,
           remark: timeIn?.remark ?? null,
           is_absent: isAbsent,
           is_excused: isExcused,
+          is_auto_missing_time_out_absence: finalAttendance.isAutomaticMissingTimeOutAbsence,
           active_from: activeFrom,
         });
       }

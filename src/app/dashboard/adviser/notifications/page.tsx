@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import {
     Send, UserCheck, ChevronRight,
     Filter, CheckCheck, AlertTriangle, CheckCircle,
-    UserX, X, TriangleAlert, Megaphone, Eye, FileText, Bell, LoaderCircle, RefreshCw,
+    UserX, X, TriangleAlert, Megaphone, Eye, FileText, Bell, LoaderCircle, RefreshCw, Clock, Trash2,
 } from "lucide-react";
 import { useNotifContext } from "../context/NotificationContext";
 import { type NotificationType } from "../data";
 import { dashboardPath } from "@/lib/routeAliases";
+import { formatManilaAnnouncementSchedule, nextSchoolCalendarDay, normalizeOptionalAnnouncementScheduleDateTime } from "@/lib/announcementSchedule";
 
 interface Notification {
     id: string;        // now a string like "report-2-new"
@@ -58,15 +59,33 @@ function ModalBackdrop({ onClose, children }: { onClose: () => void; children: R
 // ── Announcement Modal ────────────────────────────────────────────────────────
 type AnnouncementStep = "compose" | "confirm" | "sent";
 
-function AnnouncementModal({ onClose }: { onClose: () => void }) {
+type AdviserAnnouncement = {
+    id: number;
+    title: string;
+    message: string;
+    status: "Published" | "Scheduled";
+    scheduled_at?: string | null;
+    created_at?: string;
+};
+
+function AnnouncementModal({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
     const [step, setStep] = useState<AnnouncementStep>("compose");
     const [text, setText] = useState("");
+    const [scheduleDate, setScheduleDate] = useState("");
+    const [scheduleTime, setScheduleTime] = useState("");
     const [sending, setSending] = useState(false);
     const [error, setError] = useState("");
     const [deliveredCount, setDeliveredCount] = useState(0);
-    const CHAR_LIMIT = 500;
+    const [savedStatus, setSavedStatus] = useState<AdviserAnnouncement["status"]>("Published");
+    const [savedSchedule, setSavedSchedule] = useState<string | null>(null);
+    const CHAR_LIMIT = 1000;
     const tooLong = text.length > CHAR_LIMIT;
     const isEmpty = text.trim().length === 0;
+    const schedule = normalizeOptionalAnnouncementScheduleDateTime(scheduleDate, scheduleTime);
+    const scheduleError = schedule.ok ? "" : schedule.message;
+    const scheduledLabel = schedule.ok ? formatManilaAnnouncementSchedule(schedule.scheduledAt) : "";
+    const isScheduled = Boolean(schedule.ok && schedule.scheduledAt);
+    const canReview = !isEmpty && !tooLong && schedule.ok;
 
     async function sendAnnouncement() {
         setSending(true);
@@ -75,14 +94,21 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
             const res = await fetch("/api/adviser/announcements", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: text.trim() }),
+                body: JSON.stringify({
+                    message: text.trim(),
+                    schedule_date: scheduleDate || null,
+                    schedule_time: scheduleTime || null,
+                }),
             });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data?.success) {
                 throw new Error(data?.message || "Failed to send announcement.");
             }
             setDeliveredCount(Number(data.deliveredCount ?? 0));
+            setSavedStatus(data.announcement?.status === "Scheduled" ? "Scheduled" : "Published");
+            setSavedSchedule(typeof data.announcement?.scheduled_at === "string" ? data.announcement.scheduled_at : null);
             setStep("sent");
+            onChanged();
             window.dispatchEvent(new Event("adviser-notifications-changed"));
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to send announcement.");
@@ -97,7 +123,7 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center"><Megaphone className="w-4 h-4 text-emerald-600" /></div>
-                        <span className="text-base font-bold text-slate-800">{step === "sent" ? "Announcement Sent" : "Send Announcement"}</span>
+                        <span className="text-base font-bold text-slate-800">{step === "sent" ? savedStatus === "Scheduled" ? "Announcement Scheduled" : "Announcement Sent" : "Send Announcement"}</span>
                     </div>
                     <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"><X className="w-4 h-4" /></button>
                 </div>
@@ -105,17 +131,32 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
                     {step === "compose" && (
                         <>
                             <p className="text-sm text-slate-500 mb-3">Write a message to send to all parents of your advisory class.</p>
-                            <textarea value={text} onChange={e => setText(e.target.value)} placeholder="e.g. Reminder: Parent-teacher conference is on March 22 at 2:00 PM..." rows={5}
+                            <textarea value={text} maxLength={CHAR_LIMIT} onChange={e => setText(e.target.value)} placeholder="e.g. Reminder: Parent-teacher conference is on March 22 at 2:00 PM..." rows={5}
                                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white transition resize-none placeholder:text-slate-400" />
                             <div className="flex items-center justify-between mt-1.5 mb-4">
                                 <span className={`text-xs ${tooLong ? "text-red-500 font-semibold" : "text-slate-400"}`}>{text.length}/{CHAR_LIMIT} characters</span>
                                 {tooLong && <span className="text-xs text-red-500 font-medium">Message too long</span>}
                             </div>
+                            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3.5">
+                                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                    <p className="text-sm font-bold text-slate-700">Schedule delivery <span className="font-medium text-slate-400">(optional)</span></p>
+                                    <p className="text-xs text-slate-400">Leave both blank to send immediately.</p>
+                                </div>
+                                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <label className="text-xs font-semibold text-slate-600">Date
+                                        <input type="date" min={nextSchoolCalendarDay()} value={scheduleDate} onChange={(event) => { setScheduleDate(event.target.value); setError(""); }} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                    </label>
+                                    <label className="text-xs font-semibold text-slate-600">Time
+                                        <input type="time" step="60" value={scheduleTime} onChange={(event) => { setScheduleTime(event.target.value); setError(""); }} className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+                                    </label>
+                                </div>
+                                {scheduleError ? <p role="alert" className="mt-2 text-xs font-semibold text-red-600">{scheduleError}</p> : isScheduled ? <p className="mt-2 text-xs font-semibold text-emerald-700">Scheduled for {scheduledLabel}</p> : null}
+                            </div>
                             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
                                 <button onClick={onClose} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors sm:w-auto sm:py-2">Cancel</button>
-                                <button onClick={() => setStep("confirm")} disabled={isEmpty || tooLong}
+                                <button onClick={() => setStep("confirm")} disabled={!canReview}
                                     className="flex w-full items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed sm:w-auto sm:py-2">
-                                    <Send className="w-3.5 h-3.5" /> Review & Send
+                                    <Send className="w-3.5 h-3.5" /> {isScheduled ? "Review Schedule" : "Review & Send"}
                                 </button>
                             </div>
                         </>
@@ -124,7 +165,7 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
                         <>
                             <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
                                 <TriangleAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                                <p className="text-xs text-amber-700 font-medium leading-relaxed">This announcement will be sent to <strong>all parents</strong> in your advisory class.</p>
+                                <p className="text-xs text-amber-700 font-medium leading-relaxed">This announcement will be {isScheduled ? "scheduled for" : "sent to"} <strong>all parents</strong> in your advisory class{isScheduled ? ` at ${scheduledLabel}` : ""}.</p>
                             </div>
                             <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5">
                                 <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Your message</p>
@@ -138,7 +179,7 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
                             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
                                 <button onClick={() => setStep("compose")} disabled={sending} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50 sm:w-auto sm:py-2">Edit Message</button>
                                 <button onClick={sendAnnouncement} disabled={sending} className="flex w-full items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed sm:w-auto sm:py-2">
-                                    <Send className="w-3.5 h-3.5" /> {sending ? "Sending..." : "Confirm & Send"}
+                                    <Send className="w-3.5 h-3.5" /> {sending ? isScheduled ? "Scheduling..." : "Sending..." : isScheduled ? "Confirm & Schedule" : "Confirm & Send"}
                                 </button>
                             </div>
                         </>
@@ -146,14 +187,70 @@ function AnnouncementModal({ onClose }: { onClose: () => void }) {
                     {step === "sent" && (
                         <div className="flex flex-col items-center py-4 gap-3">
                             <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center"><CheckCircle className="w-7 h-7 text-emerald-500" /></div>
-                            <p className="text-base font-bold text-slate-800">Announcement Sent!</p>
-                            <p className="text-sm text-slate-400 text-center">Your announcement has been delivered to {deliveredCount} parent{deliveredCount === 1 ? "" : "s"}.</p>
+                            <p className="text-base font-bold text-slate-800">{savedStatus === "Scheduled" ? "Announcement Scheduled!" : "Announcement Sent!"}</p>
+                            <p className="text-sm text-slate-400 text-center">{savedStatus === "Scheduled" ? `Your announcement will be delivered to your advisory-class parents on ${formatManilaAnnouncementSchedule(savedSchedule)}.` : `Your announcement has been delivered to ${deliveredCount} parent${deliveredCount === 1 ? "" : "s"}.`}</p>
                             <button onClick={onClose} className="mt-2 px-6 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition-colors">Done</button>
                         </div>
                     )}
                 </div>
             </div>
         </ModalBackdrop>
+    );
+}
+
+function MyAnnouncementsPanel() {
+    const [announcements, setAnnouncements] = useState<AdviserAnnouncement[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+    const [deleteTarget, setDeleteTarget] = useState<AdviserAnnouncement | null>(null);
+    const [deleting, setDeleting] = useState(false);
+
+    const loadAnnouncements = useCallback(async () => {
+        try {
+            const response = await fetch("/api/adviser/announcements", { cache: "no-store" });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to load announcements.");
+            setAnnouncements(Array.isArray(data.announcements) ? data.announcements : []);
+            setError("");
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : "Unable to load announcements.");
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadAnnouncements();
+        const reload = () => { void loadAnnouncements(); };
+        window.addEventListener("adviser-notifications-changed", reload);
+        return () => window.removeEventListener("adviser-notifications-changed", reload);
+    }, [loadAnnouncements]);
+
+    async function deleteAnnouncement() {
+        if (!deleteTarget || deleting) return;
+        setDeleting(true);
+        try {
+            const response = await fetch(`/api/adviser/announcements/${deleteTarget.id}`, { method: "DELETE" });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to delete announcement.");
+            setAnnouncements((current) => current.filter((announcement) => announcement.id !== deleteTarget.id));
+            setDeleteTarget(null);
+            window.dispatchEvent(new Event("adviser-notifications-changed"));
+        } catch (deleteError) {
+            setError(deleteError instanceof Error ? deleteError.message : "Unable to delete announcement.");
+        } finally {
+            setDeleting(false);
+        }
+    }
+
+    return (
+        <>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="mb-3 flex items-center justify-between gap-2"><p className="text-sm font-bold text-slate-800">Your Announcements</p><Clock className="h-4 w-4 text-slate-400" /></div>
+                {loading ? <p className="text-xs text-slate-400">Loading announcements...</p> : error ? <div className="space-y-2"><p className="text-xs font-medium text-red-600">{error}</p><button type="button" onClick={() => void loadAnnouncements()} className="text-xs font-bold text-emerald-600 hover:text-emerald-700">Try again</button></div> : announcements.length === 0 ? <p className="text-xs leading-relaxed text-slate-400">Published and scheduled announcements you create will appear here.</p> : <div className="flex max-h-72 flex-col gap-3 overflow-y-auto pr-1">{announcements.map((announcement) => <article key={announcement.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3"><div className="flex items-start justify-between gap-2"><span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${announcement.status === "Scheduled" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{announcement.status === "Scheduled" && <Clock className="h-3 w-3" />}{announcement.status}</span><button type="button" aria-label={`Delete ${announcement.title}`} onClick={() => setDeleteTarget(announcement)} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button></div><p className="mt-2 break-words text-xs font-bold text-slate-700">{announcement.title}</p><p className="mt-1 line-clamp-3 break-words text-xs leading-relaxed text-slate-500">{announcement.message}</p>{announcement.status === "Scheduled" && <p className="mt-2 break-words text-[10px] font-semibold text-amber-700">Scheduled: {formatManilaAnnouncementSchedule(announcement.scheduled_at)}</p>}</article>)}</div>}
+            </div>
+            {deleteTarget && <ModalBackdrop onClose={() => !deleting && setDeleteTarget(null)}><div role="dialog" aria-modal="true" aria-labelledby="delete-adviser-announcement-title" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6"><div className="flex items-start gap-3"><div className="rounded-full bg-red-50 p-2"><Trash2 className="h-5 w-5 text-red-600" /></div><div><h2 id="delete-adviser-announcement-title" className="text-base font-bold text-slate-800">Delete announcement?</h2><p className="mt-2 text-sm leading-relaxed text-slate-500">{deleteTarget.status === "Scheduled" ? "This cancels its scheduled delivery. Parents will not receive this announcement." : "This removes the announcement from affected Parent notification lists."}</p></div></div><div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" disabled={deleting} onClick={() => setDeleteTarget(null)} className="min-h-10 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50">Keep announcement</button><button type="button" disabled={deleting} onClick={() => void deleteAnnouncement()} className="min-h-10 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-50">{deleting ? "Deleting..." : deleteTarget.status === "Scheduled" ? "Cancel delivery" : "Delete"}</button></div></div></ModalBackdrop>}
+        </>
     );
 }
 
@@ -486,7 +583,7 @@ export default function NotificationsPage() {
 
     return (
         <div className="flex min-h-full min-w-0 flex-col overflow-x-hidden bg-slate-50 p-4 sm:p-6">
-            {showAnnouncement && <AnnouncementModal onClose={() => setShowAnnouncement(false)} />}
+            {showAnnouncement && <AnnouncementModal onClose={() => setShowAnnouncement(false)} onChanged={() => window.dispatchEvent(new Event("adviser-notifications-changed"))} />}
 
             {viewNotif && <AnnouncementViewModal notif={viewNotif} onClose={() => setViewNotif(null)} />}
 
@@ -649,6 +746,7 @@ export default function NotificationsPage() {
 
                         </div>
                     </div>
+                    <MyAnnouncementsPanel />
                 </div>
             </div>
         </div>

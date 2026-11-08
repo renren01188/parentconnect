@@ -8,6 +8,7 @@ import {
     reportableAttendanceDays,
 } from "@/lib/attendanceReportingCalendar";
 import { calculateSf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
+import { resolveFinalAttendanceExport } from "@/lib/finalAttendanceExport";
 
 type LogRow = {
     id: number;
@@ -16,6 +17,8 @@ type LogRow = {
     time_logged: string;
     type: "Time In" | "Time Out" | null;
     status: string | null;
+    via: "RFID" | "Manual" | "Auto" | null;
+    remark: string | null;
     student_grade_snapshot?: string | null;
     student_section_snapshot?: string | null;
 };
@@ -37,7 +40,13 @@ function toAttendanceStatus(status: string | null): AttendanceStatus | null {
         : null;
 }
 
-type DayRecord = { status: AttendanceStatus; id: number; timeLogged: string };
+type DayRecord = {
+    status: AttendanceStatus;
+    id: number;
+    timeLogged: string;
+    via: LogRow["via"];
+    remark: string | null;
+};
 
 function shouldReplaceDayRecord(current: DayRecord | undefined, next: DayRecord) {
     if (!current) return true;
@@ -140,7 +149,7 @@ export async function GET(req: NextRequest) {
         for (let from = 0; ; from += pageSize) {
             const { data: logRows, error: logError } = await supabase
                 .from("attendance_logs")
-                .select("id, student_db_id, attendance_date, time_logged, type, status, student_grade_snapshot, student_section_snapshot")
+                .select("id, student_db_id, attendance_date, time_logged, type, status, via, remark, student_grade_snapshot, student_section_snapshot")
                 .gte("attendance_date", monthStart)
                 .lte("attendance_date", monthEnd)
                 .order("attendance_date", { ascending: true })
@@ -326,7 +335,7 @@ export async function GET(req: NextRequest) {
         // rows can exist after corrections, so retain the status with the
         // strongest final classification rather than counting the day twice.
         const logMap: Record<string, Record<string, DayRecord>> = {};
-        const autoMissingTimeOuts = new Map<string, DayRecord>();
+        const timeOutMap = new Map<string, DayRecord>();
 
         for (const log of logs) {
             const dbId = log.student_db_id as number;
@@ -339,22 +348,26 @@ export async function GET(req: NextRequest) {
             const date = log.attendance_date as string;
             const status = toAttendanceStatus(log.status);
             if (!status) continue;
+            const next = {
+                status,
+                id: log.id,
+                timeLogged: log.time_logged,
+                via: log.via,
+                remark: log.remark,
+            };
             if (log.type === "Time Out") {
-                // An automatic missing Time Out sets the learner's final
-                // daily result to Absent while preserving the Time In log.
-                if (status === "Absent") {
-                    autoMissingTimeOuts.set(`${reportKey}::${date}`, {
-                        status,
-                        id: log.id,
-                        timeLogged: log.time_logged,
-                    });
+                const timeOutKey = `${reportKey}::${date}`;
+                const existingTimeOut = timeOutMap.get(timeOutKey);
+                if (!existingTimeOut
+                    || next.timeLogged > existingTimeOut.timeLogged
+                    || (next.timeLogged === existingTimeOut.timeLogged && next.id > existingTimeOut.id)) {
+                    timeOutMap.set(timeOutKey, next);
                 }
                 continue;
             }
             if (log.type && log.type !== "Time In") continue;
             if (!logMap[reportKey]) logMap[reportKey] = {};
             const existing = logMap[reportKey][date];
-            const next = { status, id: log.id, timeLogged: log.time_logged };
             if (shouldReplaceDayRecord(existing, next)) logMap[reportKey][date] = next;
         }
 
@@ -376,6 +389,8 @@ export async function GET(req: NextRequest) {
             assignment_key: string;
             dailyAbsences: Record<number, boolean>;  // day-of-month → true if absent
             dailyExcused: Record<number, boolean>;   // day-of-month → true if excused
+            dailyHasTimeOut: Record<number, boolean>;
+            dailyAutoMissingTimeOutAbsences: Record<number, boolean>;
         };
 
         const studentSummaries: StudentSummary[] = reportStudents.map((s) => {
@@ -383,16 +398,29 @@ export async function GET(req: NextRequest) {
             const dailyAbsences: Record<number, boolean> = {};
             const dailyExcused: Record<number, boolean> = {};
             const dailyStatuses: Record<number, AttendanceStatus> = {};
+            const dailyHasTimeOut: Record<number, boolean> = {};
+            const dailyAutoMissingTimeOutAbsences: Record<number, boolean> = {};
 
             for (const dateStr of validDays.filter((date) => date >= s.active_from)) {
                 const reportKey = `${s.id}::${s.report_assignment_key}`;
-                const dayRecord = autoMissingTimeOuts.get(`${reportKey}::${dateStr}`)
-                    ?? logMap[reportKey]?.[dateStr];
+                const timeInRecord = logMap[reportKey]?.[dateStr];
+                const timeOutRecord = timeOutMap.get(`${reportKey}::${dateStr}`);
+                const finalAttendance = resolveFinalAttendanceExport({
+                    timeInStatus: timeInRecord?.status,
+                    timeOutStatus: timeOutRecord?.status,
+                    timeOutVia: timeOutRecord?.via,
+                    timeOutRemark: timeOutRecord?.remark,
+                });
                 const dayOfMonth = parseInt(dateStr.split("-")[2], 10);
+                const status = finalAttendance.status;
 
-                if (dayRecord) dailyStatuses[dayOfMonth] = dayRecord.status;
+                if (status) dailyStatuses[dayOfMonth] = status;
+                if (finalAttendance.hasCompletedAttendance) dailyHasTimeOut[dayOfMonth] = true;
+                if (finalAttendance.isAutomaticMissingTimeOutAbsence) {
+                    dailyAutoMissingTimeOutAbsences[dayOfMonth] = true;
+                }
 
-                if (dayRecord?.status === "Excused") {
+                if (status === "Excused") {
                     excused++;
                     // Keep the distinct Excused category in the dashboard,
                     // while including it in the official absent total. SF2
@@ -400,11 +428,11 @@ export async function GET(req: NextRequest) {
                     absent++;
                     dailyAbsences[dayOfMonth] = true;
                     dailyExcused[dayOfMonth] = true;
-            } else if (dayRecord?.status === "Present" || dayRecord?.status === "On Time") {
+                } else if (finalAttendance.hasCompletedAttendance && status === "Present") {
                     present++;
-                } else if (dayRecord?.status === "Late") {
+                } else if (finalAttendance.hasCompletedAttendance && status === "Late") {
                     late++;
-                } else if (dayRecord?.status === "Absent") {
+                } else if (status === "Absent") {
                     absent++;
                     dailyAbsences[dayOfMonth] = true;
                 }
@@ -421,6 +449,8 @@ export async function GET(req: NextRequest) {
                 excused,
                 dailyAbsences,
                 dailyExcused,
+                dailyHasTimeOut,
+                dailyAutoMissingTimeOutAbsences,
                 dailyStatuses,
                 active_from: s.active_from,
                 registration_date: registrationDate(s.created_at),

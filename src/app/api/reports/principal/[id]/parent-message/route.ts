@@ -240,9 +240,6 @@ export async function POST(
     if (!parent) {
       return NextResponse.json({ success: false, message: "The Parent account is unavailable." }, { status: 404 });
     }
-    if (!parent.hasDeliverableEmail) {
-      return NextResponse.json({ success: false, message: "This Parent does not have a valid email address for the required notification." }, { status: 409 });
-    }
 
     const { data: created, error } = await supabase
       .from("staff_messages")
@@ -278,9 +275,10 @@ export async function POST(
       messageId: Number(created.id),
     });
 
-    // Match the existing School Messages delivery behavior: email cannot
-    // delay the saved dashboard message or its Realtime update.
-    after(async () => {
+    // Dashboard delivery is the required path. When a Parent has a valid
+    // email address, send the matching optional notification after the
+    // response without delaying the saved message or its Realtime update.
+    if (parent.hasDeliverableEmail) after(async () => {
       try {
         await sendStaffMessageEmail({
           recipientEmail: parent.email,

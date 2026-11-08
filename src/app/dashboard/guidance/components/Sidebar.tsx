@@ -115,7 +115,7 @@ export default function Sidebar({ ready = true }: { ready?: boolean }) {
           })}
         </nav>
 
-        <div className="mx-3 mb-3 flex shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3"><Bell className="h-4 w-4 shrink-0 text-sky-100" /><p className="text-xs font-bold text-white">{escalatedCount} concern{escalatedCount === 1 ? "" : "s"} need review</p></div>
+        <div className="mx-3 mb-3 flex shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3"><Bell className="h-4 w-4 shrink-0 text-sky-100" /><p className="text-xs font-bold text-white">{escalatedCount} active guidance case{escalatedCount === 1 ? "" : "s"}</p></div>
 
         <div className="mt-3 flex shrink-0 flex-col gap-2 border-t border-white/10 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 xl:mt-auto xl:pb-4">
           <Link href={dashboardPath("guidance", "/profile")} onClick={closeMenu} className={`flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all ${pathname.startsWith(dashboardPath("guidance", "/profile")) ? "bg-white/18" : "hover:bg-white/10"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-white ring-2 ring-white/20">{profileInitials}</span><span className="min-w-0"><span className="block truncate text-xs font-semibold leading-tight text-white">{profileName}</span><span className="block text-[10px] text-sky-100">{profile?.school || "Guidance Office"}</span></span></Link>

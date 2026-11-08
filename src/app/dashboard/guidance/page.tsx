@@ -28,12 +28,43 @@ function badgeClass(value: string) {
   return "badge-gray";
 }
 
+type GuidanceDashboardReport = {
+  id: number;
+  student: string;
+  adviser: string;
+  grade: string;
+  section: string;
+  concern: string;
+  priority: string;
+  status: string;
+  date: string;
+};
+
+type GuidanceDashboardActivity = {
+  text: string;
+  time: string;
+  type: string;
+};
+
+type GuidanceDashboardResponse = {
+  success?: boolean;
+  stats?: {
+    total?: number;
+    escalated?: number;
+    inProgress?: number;
+    resolved?: number;
+    studentsMonitored?: number;
+  };
+  escalatedConcerns?: GuidanceDashboardReport[];
+  recentActivity?: GuidanceDashboardActivity[];
+};
+
 export default function GuidanceDashboard() {
   const [stats, setStats] = useState({
     total: 0, escalated: 0, inProgress: 0, resolved: 0, studentsMonitored: 0,
   });
-  const [escalatedReports, setEscalatedReports] = useState<any[]>([]);
-  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [escalatedReports, setEscalatedReports] = useState<GuidanceDashboardReport[]>([]);
+  const [recentActivity, setRecentActivity] = useState<GuidanceDashboardActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
 
@@ -44,11 +75,17 @@ export default function GuidanceDashboard() {
   const loadDashboard = useCallback(() => {
     return fetch("/api/guidance/dashboard", { cache: "no-store" })
       .then(r => r.json())
-      .then(data => {
+      .then((data: GuidanceDashboardResponse) => {
         if (data.success) {
-          setStats(data.stats);
-          setEscalatedReports(data.escalatedConcerns);
-          setRecentActivity(data.recentActivity);
+          setStats({
+            total: Number(data.stats?.total ?? 0),
+            escalated: Number(data.stats?.escalated ?? 0),
+            inProgress: Number(data.stats?.inProgress ?? 0),
+            resolved: Number(data.stats?.resolved ?? 0),
+            studentsMonitored: Number(data.stats?.studentsMonitored ?? 0),
+          });
+          setEscalatedReports(data.escalatedConcerns ?? []);
+          setRecentActivity(data.recentActivity ?? []);
         }
       })
       .catch(console.error)
@@ -88,7 +125,7 @@ export default function GuidanceDashboard() {
       <section data-parent-guide="guidance-dashboard-priority" className={`hero-card guidance-summary ${guideHighlight("guidance-dashboard-priority")}`}>
         <div>
           <p className="hero-kicker">Priority queue</p>
-          <h2>{loading ? "—" : stats.escalated} escalated concern{stats.escalated !== 1 ? "s" : ""} need review today</h2>
+          <h2>{loading ? "—" : stats.escalated} escalated concern{stats.escalated !== 1 ? "s" : ""} in the guidance queue</h2>
           <p>
             Start with high-priority cases, coordinate with advisers, and move resolved concerns out of the active queue.
           </p>
@@ -102,7 +139,7 @@ export default function GuidanceDashboard() {
       <section data-parent-guide="guidance-dashboard-summary" className={`stats-grid ${guideHighlight("guidance-dashboard-summary")}`}>
         {[
           { label: "Total Reports", value: stats.total, sub: "Escalated to guidance", icon: FileText, tone: "blue" },
-          { label: "Escalated", value: stats.escalated, sub: "Needs guidance action", icon: AlertTriangle, tone: "red" },
+          { label: "Escalated to Guidance", value: stats.escalated, sub: "Active guidance cases", icon: AlertTriangle, tone: "red" },
           { label: "In Progress", value: stats.inProgress, sub: "Currently being handled", icon: Clock, tone: "amber" },
           { label: "Resolved", value: stats.resolved, sub: "Closed cases", icon: CheckCircle2, tone: "green" },
           { label: "Students Monitored", value: stats.studentsMonitored, sub: "Active guidance cases", icon: Users, tone: "violet" },

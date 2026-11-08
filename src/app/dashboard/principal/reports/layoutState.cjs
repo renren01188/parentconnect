@@ -43,6 +43,7 @@ function detailPanelLayout(hasSelectedParent) {
  */
 function principalReportStatusLabel(report) {
   const status = String(report.status ?? "").toLowerCase();
+  if (report?.cancelledByParent) return "Cancelled by Parents";
   if (status === "resolved") {
     const storedResolverRole = String(report.resolvedByRole ?? "").trim();
     if (["Adviser", "Guidance", "Principal"].includes(storedResolverRole)) {

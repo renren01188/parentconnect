@@ -28,6 +28,9 @@ async function run() {
   const dailyMark = loadTypeScriptModule("src/lib/sf2DailyMark.ts", {
     "@/lib/attendanceExportStatus": status,
   });
+  const finalAttendance = loadTypeScriptModule("src/lib/finalAttendanceExport.ts", {
+    "@/lib/attendanceExportStatus": status,
+  });
   const fixture = [
     ["On Time", "Present", null, null, true],
     ["Late", "Late", null, "upper", true],
@@ -49,9 +52,9 @@ async function run() {
   }
   assert.equal(status.getSf2StatusCode(null, true), "H", "A selected holiday must export as H.");
   assert.deepEqual(
-    status.getSf2DailyMark("Late", false, "lower"),
+    status.getSf2DailyMark("Absent", false, "missing-time-out"),
     { code: null, tardyHalf: "lower" },
-    "Cutting Classes has a lower-half SF2 mark when that outcome is recorded.",
+    "A final automatic missing-Time-Out absence has a lower-half SF2 mark.",
   );
   sheet.addRow(["Fixture student", "Holiday", status.getSf2StatusCode(null, true), false]);
 
@@ -78,18 +81,52 @@ async function run() {
   dailyMark.writeSf2DailyMark(markSheet, "A2", "Late");
   dailyMark.writeSf2DailyMark(markSheet, "A3", "Absent");
   dailyMark.writeSf2DailyMark(markSheet, "A4", null, true);
+  dailyMark.writeSf2DailyMark(markSheet, "A5", "Absent", false, "missing-time-out");
   assert.equal(markSheet.getCell("A1").value, null, "Present must remain blank in the official SF2 daily cell.");
   assert.equal(markSheet.getCell("A2").value, null, "Late must use shading instead of a text mark.");
   assert.equal(markSheet.getCell("A2").fill.type, "gradient", "Late must use a half-cell shade.");
   assert.equal(markSheet.getCell("A2").fill.gradient, "angle", "Late shade must be a vertical gradient.");
   assert.equal(markSheet.getCell("A3").value, "X", "Absent must use X.");
   assert.equal(markSheet.getCell("A4").value, "H", "Holiday must retain H.");
+  assert.equal(markSheet.getCell("A5").value, null, "The final missing-Time-Out absence must use shading, not X.");
+  assert.equal(markSheet.getCell("A5").fill.type, "gradient", "The final missing-Time-Out absence must use a lower-half shade.");
   const markedOutput = await workbook.xlsx.writeBuffer();
   const markedReloaded = new ExcelJS.Workbook();
   await markedReloaded.xlsx.load(markedOutput);
   const persistedLateCell = markedReloaded.getWorksheet("Official SF2 marks").getCell("A2");
   assert.equal(persistedLateCell.fill.type, "gradient", "The exported XLSX must retain the Late half-cell shade.");
   assert.equal(persistedLateCell.value, null, "The exported Late cell must remain text-free.");
+  assert.equal(markedReloaded.getWorksheet("Official SF2 marks").getCell("A5").fill.type, "gradient", "The exported XLSX must retain the missing-Time-Out lower-half shade.");
+
+  assert.deepEqual(
+    finalAttendance.resolveFinalAttendanceExport({
+      timeInStatus: "Late",
+      timeOutStatus: "On Time",
+      timeOutVia: "RFID",
+    }),
+    { status: "Late", hasCompletedAttendance: true, isAutomaticMissingTimeOutAbsence: false },
+    "Late counts as attended only after a real Time Out.",
+  );
+  assert.deepEqual(
+    finalAttendance.resolveFinalAttendanceExport({ timeInStatus: "Late" }),
+    { status: "Late", hasCompletedAttendance: false, isAutomaticMissingTimeOutAbsence: false },
+    "A Late Time In without Time Out is not completed attendance yet.",
+  );
+  assert.deepEqual(
+    finalAttendance.resolveFinalAttendanceExport({
+      timeInStatus: "On Time",
+      timeOutStatus: "Absent",
+      timeOutVia: "Auto",
+      timeOutRemark: "Auto-marked absent",
+    }),
+    { status: "Absent", hasCompletedAttendance: false, isAutomaticMissingTimeOutAbsence: true },
+    "The saved automatic missing-Time-Out result is final Absent.",
+  );
+  assert.deepEqual(
+    finalAttendance.resolveFinalAttendanceExport({ timeInStatus: "Excused", isExcused: true }),
+    { status: "Excused", hasCompletedAttendance: false, isAutomaticMissingTimeOutAbsence: false },
+    "Excused stays visible while counting as absent.",
+  );
 
   const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
   const adviserRoute = read("src/app/api/attendance/monthly/route.ts");
@@ -97,6 +134,7 @@ async function run() {
   const principalRoute = read("src/app/api/attendance/monthly-summary/route.ts");
   const automaticAbsence = read("src/lib/automaticAttendanceAbsence.ts");
   const excuseDecisionRoute = read("src/app/api/excuse-letters/[id]/route.ts");
+  const finalAttendanceSource = read("src/lib/finalAttendanceExport.ts");
   for (const [name, source] of [["adviser export", adviserPage], ["principal export", principalPage]]) {
     assert.match(source, /writeSf2DailyMark\(ws, col0ToRef\(col0, row\), savedStatus\)/, `${name} must write the shared official SF2 mark.`);
     assert.match(source, /writeSf2DailyMark\(ws, col0ToRef\(col0, row\), null, true\)/, `${name} must write H for a selected holiday.`);
@@ -107,9 +145,14 @@ async function run() {
     assert.doesNotMatch(source, /pastClassDays - absenceCount/, `${name} must not default a missing daily record to Present.`);
   }
   assert.match(adviserRoute, /shouldReplaceTimeIn/, "Adviser monthly data must retain the final saved Time In record.");
+  assert.match(adviserRoute, /is_auto_missing_time_out_absence/, "Adviser monthly data must expose the saved automatic missing-Time-Out result.");
+  assert.match(finalAttendanceSource, /Absent — no Time Out recorded/, "Adviser export details must explain the lower-half mark without changing the saved status.");
   assert.match(adviserRoute, /\.range\(from, from \+ pageSize - 1\)/, "Adviser monthly data must page through all attendance logs.");
   assert.match(adviserRoute, /schoolYearLabel/, "Adviser export must use the configured school-year label.");
   assert.match(principalRoute, /dailyStatuses/, "Principal summary must send final per-day statuses to its export.");
+  assert.match(principalRoute, /dailyAutoMissingTimeOutAbsences/, "Principal summary must preserve automatic missing-Time-Out outcomes for SF2.");
+  assert.match(principalPage, /dailyAutoMissingTimeOutAbsences/, "Principal export must render the lower-half mark from the durable automatic outcome.");
+  assert.match(finalAttendanceSource, /Absent — no Time Out recorded/, "Principal export details must explain the lower-half mark without changing the saved status.");
   assert.match(principalRoute, /schoolYearLabel/, "Principal export must use the configured school-year label.");
   assert.match(excuseDecisionRoute, /supabase\.rpc\("decide_excuse_letter"/, "Only the adviser approval workflow may create an approved excuse outcome.");
   assert.match(excuseDecisionRoute, /p_status: status/, "The excuse decision must pass the approved status to the attendance-updating RPC.");

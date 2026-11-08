@@ -5,6 +5,7 @@ export interface AdviserReportStatusInput {
   status?: string | null;
   escalatedToGuidance?: boolean | null;
   escalatedToPrincipal?: boolean | null;
+  cancelledByParent?: boolean | null;
   resolvedByGuidance?: boolean | null;
   resolvedByPrincipal?: boolean | null;
 }

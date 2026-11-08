@@ -207,9 +207,11 @@ assert.ok(
   vercel.crons.some((cron) => cron.path === "/api/attendance/process-absences" && cron.schedule === "*/5 * * * *"),
   "A five-minute scheduler must invoke automatic absence processing without continuously saturating the database.",
 );
-assert.match(monthlyExportRoute, /timeOut\?\.status === "Absent"/, "Adviser monthly data must use an Absent Time Out as the final daily status.");
+assert.match(monthlyExportRoute, /resolveFinalAttendanceExport\(/, "Adviser monthly data must resolve the final daily status from the saved Time In and Time Out records.");
+assert.match(monthlyExportRoute, /is_auto_missing_time_out_absence/, "Adviser monthly data must preserve the automatic missing-Time-Out absence for SF2 rendering.");
 assert.match(historyRoute, /timeOutLog\?\.status === "Absent"/, "Adviser history must show final Absent rather than the provisional Time In status.");
-assert.match(principalSummaryRoute, /autoMissingTimeOuts/, "Principal summaries and exports must use the same final Absent Time Out rule.");
+assert.match(principalSummaryRoute, /resolveFinalAttendanceExport\(/, "Principal summaries must use the same final Absent Time Out rule.");
+assert.match(principalSummaryRoute, /dailyAutoMissingTimeOutAbsences/, "Principal summaries must preserve automatic missing-Time-Out absences for SF2 rendering.");
 assert.match(manualRoute, /Time Out requires a recorded On Time or Late Time In/);
 assert.match(manualRoute, /A remark is required when correcting an automatic absence/);
 assert.match(manualRoute, /existingSameType\.via === "Auto"/);

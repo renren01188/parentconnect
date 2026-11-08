@@ -14,6 +14,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
 import { publishAttendanceRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import { isFutureSchoolCalendarDateRange, isFutureSchoolCalendarDay } from "@/lib/announcementSchedule";
 
 type ManualBody = {
   student_id: string;
@@ -146,7 +147,14 @@ export async function POST(req: NextRequest) {
       }
       const dateFrom = body.date_from;
       const dateTo = body.date_to;
-      if (dateTo < dateFrom) {
+      const dateValidationNow = new Date();
+      if (!isFutureSchoolCalendarDay(dateFrom, dateValidationNow) || !isFutureSchoolCalendarDay(dateTo, dateValidationNow)) {
+        return NextResponse.json(
+          { success: false, message: "Excuse dates must be after today's date in Asia/Manila." },
+          { status: 400 },
+        );
+      }
+      if (!isFutureSchoolCalendarDateRange(dateFrom, dateTo, dateValidationNow)) {
         return NextResponse.json(
           { success: false, message: "End date cannot be before start date." },
           { status: 400 },

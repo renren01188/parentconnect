@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const parentRoute = read("src/app/api/parents/me/route.ts");
 const parentProfile = read("src/app/dashboard/parent/profile/page.tsx");
+const parentChildProfile = read("src/app/dashboard/parent/profile/child/[id]/page.tsx");
 const adviserProfile = read("src/app/dashboard/adviser/profile/page.tsx");
 const guidanceProfile = read("src/app/dashboard/guidance/profile/page.tsx");
 const principalProfile = read("src/app/dashboard/principal/profile/page.tsx");
@@ -29,6 +30,11 @@ assert.match(parentProfile, /const \{ refreshSession \} = useParentSession\(\);/
 assert.match(parentProfile, /await refreshSession\(\);/);
 assert.match(parentProfile, /setStep\("edit"\);[\s\S]*?if \(tab === "profile"\) setAuthErr\(message\);/);
 assert.match(parentProfile, /if \(!res\.ok \|\| !data\?\.success\)/);
+assert.match(parentProfile, /\/profile\/child\/\$\{encodeURIComponent\(String\(child\.id\)\)\}/);
+assert.doesNotMatch(parentProfile, /Manage your children\/Ward/);
+assert.match(parentChildProfile, /useParams<\{ id: string \}>/);
+assert.match(parentChildProfile, /fetch\("\/api\/parents\/me"/);
+assert.match(parentChildProfile, /students\.find\(\(student\) => String\(student\.id\) === childId\)/);
 
 // Guidance requests must render a server error (including password or pending
 // request errors) instead of failing silently.

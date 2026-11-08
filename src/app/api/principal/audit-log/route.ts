@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { AUDIT_SECURITY_ALERT_ACTION_VALUES, auditActionDatabaseValues, auditRoleDatabaseValues, auditStatusDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { parseAuditArchiveFilter } from "@/lib/auditArchive";
 import { auditManilaDateRange, formatAuditTimestamp } from "@/lib/auditPresentation";
+import { auditLogRowsToCsv } from "@/lib/auditCsv";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -64,8 +65,40 @@ export async function GET(req: NextRequest) {
     const status  = searchParams.get("status")  ?? "";
     const archive = parseAuditArchiveFilter(searchParams.get("archive"));
     const date    = searchParams.get("date")    ?? ""; // YYYY-MM-DD
+    const exportCsv = searchParams.get("export") === "csv";
     const page    = Math.max(1, Number(searchParams.get("page")    ?? "1"));
     const perPage = Math.min(100, Math.max(1, Number(searchParams.get("perPage") ?? "50")));
+    const dateRange = date ? auditManilaDateRange(date) : null;
+
+    if (exportCsv) {
+      if (!dateRange) {
+        return NextResponse.json({ success: false, message: "Choose a valid date to export." }, { status: 400 });
+      }
+
+      const exportedRows: AuditLogRow[] = [];
+      const exportPageSize = 1_000;
+      for (let from = 0; ; from += exportPageSize) {
+        const { data, error } = await supabase
+          .from("audit_log")
+          .select("*")
+          .gte("created_at", dateRange.start)
+          .lt("created_at", dateRange.end)
+          .order("created_at", { ascending: false })
+          .range(from, from + exportPageSize - 1);
+        if (error) throw error;
+        const batch = (data ?? []) as AuditLogRow[];
+        exportedRows.push(...batch);
+        if (batch.length < exportPageSize) break;
+      }
+
+      return new NextResponse(auditLogRowsToCsv(exportedRows), {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="principal-audit-trail-${date}.csv"`,
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
 
     let query = supabase
       .from("audit_log")
@@ -94,7 +127,6 @@ export async function GET(req: NextRequest) {
     if (search) query = query.or(
       `performed_by.ilike.%${search}%,performed_by_role.ilike.%${search}%,details.ilike.%${search}%,action.ilike.%${search}%`
     );
-    const dateRange = date ? auditManilaDateRange(date) : null;
     if (dateRange) query = query.gte("created_at", dateRange.start).lt("created_at", dateRange.end);
 
     // The Security Alerts card must represent all recent security events, not

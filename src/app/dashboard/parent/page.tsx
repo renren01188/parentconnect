@@ -34,6 +34,7 @@ interface StudentInfo {
     }[];
     checkInTime: string;
     checkInDay: string;
+    hasClassToday: boolean;
     isAtSchool: boolean;
 }
 
@@ -108,6 +109,17 @@ function parentReportDateLabel(value: unknown) {
 const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const MANILA_TIME_ZONE = "Asia/Manila";
 
+function manilaGreeting(value = new Date()) {
+    const hour = Number(new Intl.DateTimeFormat("en-US", {
+        timeZone: MANILA_TIME_ZONE,
+        hour: "numeric",
+        hourCycle: "h23",
+    }).format(value));
+    if (hour < 12) return "Good morning";
+    if (hour < 18) return "Good afternoon";
+    return "Good evening";
+}
+
 function studentAvatarColor(studentId: string) {
     const palette = ["#2563eb", "#0ea5e9", "#4f46e5", "#7c3aed", "#0891b2"];
     const hash = [...studentId].reduce((total, character) => total + character.charCodeAt(0), 0);
@@ -147,6 +159,7 @@ function emptyStudentInfo(student: { id: number; name: string; lrn: string; grad
         attendance: [],
         checkInTime: "Not yet in",
         checkInDay,
+        hasClassToday: true,
         isAtSchool: false,
     };
 }
@@ -220,6 +233,14 @@ export default function ParentDashboard() {
     const [reportsData, setReportsData] = useState<{ title: string; meta: string; isNew: boolean }[]>([]);
     const [messagesData, setMessagesData] = useState<{ initials: string; name: string; preview: string; color: string }[]>([]);
     const [guideTarget, setGuideTarget] = useState<string | null>(null);
+    const [greeting, setGreeting] = useState(() => manilaGreeting());
+
+    useEffect(() => {
+        const updateGreeting = () => setGreeting(manilaGreeting());
+        updateGreeting();
+        const timer = window.setInterval(updateGreeting, 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     const loadParentStudent = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
             try {
@@ -271,6 +292,7 @@ export default function ParentDashboard() {
                 linkedStudents.forEach((s, i) => {
                     const data = attendanceResults[i];
                     if (!data?.success) return;
+                    s.hasClassToday = data.todayClassStatus !== "No Class For Today";
                     const present = Number(data.stats?.present ?? 0);
                     const late = Number(data.stats?.late ?? 0);
                     const absent = Number(data.stats?.absent ?? 0);
@@ -306,8 +328,10 @@ export default function ParentDashboard() {
                     // Check-in info from today's record
                     const todayIso = manilaDateKey();
                     const todayRecord = s.attendance.find((record) => record.attendanceDate === todayIso);
-                    s.isAtSchool = Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—");
-                    s.checkInTime = todayRecord?.timeIn && todayRecord.timeIn !== "—"
+                    s.isAtSchool = s.hasClassToday && Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—");
+                    s.checkInTime = !s.hasClassToday
+                        ? "No Class For Today"
+                        : todayRecord?.timeIn && todayRecord.timeIn !== "—"
                         ? (() => {
                             const [h, m] = todayRecord.timeIn.split(":");
                             const hour = Number(h);
@@ -315,7 +339,13 @@ export default function ParentDashboard() {
                             return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${suffix}`;
                         })()
                         : "Not yet in";
-                    s.checkInDay = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+                    s.checkInDay = new Intl.DateTimeFormat("en-US", {
+                        timeZone: MANILA_TIME_ZONE,
+                        weekday: "long",
+                        month: "long",
+                        day: "numeric",
+                        year: "numeric",
+                    }).format(new Date());
                 });
 
                 const notifData = notificationResult.data;
@@ -579,15 +609,19 @@ export default function ParentDashboard() {
                     >
                         <div className="min-w-0">
                             <p className="text-white font-bold text-base leading-snug">
-                                Good morning, {parentName.split(" ")[0]}! {student.name.split(" ")[0]} is {student.isAtSchool ? "at school" : "not yet in"}.
+                                {student.hasClassToday
+                                    ? `${greeting}, ${parentName.split(" ")[0]}! ${student.name.split(" ")[0]} is ${student.isAtSchool ? "at school" : "not yet in"}.`
+                                    : `No class for ${student.name.split(" ")[0]} today.`}
                             </p>
                             <p className="text-slate-400 text-xs mt-1">{student.checkInDay}</p>
                         </div>
                         <div className="shrink-0 sm:text-right">
-                            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Checked in today</p>
+                            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">{student.hasClassToday ? "Checked in today" : "Class schedule"}</p>
                             <p className="text-white font-extrabold text-2xl leading-tight">{student.checkInTime}</p>
-                            <p className="text-green-400 text-[11px] mt-0.5 font-semibold">
-                                {student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"}
+                            <p className={`${student.hasClassToday ? "text-green-400" : "text-slate-300"} text-[11px] mt-0.5 font-semibold`}>
+                                {student.hasClassToday
+                                    ? student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"
+                                    : "Based on the ICT schedule"}
                             </p>
                         </div>
                     </div>

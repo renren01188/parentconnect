@@ -25,6 +25,7 @@ export function isAttendedExportStatus(status: AttendanceExportStatus | null | u
 }
 
 export type Sf2TardyHalf = "upper" | "lower";
+export type Sf2SpecialAttendanceMark = "missing-time-out";
 
 export type Sf2DailyMark = {
   /** Text stored in the narrow official SF2 daily cell. */
@@ -36,20 +37,20 @@ export type Sf2DailyMark = {
 /**
  * Official SF2 daily marks. Present is deliberately blank; absence (and an
  * approved excuse, which remains visible in Attendance Detail) is X. Late
- * arrival uses the upper half of the cell. The lower half is reserved for a
- * separately recorded Cutting Classes outcome, which ParentConnect does not
- * currently save, so exports never infer it from an ordinary Time Out.
+ * arrival uses the upper half of the cell. A final automatic absence caused
+ * by a missing Time Out uses the lower half; it is still counted as Absent.
  */
 export function getSf2DailyMark(
   status: AttendanceExportStatus | null | undefined,
   isHoliday = false,
-  tardyHalf: Sf2TardyHalf = "upper",
+  specialMark?: Sf2SpecialAttendanceMark,
 ): Sf2DailyMark {
   if (isHoliday) return { code: "H", tardyHalf: null };
+  if (specialMark === "missing-time-out") return { code: null, tardyHalf: "lower" };
 
   switch (status) {
     case "Late":
-      return { code: null, tardyHalf };
+      return { code: null, tardyHalf: "upper" };
     case "Absent":
     case "Excused":
       return { code: "X", tardyHalf: null };

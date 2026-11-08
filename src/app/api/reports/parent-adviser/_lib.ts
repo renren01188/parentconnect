@@ -208,7 +208,8 @@ export async function getReportForAdviser(id: number, adviserId: number) {
   return data as ReportRow | null;
 }
 
-export function parentReportStatus(status: string): "Pending" | "In Review" | "Replied" | "Resolved" | "Escalated" {
+export function parentReportStatus(status: string): "Pending" | "In Review" | "Replied" | "Resolved" | "Escalated" | "Cancelled" {
+  if (status === "cancelled") return "Cancelled";
   if (status === "resolved") return "Resolved";
   if (status === "escalated") return "Escalated";
   if (status === "replied") return "Replied";
@@ -289,6 +290,8 @@ function timeAgo(value: string) {
 
 export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   const isResolved = row.status === "resolved";
+  const isCancelled = row.status === "cancelled";
+  const isClosed = isResolved || isCancelled;
   const isPrincipalConversation = Boolean(row.escalated_to_principal) || messages.some((msg) => msg.sender_role === "principal");
   const hasOriginalReportStatus = row.adviser_id !== null && row.adviser_id !== 0;
   const isGuidanceConversation = ticket?.status === "accepted" || row.escalated_to_guidance || messages.some((msg) => msg.sender_role === "guidance");
@@ -309,7 +312,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     Number.isFinite(ticketAcceptedAtMs)
     && (!Number.isFinite(parentSeenAtMs) || ticketAcceptedAtMs > parentSeenAtMs)
   );
-  const unread = !isResolved && (hasUnreadStaffMessage || acceptedTicketIsUnread);
+  const unread = !isClosed && (hasUnreadStaffMessage || acceptedTicketIsUnread);
   const guidanceName = visibleMessages.find((msg) => msg.sender_role === "guidance")?.sender_name || "Guidance";
   const principalName = visibleMessages.find((msg) => msg.sender_role === "principal")?.sender_name || "Principal";
   const guidanceHasReplied = visibleMessages.some((msg) => msg.sender_role === "guidance");
@@ -326,7 +329,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   // A category is not sufficient to identify them because students can select
   // any supported concern category.
   const isStudentSubmittedConcern = isStudentConcernReport(row);
-  const canCancel = !isResolved && row.status !== "cancelled" && !row.cancelled_at && messages[0]?.sender_role === "parent";
+  const canCancel = !isClosed && !row.cancelled_at && messages[0]?.sender_role === "parent";
 
   return {
     id: row.id,
@@ -344,7 +347,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     // sources together without attempting to parse the display-only `time`.
     lastActivityAt: row.last_message_at || row.created_at,
     preview: lastMessage?.body?.trim().slice(0, 80) || (lastMessage ? "An attachment was sent." : ""),
-    status: isResolved ? "Resolved" : unread ? "Unread" : "Pending Response",
+    status: isCancelled ? "Cancelled" : isResolved ? "Resolved" : unread ? "Unread" : "Pending Response",
     reportStatus: hasOriginalReportStatus ? parentReportStatus(row.status) : null,
     hasReportStatus: hasOriginalReportStatus,
     time: timeAgo(row.last_message_at || row.created_at),
@@ -372,6 +375,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     }),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
+    cancelledByParent: isCancelled,
     escalatedToGuidance: row.escalated_to_guidance,
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     guidanceHasReplied,
@@ -447,6 +451,8 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
 
   return {
     id: row.id,
+    parent_id: row.parent_id,
+    student_id: row.student_id,
     parent_name: row.parent_name,
     student_name: row.student_name,
     grade: row.grade ?? "",
@@ -467,6 +473,7 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
+    cancelledByParent: row.status === "cancelled",
     escalatedToGuidance: row.escalated_to_guidance,
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     hasUnreadForAdviser,
@@ -557,12 +564,20 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
   const threadMessages = guidanceThreadMessages(row, messages);
   const hasUnreadForGuidance = unreadGuidanceMessageIds(row, messages).length > 0;
   const isResolved = row.status === "resolved" || row.status === "cancelled";
+  // Historical accepted tickets predate the report-status transition made by
+  // the current accept endpoint. Keep them visibly in progress without
+  // changing their stored ticket or report history.
+  const isAcceptedGuidanceTicket = ticket?.status === "accepted";
   const resolvedByRole = reportResolverRole(row);
 
   return {
     id: row.id,
+    parent_id: row.parent_id,
+    student_id: row.student_id,
     parent_name: row.parent_name,
     student_name: row.student_name,
+    grade: row.grade ?? "",
+    section: row.section ?? "",
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
     message: firstParentMessage?.body ?? firstGuidanceMessage?.body ?? "",
@@ -570,13 +585,14 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     createdAt: row.created_at,
     lastActivityAt: row.last_message_at || row.created_at,
     submitted_at: formatDate(row.created_at),
-    status: isResolved ? "Resolved" as const : hasUnreadForGuidance ? "New" as const : adviserReportStatus(row.status),
+    status: isResolved ? "Resolved" as const : isAcceptedGuidanceTicket ? "Ongoing" as const : hasUnreadForGuidance ? "New" as const : adviserReportStatus(row.status),
     resolvedByGuidance: resolvedByRole === "Guidance",
     resolvedByPrincipal: resolvedByRole === "Principal",
     resolvedByRole,
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
+    cancelledByParent: row.status === "cancelled",
     escalatedToGuidance: row.escalated_to_guidance,
     escalatedToPrincipal: Boolean(row.escalated_to_principal),
     hasUnreadForGuidance,
@@ -616,6 +632,8 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     student_id: row.student_id,
     parent_name: row.parent_name,
     student_name: row.student_name,
+    grade: row.grade ?? "",
+    section: row.section ?? "",
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
     message: openingMessage?.body ?? "",
@@ -634,6 +652,7 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
     guidanceSeen: Boolean(row.guidance_seen_at),
     categories: row.categories ?? [],
     concernLevel: row.concern_level ?? 0,
+    cancelledByParent: row.status === "cancelled",
     escalatedToGuidance: row.escalated_to_guidance,
     escalatedToPrincipal: conversationAvailable,
     // This server-derived flag distinguishes monitoring access from access to

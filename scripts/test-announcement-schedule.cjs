@@ -26,6 +26,7 @@ assert.match(schedule, /value === null \|\| value === undefined/);
 assert.match(schedule, /scheduledAt: null/);
 assert.match(schedule, /\$\{day\}T00:00:00\+08:00/);
 assert.match(schedule, /isDueAnnouncementSchedule/);
+assert.match(schedule, /normalizeOptionalAnnouncementScheduleDateTime/);
 
 for (const route of [ictPost, ictPatch, guidancePost, guidancePatch, principalPost, principalPatch]) {
   assert.match(route, /normalizeOptionalAnnouncementSchedule/);
@@ -43,7 +44,7 @@ assert.match(processor, /deliverGuidanceAnnouncement/);
 assert.match(processor, /deliverPrincipalAnnouncement/);
 assert.match(processor, /publishRealtimeInvalidation\(recipients, "announcements"\)/);
 assert.match(cronRoute, /processDueScheduledAnnouncements\(\)/);
-assert.match(vercelConfig, /"schedule": "0 16 \* \* \*"/);
+assert.match(vercelConfig, /"schedule": "\*\/5 \* \* \* \*"/);
 
 // Each compose form communicates the same urgent-now versus scheduled-later
 // option, including the ICT page that previously made the path unclear.

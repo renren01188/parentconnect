@@ -24,5 +24,14 @@ assert.match(page, /const loadAdvisers = useCallback/);
 assert.match(page, /Finding the class adviser linked to your child/);
 assert.match(page, /Try Again/);
 assert.match(page, /void loadAdvisers\(\);/);
+assert.match(page, /Which student has this concern\?/);
+assert.doesNotMatch(page, /Send To — Class Adviser/);
+assert.match(page, /const studentRecipients = useMemo/);
+assert.match(page, /const seenStudentIds = new Set<string>\(\)/);
+assert.match(page, /Class adviser: \{recipient\.name\}/);
+assert.match(page, /adviserId: selectedStudent\.adviserId/);
+assert.match(page, /studentId: selectedStudent\.studentId/);
+assert.match(page, /maxHeight: "min\(18rem, 35dvh\)"/);
+assert.match(page, /overflowWrap: "anywhere"/);
 
 console.log("Parent report adviser-link checks passed.");

@@ -4,13 +4,17 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type ExcelJS from "exceljs";
 import { resolveRfidScanValue } from "@/lib/rfid";
 import {
-    getAttendanceDetailStatus,
     isAttendedExportStatus,
     toAttendanceExportStatus,
 } from "@/lib/attendanceExportStatus";
 import { writeSf2DailyMark } from "@/lib/sf2DailyMark";
+import {
+    getFinalAttendanceExportDetail,
+    resolveFinalAttendanceExport,
+} from "@/lib/finalAttendanceExport";
 import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
+import { isFutureSchoolCalendarDateRange, isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
 import type { Sf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
@@ -115,10 +119,13 @@ type MonthlyAttendanceRow = {
     time_out: string | null;
     time_in_status: AttendanceStatus | null;
     time_out_status: AttendanceStatus | null;
+    time_out_via: AttendanceVia | null;
+    time_out_remark: string | null;
     via: AttendanceVia | null;
     remark: string | null;
     is_absent: boolean;
     is_excused: boolean;
+    is_auto_missing_time_out_absence: boolean;
     active_from: string;
 };
 
@@ -261,11 +268,24 @@ function getStatusClass(status: AttendanceStatus | null) {
 
 function finalMonthlyAttendanceStatus(record?: MonthlyAttendanceRow): AttendanceStatus | null {
     if (!record) return null;
-    if (record.is_excused) return "Excused";
-    // A saved Auto Time Out with Absent status is the student's final result
-    // for the day. The Time In remains visible as the arrival record.
-    if (record.is_absent) return "Absent";
-    return record.time_in_status;
+    return resolveFinalAttendanceExport({
+        timeInStatus: record.time_in_status,
+        timeOutStatus: record.time_out_status,
+        timeOutVia: record.time_out_via,
+        timeOutRemark: record.time_out_remark,
+        isExcused: record.is_excused,
+    }).status;
+}
+
+function finalMonthlyAttendanceExport(record?: MonthlyAttendanceRow) {
+    if (!record) return resolveFinalAttendanceExport({});
+    return resolveFinalAttendanceExport({
+        timeInStatus: record.time_in_status,
+        timeOutStatus: record.time_out_status,
+        timeOutVia: record.time_out_via,
+        timeOutRemark: record.time_out_remark,
+        isExcused: record.is_excused,
+    });
 }
 
 function getInitials(name: string) {
@@ -839,15 +859,22 @@ async function exportMonthlySF2(
                 const today = toLocalDateString(new Date());
                 if (iso > today) return;
 
-                // Time In is the daily attendance event. Do not treat a
-                // missing Time In record—or a Time Out status—as evidence of
-                // presence. This preserves the saved Present/Late/Absent value.
-                // A Time In records the learner's arrival. A saved Absent
-                // Time Out is the final daily status after session end.
-                const savedStatus = toAttendanceExportStatus(finalMonthlyAttendanceStatus(rec));
-                writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
+                // A Time In is only completed attendance after a genuine
+                // Time Out. The automatic missing-Time-Out result is final
+                // Absence, shown with the SF2 lower-half visual mark.
+                const finalAttendance = finalMonthlyAttendanceExport(rec);
+                const savedStatus = finalAttendance.status;
+                if (finalAttendance.isAutomaticMissingTimeOutAbsence) {
+                    writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus, false, "missing-time-out");
+                } else if (
+                    savedStatus === "Absent"
+                    || savedStatus === "Excused"
+                    || finalAttendance.hasCompletedAttendance
+                ) {
+                    writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
+                }
                 if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
-                if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
+                if (finalAttendance.hasCompletedAttendance && isAttendedExportStatus(savedStatus)) attendedCount += 1;
             });
 
             setCellValue(ws, `AM${row}`, absenceCount);
@@ -947,7 +974,7 @@ async function exportMonthlySF2(
 
     const detailWs = workbook.addWorksheet("Attendance Detail");
     detailWs.addRow([`Attendance detail — ${sectionLabel} — ${monthName} ${year}`]);
-    detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = Cutting Classes when separately recorded; H = Holiday. No Record means no saved final attendance status."]);
+    detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = final Absent after no Time Out; H = Holiday. No Record means no saved final attendance status."]);
     detailWs.addRow([]);
     detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status", "Time In", "Time Out", "Via", "Remark"]);
     const detailHeader = detailWs.getRow(4);
@@ -966,7 +993,13 @@ async function exportMonthlySF2(
                 date,
                 holidaySet.has(date)
                     ? "Holiday"
-                    : getAttendanceDetailStatus(toAttendanceExportStatus(finalMonthlyAttendanceStatus(detailRow))),
+                    : getFinalAttendanceExportDetail({
+                        timeInStatus: detailRow?.time_in_status,
+                        timeOutStatus: detailRow?.time_out_status,
+                        timeOutVia: detailRow?.time_out_via,
+                        timeOutRemark: detailRow?.time_out_remark,
+                        isExcused: detailRow?.is_excused,
+                    }),
                 detailRow?.time_in ?? "",
                 detailRow?.time_out ?? "",
                 detailRow?.via ?? "",
@@ -1014,9 +1047,10 @@ function printMonthlyAttendance(
     let sectionAbsent = 0;
 
     const studentRows = Array.from(studentMap.entries()).map(([sid, info], idx) => {
-        const present = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "On Time").length;
-        const late = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "Late").length;
-        const absent = info.days.filter((d) => finalMonthlyAttendanceStatus(d) === "Absent").length;
+        const finalResults = info.days.map((day) => finalMonthlyAttendanceExport(day));
+        const present = finalResults.filter((result) => result.hasCompletedAttendance && result.status === "Present").length;
+        const late = finalResults.filter((result) => result.hasCompletedAttendance && result.status === "Late").length;
+        const absent = finalResults.filter((result) => result.status === "Absent" || result.status === "Excused").length;
 
         sectionPresent += present;
         sectionLate += late;
@@ -1325,9 +1359,10 @@ function MonthlyExportModal({ onClose, sectionLabel, adviserName, activeSection 
 
         const holidaySet = new Set([...configuredHolidayDates, ...holidayDates, ...monthlyData.holidayDates]);
         const countableRows = monthlyData.rows.filter((row) => !holidaySet.has(row.date));
-        const present = countableRows.filter((row) =>
-            isAttendedExportStatus(toAttendanceExportStatus(finalMonthlyAttendanceStatus(row)))
-        ).length;
+        const present = countableRows.filter((row) => {
+            const finalAttendance = finalMonthlyAttendanceExport(row);
+            return finalAttendance.hasCompletedAttendance && isAttendedExportStatus(finalAttendance.status);
+        }).length;
         const pct = countableRows.length > 0 ? Math.round((present / countableRows.length) * 100) : 0;
         setPreview({
             totalDays: monthlyData.schoolDays.filter((date) => !holidaySet.has(date)).length,
@@ -2010,8 +2045,8 @@ export default function AdviserAttendancePage() {
     const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
     const [manualStatus, setManualStatus] = useState<ManualAttendanceStatus>("Present");
     const [manualRemark, setManualRemark] = useState("");
-    const [manualExcuseStartDate, setManualExcuseStartDate] = useState(toLocalDateString(new Date()));
-    const [manualExcuseEndDate, setManualExcuseEndDate] = useState(toLocalDateString(new Date()));
+    const [manualExcuseStartDate, setManualExcuseStartDate] = useState(() => nextSchoolCalendarDay());
+    const [manualExcuseEndDate, setManualExcuseEndDate] = useState(() => nextSchoolCalendarDay());
     const [manualStudentSearch, setManualStudentSearch] = useState("");
     const [isManualStudentPickerOpen, setIsManualStudentPickerOpen] = useState(false);
     const [manualMessage, setManualMessage] = useState("");
@@ -2098,11 +2133,21 @@ export default function AdviserAttendancePage() {
         classSession && selectedSectionSession === classSession.session_type
     );
     const rapidTapScannerReady = isScanningOpen && rapidTapStorageReady;
+    const manualExcuseMinimumDate = nextSchoolCalendarDay();
+    const manualExcuseRangeIsValid = isFutureSchoolCalendarDateRange(manualExcuseStartDate, manualExcuseEndDate);
 
     // This changes only the displayed scan type. The API independently uses
     // the school clock and the saved ICT schedule before it records Time Out.
     useEffect(() => {
-        const updateManilaClock = () => setManilaMinutes(getManilaMinutes());
+        const updateManilaClock = () => {
+            const now = new Date();
+            const minimumExcuseDate = nextSchoolCalendarDay(now);
+            setManilaMinutes(getManilaMinutes(now));
+            // If the form stays open across Manila midnight, yesterday's
+            // future value must not become a selectable "today" date.
+            setManualExcuseStartDate((current) => current < minimumExcuseDate ? minimumExcuseDate : current);
+            setManualExcuseEndDate((current) => current < minimumExcuseDate ? minimumExcuseDate : current);
+        };
         updateManilaClock();
         const timer = window.setInterval(updateManilaClock, 30_000);
         return () => window.clearInterval(timer);
@@ -2824,6 +2869,34 @@ export default function AdviserAttendancePage() {
         inputRef.current?.focus();
     }
 
+    function handleManualExcuseStartDateChange(date: string) {
+        if (!isFutureSchoolCalendarDay(date)) {
+            setManualMessage("Excuse dates must be after today's date in Manila time.");
+            return;
+        }
+        setManualExcuseStartDate(date);
+        if (manualExcuseEndDate < date) {
+            setManualExcuseEndDate(date);
+            setManualMessage("The end date was updated to match the new start date.");
+            return;
+        }
+        setManualMessage("");
+    }
+
+    function handleManualExcuseEndDateChange(date: string) {
+        if (!isFutureSchoolCalendarDay(date)) {
+            setManualMessage("Excuse dates must be after today's date in Manila time.");
+            return;
+        }
+        if (date < manualExcuseStartDate) {
+            setManualExcuseEndDate(manualExcuseStartDate);
+            setManualMessage("The excuse end date cannot be before the start date.");
+            return;
+        }
+        setManualExcuseEndDate(date);
+        setManualMessage("");
+    }
+
     async function handleManualSave() {
         if (selectedStudentIds.length === 0 || isSavingManual) return;
         if (manualStatus === "Excused") {
@@ -2831,7 +2904,11 @@ export default function AdviserAttendancePage() {
                 setManualMessage("An excuse reason, start date, and end date are required.");
                 return;
             }
-            if (manualExcuseEndDate < manualExcuseStartDate) {
+            if (!isFutureSchoolCalendarDay(manualExcuseStartDate) || !isFutureSchoolCalendarDay(manualExcuseEndDate)) {
+                setManualMessage("Excuse dates must be after today's date in Manila time.");
+                return;
+            }
+            if (!isFutureSchoolCalendarDateRange(manualExcuseStartDate, manualExcuseEndDate)) {
                 setManualMessage("The excuse end date cannot be before the start date.");
                 return;
             }
@@ -2890,8 +2967,9 @@ export default function AdviserAttendancePage() {
             if (failedStudentIds.length === 0) {
                 setManualStudentSearch("");
                 setManualStatus("Present"); setManualRemark("");
-                setManualExcuseStartDate(toLocalDateString(new Date()));
-                setManualExcuseEndDate(toLocalDateString(new Date()));
+                const nextExcuseDate = nextSchoolCalendarDay();
+                setManualExcuseStartDate(nextExcuseDate);
+                setManualExcuseEndDate(nextExcuseDate);
                 setManualMessage(`Manual attendance saved for ${savedCount} student${savedCount === 1 ? "" : "s"}.`);
             } else {
                 setManualMessage(
@@ -3775,24 +3853,24 @@ export default function AdviserAttendancePage() {
                                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                                     <div>
                                         <label htmlFor="manual-excuse-start" className="mb-1.5 block text-xs font-semibold text-slate-600">Excuse start date <span className="text-red-500">*</span></label>
-                                        <input id="manual-excuse-start" type="date" value={manualExcuseStartDate}
-                                            onChange={(event) => {
-                                                const date = event.target.value;
-                                                setManualExcuseStartDate(date);
-                                                if (manualExcuseEndDate && date > manualExcuseEndDate) setManualExcuseEndDate(date);
-                                            }}
+                                        <input id="manual-excuse-start" type="date" value={manualExcuseStartDate} min={manualExcuseMinimumDate}
+                                            aria-describedby="manual-excuse-date-help"
+                                            aria-invalid={!isFutureSchoolCalendarDay(manualExcuseStartDate)}
+                                            onChange={(event) => handleManualExcuseStartDateChange(event.target.value)}
                                             className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
                                     </div>
                                     <div>
                                         <label htmlFor="manual-excuse-end" className="mb-1.5 block text-xs font-semibold text-slate-600">Excuse end date <span className="text-red-500">*</span></label>
-                                        <input id="manual-excuse-end" type="date" value={manualExcuseEndDate} min={manualExcuseStartDate}
-                                            onChange={(event) => setManualExcuseEndDate(event.target.value)}
+                                        <input id="manual-excuse-end" type="date" value={manualExcuseEndDate} min={manualExcuseStartDate > manualExcuseMinimumDate ? manualExcuseStartDate : manualExcuseMinimumDate}
+                                            aria-describedby="manual-excuse-date-help"
+                                            aria-invalid={!isFutureSchoolCalendarDateRange(manualExcuseStartDate, manualExcuseEndDate)}
+                                            onChange={(event) => handleManualExcuseEndDateChange(event.target.value)}
                                             className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
                                     </div>
-                                    <p className="sm:col-span-2 text-xs text-slate-400">The excuse is immediately approved and applied only to scheduled class days in this range. Existing Present or Late records stay unchanged.</p>
+                                    <p id="manual-excuse-date-help" className="sm:col-span-2 text-xs text-slate-400">Choose tomorrow or a later Manila date. The excuse is immediately approved and applied only to scheduled class days in this range. Existing Present or Late records stay unchanged.</p>
                                 </div>
                             )}
-                            <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0 || (manualStatus === "Excused" && (!manualRemark.trim() || !manualExcuseStartDate || !manualExcuseEndDate || manualExcuseEndDate < manualExcuseStartDate))}
+                            <button onClick={handleManualSave} disabled={isSavingManual || selectedStudentIds.length === 0 || (manualStatus === "Excused" && (!manualRemark.trim() || !manualExcuseRangeIsValid))}
                                 className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-sm font-bold text-white transition-colors disabled:opacity-60">
                                 <Check className="h-4 w-4" />
                                 {isSavingManual ? "Saving..." : selectedStudentIds.length > 1 ? `Save Attendance for ${selectedStudentIds.length} Students` : "Save Attendance"}

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
+import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
+import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 
 const SECRET = new TextEncoder().encode(
     process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -12,6 +14,89 @@ function errorMessage(error: unknown) {
 }
 
 const ATTENDANCE_LOG_PAGE_SIZE = 1_000;
+
+type ActiveSchoolYear = {
+    id: number;
+    start_date: string;
+    end_date: string;
+    school_year_label: string | null;
+    attendance_weekdays: unknown;
+};
+
+async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: string) {
+    const today = getSchoolClock().date;
+    if (!isScheduledAttendanceDate(
+        today,
+        schoolYear.start_date,
+        schoolYear.end_date,
+        schoolYear.attendance_weekdays,
+    )) {
+        return false;
+    }
+
+    // A configured holiday takes precedence over a normally scheduled
+    // weekday. Older installations can safely omit the optional table.
+    const { data: holidays, error: holidayError } = await supabase
+        .from("school_holidays")
+        .select("id")
+        .eq("school_year_config_id", schoolYear.id)
+        .eq("holiday_date", today)
+        .limit(1);
+    if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
+    if ((holidays?.length ?? 0) > 0) return false;
+
+    const { data: student, error: studentError } = await supabase
+        .from("students")
+        .select("grade, section, class_session")
+        .eq("student_id", studentLrn)
+        .maybeSingle();
+    if (studentError) throw studentError;
+    if (!student?.grade) return false;
+
+    // The section is the authoritative Morning/Afternoon assignment; the
+    // student's stored session preserves compatibility with older sections.
+    const { data: section, error: sectionError } = student.section
+        ? await supabase
+            .from("sections")
+            .select("class_session")
+            .eq("grade", student.grade)
+            .eq("name", student.section)
+            .maybeSingle()
+        : { data: null, error: null };
+    if (sectionError) throw sectionError;
+    const sessionType = section?.class_session === "Morning" || section?.class_session === "Afternoon"
+        ? section.class_session
+        : student.class_session === "Morning" || student.class_session === "Afternoon"
+            ? student.class_session
+            : null;
+    if (!sessionType) return false;
+
+    // Use the same schedule inheritance as ICT Class Session Control: a
+    // grade-specific schedule wins, followed by the legacy school-wide row.
+    const { data: gradeSchedule, error: gradeScheduleError } = await supabase
+        .from("class_sessions")
+        .select("id")
+        .eq("grade", student.grade)
+        .eq("session_type", sessionType)
+        .lte("session_date", today)
+        .order("session_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    if (gradeScheduleError) throw gradeScheduleError;
+    if (gradeSchedule) return true;
+
+    const { data: legacySchedule, error: legacyScheduleError } = await supabase
+        .from("class_sessions")
+        .select("id")
+        .is("grade", null)
+        .eq("session_type", sessionType)
+        .lte("session_date", today)
+        .order("session_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    if (legacyScheduleError) throw legacyScheduleError;
+    return Boolean(legacySchedule);
+}
 
 export async function GET(req: NextRequest) {
     try {
@@ -64,7 +149,7 @@ export async function GET(req: NextRequest) {
         // "This school year" label.
         const { data: activeSchoolYear, error: schoolYearError } = await supabase
             .from("school_year_config")
-            .select("id, start_date, end_date, school_year_label")
+            .select("id, start_date, end_date, school_year_label, attendance_weekdays")
             .eq("is_active", true)
             .limit(1)
             .maybeSingle();
@@ -76,6 +161,11 @@ export async function GET(req: NextRequest) {
                 { status: 503 },
             );
         }
+
+        const hasClassToday = await hasScheduledClassToday(
+            activeSchoolYear as ActiveSchoolYear,
+            studentLrn,
+        );
 
         // Read every current-school-year row. PostgREST applies a response
         // cap, so a single unpaginated request would eventually omit older
@@ -168,6 +258,7 @@ export async function GET(req: NextRequest) {
             success: true,
             records,
             stats: { present, late, absent, excused },
+            todayClassStatus: hasClassToday ? "Scheduled" : "No Class For Today",
             schoolYear: {
                 startDate: activeSchoolYear.start_date,
                 endDate: activeSchoolYear.end_date,

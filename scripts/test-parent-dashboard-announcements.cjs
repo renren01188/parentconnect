@@ -8,7 +8,9 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const parentNotifications = read("src/app/api/parents/notifications/route.ts");
 const parentDashboard = read("src/app/dashboard/parent/page.tsx");
 const adviserAnnouncements = read("src/app/api/adviser/announcements/route.ts");
+const adviserDelivery = read("src/lib/deliverAdviserAnnouncement.ts");
 const guidanceAnnouncements = read("src/app/api/guidance/announcements/route.ts");
+const guidanceDelivery = read("src/lib/deliverGuidanceAnnouncement.ts");
 const ictDelivery = read("src/lib/ictAnnouncementDelivery.ts");
 const principalDelivery = read("src/lib/deliverPrincipalAnnouncement.ts");
 
@@ -42,10 +44,11 @@ assert.match(parentDashboard, /announcement\.message/);
 
 // Every writer keeps Parent delivery restricted to its intended audience and
 // uses durable, source-specific recipient rows.
-assert.match(adviserAnnouncements, /\.eq\("grade", adviser\.grade\)[\s\S]*?\.in\("section", adviserSections\)/);
-assert.match(adviserAnnouncements, /source: "adviser"/);
+assert.match(adviserAnnouncements, /deliverAdviserAnnouncement/);
+assert.match(adviserDelivery, /\.eq\("grade", announcement\.grade\)[\s\S]*?\.in\("section", sections\)/);
+assert.match(adviserDelivery, /source: "adviser"/);
 assert.match(guidanceAnnouncements, /if \(audience === "Parents" \|\| audience === "Both"\)/);
-assert.match(guidanceAnnouncements, /source: "guidance"/);
+assert.match(guidanceDelivery, /source: "guidance"/);
 assert.match(ictDelivery, /if \(!announcement\.audience\.includes\("Parents"\)\) return;/);
 assert.match(ictDelivery, /source: "ict"/);
 assert.match(principalDelivery, /if \(principalAudienceIncludesParents\(audience\)\)/);

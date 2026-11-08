@@ -4,6 +4,7 @@ import { logAnnouncementAudit } from "@/lib/announcementAudit";
 import { deliverIctAnnouncement } from "@/lib/deliverIctAnnouncement";
 import { deliverGuidanceAnnouncement } from "@/lib/deliverGuidanceAnnouncement";
 import { deliverPrincipalAnnouncement } from "@/lib/deliverPrincipalAnnouncement";
+import { deliverAdviserAnnouncement } from "@/lib/deliverAdviserAnnouncement";
 import { normalizeIctAnnouncementAudience, ictAnnouncementRecipientRoles } from "@/lib/ictAnnouncementAudience";
 import { normalizePrincipalAnnouncementAudience, principalAnnouncementRecipientRoles } from "@/lib/principalAnnouncementAudience";
 import { publishRealtimeInvalidation, recipientsForRoles, type RealtimeRecipientRole } from "@/lib/realtimeInvalidation";
@@ -36,6 +37,17 @@ type PrincipalScheduledAnnouncement = {
   title: string;
   message: string;
   audience: string;
+  scheduled_at: string | null;
+};
+
+type AdviserScheduledAnnouncement = {
+  id: number;
+  adviser_id: number;
+  adviser_name: string;
+  grade: string | null;
+  sections: unknown;
+  title: string;
+  message: string;
   scheduled_at: string | null;
 };
 
@@ -122,6 +134,45 @@ async function processGuidanceAnnouncements(now: Date, result: ProcessResult) {
   }
 }
 
+async function processAdviserAnnouncements(now: Date, result: ProcessResult) {
+  const { data, error } = await supabase
+    .from("adviser_announcements")
+    .select("id, adviser_id, adviser_name, grade, sections, title, message, scheduled_at")
+    .eq("status", "Scheduled");
+  if (error) throw error;
+
+  for (const item of (data ?? []) as AdviserScheduledAnnouncement[]) {
+    if (!isDueAnnouncementSchedule(item.scheduled_at, now)) continue;
+    try {
+      const published = await claimScheduledAnnouncement("adviser_announcements", item.id);
+      if (!published) continue;
+
+      const delivery = await deliverAdviserAnnouncement(item);
+      const principalRecipients = await recipientsForRoles(["principal"]);
+      await publishRealtimeInvalidation([
+        ...delivery.parentIds.map((id) => ({ role: "parent" as const, id })),
+        ...principalRecipients,
+        { role: "adviser", id: Number(item.adviser_id) },
+      ], "announcements");
+      await logAnnouncementAudit({
+        action: "Published",
+        actor: { id: item.adviser_id, name: item.adviser_name || "Class Adviser", role: "Adviser" },
+        announcement: {
+          id: item.id,
+          title: item.title,
+          audience: `Grade ${item.grade ?? ""} - ${Array.isArray(item.sections) ? item.sections.join(", ") : ""}`,
+          status: "Published",
+        },
+        previousStatus: "Scheduled",
+      });
+      result.published.push(`adviser:${item.id}`);
+    } catch (error) {
+      console.error(`Unable to publish scheduled adviser announcement ${item.id}:`, error);
+      result.failed.push(`adviser:${item.id}`);
+    }
+  }
+}
+
 async function processPrincipalAnnouncements(now: Date, result: ProcessResult) {
   const { data, error } = await supabase
     .from("principal_announcements")
@@ -171,6 +222,7 @@ export async function processDueScheduledAnnouncements(now = new Date()) {
   const result: ProcessResult = { published: [], failed: [] };
   await processIctAnnouncements(now, result);
   await processGuidanceAnnouncements(now, result);
+  await processAdviserAnnouncements(now, result);
   await processPrincipalAnnouncements(now, result);
   return result;
 }

@@ -13,6 +13,7 @@ const parentNotificationsRoute = read("src/app/api/parents/notifications/route.t
 const parentReportMapper = read("src/app/api/reports/parent-adviser/_lib.ts");
 const guidanceTicketDecisionRoute = read("src/app/api/reports/guidance/tickets/[id]/route.ts");
 const adviserAnnouncements = read("src/app/api/adviser/announcements/route.ts");
+const adviserAnnouncementDelivery = read("src/lib/deliverAdviserAnnouncement.ts");
 
 assert.match(parentLayout, /<NotificationProvider>/, "The Parent layout must mount its shared notification provider on every dashboard route.");
 assert.match(parentNotifications, /useSessionInvalidation/, "The Parent sidebar counts must use the shared Realtime subscription.");
@@ -23,8 +24,8 @@ assert.match(parentNotifications, /refreshNotificationFeed\(\)\.catch/);
 assert.match(parentNotificationsPage, /notificationRefreshVersion/, "The visible notification feed must reload after the layout receives a live invalidation.");
 assert.match(parentNotificationsPage, /loadNotifications\(\)/);
 assert.match(parentNotificationsRoute, /publishRealtimeInvalidation\(\[\{ role: "parent", id: session\.id \}\], "notifications"\)/, "Read state must synchronize across Parent tabs.");
-assert.match(adviserAnnouncements, /parent_announcement_notifications/, "Adviser announcements must create durable Parent notification rows.");
-assert.match(adviserAnnouncements, /publishRealtimeInvalidation\(realtimeRecipients, "announcements"\)/, "Adviser announcements must wake target Parent dashboards.");
+assert.match(adviserAnnouncementDelivery, /parent_announcement_notifications/, "Adviser announcements must create durable Parent notification rows.");
+assert.match(adviserAnnouncements, /delivery\.parentIds\.map\(\(id\) => \(\{ role: "parent" as const, id \}\)\)/, "Adviser announcements must wake only target Parent dashboards.");
 
 // Guidance acceptance is a durable ticket transition, not just a transient
 // client event. One ticket is allowed per report, and its saved acceptance

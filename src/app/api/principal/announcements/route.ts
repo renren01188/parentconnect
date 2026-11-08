@@ -27,6 +27,7 @@ export async function GET() {
     const { data: adviserAnns, error: adviserError } = await supabase
       .from("adviser_announcements")
       .select("id, title, message, adviser_name, grade, sections, created_at")
+      .eq("status", "Published")
       .order("created_at", { ascending: false });
     if (adviserError) throw adviserError;
 

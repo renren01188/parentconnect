@@ -55,6 +55,8 @@ interface StudentRecord {
   dailyStatuses?: Record<number, "Present" | "On Time" | "Late" | "Absent" | "Excused">;
   dailyAbsences?: Record<number, boolean>;
   dailyExcused?: Record<number, boolean>;
+  dailyHasTimeOut?: Record<number, boolean>;
+  dailyAutoMissingTimeOutAbsences?: Record<number, boolean>;
   active_from: string;
   remarks?: StudentRemark[];
 }
@@ -483,13 +485,18 @@ function populateSF2Worksheet(
           return;
         }
         if (!schoolDaySet.has(iso)) return;
-        // The API returns the final saved Time In status for this learner and
-        // day. A missing value stays blank/No Record; it is never assumed
-        // Present merely because it is a class day.
+        // Attendance is counted only after Time Out. The already-saved Auto
+        // missing-Time-Out record is final Absence and gets the lower mark.
         const savedStatus = toAttendanceExportStatus(st.dailyStatuses?.[day]);
-        writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
+        const isAutomaticMissingTimeOutAbsence = st.dailyAutoMissingTimeOutAbsences?.[day] === true;
+        const hasCompletedAttendance = st.dailyHasTimeOut?.[day] === true;
+        if (isAutomaticMissingTimeOutAbsence) {
+          writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus, false, "missing-time-out");
+        } else if (savedStatus === "Absent" || savedStatus === "Excused" || hasCompletedAttendance) {
+          writeSf2DailyMark(ws, col0ToRef(col0, row), savedStatus);
+        }
         if (savedStatus === "Absent" || savedStatus === "Excused") absenceCount += 1;
-        if (isAttendedExportStatus(savedStatus)) attendedCount += 1;
+        if (hasCompletedAttendance && isAttendedExportStatus(savedStatus)) attendedCount += 1;
       });
 
       setCellValue(ws, `AM${row}`, absenceCount);
@@ -585,7 +592,7 @@ function populateSF2Worksheet(
     .slice(0, 31) || "Attendance Detail";
   const detailWs = workbook.addWorksheet(detailSheetName);
   detailWs.addRow([`Attendance detail — ${gradeLabel} ${section.name} — ${month} ${year}`]);
-  detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = Cutting Classes when separately recorded; H = Holiday. No Record means no saved Time In status."]);
+  detailWs.addRow(["SF2 marks: blank = Present; X = Absent (including approved excuse); upper half-shaded = Late arrival; lower half-shaded = final Absent after no Time Out; H = Holiday. No Record means no saved Time In status."]);
   detailWs.addRow([]);
   detailWs.addRow(["Student ID", "Student", "Grade", "Section", "Date", "Saved Status"]);
   const detailHeader = detailWs.getRow(4);
@@ -603,7 +610,9 @@ function populateSF2Worksheet(
         date,
         holidaySet.has(date)
           ? "Holiday"
-          : getAttendanceDetailStatus(toAttendanceExportStatus(student.dailyStatuses?.[day])),
+          : student.dailyAutoMissingTimeOutAbsences?.[day]
+            ? "Absent — no Time Out recorded"
+            : getAttendanceDetailStatus(toAttendanceExportStatus(student.dailyStatuses?.[day])),
       ]);
     }
   }

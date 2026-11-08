@@ -31,6 +31,7 @@ function adviserReportStatusCategory(report) {
 }
 
 function adviserReportStatusLabel(report) {
+  if (report?.cancelledByParent) return "Cancelled by Parents";
   const status = effectiveAdviserReportStatus(report);
   if (status === "Resolved" && report?.resolvedByPrincipal) return "Resolved By the Principal";
   if (status === "Resolved" && report?.resolvedByGuidance) return "Resolved By the Guidance";

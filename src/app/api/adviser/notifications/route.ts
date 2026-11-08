@@ -61,6 +61,7 @@ export async function GET() {
                     .from("adviser_announcements")
                     .select("id, adviser_name, title, message, created_at")
                     .eq("adviser_id", adviser.id)
+                    .eq("status", "Published")
                     .order("created_at", { ascending: false })
                     .limit(5),
                 supabase

@@ -19,6 +19,13 @@ assert.match(parentHistory, /ATTENDANCE_LOG_PAGE_SIZE/);
 assert.match(parentHistory, /\.range\(from, from \+ ATTENDANCE_LOG_PAGE_SIZE - 1\)/);
 assert.match(parentHistory, /schoolYear: \{/);
 assert.match(parentHistory, /generatedAt: new Date\(\)\.toISOString\(\)/);
+assert.match(parentHistory, /isScheduledAttendanceDate/);
+assert.match(parentHistory, /school_holidays/);
+assert.match(parentHistory, /class_sessions/);
+assert.match(parentHistory, /todayClassStatus: hasClassToday \? "Scheduled" : "No Class For Today"/);
+const parentDashboard = read("src/app/dashboard/parent/page.tsx");
+assert.match(parentDashboard, /data\.todayClassStatus !== "No Class For Today"/);
+assert.match(parentDashboard, /No Class For Today/);
 
 // An unavailable API is not attendance of zero. The page must fail visibly on
 // initial load and keep its last verified snapshot during a live refresh.

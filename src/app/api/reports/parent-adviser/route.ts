@@ -332,7 +332,6 @@ export async function GET(req: NextRequest) {
       .select(REPORT_SELECT)
       .eq("parent_id", parent.id)
       .in("student_id", linkedStudentIds)
-      .is("cancelled_at", null)
       .order("last_message_at", { ascending: false });
     if (reportId) query = query.eq("id", reportId);
     const { data, error } = await query.limit(reportId ? 1 : MAX_REPORTS);

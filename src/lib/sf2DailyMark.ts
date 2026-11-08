@@ -2,7 +2,7 @@ import type ExcelJS from "exceljs";
 import {
   getSf2DailyMark,
   type AttendanceExportStatus,
-  type Sf2TardyHalf,
+  type Sf2SpecialAttendanceMark,
 } from "@/lib/attendanceExportStatus";
 
 const SF2_HALF_SHADE = "FF808080";
@@ -11,18 +11,18 @@ const SF2_UNSHADED = "FFFFFFFF";
 /**
  * Writes the official SF2 mark without altering the supplied template's
  * borders, alignment, or number formatting. Excel renders the gradient as a
- * crisp half-cell shade: top for a late arrival and bottom for cutting
- * classes when that distinct outcome is eventually recorded.
+ * crisp half-cell shade: top for a late arrival and bottom for the final
+ * automatic absence created when a learner has no Time Out.
  */
 export function writeSf2DailyMark(
   worksheet: ExcelJS.Worksheet,
   reference: string,
   status: AttendanceExportStatus | null | undefined,
   isHoliday = false,
-  tardyHalf: Sf2TardyHalf = "upper",
+  specialMark?: Sf2SpecialAttendanceMark,
 ) {
   const cell = worksheet.getCell(reference);
-  const mark = getSf2DailyMark(status, isHoliday, tardyHalf);
+  const mark = getSf2DailyMark(status, isHoliday, specialMark);
   cell.value = mark.code;
 
   if (!mark.tardyHalf) return;

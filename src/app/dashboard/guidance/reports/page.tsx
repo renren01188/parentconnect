@@ -28,14 +28,18 @@ import {
     type GuidanceReportExportContext,
 } from "@/lib/guidanceReportExport";
 import GuidanceReportsGuide from "../components/GuidanceReportsGuide";
+import { formatStudentGradeSection } from "@/lib/studentGradeSection";
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
 // ── Types (local only) ────────────────────────────────────────────────────────
 interface ParentGroup {
+    key: string;
     parent_name: string;
     parent_profile_picture?: string | null;
     student_name: string;
+    grade?: string;
+    section?: string;
     initials: string;
     reports: Report[];
     unread: number;
@@ -59,6 +63,11 @@ function getAvatarColor(name: string) {
     let h = 0;
     for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
     return colors[Math.abs(h) % colors.length];
+}
+function parentStudentGroupKey(report: Report) {
+    const parent = report.parent_id ?? `name:${report.parent_name || "unknown-parent"}`;
+    const student = report.student_id ?? `name:${report.student_name || "unknown-student"}`;
+    return `${parent}:${student}`;
 }
 function reportActivityTime(report: Report) {
     const timestamp = Date.parse(report.lastActivityAt ?? report.createdAt ?? "");
@@ -96,6 +105,20 @@ function getStatusStyle(status: ReportStatus | "ResolvedByPrincipal") {
         case "Escalated": return "bg-red-100 text-red-600";
         case "ResolvedByPrincipal": return "bg-sky-100 text-sky-700";
     }
+}
+function isGuidanceReportInProgress(report: Report) {
+    return report.status !== "Resolved" && (
+        report.status === "Ongoing" || report.ticketStatus === "accepted"
+    );
+}
+function guidanceReportStatusLabel(report: Report, options: { escalatedToPrincipal?: boolean; resolvedByPrincipal?: boolean } = {}) {
+    if (report.cancelledByParent) return "Cancelled by Parents";
+    if (options.resolvedByPrincipal) return "Resolved by Principal";
+    if (options.escalatedToPrincipal) return "Escalated to Principal";
+    if (report.status === "Resolved") return "Resolved";
+    if (isGuidanceReportInProgress(report)) return "In Progress";
+    if (report.escalatedToGuidance) return "Escalated to Guidance";
+    return report.status;
 }
 function getAdminMsgStatusStyle(status: AdminMsgStatus) {
     switch (status) {
@@ -135,20 +158,24 @@ function getLatestAdminPreview(message: AdminMessage) {
 function groupByParent(reports: Report[]): ParentGroup[] {
     const map: Record<string, ParentGroup> = {};
     for (const r of reports) {
-        if (!map[r.parent_name]) {
-            map[r.parent_name] = {
+        const key = parentStudentGroupKey(r);
+        if (!map[key]) {
+            map[key] = {
+                key,
                 parent_name: r.parent_name,
                 parent_profile_picture: r.parent_profile_picture ?? null,
                 student_name: r.student_name,
+                grade: r.grade,
+                section: r.section,
                 initials: getInitials(r.parent_name),
                 reports: [],
                 unread: 0,
                 maxConcernLevel: 0,
             };
         }
-        map[r.parent_name].reports.push(r);
-        if (r.hasUnreadForGuidance) map[r.parent_name].unread++;
-        if (r.concernLevel > map[r.parent_name].maxConcernLevel) map[r.parent_name].maxConcernLevel = r.concernLevel;
+        map[key].reports.push(r);
+        if (r.hasUnreadForGuidance) map[key].unread++;
+        if (r.concernLevel > map[key].maxConcernLevel) map[key].maxConcernLevel = r.concernLevel;
     }
     for (const g of Object.values(map)) {
         g.reports.sort(newestReportFirst);
@@ -848,7 +875,7 @@ function ReportsPageContent() {
         });
         setSelectedParent((current) => {
             if (!current) return current;
-            return groupByParent(nextReports).find((group) => group.parent_name === current.parent_name) ?? current;
+            return groupByParent(nextReports).find((group) => group.key === current.key) ?? current;
         });
     }, []);
 
@@ -1120,7 +1147,7 @@ function ReportsPageContent() {
         .sort((a, b) => Number(groupHasFavorite(b, favoriteReportIds)) - Number(groupHasFavorite(a, favoriteReportIds)) || newestGroupFirst(a, b))
         .map((group) => ({ ...group, reports: [...group.reports].sort(favoriteFirstReport(favoriteReportIds)) }));
     const selectedParentReports = selectedParent
-        ? reports.filter((report) => report.parent_name === selectedParent.parent_name).sort(favoriteFirstReport(favoriteReportIds))
+        ? reports.filter((report) => parentStudentGroupKey(report) === selectedParent.key).sort(favoriteFirstReport(favoriteReportIds))
         : [];
 
     const principalMsgs = adminMsgs;
@@ -1243,7 +1270,7 @@ function ReportsPageContent() {
         if (selectedParent) {
             const updated = reports.map(r => r.id === id ? { ...r, status } : r);
             const groups = groupByParent(updated);
-            const g = groups.find(g => g.parent_name === selectedParent.parent_name);
+            const g = groups.find(g => g.key === selectedParent.key);
             if (g) setSelectedParent(g);
         }
         try {
@@ -1402,6 +1429,7 @@ function ReportsPageContent() {
 
     async function sendReply() {
         if (sendingReply || (!replyText.trim() && replyAttachments.length === 0)) return;
+        if (selectedReport && !selectedAdminMsg && (selectedReport.status === "Resolved" || selectedReport.cancelledByParent)) return;
         setSendingReply(true);
         if (selectedAdminMsg) forceAdminScrollRef.current = true;
         if (selectedReport && !selectedAdminMsg) forceParentScrollRef.current = true;
@@ -1686,7 +1714,7 @@ function ReportsPageContent() {
                                     <p className="text-xs text-slate-400 text-center mt-8">No escalated adviser reports found.</p>
                                 )}
                                 {filteredParentGroups.map(g => {
-                                    const isActive = selectedParent?.parent_name === g.parent_name;
+                                    const isActive = selectedParent?.key === g.key;
                                     const hasFavorite = groupHasFavorite(g, favoriteReportIds);
                                     const allResolved = g.reports.every(r => r.status === "Resolved");
                                     const activeReports = g.reports.filter(r => r.status !== "Resolved");
@@ -1702,7 +1730,7 @@ function ReportsPageContent() {
                                     const escalatedFromAdviser = activeReports.some(r => guidanceEscalated[r.id]);
                                     const hasEscalated = escalatedToPrincipal || escalatedFromAdviser;
                                     return (
-                                        <button key={g.parent_name} onClick={() => { setSelectedParent(g); setSelectedReport(null); setViewStep("reports"); }}
+                                        <button key={g.key} onClick={() => { setSelectedParent(g); setSelectedReport(null); setViewStep("reports"); }}
                                             className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "border-sky-200 bg-sky-50 ring-2 ring-sky-200" : hasOngoing ? "border-violet-200 bg-violet-50 shadow-sm hover:bg-violet-100" : hasEscalated ? "border-red-100 bg-red-50 hover:bg-red-100" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                                             <div className="flex items-center gap-2.5">
                                                 <div className={`w-9 h-9 rounded-full overflow-hidden ${getAvatarColor(g.parent_name)} flex items-center justify-center text-white text-xs font-extrabold shrink-0`}>
@@ -1715,6 +1743,7 @@ function ReportsPageContent() {
                                                         {g.unread > 0 && <span className="text-[10px] font-extrabold bg-red-500 text-white rounded-full px-1.5 py-0.5 shrink-0">{g.unread}</span>}
                                                     </div>
                                                     <p className="text-[11px] text-slate-400 truncate">Student Name: {g.student_name}</p>
+                                                    {formatStudentGradeSection(g.grade, g.section) && <p className="text-[11px] text-slate-400 truncate">{formatStudentGradeSection(g.grade, g.section)}</p>}
                                                 </div>
                                             </div>
                                             <div className="mt-2 flex items-center justify-between">
@@ -1727,7 +1756,7 @@ function ReportsPageContent() {
                                             {!allResolved && hasEscalated && (
                                                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold">
                                                     {principalEscalatedCount > 0 && <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-3 h-3" />{principalEscalatedCount} escalated to principal</span>}
-                                                    {hasOngoing && <span className="rounded-lg bg-violet-600 px-2 py-0.5 text-white">{ongoingCount} ongoing</span>}
+                                                    {hasOngoing && <span className="rounded-lg bg-violet-600 px-2 py-0.5 text-white">{ongoingCount} in progress</span>}
                                                     {!escalatedToPrincipal && ongoingCount === 0 && <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-3 h-3" />{g.reports.some((report) => report.ticketStatus === "accepted") ? "Accepted by the Ticket" : "Escalated from Adviser"}</span>}
                                                 </div>
                                             )}
@@ -1822,6 +1851,7 @@ function ReportsPageContent() {
                                         <div className="min-w-0">
                                             <p className="text-sm font-extrabold text-slate-900 truncate">{selectedParent.parent_name}</p>
                                             <p className="text-xs text-slate-400 truncate">Student Name: {selectedParent.student_name}</p>
+                                            {formatStudentGradeSection(selectedParent.grade, selectedParent.section) && <p className="text-xs text-slate-400 truncate">{formatStudentGradeSection(selectedParent.grade, selectedParent.section)}</p>}
                                         </div>
                                     </div>
                                     <div className="mt-3">
@@ -1838,14 +1868,19 @@ function ReportsPageContent() {
                                         const isEscalatedToPrincipal = principalEscalated[r.id];
                                         const isEscalated = guidanceEscalated[r.id] || isEscalatedToPrincipal;
                                         const isResolvedByPrincipal = principalEscalated[r.id] && r.status === "Resolved";
+                                        const isInProgress = isGuidanceReportInProgress(r);
+                                        const statusLabel = guidanceReportStatusLabel(r, {
+                                            escalatedToPrincipal: isEscalatedToPrincipal,
+                                            resolvedByPrincipal: isResolvedByPrincipal,
+                                        });
                                         return (
                                             <div key={r.id} className="relative">
                                                 <button onClick={() => { selectReport(r); setViewStep("detail"); }}
-                                                    className={`w-full text-left rounded-xl px-3 py-3 pr-11 transition border ${isActive ? "bg-sky-50 border-sky-200" : isEscalated ? "bg-red-50 border-red-100" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
+                                                    className={`w-full text-left rounded-xl px-3 py-3 pr-11 transition border ${isActive ? "bg-sky-50 border-sky-200" : isInProgress ? "bg-violet-50 border-violet-200 hover:bg-violet-100" : isEscalated ? "bg-red-50 border-red-100" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                                     <div className="flex items-start justify-between gap-2 mb-1.5">
                                                         <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
-                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : isEscalatedToPrincipal ? "Escalated" : r.status)}`}>
-                                                            {isResolvedByPrincipal ? "Resolved by Principal" : isEscalatedToPrincipal ? "Escalated to Principal" : r.escalatedToGuidance && r.status !== "Resolved" ? "Escalated to Guidance" : r.status}
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${r.cancelledByParent ? "bg-slate-100 text-slate-700" : getStatusStyle(isResolvedByPrincipal ? "ResolvedByPrincipal" : isEscalatedToPrincipal ? "Escalated" : r.status)}`}>
+                                                            {statusLabel}
                                                         </span>
                                                     </div>
                                                     <div className="flex flex-wrap gap-1 mb-2">
@@ -1904,6 +1939,20 @@ function ReportsPageContent() {
                             const isGuidanceEsc = guidanceEscalated[selectedReport.id];
                             const isPrincipalEscalated = principalEscalated[selectedReport.id];
                             const isResolved = selectedReport.status === "Resolved";
+                            const isCancelled = Boolean(selectedReport.cancelledByParent);
+                            const statusLabel = guidanceReportStatusLabel(selectedReport, {
+                                escalatedToPrincipal: isPrincipalEscalated,
+                                resolvedByPrincipal: isPrincipalEscalated && isResolved,
+                            });
+                            const statusStyle = isCancelled
+                                ? "bg-slate-100 text-slate-700"
+                                : getStatusStyle(
+                                    isPrincipalEscalated && isResolved
+                                        ? "ResolvedByPrincipal"
+                                        : isPrincipalEscalated
+                                            ? "Escalated"
+                                            : selectedReport.status,
+                                );
                             // Only show replies between Guidance and Parent — never show Adviser replies
                             const reportGuidanceReplies = (guidanceReplies[selectedReport.id] ?? []).filter(
                                 reply => reply.sender === "Guidance" || reply.sender === selectedReport.parent_name
@@ -2005,6 +2054,7 @@ function ReportsPageContent() {
                                                     ))}
                                                 </div>
                                             </div>
+                                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${statusStyle}`}>{statusLabel}</span>
                                         </div>
                                     </div>
 
@@ -2072,33 +2122,35 @@ function ReportsPageContent() {
                                                 The other participant is typing…
                                             </div>
                                         )}
-                                        {isPrincipalEscalated ? (
+                                        {isCancelled || selectedReport.status === "Resolved" ? (
+                                            <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 bg-slate-50">
+                                                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                                                    <Shield className="w-4 h-4 text-slate-400" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs font-bold text-slate-600">{isCancelled ? "Cancelled by Parents" : "Conversation resolved"}</p>
+                                                    <p className="text-[11px] text-slate-400 mt-0.5">{isCancelled ? "The Parent cancelled this report. No further messages can be sent." : "This concern has been resolved. No further messages can be sent."}</p>
+                                                </div>
+                                            </div>
+                                        ) : isPrincipalEscalated ? (
                                             /* ── Guidance locked out after Principal escalation ── */
                                             <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200">
                                                 <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
                                                     <Shield className="w-4 h-4 text-slate-400" />
                                                 </div>
                                                 <div>
-                                                    <p className="text-xs font-bold text-slate-600">
-                                                        {selectedReport.status === "Resolved" ? "Conversation resolved" : "Conversation handed over to Principal"}
-                                                    </p>
-                                                    <p className="text-[11px] text-slate-400 mt-0.5">
-                                                        {selectedReport.status === "Resolved"
-                                                            ? "This concern has been resolved. No further messages can be sent."
-                                                            : "This report has been escalated. Only the Principal and Parent can continue this conversation."}
-                                                    </p>
+                                                    <p className="text-xs font-bold text-slate-600">Conversation handed over to Principal</p>
+                                                    <p className="text-[11px] text-slate-400 mt-0.5">This report has been escalated. Only the Principal and Parent can continue this conversation.</p>
                                                 </div>
                                             </div>
                                         ) : (
                                             <>
                                                 <div className="guidance-reports-detail-actions mb-3 flex flex-wrap items-center gap-2">
-                                                    {selectedReport.status !== "Resolved" && (
-                                                        <button onClick={() => setResolveTargetId(selectedReport.id)}
-                                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-bold border border-sky-200 hover:bg-sky-100 transition h-11">
-                                                            <CheckCircle className="w-3.5 h-3.5" /> Resolve
-                                                        </button>
-                                                    )}
-                                                    {isGuidanceEsc && selectedReport.status !== "Resolved" && (
+                                                    <button onClick={() => setResolveTargetId(selectedReport.id)}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-bold border border-sky-200 hover:bg-sky-100 transition h-11">
+                                                        <CheckCircle className="w-3.5 h-3.5" /> Resolve
+                                                    </button>
+                                                    {isGuidanceEsc && (
                                                         <button
                                         onClick={() => { setEscalateError(""); setEscalateTarget(selectedReport); }}
                                                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition h-11 bg-red-100 text-red-600 border-red-200 hover:bg-red-200"

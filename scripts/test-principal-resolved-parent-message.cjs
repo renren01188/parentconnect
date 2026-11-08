@@ -38,11 +38,13 @@ assert.match(route, /bytes\.byteLength !== size \|\| bytes\.byteLength > MAX_ATT
 assert.match(route, /You can attach up to \$\{MAX_ATTACHMENTS\} files/);
 
 // A saved message remains a root School Message with its report link, then
-// wakes the authenticated Parent and Principal and schedules email delivery.
+// wakes the authenticated Parent and Principal. Dashboard delivery never
+// depends on email; email is an optional post-response notification.
 assert.match(route, /\.from\("staff_messages"\)[\s\S]*?report_id: reportId,[\s\S]*?status: "unread"/);
 assert.match(route, /\{ role: "principal", id: principal\.id \},[\s\S]*?\{ role: "parent", id: parent\.id \}/);
 assert.match(route, /scope: "staff-messages",[\s\S]*?reportId,/);
-assert.match(route, /after\(async \(\) =>[\s\S]*?sendStaffMessageEmail/);
+assert.match(route, /if \(parent\.hasDeliverableEmail\) after\(async \(\) =>[\s\S]*?sendStaffMessageEmail/);
+assert.doesNotMatch(route, /This Parent does not have a valid email address for the required notification/);
 assert.match(route, /parentAccountCanAccess\(data\)/);
 
 // Parent replies keep the optional link while normal School Messages behavior
@@ -57,6 +59,7 @@ assert.match(principalReports, /function canSendResolvedReportParentMessage/);
 assert.match(principalReports, /report\.resolvedByRole === "Adviser" \|\| report\.resolvedByRole === "Guidance"/);
 assert.match(principalReports, /function ResolvedReportParentMessageModal/);
 assert.match(principalReports, /Send Message to Parent/);
+assert.match(principalReports, /The Parent will receive it in their dashboard\./);
 assert.match(principalReports, /is over the 10 MB attachment limit/);
 assert.doesNotMatch(principalReports, /PrincipalReportParentMessages|Principal Messages to Parent/);
 assert.match(principalReports, /const conversationId = Number\.isSafeInteger\(createdMessageId\)[\s\S]*?`staff-message:\$\{createdMessageId\}`/);

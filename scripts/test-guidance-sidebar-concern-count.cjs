@@ -29,7 +29,7 @@ assert.match(context, /const requestVersion = \+\+guidanceCountRequestVersionRef
   "Each Guidance count snapshot must have a monotonic request version.");
 assert.match(context, /if \(requestVersion !== guidanceCountRequestVersionRef\.current\) return;[\s\S]*?const nextCount = reportCount \+ reportStaffCount \+ pendingTicketCount/,
   "A stale pre-ticket response must not overwrite the newer Realtime count.");
-assert.match(sidebar, /\{escalatedCount\} concern/,
+assert.match(sidebar, /\{escalatedCount\} active guidance case/,
   "The Guidance sidebar must render the active concern count.");
 assert.match(reportRoute, /\.eq\("escalated_to_guidance", true\)/,
   "The Guidance report feed must be scoped to Guidance escalations.");

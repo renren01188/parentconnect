@@ -182,7 +182,7 @@ function ComposeModal({
     }, [onClose]);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5 md:justify-end" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
             <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
                     <div className="min-w-0">

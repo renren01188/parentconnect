@@ -8,9 +8,12 @@ import {
   MessageSquare, Settings,
   AlertTriangle, CheckCircle, FileText,
   RefreshCw, Trash2, Plus,
+  Download,
 } from "lucide-react";
 import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, AUDIT_STATUS_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { AuditExportModal } from "@/components/AuditExportModal";
+import { downloadAuditCsv } from "@/lib/downloadAuditCsv";
 
 // ─── Theme ───────────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -311,6 +314,7 @@ export default function AuditTrailPage() {
 
   // ── UI state ──
   const [viewEvent,  setViewEvent]  = useState<AuditEvent | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const [actionOpen, setActionOpen] = useState(false);
   const [roleOpen,   setRoleOpen]   = useState(false);
 
@@ -386,6 +390,10 @@ export default function AuditTrailPage() {
     setRoleFilter(""); setModuleFilter(""); setStatusFilter(""); setDateFilter(""); setArchiveFilter("active"); setPage(1);
   }
 
+  const exportAuditDate = useCallback((date: string) => (
+    downloadAuditCsv("/api/principal/audit-log", date, "principal-audit-trail")
+  ), []);
+
   const statCards = [
     { label: "Total Events",    value: stats.total,    Icon: Activity,    color: PRIMARY,   bg: `${PRIMARY}18`  },
     { label: "Login Events",    value: stats.logins,   Icon: LogIn,       color: "#2563eb", bg: "#eff6ff"       },
@@ -407,16 +415,26 @@ export default function AuditTrailPage() {
           </p>
         </div>
 
-        {/* Refresh */}
-        <button
-          onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
-          disabled={loading}
-          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition hover:opacity-80 disabled:opacity-50 sm:w-auto"
-          style={{ color: PRIMARY, borderColor: `${PRIMARY}40`, background: `${PRIMARY}08` }}
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={() => setExportOpen(true)}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ background: PRIMARY }}
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+          <button
+            onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
+            disabled={loading}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition hover:opacity-80 disabled:opacity-50"
+            style={{ color: PRIMARY, borderColor: `${PRIMARY}40`, background: `${PRIMARY}08` }}
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* ── Stats ── */}
@@ -852,6 +870,7 @@ export default function AuditTrailPage() {
 
       {/* Event detail modal */}
       {viewEvent && <EventDetailModal event={viewEvent} onClose={() => setViewEvent(null)} />}
+      {exportOpen && <AuditExportModal accentColor={PRIMARY} onClose={() => setExportOpen(false)} onExport={exportAuditDate} />}
 
     </div>
   );

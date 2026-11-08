@@ -789,14 +789,13 @@ export default function ProfilePage() {
                         {/* My Children/Ward */}
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">My Children / Ward</h2>
-                            <p className="text-xs text-slate-400 mb-4">Manage your children/Ward&apos;s profiles</p>
                             {students.length === 0 && (
                                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs text-slate-500">
                                     No linked students found.
                                 </div>
                             )}
                             {students.map((child, index) => (
-                                <Link key={`${child.id}-${child.lrn}`} href={dashboardPath("parent", `?student=${child.id}`)}
+                                <Link key={`${child.id}-${child.lrn}`} href={dashboardPath("parent", `/profile/child/${encodeURIComponent(String(child.id))}`)}
                                     className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-blue-50 hover:border-blue-200 transition-colors mb-2 last:mb-0">
                                     <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0"
                                         style={{ background: studentColors[index % studentColors.length] }}>

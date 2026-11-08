@@ -28,6 +28,7 @@ import { useStaffConversationTyping } from "@/hooks/useStaffConversationTyping";
 import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { isPrincipalReportUnread, markPrincipalReportRead } from "@/lib/principalReportReadState.cjs";
 import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
+import { formatStudentGradeSection } from "@/lib/studentGradeSection";
 import {
   detailPanelLayout,
   findSelectedParentGroup,
@@ -39,7 +40,7 @@ import {
 type MainTab = "Escalated" | "Monitoring" | "Messages";
 type FilterTab = "All" | "Pending" | "Ongoing" | "Escalated" | "Resolved";
 type MonitoringPriority = "low" | "medium" | "high";
-type MonitoringStatus = "Pending" | "Under Review" | "Accepted Ticket" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved";
+type MonitoringStatus = "Pending" | "Under Review" | "Accepted Ticket" | "Escalated to Guidance" | "Escalated to Principal" | "Resolved" | "Cancelled by Parents";
 type MonitoringSourceFilter = "All" | "Parent" | "Student";
 type MonitoringStatusFilter = "All" | MonitoringStatus;
 type MonitoringEntry = {
@@ -63,6 +64,7 @@ const MONITORING_STATUS_OPTIONS: MonitoringStatus[] = [
   "Escalated to Guidance",
   "Escalated to Principal",
   "Resolved",
+  "Cancelled by Parents",
 ];
 
 type PrincipalStudentReport = {
@@ -91,6 +93,8 @@ interface ParentGroup {
   displayName: string;
   profilePicture?: string | null;
   studentName: string;
+  grade?: string;
+  section?: string;
   initials: string;
   reports: Report[];
   unread: number;
@@ -280,6 +284,7 @@ function ResolvedReportParentMessageModal({
           <div className="min-w-0">
             <h2 id="send-parent-message-title" className="text-lg font-extrabold text-slate-900">Send Message to Parent</h2>
             <p className="mt-1 text-sm text-slate-500">This sends a separate School Message and does not reopen the resolved report conversation.</p>
+            <p className="mt-1 text-xs text-slate-400">The Parent will receive it in their dashboard. A valid email address also receives an email notification.</p>
           </div>
           <button type="button" onClick={onClose} disabled={sending} aria-label="Close Send Message to Parent" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">
             <X className="h-5 w-5" />
@@ -347,7 +352,7 @@ function parentDisplayName(report: Report) {
 }
 
 function canSendResolvedReportParentMessage(report: Report | null) {
-  return report?.status === "Resolved" && (report.resolvedByRole === "Adviser" || report.resolvedByRole === "Guidance");
+  return report?.status === "Resolved" && !report.cancelledByParent && (report.resolvedByRole === "Adviser" || report.resolvedByRole === "Guidance");
 }
 
 function getInitials(name: string) {
@@ -411,6 +416,7 @@ function getStatusStyle(status: ReportStatus) {
 }
 
 function principalReportStatusClass(report: Report) {
+  if (report.cancelledByParent) return "bg-slate-100 text-slate-700";
   if (report.status === "Resolved") return "bg-emerald-100 text-emerald-700";
   if (report.escalatedToPrincipal) return "bg-red-100 text-red-700";
   if (report.escalatedToGuidance) return "bg-violet-100 text-violet-700";
@@ -437,6 +443,7 @@ function monitoringPriorityClass(priority: MonitoringPriority) {
 }
 
 function monitoringStatusClass(status: MonitoringStatus) {
+  if (status === "Cancelled by Parents") return "bg-slate-100 text-slate-700";
   if (status === "Escalated to Principal") return "bg-red-600 text-white";
   if (status === "Accepted Ticket") return "bg-sky-600 text-white";
   if (status === "Escalated to Guidance") return "bg-violet-600 text-white";
@@ -446,6 +453,7 @@ function monitoringStatusClass(status: MonitoringStatus) {
 }
 
 function monitoringStatusFromReport(report: Report): MonitoringStatus {
+  if (report.cancelledByParent) return "Cancelled by Parents";
   if (report.escalatedToPrincipal) return "Escalated to Principal";
   if (report.ticketStatus === "accepted") return "Accepted Ticket";
   if (report.escalatedToGuidance) return "Escalated to Guidance";
@@ -1329,6 +1337,8 @@ function groupByStudentParent(reports: Report[]): ParentGroup[] {
         displayName,
         profilePicture: report.parent_profile_picture,
         studentName: report.student_name,
+        grade: report.grade,
+        section: report.section,
         initials: getInitials(displayName),
         reports: [],
         unread: 0,
@@ -2756,6 +2766,7 @@ function PrincipalReportsPageContent() {
                               {group.unread > 0 && <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-extrabold text-white">{group.unread}</span>}
                             </div>
                             <p className="truncate text-[11px] text-slate-400">Student Name: {group.studentName}</p>
+                            {formatStudentGradeSection(group.grade, group.section) && <p className="truncate text-[11px] text-slate-400">{formatStudentGradeSection(group.grade, group.section)}</p>}
                           </div>
                         </div>
                         <div className="mt-2 flex items-center justify-between">
@@ -2819,6 +2830,7 @@ function PrincipalReportsPageContent() {
                             <div className="min-w-0">
                               <p className="truncate text-sm font-extrabold text-slate-900">{selectedParent.displayName}</p>
                               <p className="truncate text-xs text-slate-400">Student Name: {selectedParent.studentName}</p>
+                              {formatStudentGradeSection(selectedParent.grade, selectedParent.section) && <p className="truncate text-xs text-slate-400">{formatStudentGradeSection(selectedParent.grade, selectedParent.section)}</p>}
                             </div>
                           </div>
                         </div>
@@ -2894,6 +2906,7 @@ function PrincipalReportsPageContent() {
                 {selectedReport ? (() => {
                   const replies = principalReplies[selectedReport.id] ?? [];
                   const isResolved = selectedReport.status === "Resolved";
+                  const isCancelled = Boolean(selectedReport.cancelledByParent);
                   const hasPrincipalReply = replies.some((reply) => reply.sender === "Principal");
                   const canReply = Boolean(selectedReport.canReply);
                   const escalatedFromGuidance = Boolean(selectedReport.escalatedToPrincipal);
@@ -2922,7 +2935,7 @@ function PrincipalReportsPageContent() {
                         <div className="border-b border-slate-100 bg-white px-6 py-5">
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0 flex-1">
-                              <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-700">Conversation locked</span>
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${isCancelled ? "border-slate-300 bg-slate-100 text-slate-700" : "border-amber-200 bg-amber-100 text-amber-700"}`}>{isCancelled ? "Cancelled by Parents" : "Conversation locked"}</span>
                               <h2 className="mt-2 text-base font-extrabold leading-snug text-slate-900">{selectedReport.subject}</h2>
                               <p className="mt-0.5 text-xs text-slate-400">{selectedReport.submitted_at}</p>
                               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2955,12 +2968,16 @@ function PrincipalReportsPageContent() {
                                 <Shield className="h-7 w-7 text-violet-600" />
                               </div>
                               <p className="mt-3 text-sm font-extrabold text-slate-900">
-                                {resolvedByAdviserOrGuidance
+                                {isCancelled
+                                  ? "The Parent cancelled this report."
+                                  : resolvedByAdviserOrGuidance
                                   ? `This report was resolved by ${selectedReport.resolvedByRole}.`
                                   : "This report has not been escalated to the Principal."}
                               </p>
                               <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                                {resolvedByAdviserOrGuidance
+                                {isCancelled
+                                  ? "The report and message history remain available to view, but no further messages can be sent."
+                                  : resolvedByAdviserOrGuidance
                                   ? "The original conversation is locked."
                                   : "The original conversation is locked and becomes available only after Guidance escalates this report to the Principal."}
                               </p>
@@ -3110,8 +3127,8 @@ function PrincipalReportsPageContent() {
                         )}
 
                         {isResolved ? (
-                          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-                            This report has been resolved. Messaging is unavailable.
+                          <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${isCancelled ? "border-slate-300 bg-slate-50 text-slate-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+                            {isCancelled ? "Cancelled by Parents. Messaging is unavailable." : "This report has been resolved. Messaging is unavailable."}
                           </div>
                         ) : !canReply ? <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">Read-only monitoring. Guidance must escalate this report to the Principal before you can reply.</div> : <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
                           <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white transition focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">

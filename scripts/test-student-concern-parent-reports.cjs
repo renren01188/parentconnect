@@ -44,7 +44,8 @@ assert.match(notifyParentRoute, /parentId,[\s\S]*?adviserId: adviser\.id,[\s\S]*
 // actually linked to that parent; this is the server-side visibility boundary.
 assert.match(parentReportsRoute, /const parent = await getParentSession\(\)/);
 assert.match(parentReportsRoute, /getLinkedStudentIds\(parent\.id\)/);
-assert.match(parentReportsRoute, /\.eq\("parent_id", parent\.id\)[\s\S]*?\.in\("student_id", linkedStudentIds\)[\s\S]*?\.is\("cancelled_at", null\)/);
+assert.match(parentReportsRoute, /\.eq\("parent_id", parent\.id\)[\s\S]*?\.in\("student_id", linkedStudentIds\)/);
+assert.doesNotMatch(parentReportsRoute, /\.is\("cancelled_at", null\)/);
 
 // The Parent API retains the student's origin instead of guessing from the
 // category, and both the Reports page and dashboard card display that origin.
@@ -84,7 +85,7 @@ assert.match(parentReportsPage, /activePanel === "reports" && <div data-parent-g
 assert.match(parentReportsPage, /r\.isStandaloneStaffMessage && \([\s\S]*?\{r\.recipientRole\}/);
 assert.match(parentReportsPage, /selectedReport\.isStandaloneStaffMessage \? `School message from \$\{selectedReport\.recipientName\}`/);
 assert.match(parentReportsPage, /Direct school message from <strong>\{selectedReport\.recipientName\}<\/strong>/);
-assert.match(parentReportsPage, /!selectedReport\.isStandaloneStaffMessage && selectedReport\.reportStatus === "Resolved"/);
+assert.match(parentReportsPage, /!selectedReport\.isStandaloneStaffMessage && \(selectedReport\.reportStatus === "Resolved" \|\| selectedReport\.reportStatus === "Cancelled"\)/);
 
 // Selecting a card uses that exact report and canonicalizes the client route.
 // A previously opened `?reportId=` may be applied once for deep links, but a

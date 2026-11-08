@@ -43,7 +43,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (nextStatus === "accepted") {
       const { error: reportError } = await supabase
         .from("parent_adviser_reports")
-        .update({ escalated_to_guidance: true, status_updated_at: now, updated_at: now, last_message_at: now })
+        // Accepting a ticket means Guidance has taken ownership. Persist the
+        // report's active state as well as the ticket decision so every
+        // Guidance view has one authoritative case, not a report plus a
+        // separate accepted-ticket count.
+        .update({
+          escalated_to_guidance: true,
+          status: "ongoing",
+          guidance_seen_at: now,
+          status_updated_at: now,
+          updated_at: now,
+          last_message_at: now,
+        })
         .eq("id", ticket.report_id)
         .neq("status", "resolved")
         .neq("status", "cancelled");

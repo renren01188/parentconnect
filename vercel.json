@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/scheduled-deletions/process",
-      "schedule": "0 16 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/attendance/process-absences",

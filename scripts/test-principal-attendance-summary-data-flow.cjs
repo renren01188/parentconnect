@@ -26,7 +26,9 @@ for (const [name, source] of [["manual attendance", manualAttendance], ["RFID at
 assert.match(principalSummary, /\.from\("attendance_logs"\)/, "The Principal summary must read the shared attendance table.");
 assert.match(principalSummary, /student_grade_snapshot, student_section_snapshot/, "The Principal summary must retain recorded grade and section scope.");
 assert.match(principalSummary, /if \(log\.type && log\.type !== "Time In"\) continue/, "The Principal daily summary must use the Time In status once per student/day.");
-assert.match(principalSummary, /dayRecord\?\.status === "Excused"[\s\S]*?excused\+\+;[\s\S]*?absent\+\+/, "Excused must remain identifiable while also increasing the Principal absent total.");
+assert.match(principalSummary, /resolveFinalAttendanceExport\(/, "The Principal summary must resolve the final day status from Time In and Time Out records.");
+assert.match(principalSummary, /if \(status === "Excused"\)[\s\S]*?excused\+\+;[\s\S]*?absent\+\+/, "Excused must remain identifiable while also increasing the Principal absent total.");
+assert.match(principalSummary, /dailyAutoMissingTimeOutAbsences/, "The Principal summary must preserve the saved automatic missing-Time-Out outcome for SF2 exports.");
 assert.match(principalSummary, /\.gte\("attendance_date", monthStart\)/, "The Principal summary must read every saved record in the selected month.");
 assert.match(principalSummary, /\.lte\("attendance_date", monthEnd\)/, "The Principal summary must read every saved record in the selected month.");
 assert.doesNotMatch(principalSummary, /\.gte\("attendance_date", validDays\[0\]\)/, "The Principal summary must not hide records after the live school-year range changes.");
@@ -37,6 +39,7 @@ assert.doesNotMatch(principalSummary, /parent_student_links/, "The Principal sum
 assert.match(invalidation, /supabase\.from\("principals"\)\.select\("id"\)/, "Attendance changes must include active Principals as recipients.");
 assert.match(principalPage, /\["attendance", "students", "dashboard"\]\.includes\(scope\)/, "The Principal page must refresh when attendance is saved.");
 assert.match(principalPage, /\/api\/attendance\/monthly-summary/, "The Principal page must reload the shared attendance summary endpoint.");
-assert.match(principalPage, /getSf2StatusCode\(savedStatus\)/, "The Principal SF2 export must use the shared status-to-X mapping.");
+assert.match(principalPage, /writeSf2DailyMark\(/, "The Principal SF2 export must use the shared SF2 mark writer.");
+assert.match(principalPage, /"missing-time-out"/, "The Principal SF2 export must render the saved automatic missing-Time-Out outcome as the lower-half mark.");
 
 console.log("Adviser/RFID to Principal attendance-summary data-flow checks passed.");

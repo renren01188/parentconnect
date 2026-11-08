@@ -1,5 +1,5 @@
 "use client";
-import React, { Suspense, useState, useRef, useEffect, useCallback } from "react";
+import React, { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, X, Clock, Paperclip, Send, Upload, CheckCircle, AlertCircle, AlertTriangle, ChevronDown, LoaderCircle } from "lucide-react";
 import Sidebar from "../components/Sidebar";
@@ -176,6 +176,7 @@ function ReportStatusBadge({ status, label = status }: { status: ReportStatus; l
     "In Review": { bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe", icon: <AlertCircle style={{ width: 11, height: 11 }} /> },
     "Replied": { bg: "#eef2ff", color: "#4f46e5", border: "#c7d2fe", icon: <Send style={{ width: 11, height: 11 }} /> },
     "Resolved": { bg: "#f0fdf4", color: "#15803d", border: "#bbf7d0", icon: <CheckCircle style={{ width: 11, height: 11 }} /> },
+    "Cancelled": { bg: "#f8fafc", color: "#475569", border: "#cbd5e1", icon: <X style={{ width: 11, height: 11 }} /> },
     "Escalated": { bg: "#fff1f2", color: "#be123c", border: "#fecdd3", icon: <AlertTriangle style={{ width: 11, height: 11 }} /> },
   };
   const s = cfg[status];
@@ -191,6 +192,7 @@ function StatusBadge({ status }: { status: MessageStatus }) {
   const styles: Record<MessageStatus, string> = {
     "Pending Response": "bg-amber-100 text-amber-700 border border-amber-300",
     "Resolved": "bg-emerald-100 text-emerald-700 border border-emerald-300",
+    "Cancelled": "bg-slate-100 text-slate-600 border border-slate-300",
     "Read": "bg-sky-100 text-sky-600 border border-sky-200",
     "Unread": "bg-slate-100 text-slate-500 border border-slate-200",
   };
@@ -218,6 +220,7 @@ function StatusTimeline({ status }: { status: ReportStatus }) {
     { key: "Replied", label: "Replied", color: "#4f46e5", bg: "#e0e7ff" },
     { key: "Escalated", label: "Escalated", color: "#ef4444", bg: "#fee2e2" },
     { key: "Resolved", label: "Resolved", color: "#10b981", bg: "#d1fae5" },
+    { key: "Cancelled", label: "Cancelled", color: "#64748b", bg: "#e2e8f0" },
   ];
 
   const activeIdx = STEPS.findIndex(s => s.key === status);
@@ -278,8 +281,8 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
   onRetryAdvisers: () => void;
   cooldownMessage: string | null;
 }) {
-  const [adviserIdx, setAdviserIdx] = useState(0);
-  const [adviserOpen, setAdviserOpen] = useState(false);
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [studentOpen, setStudentOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [otherText, setOtherText] = useState("");
@@ -290,16 +293,31 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
   const [confirmation, setConfirmation] = useState(() => createReportSubmissionConfirmation());
-  const adviserRef = useRef<HTMLDivElement>(null);
+  const studentRef = useRef<HTMLDivElement>(null);
   const confirmationDialogRef = useRef<HTMLDivElement>(null);
   const confirmationTermsRef = useRef<HTMLDivElement>(null);
   const confirmationCloseButtonRef = useRef<HTMLButtonElement>(null);
   const confirmationOpenerRef = useRef<HTMLElement | null>(null);
-  const adviser = advisers[adviserIdx];
-
-  useEffect(() => {
-    setAdviserIdx((current) => Math.min(current, Math.max(0, advisers.length - 1)));
-  }, [advisers.length]);
+  // The source is one record per linked student. De-duplicate defensively by
+  // student ID so an accidental duplicate relationship cannot create two
+  // choices that submit the same student/adviser report.
+  const studentRecipients = useMemo(() => {
+    const seenStudentIds = new Set<string>();
+    return advisers.filter((recipient) => {
+      if (seenStudentIds.has(recipient.studentId)) return false;
+      seenStudentIds.add(recipient.studentId);
+      return true;
+    });
+  }, [advisers]);
+  const selectedStudent = studentRecipients.find((recipient) => recipient.studentId === selectedStudentId)
+    ?? (studentRecipients.length === 1 ? studentRecipients[0] : undefined);
+  const selectedStudentInitials = selectedStudent?.studentName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "ST";
 
   // Compute concern level silently (used on submit, not shown to parent)
   const allCats = DEFAULT_CATEGORIES.map(n => ({ name: n, pct: CONCERN_PERCENTAGES[n] }));
@@ -307,10 +325,10 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
   const concernLevel = computeConcernLevel(selectedEntries);
 
   useEffect(() => {
-    function h(e: MouseEvent) { if (adviserOpen && adviserRef.current && !adviserRef.current.contains(e.target as Node)) setAdviserOpen(false); }
+    function h(e: MouseEvent) { if (studentOpen && studentRef.current && !studentRef.current.contains(e.target as Node)) setStudentOpen(false); }
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [adviserOpen]);
+  }, [studentOpen]);
   useEffect(() => {
     function h(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
@@ -394,7 +412,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
   }
 
   const otherSelected = selectedCats.includes("Other");
-  const canSubmit = !cooldownMessage && !!adviser && !isSubmitting && subject.trim() && (message.trim() || attachments.length > 0) && selectedCats.length > 0 && (!otherSelected || otherText.trim());
+  const canSubmit = !cooldownMessage && !!selectedStudent && !isSubmitting && subject.trim() && (message.trim() || attachments.length > 0) && selectedCats.length > 0 && (!otherSelected || otherText.trim());
 
 
   async function handleSubmit() {
@@ -402,7 +420,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
     // prior conversation history private unless a separate consent flow sets it.
     const allowHistoryAccess = false;
     const termsAccepted = confirmation.termsAccepted;
-    if (cooldownMessage || !canSubmit || !adviser || !canSubmitConfirmedReport(confirmation) || !termsAccepted) return;
+    if (cooldownMessage || !canSubmit || !selectedStudent || !canSubmitConfirmedReport(confirmation) || !termsAccepted) return;
     // Close the consent prompt immediately; the report submission can continue in the background.
     closeConfirmationModal();
     // Replace generic "Other" with the typed description if provided
@@ -412,8 +430,8 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
       setIsSubmitting(true);
       setSubmitError("");
       await onSubmit({
-        adviserId: adviser.adviserId,
-        studentId: adviser.studentId,
+        adviserId: selectedStudent.adviserId,
+        studentId: selectedStudent.studentId,
         subject: subject.trim(),
         categories: finalCats,
         concernLevel: computeConcernLevel(finalEntries),
@@ -430,7 +448,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
     }
   }
 
-  if (!adviser) {
+  if (studentRecipients.length === 0) {
     const message = advisersLoading
       ? "Finding the class adviser linked to your child…"
       : advisersError || "No active class adviser is linked to your children yet.";
@@ -473,7 +491,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
               <CheckCircle style={{ width: 28, height: 28, color: "#10b981" }} />
             </div>
             <p style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", margin: 0 }}>Report Submitted!</p>
-            <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", margin: 0 }}>Your report has been sent to {adviser.name}. You&apos;ll be notified when they respond.</p>
+            <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", margin: 0 }}>Your report about {selectedStudent?.studentName} has been sent to {selectedStudent?.name}. You&apos;ll be notified when they respond.</p>
             <button onClick={onClose} style={{ marginTop: 8, padding: "10px 28px", borderRadius: 10, border: "none", background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Done</button>
           </div>
         ) : (
@@ -488,34 +506,44 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
                 {submitError}
               </div>
             )}
-            {/* Adviser selector */}
+            {/* Student selector */}
             <div>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Send To — Class Adviser <span style={{ color: "#ef4444" }}>*</span></label>
-              <div className="relative" ref={adviserRef}>
-                <button type="button" onClick={() => setAdviserOpen(p => !p)}
-                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#fff", textAlign: "left", cursor: "pointer", boxSizing: "border-box" }}>
-                  <span style={{ width: 34, height: 34, minWidth: 34, borderRadius: "50%", background: adviser.color, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>{adviser.initials}</span>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", margin: 0 }}>{adviser.name}</p>
-                    <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>{adviser.jobTitle} • {adviser.role}</p>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Which student has this concern? <span style={{ color: "#ef4444" }}>*</span></label>
+              <div ref={studentRef}>
+                <button type="button" onClick={() => setStudentOpen(p => !p)} aria-haspopup="listbox" aria-expanded={studentOpen}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, border: selectedStudent ? "1.5px solid #e2e8f0" : "1.5px solid #93c5fd", background: selectedStudent ? "#fff" : "#eff6ff", textAlign: "left", cursor: "pointer", boxSizing: "border-box" }}>
+                  <span style={{ width: 34, height: 34, minWidth: 34, borderRadius: "50%", background: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>{selectedStudentInitials}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", margin: 0, overflowWrap: "anywhere" }}>{selectedStudent?.studentName ?? "Select a student"}</p>
+                    <p style={{ fontSize: 12, color: "#64748b", margin: 0, overflowWrap: "anywhere" }}>{selectedStudent ? `${selectedStudent.grade} • ${selectedStudent.section}` : "Choose the child this report is about"}</p>
                   </div>
-                  <ChevronDown style={{ width: 16, height: 16, color: "#94a3b8", transform: adviserOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+                  <ChevronDown style={{ width: 16, height: 16, color: "#94a3b8", transform: studentOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
                 </button>
-                {adviserOpen && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", borderRadius: 12, border: "1.5px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 30, overflow: "hidden" }}>
-                    {advisers.map((a, i) => (
-                      <button key={a.id} type="button" onMouseDown={e => { e.preventDefault(); setAdviserIdx(i); setAdviserOpen(false); }}
-                        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: adviserIdx === i ? "#eff6ff" : "#fff", border: "none", cursor: "pointer" }}>
-                        <span style={{ width: 34, height: 34, minWidth: 34, borderRadius: "50%", background: a.color, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>{a.initials}</span>
-                        <div>
-                          <p style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", margin: 0 }}>{a.name}</p>
-                          <p style={{ fontSize: 11, color: "#94a3b8", margin: 0 }}>{a.role}</p>
-                        </div>
-                      </button>
-                    ))}
+                {studentOpen && (
+                  <div role="listbox" aria-label="Linked students" style={{ marginTop: 6, maxHeight: "min(18rem, 35dvh)", overflowY: "auto", background: "#fff", borderRadius: 12, border: "1.5px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
+                    {studentRecipients.map((recipient) => {
+                      const recipientInitials = recipient.studentName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST";
+                      const isSelected = selectedStudent?.studentId === recipient.studentId;
+                      return (
+                        <button key={recipient.id} type="button" role="option" aria-selected={isSelected} onMouseDown={e => { e.preventDefault(); setSelectedStudentId(recipient.studentId); setStudentOpen(false); }}
+                          style={{ width: "100%", display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px", background: isSelected ? "#eff6ff" : "#fff", border: "none", borderBottom: "1px solid #f1f5f9", cursor: "pointer", textAlign: "left" }}>
+                          <span style={{ width: 34, height: 34, minWidth: 34, borderRadius: "50%", background: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>{recipientInitials}</span>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, overflowWrap: "anywhere" }}>{recipient.studentName}</p>
+                            <p style={{ fontSize: 11, color: "#64748b", margin: "2px 0 0", overflowWrap: "anywhere" }}>{recipient.grade} • {recipient.section}</p>
+                            <p style={{ fontSize: 11, color: "#64748b", margin: "2px 0 0", overflowWrap: "anywhere" }}>Class adviser: {recipient.name}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
+              {selectedStudent && (
+                <div role="status" style={{ marginTop: 8, borderRadius: 9, border: "1px solid #bfdbfe", background: "#eff6ff", padding: "9px 11px", color: "#1e3a8a", fontSize: 12, lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                  This report will be sent to <strong>{selectedStudent.name}</strong>, the assigned class adviser for <strong>{selectedStudent.studentName}</strong>.
+                </div>
+              )}
             </div>
 
             {/* Multi-category selection */}
@@ -770,7 +798,7 @@ function CancelReportModal({ report, onClose, onConfirm, cancelling, error }: {
           <div className="min-w-0">
             <h2 id="cancel-parent-report-title" className="text-lg font-extrabold text-slate-900">Cancel this report?</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              <strong>{report.subject}</strong> will be removed from your active reports. Authorized school staff will retain it for follow-up and audit history.
+              <strong>{report.subject}</strong> will be marked as cancelled and remain available to you and authorized school staff for viewing and audit history. No one will be able to send further messages.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-amber-800">After cancellation, you must wait 5 minutes before submitting another report.</p>
           </div>
@@ -1326,7 +1354,7 @@ function ParentReportsPageContent() {
 
 
   async function handleSendReply() {
-    if (sendingReply || (!replyText.trim() && replyAttachments.length === 0) || !selectedReport || (!selectedReport.isStandaloneStaffMessage && selectedReport.reportStatus === "Resolved")) return;
+    if (sendingReply || (!replyText.trim() && replyAttachments.length === 0) || !selectedReport || (!selectedReport.isStandaloneStaffMessage && (selectedReport.reportStatus === "Resolved" || selectedReport.reportStatus === "Cancelled"))) return;
     const reportId = selectedReport.id;
     const sentText = replyText.trim();
     const sentAttachments = replyAttachments;
@@ -1456,8 +1484,9 @@ function ParentReportsPageContent() {
       if (typeof data?.reportSubmissionCooldownUntil === "string") {
         setReportSubmissionCooldownUntil(data.reportSubmissionCooldownUntil);
       }
-      setReports((current) => current.filter((report) => report.id !== cancelTarget.id));
-      setSelectedId((current) => current === cancelTarget.id ? null : current);
+      setReports((current) => current.map((report) => report.id === cancelTarget.id
+        ? { ...report, status: "Cancelled", reportStatus: "Cancelled", unread: false, canCancel: false, cancelledByParent: true }
+        : report));
       setCancelTargetId(null);
       setShowTicketModal(false);
       await loadReports().catch((error) => {
@@ -1630,12 +1659,16 @@ function ParentReportsPageContent() {
                       {r.hasReportStatus !== false && r.reportStatus && (
                         <ReportStatusBadge
                           status={
-                            (r.escalatedToPrincipal || r.escalatedToGuidance) && r.reportStatus !== "Resolved"
+                            r.cancelledByParent || r.reportStatus === "Cancelled"
+                              ? "Cancelled"
+                              : (r.escalatedToPrincipal || r.escalatedToGuidance) && r.reportStatus !== "Resolved"
                               ? "Escalated"
                               : r.reportStatus!
                           }
                           label={
-                            r.escalatedToPrincipal && r.reportStatus !== "Resolved"
+                            r.cancelledByParent || r.reportStatus === "Cancelled"
+                              ? "Cancelled"
+                              : r.escalatedToPrincipal && r.reportStatus !== "Resolved"
                               ? "Escalated to Principal"
                               : r.escalatedToGuidance && r.reportStatus !== "Resolved"
                                 ? "Escalated to Guidance"
@@ -1670,10 +1703,10 @@ function ParentReportsPageContent() {
                       <p className="break-words text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
                     </div>
                     <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
-                      {!selectedReport.isStandaloneStaffMessage && !selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && (
+                      {!selectedReport.isStandaloneStaffMessage && !selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
                         <button type="button" onClick={() => setShowTicketModal(true)} className="min-h-11 flex-1 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100 sm:flex-none">Submit Ticket to Guidance</button>
                       )}
-                      {selectedReport.canCancel && selectedReport.reportStatus !== "Resolved" && (
+                      {selectedReport.canCancel && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
                         <button type="button" onClick={() => { setCancelError(""); setCancelTargetId(selectedReport.id); }} className="min-h-11 flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 sm:flex-none">Cancel Report</button>
                       )}
                     </div>
@@ -1719,7 +1752,7 @@ function ParentReportsPageContent() {
                   {selectedReport.hasReportStatus !== false && selectedReport.reportStatus && (() => {
                     // Escalated to guidance or principal → always show "Escalated" step
                     const effectiveStatus: ReportStatus =
-                      (selectedReport.escalatedToPrincipal || selectedReport.escalatedToGuidance) &&
+                      !selectedReport.cancelledByParent && (selectedReport.escalatedToPrincipal || selectedReport.escalatedToGuidance) &&
                       selectedReport.reportStatus !== "Resolved"
                         ? "Escalated"
                         : selectedReport.reportStatus!;
@@ -1727,7 +1760,7 @@ function ParentReportsPageContent() {
                   })()}
 
                   {/* Guidance escalation banner */}
-                  {selectedReport.hasReportStatus !== false && selectedReport.escalatedToPrincipal && !selectedReport.parentRepliedAfterPrincipalEscalation && selectedReport.reportStatus !== "Resolved" && (
+                  {selectedReport.hasReportStatus !== false && selectedReport.escalatedToPrincipal && !selectedReport.parentRepliedAfterPrincipalEscalation && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "10px 14px" }}>
                       <AlertTriangle style={{ width: 15, height: 15, color: "#7c3aed", flexShrink: 0, marginTop: 1 }} />
                       <p style={{ fontSize: 12, color: "#5b21b6", fontWeight: 600, margin: 0 }}>
@@ -1736,7 +1769,7 @@ function ParentReportsPageContent() {
                     </div>
                   )}
 
-                  {selectedReport.hasReportStatus !== false && !selectedReport.escalatedToPrincipal && selectedReport.escalatedToGuidance && !selectedReport.guidanceHasReplied && selectedReport.reportStatus !== "Resolved" && (
+                  {selectedReport.hasReportStatus !== false && !selectedReport.escalatedToPrincipal && selectedReport.escalatedToGuidance && !selectedReport.guidanceHasReplied && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: "10px 14px" }}>
                       <AlertTriangle style={{ width: 15, height: 15, color: "#be123c", flexShrink: 0, marginTop: 1 }} />
                       <p style={{ fontSize: 12, color: "#9f1239", fontWeight: 600, margin: 0 }}>
@@ -1797,12 +1830,12 @@ function ParentReportsPageContent() {
                       The other participant is typing…
                     </div>
                   )}
-                  {!selectedReport.isStandaloneStaffMessage && requiresStudentConcernConsent ? (
-                    <StudentConcernConsent onConfirm={saveStudentConcernConsent} />
-                  ) : !selectedReport.isStandaloneStaffMessage && selectedReport.reportStatus === "Resolved" ? (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-                      This report has been resolved. Messaging is unavailable.
+                  {!selectedReport.isStandaloneStaffMessage && (selectedReport.reportStatus === "Resolved" || selectedReport.reportStatus === "Cancelled") ? (
+                    <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${selectedReport.reportStatus === "Cancelled" ? "border-slate-300 bg-slate-50 text-slate-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+                      {selectedReport.reportStatus === "Cancelled" ? "This report has been cancelled. Messaging is unavailable." : "This report has been resolved. Messaging is unavailable."}
                     </div>
+                  ) : !selectedReport.isStandaloneStaffMessage && requiresStudentConcernConsent ? (
+                    <StudentConcernConsent onConfirm={saveStudentConcernConsent} />
                   ) : (
                   <>
                   <div className="mb-3 flex flex-wrap items-center gap-2">
