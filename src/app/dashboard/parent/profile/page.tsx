@@ -582,6 +582,7 @@ export default function ProfilePage() {
     const [emailNotif,   setEmailNotif]   = useState(false);
     const [smsNotif,     setSmsNotif]     = useState(true);
     const [emailAvailable, setEmailAvailable] = useState(false);
+    const [schoolDelivery, setSchoolDelivery] = useState<"sms" | "email" | "both" | "none">("sms");
     const [savingNotificationPreferences, setSavingNotificationPreferences] = useState(false);
     const [notificationPreferencesError, setNotificationPreferencesError] = useState("");
     const [notificationPreferencesNotice, setNotificationPreferencesNotice] = useState("");
@@ -635,6 +636,10 @@ export default function ProfilePage() {
                     setEmailNotif(emailEnabled);
                     setSmsNotif(smsEnabled);
                     setEmailAvailable(preferencesData.preferences?.emailAvailable === true);
+                    const configuredDelivery = preferencesData.preferences?.schoolDelivery;
+                    if (configuredDelivery === "sms" || configuredDelivery === "email" || configuredDelivery === "both" || configuredDelivery === "none") {
+                        setSchoolDelivery(configuredDelivery);
+                    }
                     if (emailEnabled && smsEnabled) {
                         setNotificationPreferencesError("Choose Email, SMS, or Neither for attendance notifications.");
                     }
@@ -704,6 +709,10 @@ export default function ProfilePage() {
 
             setEmailNotif(Boolean(data.preferences?.emailEnabled));
             setSmsNotif(Boolean(data.preferences?.smsEnabled));
+            const configuredDelivery = data.preferences?.schoolDelivery;
+            if (configuredDelivery === "sms" || configuredDelivery === "email" || configuredDelivery === "both" || configuredDelivery === "none") {
+                setSchoolDelivery(configuredDelivery);
+            }
             setNotificationPreferencesNotice("Attendance notification preferences saved.");
         } catch (preferencesError) {
             setNotificationPreferencesError(preferencesError instanceof Error ? preferencesError.message : "Unable to save attendance notification preferences.");
@@ -857,7 +866,10 @@ export default function ProfilePage() {
                         {/* Notifications */}
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <h2 className="text-sm font-extrabold text-slate-800 mb-0.5">Notifications</h2>
-                            <p className="text-xs text-slate-400 mb-4">Choose one way to receive RFID attendance alerts for every child linked to your account.</p>
+                            <p className="text-xs text-slate-400 mb-4">Choose your usual attendance-alert preference for every child linked to your account.</p>
+                            {schoolDelivery === "email" && (
+                                <p className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] leading-4 text-blue-700">School delivery is currently <strong>Email only</strong>. If your account has a valid email address, it receives attendance alerts even when your usual preference is SMS. Select <strong>Neither</strong> to opt out.</p>
+                            )}
                             <div className="flex flex-col gap-2" role="radiogroup" aria-label="Attendance notification method">
                                 <button type="button" role="radio" aria-checked={emailNotif && !smsNotif} onClick={() => void saveNotificationPreferences(true, false)} disabled={savingNotificationPreferences || !emailAvailable}
                                     className={`flex min-h-16 items-start gap-3 rounded-xl border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${emailNotif && !smsNotif ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300"}`}>

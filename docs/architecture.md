@@ -70,7 +70,12 @@ served by `dashboard/principal/AttendanceSummary` and its related API routes.
 Attendance notification jobs are queued in `attendanceSmsQueue.ts`, processed
 by `attendanceSmsWorker.ts`, and exposed to ICT through
 `/api/ict/attendance-sms-jobs`. Email notification counterparts are in
-`attendanceEmailQueue.ts` and `attendanceEmailWorker.ts`.
+`attendanceEmailQueue.ts` and `attendanceEmailWorker.ts`, with ICT queue data
+at `/api/ict/attendance-email-jobs`. The scheduled
+`/api/internal/process-attendance-sms` worker processes both durable queues.
+When ICT selects Email only, every eligible completed active Parent with a
+valid email receives email regardless of their usual SMS preference; `Neither`
+remains an explicit opt-out.
 
 ### Reports and messages
 
@@ -168,6 +173,8 @@ git diff --check
 Focused checks are declared in `package.json` and implemented in `scripts/`.
 Run the test matching the changed flow, for example
 `npm.cmd run test:attendance-auto-absence` or
+`npm.cmd run test:attendance-notifications` or
+`npm.cmd run test:attendance-email-failover` or
 `npm.cmd run test:profile-save-flows` or
 `npm.cmd run test:parent-account-change-notifications` or
 `npm.cmd run test:ict-approval-selection`. There is no single catch-all test

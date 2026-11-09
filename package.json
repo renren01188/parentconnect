@@ -19,6 +19,7 @@
     "test:attendance-export-statuses": "node scripts/test-attendance-export-statuses.cjs",
     "test:attendance-historical-reporting": "node scripts/test-attendance-historical-reporting.cjs",
     "test:attendance-notifications": "node scripts/test-attendance-notification-settings.cjs",
+    "test:attendance-email-failover": "node scripts/test-attendance-email-failover.cjs",
     "test:ict-attendance-sms-delivery-queue": "node scripts/test-ict-attendance-sms-delivery-queue.cjs",
     "test:class-session-time-picker": "node scripts/test-class-session-time-picker.cjs",
     "test:grade-class-session-schedules": "node scripts/test-grade-class-session-schedules.cjs",

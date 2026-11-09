@@ -40,6 +40,30 @@ unless a named check has been run and recorded below.
   check covers the immediate state update and the GET mapping used when Profile
   is reopened; no live Parent record was modified for this verification.
 
+### Attendance Email-only delivery override
+
+- **Complete in source:** ICT's **Email only** setting now sends attendance
+  email to each eligible completed active Parent with a valid email address,
+  even when that Parent's usual choice is SMS. **Neither** remains an explicit
+  Parent opt-out. Pending, unclaimed SMS jobs are safely skipped and queued for
+  eligible email delivery when ICT changes into Email-only mode; already sent
+  or provider-claimed SMS jobs are not modified.
+- **Visibility:** ICT Student Profiles now displays a separately searchable,
+  scrollable Email delivery queue using Parent name first and student name
+  below it. The existing scheduled attendance queue route now processes both
+  SMS and email jobs.
+- **Affected files:** attendance notification settings, SMS/email queue and
+  worker routes, Parent notification preferences/Profile UI, ICT Student
+  Profiles UI, `/api/ict/attendance-email-jobs`,
+  `attendanceDeliveryTransition.ts`, and the attendance notification scripts.
+  No database migration or attendance record was changed.
+- **Verified:** `npm.cmd run test:attendance-notifications`,
+  `npm.cmd run test:attendance-email-failover`,
+  `npm.cmd run test:ict-attendance-sms-delivery-queue`, and
+  `npx.cmd tsc --noEmit` passed on 2026-11-09. Live delivery remains
+  **unverified** until an ICT account selects Email only and a real active
+  Parent with a configured email receives an attendance alert.
+
 ### Parent notifications for account and child changes
 
 - **Complete in source:** Adviser edits made through `/api/students/[id]` and

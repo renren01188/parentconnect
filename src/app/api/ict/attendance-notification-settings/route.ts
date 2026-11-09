@@ -5,10 +5,12 @@ import {
   deliveryFromChannels,
   getAttendanceNotificationSettings,
   initializeAttendanceNotificationSettings,
+  isEmailOnlyDelivery,
   mapAttendanceNotificationSettings,
   normalizeLowCreditThreshold,
   type AttendanceNotificationDelivery,
 } from "@/lib/attendanceNotificationSettings";
+import { movePendingAttendanceSmsToEmail } from "@/lib/attendanceDeliveryTransition";
 import { supabase } from "@/lib/supabase";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 
@@ -64,6 +66,7 @@ export async function PUT(request: NextRequest) {
     // Older deployments may have the table but not its singleton row. Create
     // the defaults without overwriting an existing ICT configuration.
     await initializeAttendanceNotificationSettings();
+    const previousSettings = await getAttendanceNotificationSettings();
     const { data, error } = await supabase
       .from("attendance_notification_settings")
       .update({
@@ -78,10 +81,30 @@ export async function PUT(request: NextRequest) {
     if (error) throw error;
     if (!data) throw new Error("Attendance notification settings could not be saved.");
 
+    let deliveryTransition: { skippedSms: number; queuedEmail: number } | null = null;
+    let transitionWarning: string | null = null;
+    if (isEmailOnlyDelivery({ smsEnabled: channels.smsEnabled, emailEnabled: channels.emailEnabled })
+      && !isEmailOnlyDelivery(previousSettings)) {
+      try {
+        deliveryTransition = await movePendingAttendanceSmsToEmail();
+      } catch (transitionError) {
+        // The selected school-wide setting is already durable. Do not report a
+        // false failed save, but surface that the existing pending queue needs
+        // attention rather than silently dropping those notifications.
+        console.error("Could not move pending attendance SMS jobs to email:", transitionError);
+        transitionWarning = "Email-only was saved, but some pending SMS notifications could not be moved to the email queue. Review the delivery queues.";
+      }
+    }
+
     await publishAttendanceSettingsRefresh();
 
     return NextResponse.json(
-      { success: true, settings: responseSettings(mapAttendanceNotificationSettings(data)) },
+      {
+        success: true,
+        settings: responseSettings(mapAttendanceNotificationSettings(data)),
+        deliveryTransition,
+        transitionWarning,
+      },
       { headers: noStoreHeaders },
     );
   } catch (error) {

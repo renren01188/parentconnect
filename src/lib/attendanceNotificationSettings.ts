@@ -40,6 +40,15 @@ export function channelsForDelivery(delivery: AttendanceNotificationDelivery) {
   };
 }
 
+/**
+ * ICT's Email-only mode is a school-wide delivery decision. It deliberately
+ * overrides an account's normal SMS preference, while the Parent's explicit
+ * Neither choice remains an opt-out.
+ */
+export function isEmailOnlyDelivery(settings: Pick<AttendanceNotificationSettings, "smsEnabled" | "emailEnabled">) {
+  return settings.emailEnabled && !settings.smsEnabled;
+}
+
 export function isLowSmsCredit(balance: number | null, threshold: number) {
   return balance !== null && Number.isFinite(balance) && balance <= threshold;
 }

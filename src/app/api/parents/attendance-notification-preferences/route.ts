@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { getJwtSecret } from "@/lib/authSecret";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import { deliveryFromChannels, getAttendanceNotificationSettings } from "@/lib/attendanceNotificationSettings";
 import { supabase } from "@/lib/supabase";
 
 const SECRET = getJwtSecret();
@@ -47,7 +48,7 @@ function savedPreference(value: unknown): AttendancePreference | null {
   return value === "SMS" || value === "Email" || value === "Neither" ? value : null;
 }
 
-function responsePreferences(row: PreferenceRow) {
+function responsePreferences(row: PreferenceRow, schoolDelivery: ReturnType<typeof deliveryFromChannels>) {
   const emailAvailable = /\S+@\S+\.\S+/.test(String(row.email ?? "").trim());
   const preference = savedPreference(row.attendance_notification_preference);
   // The marker is authoritative for new saves. The boolean fallback keeps all
@@ -67,6 +68,7 @@ function responsePreferences(row: PreferenceRow) {
     smsEnabled,
     preference: preference ?? (emailEnabled ? "Email" : smsEnabled ? "SMS" : "Neither"),
     emailAvailable,
+    schoolDelivery,
   };
 }
 
@@ -109,8 +111,15 @@ export async function GET() {
       if (defaulted) preferencesRow = defaulted as PreferenceRow;
     }
 
+    const schoolSettings = await getAttendanceNotificationSettings();
     return NextResponse.json(
-      { success: true, preferences: responsePreferences(preferencesRow) },
+      {
+        success: true,
+        preferences: responsePreferences(
+          preferencesRow,
+          deliveryFromChannels(schoolSettings.smsEnabled, schoolSettings.emailEnabled),
+        ),
+      },
       { headers: noStoreHeaders },
     );
   } catch (error: unknown) {
@@ -159,8 +168,15 @@ export async function PATCH(request: NextRequest) {
     if (error) throw error;
     if (!data) return NextResponse.json({ success: false, message: "Parent account not found." }, { status: 404 });
 
+    const schoolSettings = await getAttendanceNotificationSettings();
     return NextResponse.json(
-      { success: true, preferences: responsePreferences(data) },
+      {
+        success: true,
+        preferences: responsePreferences(
+          data,
+          deliveryFromChannels(schoolSettings.smsEnabled, schoolSettings.emailEnabled),
+        ),
+      },
       { headers: noStoreHeaders },
     );
   } catch (error: unknown) {

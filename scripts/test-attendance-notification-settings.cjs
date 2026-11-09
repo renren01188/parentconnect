@@ -16,7 +16,9 @@ const smsQueue = read("src/lib/attendanceSmsQueue.ts");
 const emailQueue = read("src/lib/attendanceEmailQueue.ts");
 const parentEnrollment = read("src/lib/parentEnrollment.ts");
 const verifyTempPassword = read("src/app/api/parents/verify-temp-password/route.ts");
-const parentPreferenceMigration = read("supabase/migrations/20261020140000_default_parent_attendance_notifications_to_sms.sql");
+const transition = read("src/lib/attendanceDeliveryTransition.ts");
+const scheduledWorker = read("src/app/api/internal/process-attendance-sms/route.ts");
+const emailJobsRoute = read("src/app/api/ict/attendance-email-jobs/route.ts");
 
 // A freshly deployed database can have the table before it has the singleton
 // row. Reads and saves must create the defaults without overwriting ICT data.
@@ -25,6 +27,7 @@ assert.match(settings, /\.upsert\([\s\S]*?id: true[\s\S]*?ignoreDuplicates: true
 assert.match(settings, /if \(!data\) return initializeAttendanceNotificationSettings\(\)/);
 assert.match(settingsRoute, /await initializeAttendanceNotificationSettings\(\);/);
 assert.match(creditsRoute, /await initializeAttendanceNotificationSettings\(\);/);
+assert.match(settings, /isEmailOnlyDelivery/);
 
 // The UI receives an actionable, secret-free message when Vercel lacks the
 // Semaphore credential. The provider key itself is never returned.
@@ -43,26 +46,39 @@ assert.match(parentProfile, /saveNotificationPreferences\(false, true\)/);
 assert.match(parentProfile, /saveNotificationPreferences\(false, false\)/);
 assert.match(parentProfile, /setEmailNotif\]\s*=\s*useState\(false\)/);
 assert.match(parentProfile, /setSmsNotif\]\s*=\s*useState\(true\)/);
+assert.match(parentPreferencesRoute, /schoolDelivery/);
+assert.match(parentProfile, /School delivery is currently/);
 assert.doesNotMatch(parentProfile, /<Toggle/);
 assert.match(smsQueue, /attendance_sms_notifications/);
 assert.match(emailQueue, /attendance_email_notifications/);
 
 // New Parent creation has the same durable default across both enrollment
-// flows. The migration only marks existing stored combinations, preserving
-// an existing Email or Neither choice rather than overwriting it with SMS.
+// flows. Existing saved preference values remain authoritative.
 assert.match(parentEnrollment, /attendance_email_notifications: false,[\s\S]*?attendance_sms_notifications: true,[\s\S]*?attendance_notification_preference: "SMS"/);
 assert.match(verifyTempPassword, /attendance_email_notifications: false,[\s\S]*?attendance_sms_notifications: true,[\s\S]*?attendance_notification_preference: "SMS"/);
-assert.match(parentPreferenceMigration, /ALTER COLUMN attendance_email_notifications SET DEFAULT false/);
-assert.match(parentPreferenceMigration, /ALTER COLUMN attendance_sms_notifications SET DEFAULT true/);
-assert.match(parentPreferenceMigration, /WHEN attendance_email_notifications = true[\s\S]*?THEN 'Email'/);
-assert.match(parentPreferenceMigration, /WHEN attendance_email_notifications = false[\s\S]*?attendance_sms_notifications = false THEN 'Neither'/);
 
-// Every RFID tap receives an initial post-response send attempt; it no longer
-// depends on an external Cron route for SMS or email delivery.
-assert.match(scanRoute, /await enqueueAttendanceSms\(input\);[\s\S]*?await processAttendanceSmsJobs\(\{ attendanceLogId: input\.attendanceLogId/);
+// RFID always queues both possible channels after the attendance row is
+// committed. Email gets an initial safe worker attempt; SMS/email retry work
+// continues through the shared authenticated scheduled worker.
+assert.match(scanRoute, /await enqueueAttendanceSms\(input\)/);
 assert.match(scanRoute, /await enqueueAttendanceEmail\(input\);[\s\S]*?await processAttendanceEmailJobs\(\{ attendanceLogId: input\.attendanceLogId/);
 assert.doesNotMatch(scanRoute, /SCHEDULED_ATTENDANCE_SMS_WORKER/);
 assert.doesNotMatch(scanRoute, /SCHEDULED_ATTENDANCE_EMAIL_WORKER/);
+assert.match(scheduledWorker, /processAttendanceEmailJobs/);
+
+// Email-only is a school-wide override for a completed, active Parent with a
+// valid email. An explicit Neither remains an opt-out. Pending SMS jobs that
+// never reached Semaphore are retired and re-queued as email jobs; claimed or
+// sent jobs are not touched.
+assert.match(emailQueue, /password_set/);
+assert.match(emailQueue, /explicitlyOptedOut/);
+assert.match(emailQueue, /emailOnly \? explicitlyOptedOut\(row\)/);
+assert.match(settingsRoute, /movePendingAttendanceSmsToEmail/);
+assert.match(transition, /\.eq\("status", "pending"\)[\s\S]*?\.eq\("attempts", 0\)[\s\S]*?\.is\("provider_requested_at", null\)/);
+assert.match(transition, /enqueueAttendanceEmail/);
+assert.match(emailJobsRoute, /attendance_email_jobs/);
+assert.doesNotMatch(emailJobsRoute, /recipient_email/);
+assert.doesNotMatch(emailJobsRoute, /, message,/);
 
 // The in-app feed must show every attendance event independently from the
 // optional external SMS/email channels. A parent can be linked through the
@@ -77,4 +93,4 @@ assert.match(parentNotificationsRoute, /Attendance Time In/);
 assert.match(parentNotificationsRoute, /Attendance Time Out/);
 assert.doesNotMatch(parentNotificationsRoute, /\.eq\("status", "Absent"\)/);
 
-console.log("Attendance notification initialization and RFID SMS dispatch checks passed.");
+console.log("Attendance notification settings, Email-only override, and queue delivery checks passed.");

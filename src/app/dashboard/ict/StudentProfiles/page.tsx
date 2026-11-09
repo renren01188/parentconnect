@@ -143,6 +143,21 @@ type AttendanceSmsJob = {
   retry_eligible_at: string | null;
 };
 
+type AttendanceEmailJob = {
+  id: string;
+  attendance_log_id: number;
+  attendance_date: string | null;
+  parent_name: string;
+  student_name: string;
+  status: string;
+  attempts: number;
+  provider: string | null;
+  provider_message_id: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 // ─── Constants ──────────────────────────────────────────────────
 const SUFFIXES = ["None", "Jr.", "Sr.", "II", "III", "IV"];
 const PER_PAGE = 8;
@@ -551,6 +566,11 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
   const [configuredSmsClassDayCount, setConfiguredSmsClassDayCount] = useState(0);
   const [smsQueueSearch, setSmsQueueSearch] = useState("");
   const [loadingSmsJobs, setLoadingSmsJobs] = useState(true);
+  const [emailJobs, setEmailJobs] = useState<AttendanceEmailJob[]>([]);
+  const [recentEmailClassDays, setRecentEmailClassDays] = useState<string[]>([]);
+  const [configuredEmailClassDayCount, setConfiguredEmailClassDayCount] = useState(0);
+  const [emailQueueSearch, setEmailQueueSearch] = useState("");
+  const [loadingEmailJobs, setLoadingEmailJobs] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -595,6 +615,24 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
 
   useEffect(() => { void loadSmsJobs(); }, [loadSmsJobs]);
 
+  const loadEmailJobs = useCallback(async () => {
+    setLoadingEmailJobs(true);
+    try {
+      const res = await fetch("/api/ict/attendance-email-jobs", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || "Could not load attendance email jobs.");
+      setEmailJobs(Array.isArray(data.jobs) ? data.jobs as AttendanceEmailJob[] : []);
+      setRecentEmailClassDays(Array.isArray(data.recentClassDays) ? data.recentClassDays.filter((date: unknown): date is string => typeof date === "string") : []);
+      setConfiguredEmailClassDayCount(Number.isInteger(data.configuredClassDayCount) ? data.configuredClassDayCount : 0);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load attendance email jobs.");
+    } finally {
+      setLoadingEmailJobs(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadEmailJobs(); }, [loadEmailJobs]);
+
   // Attendance settings are shared by all ICT sessions. Re-read the server
   // snapshot when another administrator saves settings or checks credits.
   useSessionInvalidation(({ scope }) => {
@@ -619,7 +657,15 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || "Could not save attendance notification settings.");
       applySettings(data.settings as AttendanceNotificationSettings);
-      setNotice("Attendance notification settings saved.");
+      void loadSmsJobs();
+      void loadEmailJobs();
+      if (typeof data.transitionWarning === "string" && data.transitionWarning) {
+        setNotice(`Attendance notification settings saved. ${data.transitionWarning}`);
+      } else if (Number(data.deliveryTransition?.skippedSms) > 0) {
+        setNotice(`Attendance notification settings saved. ${data.deliveryTransition.skippedSms} pending SMS notification${data.deliveryTransition.skippedSms === 1 ? " was" : "s were"} moved to the email queue when eligible.`);
+      } else {
+        setNotice("Attendance notification settings saved.");
+      }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not save attendance notification settings.");
     } finally {
@@ -652,7 +698,7 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
     && settings.smsCreditBalance <= parsedThreshold;
   const choices: Array<{ value: AttendanceNotificationDelivery; label: string; description: string }> = [
     { value: "sms", label: "SMS only", description: "Send an SMS to the eligible parent or guardian." },
-    { value: "email", label: "Email only", description: "Send an attendance email to the eligible parent or guardian." },
+    { value: "email", label: "Email only", description: "Email every eligible active Parent with an email address, regardless of their usual SMS choice. A Parent who chose Neither remains opted out." },
     { value: "both", label: "Both SMS and Email", description: "Send both channels for each RFID attendance event." },
     { value: "none", label: "Neither", description: "Record attendance normally without sending parent notifications." },
   ];
@@ -665,6 +711,14 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
     job.provider,
     job.provider_status,
   ].some((value) => String(value ?? "").toLowerCase().includes(smsQueueQuery)));
+  const emailQueueQuery = emailQueueSearch.trim().toLowerCase();
+  const visibleEmailJobs = emailJobs.filter((job) => !emailQueueQuery || [
+    job.parent_name,
+    job.student_name,
+    job.attendance_date,
+    job.status,
+    job.provider,
+  ].some((value) => String(value ?? "").toLowerCase().includes(emailQueueQuery)));
 
   const smsJobPresentation = (job: AttendanceSmsJob) => {
     const status = String(job.status || "").toLowerCase();
@@ -681,6 +735,16 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
     if (status === "failed") return { label: "Failed", detail: "The SMS could not be sent.", tone: "border-red-200 bg-red-50" };
     if (status === "skipped") return { label: "Not sent", detail: "Attendance SMS notifications were disabled or no eligible recipient was available.", tone: "border-gray-200 bg-gray-50" };
     return { label: status.replace(/_/g, " ") || "Unknown", detail: "SMS status is unavailable.", tone: "border-gray-200 bg-gray-50" };
+  };
+
+  const emailJobPresentation = (job: AttendanceEmailJob) => {
+    const status = String(job.status || "").toLowerCase();
+    if (status === "sent") return { label: "Sent", detail: "Accepted by the email provider.", tone: "border-emerald-200 bg-emerald-50" };
+    if (status === "processing") return { label: "Sending", detail: "Sending through the email provider.", tone: "border-blue-200 bg-blue-50" };
+    if (status === "pending") return { label: "Pending", detail: "Waiting for the attendance email worker.", tone: "border-gray-200 bg-gray-50" };
+    if (status === "failed") return { label: "Failed", detail: "The attendance email could not be sent.", tone: "border-red-200 bg-red-50" };
+    if (status === "skipped") return { label: "Not sent", detail: "Email delivery was disabled or no eligible Parent email was available.", tone: "border-gray-200 bg-gray-50" };
+    return { label: status.replace(/_/g, " ") || "Unknown", detail: "Email delivery status is unavailable.", tone: "border-gray-200 bg-gray-50" };
   };
 
   return (
@@ -713,6 +777,22 @@ function AttendanceNotificationSettingsModal({ onClose }: { onClose: () => void 
               </div>
               {loadingSmsJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : visibleSmsJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">{smsQueueQuery ? "No SMS notifications match your search." : "No attendance SMS notifications were queued for these recent class days."}</p> : <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">{visibleSmsJobs.map(job => {
                 const presentation = smsJobPresentation(job);
+                return <div key={job.id} className={`rounded-lg border p-3 ${presentation.tone}`}>
+                  <div className="min-w-0"><p className="truncate text-xs font-bold text-gray-800">{job.parent_name}</p><p className="mt-0.5 truncate text-[11px] font-medium text-gray-600">{job.student_name}</p><p className="mt-2 text-[11px] font-semibold text-gray-700">{presentation.label}{job.attendance_date ? ` · ${formatSchoolDate(job.attendance_date)}` : ""}</p><p className="mt-1 text-[11px] leading-4 text-gray-600">{presentation.detail} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
+                </div>;
+              })}</div>}
+            </section>
+            <section className="rounded-xl border border-gray-200 bg-white p-4" aria-label="Attendance email delivery queue">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div><p className="text-sm font-bold text-gray-800">Email delivery queue</p><p className="mt-1 text-xs leading-5 text-gray-500">Email jobs are processed after RFID attendance and by the scheduled delivery worker. Sent means the email provider accepted the request; provider delivery cannot be inferred from that acceptance alone.</p></div>
+                <button type="button" onClick={() => { void loadEmailJobs(); }} disabled={loadingEmailJobs} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13] bg-white px-3 py-2 text-xs font-bold text-[#274e13] transition hover:bg-[#274e13]/5 disabled:opacity-60"><RefreshCw className={`h-3.5 w-3.5 ${loadingEmailJobs ? "animate-spin" : ""}`} />{loadingEmailJobs ? "Refreshing…" : "Refresh queue"}</button>
+              </div>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-[11px] text-gray-500">{recentEmailClassDays.length > 0 ? `Showing notifications for the most recent ${recentEmailClassDays.length} configured class day${recentEmailClassDays.length === 1 ? "" : "s"}.` : configuredEmailClassDayCount > 0 ? "No scheduled class days are available in the active school-year window." : "Configure class days in Edit School Year to view the email queue."}</p>
+                <label className="relative block sm:w-56"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" /><span className="sr-only">Search email delivery queue</span><input value={emailQueueSearch} onChange={event => setEmailQueueSearch(event.target.value)} placeholder="Search parent or student" className="min-h-10 w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-xs text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-[#274e13] focus:ring-2 focus:ring-[#274e13]/20" /></label>
+              </div>
+              {loadingEmailJobs ? <div className="mt-4 flex items-center gap-2 text-xs text-gray-500"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-[#274e13]" />Loading queue…</div> : visibleEmailJobs.length === 0 ? <p className="mt-4 text-xs text-gray-500">{emailQueueQuery ? "No email notifications match your search." : "No attendance email notifications were queued for these recent class days."}</p> : <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">{visibleEmailJobs.map(job => {
+                const presentation = emailJobPresentation(job);
                 return <div key={job.id} className={`rounded-lg border p-3 ${presentation.tone}`}>
                   <div className="min-w-0"><p className="truncate text-xs font-bold text-gray-800">{job.parent_name}</p><p className="mt-0.5 truncate text-[11px] font-medium text-gray-600">{job.student_name}</p><p className="mt-2 text-[11px] font-semibold text-gray-700">{presentation.label}{job.attendance_date ? ` · ${formatSchoolDate(job.attendance_date)}` : ""}</p><p className="mt-1 text-[11px] leading-4 text-gray-600">{presentation.detail} · Attempts: {job.attempts}</p>{job.last_error && <p className="mt-1 text-[11px] leading-4 text-gray-600">{job.last_error}</p>}</div>
                 </div>;
