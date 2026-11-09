@@ -145,7 +145,9 @@ ICT staff-profile approvals are served by `/api/ict/approvals`. Adviser and
 Guidance request tables have independent IDs, so the User Management modal
 uses a compound `role:id` selection key and sends both values to the API. A
 successful response is required before the selected row changes status; the
-other request rows remain pending.
+other request rows remain pending. The ICT sidebar uses the same protected API
+to show the current Pending count beside User Management and refreshes it from
+the existing ICT audit/account invalidations and visibility recovery path.
 
 ## Development and verification
 

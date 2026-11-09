@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const userManagement = read("src/app/dashboard/ict/user-management/page.tsx");
+const ictSidebar = read("src/app/dashboard/ict/components/Sidebar.tsx");
 const approvalsRoute = read("src/app/api/ict/approvals/route.ts");
 
 // Adviser and Guidance request tables have independent identity sequences. A
@@ -20,6 +21,24 @@ assert.match(userManagement, /body: JSON\.stringify\(\{ id: req\.id, action: "ap
 assert.match(userManagement, /setApprovals\(prev => prev\.map\(a => approvalKey\(a\) === approvalKey\(req\)/);
 assert.match(userManagement, /if \(!response\.ok \|\| !result\?\.success\)[\s\S]*?return false/);
 assert.match(userManagement, /The request was not updated\. It remains pending\./);
+
+// The count shown on both Approval entry points is always the saved current
+// number of pending requests; opening the panel must not hide or subtract it.
+assert.match(userManagement, /const pendingApprovalCount = approvals\.filter\(a => a\.status === "Pending"\)\.length/);
+assert.match(userManagement, /badge: pendingApprovalCount/);
+assert.match(userManagement, /\{pendingApprovalCount > 0 && <span[^>]*>\{pendingApprovalCount\}<\/span>\}/);
+assert.doesNotMatch(userManagement, /dismissedApprovalBadgeCount|visibleApprovalBadgeCount/);
+
+// The dashboard-wide ICT sidebar reads the same protected approval endpoint
+// and displays the real pending count next to User Management. It refreshes
+// after profile-request audit events, account updates, reconnects, and when
+// the tab becomes visible.
+assert.match(ictSidebar, /fetch\("\/api\/ict\/approvals", \{ cache: "no-store" \}\)/);
+assert.match(ictSidebar, /const \[pendingApprovalCount, setPendingApprovalCount\] = useState\(0\)/);
+assert.match(ictSidebar, /approval\.status === "Pending"/);
+assert.match(ictSidebar, /useVisibleRefresh\(refreshPendingApprovalCount\)/);
+assert.match(ictSidebar, /scope === "audit" \|\| scope === "accounts" \|\| !scope/);
+assert.match(ictSidebar, /href === dashboardPath\("ict", "\/user-management"\)[\s\S]*?\? pendingApprovalCount/);
 
 // The route must require an explicit role and update only the request in that
 // role's table. Both update paths also verify an affected pending row.

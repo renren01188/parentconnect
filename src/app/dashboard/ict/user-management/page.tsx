@@ -2350,7 +2350,6 @@ export default function UserManagementPage() {
     counts: { total: 0, alreadyLinked: 0, notRegistered: 0 },
   });
   const [showApprovals, setShowApprovals] = useState(false);
-  const [dismissedApprovalBadgeCount, setDismissedApprovalBadgeCount] = useState(0);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [previewUser, setPreviewUser] = useState<UserRow | null>(null);
   const [scheduledDeletions, setScheduledDeletions] = useState<ScheduledDeletion[]>([]);
@@ -2447,18 +2446,7 @@ export default function UserManagementPage() {
     }
   });
   const pendingApprovalCount = approvals.filter(a => a.status === "Pending").length;
-
-  // Opening approvals acknowledges its number only. The pending rows retain
-  // their saved state until ICT explicitly approves or rejects them.
-  useEffect(() => {
-    if (pendingApprovalCount < dismissedApprovalBadgeCount) {
-      setDismissedApprovalBadgeCount(0);
-    }
-  }, [dismissedApprovalBadgeCount, pendingApprovalCount]);
-
-  const visibleApprovalBadgeCount = Math.max(0, pendingApprovalCount - dismissedApprovalBadgeCount);
   const openApprovals = () => {
-    if (pendingApprovalCount > 0) setDismissedApprovalBadgeCount(pendingApprovalCount);
     setShowApprovals(true);
   };
 
@@ -2583,7 +2571,7 @@ export default function UserManagementPage() {
           <button onClick={() => setShowBulkDeletion(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
           <button onClick={openApprovals} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
             <FileCheck className="w-4 h-4" /> Approvals
-            {visibleApprovalBadgeCount > 0 && <span className="ml-0.5 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full text-white bg-amber-500">{visibleApprovalBadgeCount}</span>}
+            {pendingApprovalCount > 0 && <span className="ml-0.5 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full text-white bg-amber-500">{pendingApprovalCount}</span>}
           </button>
         </div>
       </div>
@@ -2648,8 +2636,8 @@ export default function UserManagementPage() {
               <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                 <span className="text-xs font-bold text-gray-400 shrink-0">Filter by:</span>
                 <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible">
-                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }, { value: "approval", label: "Pending Approval", badge: visibleApprovalBadgeCount }] as { value: string; label: string; badge?: number }[]).map(({ value, label, badge }) => (
-                    <button key={value} onClick={() => { if (value === "approval" && pendingApprovalCount > 0) setDismissedApprovalBadgeCount(pendingApprovalCount); setFilterMode(value as typeof filterMode); setPage(1); }}
+                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }, { value: "approval", label: "Pending Approval", badge: pendingApprovalCount }] as { value: string; label: string; badge?: number }[]).map(({ value, label, badge }) => (
+                    <button key={value} onClick={() => { setFilterMode(value as typeof filterMode); setPage(1); }}
                       className="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition sm:py-1.5"
                       style={{ background: filterMode === value ? (value === "approval" ? "#fffbeb" : PRIMARY) : "white", color: filterMode === value ? (value === "approval" ? "#d97706" : "white") : "#6b7280", borderColor: filterMode === value ? (value === "approval" ? "#fde68a" : PRIMARY) : "#e5e7eb" }}>
                       {value === "approval" && <Bell className="w-3 h-3" />}{label}

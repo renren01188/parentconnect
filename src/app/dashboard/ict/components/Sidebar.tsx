@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, GraduationCap, ClipboardList, Inbox, Menu, Monitor, Megaphone, X,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
 import { useNotifications } from "@/app/dashboard/ict/context/NotificationContext";
 import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
+import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { dashboardPath } from "@/lib/routeAliases";
 
 const mainNav = [
@@ -27,6 +29,11 @@ type IctSummary = {
   profilePicture?: string;
 };
 
+type ApprovalCountResponse = {
+  success?: boolean;
+  approvals?: Array<{ status?: string | null }>;
+};
+
 function getInitials(user: IctSummary | null) {
   if (!user) return "IA";
   const names = [user.firstName, user.lastName].filter(Boolean);
@@ -43,6 +50,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { inboxUnreadCount, annUnreadCount } = useNotifications();
   const [ictUser, setIctUser] = useState<IctSummary | null>(null);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [guideTarget, setGuideTarget] = useState<string | null>(null);
   const { dismissBadge, visibleBadgeCount } = useSidebarBadgeDismissal({
@@ -50,6 +58,34 @@ export default function Sidebar() {
     announcements: annUnreadCount,
   });
   const acknowledgedBadgePathRef = useRef<string | null>(null);
+  const approvalCountRequestRef = useRef(0);
+
+  const refreshPendingApprovalCount = useCallback(async () => {
+    const requestVersion = ++approvalCountRequestRef.current;
+    try {
+      const response = await fetch("/api/ict/approvals", { cache: "no-store" });
+      const data = await response.json().catch(() => null) as ApprovalCountResponse | null;
+      if (!response.ok || !data?.success || requestVersion !== approvalCountRequestRef.current) return;
+      setPendingApprovalCount(
+        (data.approvals ?? []).filter((approval) => approval.status === "Pending").length,
+      );
+    } catch {
+      // Preserve the last server-confirmed count during a temporary failure.
+    }
+  }, []);
+
+  useVisibleRefresh(refreshPendingApprovalCount);
+  useSessionInvalidation(({ scope }) => {
+    // New profile requests are audit events; approvals update account records.
+    // A reconnect has no scope and must reconcile the count as well.
+    if (scope === "audit" || scope === "accounts" || !scope) {
+      return refreshPendingApprovalCount();
+    }
+  });
+
+  useEffect(() => {
+    void refreshPendingApprovalCount();
+  }, [refreshPendingApprovalCount]);
 
   useEffect(() => {
     const active = mainNav.find(({ href }) => href === dashboardPath("ict") ? pathname === href : pathname.startsWith(href));
@@ -125,7 +161,10 @@ export default function Sidebar() {
           {mainNav.map(({ label, href, icon: Icon }) => {
             const active = isActive(href);
             const badgeKey = href === dashboardPath("ict", "/inbox") ? "inbox" : href === dashboardPath("ict", "/Announcements") ? "announcements" : undefined;
-            return <Link key={href} href={href} onClick={() => { dismissBadge(badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={visibleBadgeCount(badgeKey)} /></Link>;
+            const badgeCount = href === dashboardPath("ict", "/user-management")
+              ? pendingApprovalCount
+              : visibleBadgeCount(badgeKey);
+            return <Link key={href} href={href} onClick={() => { dismissBadge(badgeKey); closeMenu(); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${active ? "bg-white/18 text-white shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}><Icon className="h-4 w-4 shrink-0" /><span className="flex-1 truncate">{label}</span><Badge count={badgeCount} /></Link>;
           })}
         </nav>
 

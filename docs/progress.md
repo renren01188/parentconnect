@@ -67,7 +67,11 @@ unless a named check has been run and recorded below.
   both role and request ID. Adviser and Guidance request tables can each have
   the same numeric ID; approving one no longer changes the other row in the
   modal. The API requires a valid role and ID, and the UI leaves a request
-  pending when the API does not confirm its update.
+  pending when the API does not confirm its update. The Approvals button and
+  Pending Approval filter now always show the real number of currently pending
+  requests; opening either view does not hide the count. The ICT sidebar shows
+  that same count beside User Management and refreshes from the protected
+  approval endpoint after the existing relevant realtime events.
 - **Affected files:** `src/app/dashboard/ict/user-management/page.tsx`,
   `src/app/api/ict/approvals/route.ts`, `scripts/test-ict-approval-selection.cjs`,
   and `package.json`.
