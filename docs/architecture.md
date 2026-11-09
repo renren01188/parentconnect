@@ -77,11 +77,11 @@ by `attendanceSmsWorker.ts`, and exposed to ICT through
 Parent/Adviser report operations are centered on
 `/api/reports/parent-adviser` and its `_lib.ts`; Guidance and Principal status
 routes live beneath `/api/reports/guidance` and `/api/reports/principal`.
-Report payloads resolve a current Student Profile name by LRN at read time,
-falling back to the stored report-name snapshot only when that student record
-is unavailable. This keeps corrected student names consistent in existing
-Parent, Adviser, Guidance, and Principal report views without rewriting report
-history.
+Report payloads and the Guidance dashboard queue resolve a current Student
+Profile name by LRN at read time, falling back to the stored report-name
+snapshot only when that student record is unavailable. This keeps corrected
+student names consistent in existing Parent, Adviser, Guidance, and Principal
+report views without rewriting report history.
 Realtime report updates use `realtimeInvalidation.ts` and report-message hooks.
 Standalone staff messages use `/api/reports/staff-messages`; Adviser and
 Principal message paths also have dedicated report routes. Keep standalone
@@ -94,6 +94,10 @@ Guidance/Principal detail payloads only after their existing escalation access
 rules permit those roles to read the report. The Parent mapper, Parent report
 UI, Parent notification feed, and Parent-facing submission email redact that
 identity and use generic Subject Teacher/School staff wording.
+The public Subject Teacher submission route always creates the Adviser report
+after the student and Adviser are verified. A link to an eligible Parent is
+retained when one exists, but a Parent email is optional; absent or
+pre-signup Parent records never block the Adviser-only submission.
 
 ### Notifications and announcements
 

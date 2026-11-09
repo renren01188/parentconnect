@@ -95,6 +95,20 @@ unless a named check has been run and recorded below.
   Browser verification with a renamed student and a pre-existing report is
   still **unverified**.
 
+### Current student names in the Guidance dashboard queue
+
+- **Complete in source:** `/api/guidance/dashboard` now uses the same current
+  Student Profile name overlay as the report workspaces. Its Escalated Concerns
+  table no longer displays a stale submission-time name after a student record
+  is corrected; the stored report name remains the fallback for a missing
+  historical student record.
+- **Affected files:** `src/app/api/guidance/dashboard/route.ts` and
+  `scripts/test-report-current-student-name.cjs`.
+- **Verified:** `npm.cmd run test:report-current-student-name`,
+  `npm.cmd run test:guidance-ticket-dashboard-status`, and
+  `npx.cmd tsc --noEmit` passed on 2026-11-09. Browser verification with a
+  renamed student remains **unverified**.
+
 ### Subject Teacher reporter visibility
 
 - **Complete in source:** a Subject Teacher report keeps the reporter's name
@@ -112,6 +126,23 @@ unless a named check has been run and recorded below.
   Browser-role verification remains **unverified**. The older
   `test:subject-teacher-report-security` is independently blocked because it
   references a missing legacy migration file.
+
+### Subject Teacher submission without a Parent account
+
+- **Complete in source:** `/api/subject-teacher-reports` now always routes a
+  verified, matched student's report to the assigned Adviser even if no
+  eligible Parent account exists. A linked Parent without email remains linked
+  for in-app access, while Parent email delivery is skipped. The public
+  success view now reports the actual notification outcome.
+- **Affected files:** the Subject Teacher public page and submission route,
+  `scripts/test-subject-teacher-report-parent-availability.cjs`, and
+  `package.json`.
+- **Verified:** `npm.cmd run test:subject-teacher-report-parent-availability`,
+  `npm.cmd run test:subject-teacher-reporter-privacy`, and
+  `npx.cmd tsc --noEmit` passed on 2026-11-09. Live submission with no Parent,
+  SMS-only Parent, and emailed Parent remains **unverified**. The existing
+  category check remains independently blocked by a missing legacy migration
+  source file.
 
 ### Send a Concern modal placement
 

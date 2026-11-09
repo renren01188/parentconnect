@@ -69,6 +69,7 @@
     "test:guidance-ticket-read-state": "node scripts/test-guidance-ticket-read-state.cjs",
     "test:student-report-submission": "node scripts/test-student-report-submission.cjs",
     "test:subject-teacher-report-security": "node scripts/test-subject-teacher-report-security.cjs",
+    "test:subject-teacher-report-parent-availability": "node scripts/test-subject-teacher-report-parent-availability.cjs",
     "test:subject-teacher-reporter-privacy": "node scripts/test-subject-teacher-reporter-privacy.cjs",
     "test:subject-teacher-report-categories": "node scripts/test-subject-teacher-report-categories.cjs",
     "test:student-concern-parent-reports": "node scripts/test-student-concern-parent-reports.cjs",

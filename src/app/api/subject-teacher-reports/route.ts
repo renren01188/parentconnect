@@ -103,17 +103,24 @@ export async function POST(req: NextRequest) {
 
     type Parent = { id: number; email: string | null; parent_first_name: string | null; parent_middle_name: string | null; parent_last_name: string | null; parent_suffix: string | null; status: string | null; archive_status: string | null };
     const parents = (parentLinks ?? []).map((link) => link.parents as unknown as Parent);
+    // A Subject Teacher report is first and foremost an Adviser workflow. A
+    // Parent account is optional at submission time: a linked SMS-only Parent
+    // can still receive the in-app report, while an unlinked/pre-signup
+    // student must not prevent the Adviser from receiving the concern.
     const parent = parents.find(parentAccountCanAccess);
-    if (!parent?.email) return NextResponse.json({ success: false, message: "The matched student does not have an available parent account." }, { status: 409 });
+    const parentId = parent?.id ?? null;
+    const parentEmail = trimmed(parent?.email);
 
     const teacherName = [teacherFirstName, teacherMiddleName, teacherLastName, teacherSuffix].filter(Boolean).join(" ");
     const studentName = fullName(student).toUpperCase();
-    const parentName = fullName({
-      first_name: parent.parent_first_name,
-      middle_name: parent.parent_middle_name,
-      last_name: parent.parent_last_name,
-      suffix: parent.parent_suffix,
-    }) || "Parent / Guardian";
+    const parentName = parent
+      ? fullName({
+        first_name: parent.parent_first_name,
+        middle_name: parent.parent_middle_name,
+        last_name: parent.parent_last_name,
+        suffix: parent.parent_suffix,
+      }) || "Parent / Guardian"
+      : "No Parent / Guardian account linked";
     const adviserName = fullName(adviser) || "Class Adviser";
     const now = new Date().toISOString();
     const reportDay = manilaDate();
@@ -148,8 +155,11 @@ export async function POST(req: NextRequest) {
     }
 
     const { data: report, error: reportError } = await supabase.rpc("submit_subject_teacher_report", {
-      p_parent_id: parent.id,
-      p_parent_email: parent.email,
+      p_parent_id: parentId,
+      // `parent_email` is a legacy non-null report column. An empty value
+      // intentionally means this report has no email-deliverable Parent; it
+      // is never used as a Parent-account lookup key.
+      p_parent_email: parentEmail,
       p_parent_name: parentName,
       p_adviser_id: adviser.id,
       p_adviser_name: adviserName,
@@ -179,15 +189,15 @@ export async function POST(req: NextRequest) {
     // inboxes as a parent-submitted concern. Broadcast only an opaque refresh
     // after the RPC commits, so no participant needs to reload manually.
     await publishReportRealtimeInvalidation({
-      parentId: parent.id,
+      parentId,
       adviserId: adviser.id,
       reportId: Number((report as { id?: number } | null)?.id),
       kind: "status",
     });
 
     const emailResults = await Promise.allSettled([
-      sendSubjectTeacherReportNotificationEmail({
-        recipientEmail: parent.email,
+      parentEmail ? sendSubjectTeacherReportNotificationEmail({
+        recipientEmail: parentEmail,
         recipientName: parentName,
         recipientRole: "Parent / Guardian",
         teacherName,
@@ -197,7 +207,7 @@ export async function POST(req: NextRequest) {
         section: student.section,
         concern,
         revealReporter: false,
-      }),
+      }) : Promise.resolve(),
       adviser.email ? sendSubjectTeacherReportNotificationEmail({
         recipientEmail: adviser.email,
         recipientName: adviserName,
@@ -226,7 +236,12 @@ export async function POST(req: NextRequest) {
       browser: req.headers.get("user-agent") ?? undefined,
     });
 
-    const response = NextResponse.json({ success: true, message: "Report submitted successfully." }, { status: 201 });
+    const message = parentId
+      ? parentEmail
+        ? "Report submitted successfully. The assigned class adviser and linked Parent have been notified."
+        : "Report submitted successfully. The assigned class adviser has been notified. Parent email notification was skipped because no email address is available."
+      : "Report submitted successfully. The assigned class adviser has been notified. No Parent account is linked to this student yet.";
+    const response = NextResponse.json({ success: true, message }, { status: 201 });
     response.cookies.delete(SUBJECT_TEACHER_REPORT_COOKIE);
     return response;
   } catch (error: unknown) {

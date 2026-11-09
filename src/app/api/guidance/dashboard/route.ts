@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
+import { getGuidanceSession, withCurrentStudentNames } from "@/app/api/reports/parent-adviser/_lib";
 
 type GuidanceReportRow = {
   id: number;
@@ -55,7 +55,10 @@ export async function GET() {
       .order("last_message_at", { ascending: false });
     if (reportsError) throw reportsError;
 
-    const reports = (allReports ?? []) as GuidanceReportRow[];
+    // The report row retains the submission-time student name as history.
+    // The Guidance dashboard is a current-work view, so display the live
+    // Student Profile name whenever that learner still exists.
+    const reports = await withCurrentStudentNames((allReports ?? []) as GuidanceReportRow[]);
     const reportIds = reports.map((report) => report.id);
     const { data: acceptedTicketRows, error: acceptedTicketsError } = reportIds.length
       ? await supabase

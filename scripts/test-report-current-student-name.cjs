@@ -9,6 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const reportMapper = read("src/app/api/reports/parent-adviser/_lib.ts");
 const reportsRoute = read("src/app/api/reports/parent-adviser/route.ts");
 const guidanceTicketsRoute = read("src/app/api/reports/guidance/tickets/route.ts");
+const guidanceDashboardRoute = read("src/app/api/guidance/dashboard/route.ts");
 
 // Existing reports retain their stored name only as a fallback. The current
 // Student Profile row is the display source for every normal report read.
@@ -26,6 +27,11 @@ assert.equal((reportsRoute.match(/resolveCurrentReportIdentities\(/g) ?? []).len
 // Guidance's separate ticket list uses the same display source.
 assert.match(guidanceTicketsRoute, /withCurrentStudentNames/);
 assert.match(guidanceTicketsRoute, /const currentStudentReports = await withCurrentStudentNames\(reports \?\? \[\]\)/);
+
+// The Guidance landing dashboard has its own lightweight report query. It
+// must use the same display overlay instead of a stale submission-time name.
+assert.match(guidanceDashboardRoute, /withCurrentStudentNames/);
+assert.match(guidanceDashboardRoute, /const reports = await withCurrentStudentNames\(\(allReports \?\? \[\]\) as GuidanceReportRow\[\]\)/);
 
 for (const route of [
   "src/app/api/reports/parent-adviser/[id]/status/route.ts",
