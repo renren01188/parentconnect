@@ -15,9 +15,10 @@ unless a named check has been run and recorded below.
 
 ### Public header school branding
 
-- **Complete:** removed the top-left Santiago Elementary School seal and name
-  from the landing hero and the shared login header used by all user roles.
-  The lower institutional logos and the public navigation remain unchanged.
+- **Complete:** removed the top-left Santiago Elementary School seal from the
+  landing hero and the shared login header used by all user roles while
+  retaining the school-name text. The lower institutional logos and the public
+  navigation remain unchanged.
   The landing, all login journeys, About, and Contact now use the same local
   school-banner image.
 - **Affected files:** `src/components/HeroSection.tsx`,
