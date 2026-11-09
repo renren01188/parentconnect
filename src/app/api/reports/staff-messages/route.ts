@@ -5,6 +5,11 @@ import { getIctFromToken } from "@/lib/getIctFromToken";
 import { sendStaffMessageEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import {
+  findParentMessageRecipient,
+  listParentMessageRecipients,
+  parentHasCompletedSignup,
+} from "@/lib/parentMessageRecipients";
+import {
   getGuidanceSession,
   getParentSession,
   getPrincipalSession,
@@ -42,10 +47,6 @@ function isTransientConnectionError(error: unknown) {
 }
 function fullName(parts: Array<string | null | undefined>) {
   return parts.filter(Boolean).join(" ").trim();
-}
-
-function displayParentName(studentName: string) {
-  return `${studentName}'s Parent`;
 }
 
 function formatDate(value: string) {
@@ -196,68 +197,12 @@ async function staffRecipients(current: NonNullable<Awaited<ReturnType<typeof cu
   return Array.from(new Map(recipients.map((recipient) => [recipient.id, recipient])).values());
 }
 
-function toParentRecipient(parent: Record<string, unknown>) {
-  const studentRaw = parent.students;
-  const student = Array.isArray(studentRaw) ? studentRaw[0] : studentRaw;
-  const row = student && typeof student === "object" ? student as Record<string, unknown> : {};
-  const studentName = fullName([row.first_name as string, row.middle_name as string | null, row.last_name as string, row.suffix as string | null]);
-  const actualParentName = fullName([
-    parent.parent_first_name as string | null,
-    parent.parent_middle_name as string | null,
-    parent.parent_last_name as string | null,
-    parent.parent_suffix as string | null,
-  ]);
-  const studentId = String(row.student_id ?? parent.student_id ?? "");
-
-  return {
-    id: `parent:${parent.id}:${studentId}`,
-    type: "parent" as const,
-    parentId: Number(parent.id),
-    parentEmail: String(parent.email ?? ""),
-    name: actualParentName || (studentName ? displayParentName(studentName) : "Registered Parent"),
-    actualParentName: actualParentName || "Registered Parent",
-    studentId,
-    student: studentName || studentId || "No linked student",
-    gradeLevel: String(row.grade ?? "").trim() || "No grade level",
-    section: String(row.section ?? "").trim() || "No section",
-  };
-}
-
 async function parentRecipients() {
-  const { data, error } = await supabase
-    .from("parents")
-    .select(`
-      id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
-    `)
-    .eq("archive_status", "active")
-    .eq("students.archive_status", "active")
-    .order("parent_last_name", { ascending: true });
-  if (error) throw error;
-
-  return ((data ?? []) as Array<Record<string, unknown>>)
-    .map(toParentRecipient)
-    .filter((parent) => parent.parentEmail && parent.studentId);
+  return listParentMessageRecipients();
 }
 
 async function findParentRecipient(parentId: number, studentId: string) {
-  const { data, error } = await supabase
-    .from("parents")
-    .select(`
-      id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
-    `)
-    .eq("id", parentId)
-    .eq("student_id", studentId)
-    .eq("archive_status", "active")
-    .eq("students.archive_status", "active")
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
-
-  const recipient = toParentRecipient(data as Record<string, unknown>);
-  return recipient.parentEmail && recipient.studentId ? recipient : null;
+  return findParentMessageRecipient(parentId, studentId);
 }
 
 async function adviserMayMessageParent(parentId: number, studentId: string) {
@@ -267,19 +212,12 @@ async function adviserMayMessageParent(parentId: number, studentId: string) {
     ? adviser.sections
     : adviser.section ? [adviser.section] : [];
   if (!adviser.grade || sections.length === 0) return false;
-  const { data, error } = await supabase
-    .from("parents")
-    .select("id, students!inner ( student_id, grade, section, archive_status )")
-    .eq("id", parentId)
-    .eq("archive_status", "active")
-    .eq("students.student_id", studentId)
-    .eq("students.archive_status", "active")
-    .eq("students.grade", adviser.grade)
-    .in("students.section", sections)
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return Boolean(data);
+  const recipient = await findParentMessageRecipient(parentId, studentId);
+  return Boolean(
+    recipient &&
+    recipient.gradeLevel === adviser.grade &&
+    sections.includes(recipient.section),
+  );
 }
 
 /**
@@ -291,7 +229,7 @@ async function participantCanReceiveStaffMessage(type: ParticipantRole, id: numb
   if (!Number.isSafeInteger(id) || id <= 0) return false;
 
   const query = type === "parent"
-    ? supabase.from("parents").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
+    ? supabase.from("parents").select("id, status, archive_status, password_set").eq("id", id)
     : type === "adviser"
       ? supabase.from("advisers").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
       : type === "guidance"
@@ -301,7 +239,10 @@ async function participantCanReceiveStaffMessage(type: ParticipantRole, id: numb
           : supabase.from("ict_admins").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active");
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  return Boolean(data);
+  if (!data) return false;
+  return type === "parent"
+    ? parentHasCompletedSignup(data as unknown as { status?: string | null; archive_status?: string | null; password_set?: boolean | number | null })
+    : true;
 }
 
 function roleLabel(type: string) {
@@ -405,9 +346,12 @@ export async function GET(req: NextRequest) {
 
     const [recipients, parents, messagesResult] = await Promise.all([
       staffRecipients(current),
-      // Adviser and Principal recipient pickers retain their scoped legacy
-      // queries.  Do not return the school-wide parent directory to them.
-      current.type === "guidance" ? parentRecipients() : Promise.resolve([]),
+      // Adviser has its own section-scoped endpoint. Guidance and Principal
+      // both need the complete school directory; the client filters it by
+      // grade/section without collapsing siblings into a single Parent row.
+      current.type === "guidance" || current.type === "principal"
+        ? parentRecipients()
+        : Promise.resolve([]),
       supabase
         .from("staff_messages")
         .select("*")
@@ -517,6 +461,12 @@ export async function POST(req: NextRequest) {
       // directory before every send made the send path slower than the write.
       const recipient = await findParentRecipient(parentId, studentId);
       if (!recipient) return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
+      if (!recipient.canReceive) {
+        return NextResponse.json(
+          { success: false, message: "This Parent account is not active. The Parent must complete Guardian signup before receiving messages." },
+          { status: 409 },
+        );
+      }
       if (current.type === "adviser" && !await adviserMayMessageParent(recipient.parentId, recipient.studentId)) {
         // Do not reveal whether an out-of-class parent exists.
         return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });

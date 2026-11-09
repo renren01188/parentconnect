@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const staffRoute = read("src/app/api/reports/staff-messages/route.ts");
 const adviserMessagesRoute = read("src/app/api/reports/adviser-messages/route.ts");
+const parentMessageRecipients = read("src/lib/parentMessageRecipients.ts");
 const typingHook = read("src/hooks/useStaffConversationTyping.ts");
 const realtimeHook = read("src/hooks/useReportMessagesRealtime.ts");
 const adviserContext = read("src/app/dashboard/adviser/context/NotificationContext.tsx");
@@ -27,13 +28,20 @@ assert.match(staffRoute, /recipient_type: recipientType/);
 
 // Archived accounts retain historical conversations but must not appear in a
 // New Message picker or receive a new direct message through an old thread.
-assert.match(staffRoute, /function parentRecipients\(\)[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
-assert.match(staffRoute, /function findParentRecipient[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
-assert.match(staffRoute, /function adviserMayMessageParent[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+// The shared resolver uses parent_student_links for all siblings and falls
+// back to the legacy parents.student_id only for old records.
+assert.match(parentMessageRecipients, /from\("parent_student_links"\)/);
+assert.match(parentMessageRecipients, /\.eq\("archive_status", "active"\)/);
+assert.match(parentMessageRecipients, /parentHasCompletedSignup[\s\S]*?password_set/);
+assert.match(parentMessageRecipients, /isLegacyDirectLink/);
+assert.match(staffRoute, /function parentRecipients\(\)[\s\S]*?listParentMessageRecipients\(\)/);
+assert.match(staffRoute, /function findParentRecipient[\s\S]*?findParentMessageRecipient/);
+assert.match(staffRoute, /function adviserMayMessageParent[\s\S]*?findParentMessageRecipient/);
+assert.match(staffRoute, /recipient\.canReceive/);
 assert.match(staffRoute, /function participantCanReceiveStaffMessage[\s\S]*?type === "parent"[\s\S]*?type === "adviser"[\s\S]*?type === "guidance"[\s\S]*?type === "principal"/);
 assert.match(staffRoute, /This recipient is no longer available\./);
-assert.match(adviserMessagesRoute, /from\("parents"\)[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)[\s\S]*?\.eq\("students\.grade", adviser\.grade\)/);
-assert.match(adviserMessagesRoute, /async function createParentReport[\s\S]*?\.eq\("archive_status", "active"\)[\s\S]*?\.eq\("students\.archive_status", "active"\)/);
+assert.match(adviserMessagesRoute, /listParentMessageRecipients\(\)[\s\S]*?parent\.grade === adviser\.grade/);
+assert.match(adviserMessagesRoute, /async function createParentReport[\s\S]*?findParentMessageRecipient[\s\S]*?recipient\.canReceive/);
 assert.match(adviserMessagesRoute, /async function createPrincipalMessage[\s\S]*?\.eq\("status", "active"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 
 // Direct threads retain inbox state rather than report workflow state.

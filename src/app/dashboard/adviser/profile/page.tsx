@@ -9,6 +9,7 @@ import {
     Settings, X, Lock, ChevronRight, ArrowLeft, Pencil, ChevronDown,
 } from "lucide-react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 
 function checkPassword(pw: string) {
     return {
@@ -52,7 +53,7 @@ interface AdviserProfile {
     } | null;
 }
 // ─── Auth Gate ────────────────────────────────────────────────────────────────
-function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; onCancel: () => void }) {
+function AuthGate({ onConfirm, onCancel, onDraftChange }: { onConfirm: (pw: string) => void; onCancel: () => void; onDraftChange: (hasDraft: boolean) => void }) {
     const [pw, setPw] = useState("");
     const [show, setShow] = useState(false);
     const [err, setErr] = useState("");
@@ -88,7 +89,7 @@ function AuthGate({ onConfirm, onCancel }: { onConfirm: (pw: string) => void; on
                     <input
                         type={show ? "text" : "password"}
                         value={pw}
-                        onChange={e => { setPw(e.target.value); setErr(""); }}
+                        onChange={e => { setPw(e.target.value); setErr(""); onDraftChange(Boolean(e.target.value)); }}
                         onKeyDown={e => e.key === "Enter" && handleSubmit()}
                         placeholder="Current password"
                         autoFocus
@@ -129,7 +130,7 @@ function SettingsModal({
     onClose: () => void;
     onProfileUpdated: () => void;
 }) {
-    const [view, setView] = useState<SettingsView>("menu");
+    const [view, setView] = useState<SettingsView>("personal-info");
     const [verifiedPw, setVerifiedPw] = useState("");
     const [pendingNav, setPendingNav] = useState<"personal-info" | "password" | null>(null);
 
@@ -141,15 +142,30 @@ function SettingsModal({
     const [suffix, setSuffix] = useState(profile.suffix ?? "");
     const [email, setEmail] = useState(profile.email);
     const [phone, setPhone] = useState(profile.phone ?? "");
+    const [employeeId, setEmployeeId] = useState(profile.employee_id ?? "");
     const [grade, setGrade] = useState(profile.grade ?? "");
-    const [selectedSections, setSelectedSections] = useState<string[]>(
-        profile.sections?.length ? profile.sections : profile.section ? [profile.section] : []
-    );
+    const initialSelectedSections = profile.sections?.length ? profile.sections : profile.section ? [profile.section] : [];
+    const [sectionsByGrade, setSectionsByGrade] = useState<Record<string, string[]>>(() => ({
+        [profile.grade ?? ""]: initialSelectedSections,
+    }));
+    const selectedSections = sectionsByGrade[grade] ?? [];
+    const updateSelectedSections = (updater: (current: string[]) => string[]) => {
+        setSectionsByGrade((previous) => ({
+            ...previous,
+            [grade]: updater(previous[grade] ?? []).slice(0, 2),
+        }));
+    };
     const [note, setNote] = useState("");
     const [isSending, setIsSending] = useState(false);
     const [approvalMsg, setApprovalMsg] = useState("");
     const [approvalErr, setApprovalErr] = useState(false);
     const [approvalSent, setApprovalSent] = useState(false);
+    const [approvalPassword, setApprovalPassword] = useState("");
+    const [showApprovalPassword, setShowApprovalPassword] = useState(false);
+    const [approvalUnlocked, setApprovalUnlocked] = useState(false);
+    const [unlockingApproval, setUnlockingApproval] = useState(false);
+    const [authGateHasDraft, setAuthGateHasDraft] = useState(false);
+    const [showDiscardDialog, setShowDiscardDialog] = useState(false);
 
     // Grade / section dropdown data
     const GRADE_LEVELS = ["Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6"];
@@ -159,7 +175,7 @@ function SettingsModal({
 
     // Fetch sections whenever grade changes
     useEffect(() => {
-        if (!grade) { setSectionOptions([]); setSelectedSections([]); return; }
+        if (!grade) { setSectionOptions([]); return; }
         setLoadingSections(true);
         fetch(`/api/sections?grade=${encodeURIComponent(grade)}`)
             .then(r => r.json())
@@ -174,6 +190,8 @@ function SettingsModal({
     // Password state
     const [newPw, setNewPw] = useState("");
     const [confirmPw, setConfirmPw] = useState("");
+    const [currentPw, setCurrentPw] = useState("");
+    const [showCurrent, setShowCurrent] = useState(false);
     const [showNew, setShowNew] = useState(false);
     const [showCon, setShowCon] = useState(false);
     const [pwMsg, setPwMsg] = useState("");
@@ -183,12 +201,47 @@ function SettingsModal({
     const pwChecks = checkPassword(newPw);
     const pwValid = pwChecks.length && pwChecks.uppercase && pwChecks.numOrSym;
 
-    // Close on Escape
+    const selectedSectionsChanged = [...selectedSections].sort().join("\u0000") !== [...initialSelectedSections].sort().join("\u0000");
+    const profileDraftChanged = (
+        firstName !== profile.first_name ||
+        middleName !== (profile.middle_name ?? "") ||
+        lastName !== profile.last_name ||
+        suffix !== (profile.suffix ?? "") ||
+        email !== profile.email ||
+        phone !== (profile.phone ?? "") ||
+        employeeId !== (profile.employee_id ?? "") ||
+        grade !== (profile.grade ?? "") ||
+        selectedSectionsChanged
+    );
+    const hasUnsavedChanges = !approvalSent && (
+        profileDraftChanged ||
+        Boolean(note.trim()) ||
+        Boolean(approvalPassword.trim()) ||
+        Boolean(verifiedPw) ||
+        authGateHasDraft ||
+        Boolean(currentPw) ||
+        Boolean(newPw) ||
+        Boolean(confirmPw)
+    );
+
+    function closeModal() {
+        onClose();
+    }
+
+    function requestClose() {
+        if (hasUnsavedChanges) {
+            setShowDiscardDialog(true);
+            return;
+        }
+        closeModal();
+    }
+
+    // Close on Escape only after confirming a pending draft can be discarded.
     useEffect(() => {
-        const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+        const handler = (e: KeyboardEvent) => { if (e.key === "Escape") requestClose(); };
         window.addEventListener("keydown", handler);
         return () => window.removeEventListener("keydown", handler);
-    }, [onClose]);
+    }, [hasUnsavedChanges]);
 
     function navigate(dest: "personal-info" | "password") {
         if (verifiedPw) { setView(dest); }
@@ -196,13 +249,41 @@ function SettingsModal({
     }
 
     function handleAuthConfirm(pw: string) {
+        setAuthGateHasDraft(false);
         setVerifiedPw(pw);
         if (pendingNav) { setView(pendingNav); setPendingNav(null); }
     }
 
+    async function unlockProfileApproval() {
+        if (!approvalPassword.trim() || unlockingApproval) return;
+
+        setApprovalMsg("");
+        setApprovalErr(false);
+        setUnlockingApproval(true);
+        try {
+            const response = await fetch("/api/adviser/verify-password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: approvalPassword }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) {
+                throw new Error(data?.message || "Unable to verify your current password.");
+            }
+            setVerifiedPw(approvalPassword);
+            setApprovalUnlocked(true);
+        } catch (error: unknown) {
+            setApprovalErr(true);
+            setApprovalMsg(error instanceof Error ? error.message : "Unable to verify your current password.");
+        } finally {
+            setUnlockingApproval(false);
+        }
+    }
+
     async function handleSendApproval() {
         setApprovalMsg(""); setApprovalErr(false);
-        if (!email.trim()) { setApprovalErr(true); setApprovalMsg("Email address is required."); return; }
+        if (!approvalUnlocked || !verifiedPw) { setApprovalErr(true); setApprovalMsg("Enter and unlock your current password before sending an approval request."); return; }
+        if (!email.trim() || !employeeId.trim()) { setApprovalErr(true); setApprovalMsg("Email address and Employee ID are required."); return; }
         setIsSending(true);
         try {
             const res = await fetch("/api/adviser/me", {
@@ -215,6 +296,7 @@ function SettingsModal({
                     suffix,
                     email,
                     phone,
+                    employeeId,
                     grade,
                     sections: selectedSections,
                     note: note.trim(),
@@ -237,7 +319,7 @@ function SettingsModal({
             setApprovalMsg("Approval request sent! Your changes will be applied once ICT approves.");
             setNote("");
             onProfileUpdated();
-            setTimeout(() => { setApprovalMsg(""); setView("menu"); }, 3500);
+            setTimeout(() => { setApprovalMsg(""); closeModal(); }, 3500);
         } catch (e: any) {
             setApprovalErr(true);
             setApprovalMsg(e.message || "Failed to send approval request.");
@@ -248,19 +330,20 @@ function SettingsModal({
 
     async function handleUpdatePassword() {
         setPwMsg(""); setPwError(false);
+        if (!currentPw.trim()) { setPwError(true); setPwMsg("Current password is required."); return; }
         if (!pwValid) { setPwError(true); setPwMsg("New password doesn't meet requirements."); return; }
         if (newPw !== confirmPw) { setPwError(true); setPwMsg("Passwords do not match."); return; }
         setIsSavingPw(true);
         try {
             const res = await fetch("/api/adviser/me", {
                 method: "PUT", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ current_password: verifiedPw, new_password: newPw }),
+                body: JSON.stringify({ current_password: currentPw, new_password: newPw }),
             });
             const json = await res.json();
             if (!json.success) { setPwError(true); setPwMsg(json.message); return; }
             setPwMsg("Password updated successfully!");
-            setNewPw(""); setConfirmPw(""); setVerifiedPw("");
-            setTimeout(() => { setPwMsg(""); setView("menu"); }, 2500);
+            setNewPw(""); setConfirmPw(""); setCurrentPw("");
+            setTimeout(() => { setPwMsg(""); }, 2500);
         } catch {
             setPwError(true); setPwMsg("Failed to update password. Please try again.");
         } finally {
@@ -268,46 +351,43 @@ function SettingsModal({
         }
     }
 
-    const viewTitle: Record<SettingsView, string> = {
-        "menu": "Account Settings",
-        "auth": "Verify Identity",
-        "personal-info": "Edit Personal Information",
-        "password": "Change Password",
-    };
-    const viewSubtitle: Record<SettingsView, string> = {
-        "menu": "Manage your profile and security",
-        "auth": "Confirm your identity to continue",
-        "personal-info": "Changes require ICT approval",
-        "password": "No approval needed for password changes",
-    };
-
     return (
         <div
             className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-3 backdrop-blur-sm sm:p-4"
-            onClick={onClose}
+            onClick={requestClose}
         >
             <div
-                className="flex w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+                className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
                 style={{ maxHeight: "calc(100dvh - 1.5rem)" }}
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
                 <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
-                    {(view === "personal-info" || view === "password" || view === "auth") && (
-                        <button
-                            type="button"
-                            onClick={() => setView("menu")}
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 transition shrink-0"
-                        >
-                            <ArrowLeft className="w-4 h-4" />
-                        </button>
-                    )}
                     <div className="min-w-0 flex-1">
-                        <h2 className="text-base font-extrabold text-slate-800">{viewTitle[view]}</h2>
-                        <p className="text-xs text-slate-400 mt-0.5">{viewSubtitle[view]}</p>
+                        <h2 className="text-base font-extrabold text-slate-800">Settings</h2>
+                        <p className="text-xs text-slate-400 mt-0.5">Request profile updates or change your password securely.</p>
                     </div>
-                    <button type="button" onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 transition shrink-0">
+                    <button type="button" onClick={requestClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 transition shrink-0">
                         <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-100 px-4 py-3 sm:px-6">
+                    <button
+                        type="button"
+                        onClick={() => setView("personal-info")}
+                        className={`flex min-h-10 items-center justify-center gap-2 rounded-xl border text-sm font-bold transition ${view === "personal-info" ? "border-emerald-300 bg-emerald-100 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"}`}
+                    >
+                        <ShieldCheck className="h-4 w-4" />
+                        Profile Approval
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setView("password")}
+                        className={`flex min-h-10 items-center justify-center gap-2 rounded-xl border text-sm font-bold transition ${view === "password" ? "border-emerald-300 bg-emerald-100 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"}`}
+                    >
+                        <Lock className="h-4 w-4" />
+                        Change Password
                     </button>
                 </div>
 
@@ -364,21 +444,51 @@ function SettingsModal({
                     {view === "auth" && (
                         <AuthGate
                             onConfirm={handleAuthConfirm}
-                            onCancel={() => setView("menu")}
+                            onCancel={() => { setAuthGateHasDraft(false); setView("menu"); }}
+                            onDraftChange={setAuthGateHasDraft}
                         />
                     )}
 
                     {/* ── PERSONAL INFO ── */}
                     {view === "personal-info" && (
                         <div className="space-y-4 p-4 sm:p-6">
-                            <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
-                                <CircleAlert className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-                                <p className="text-xs text-amber-700 leading-relaxed">
-                                    All changes below require <strong>ICT approval</strong> before they take effect.
-                                    <strong> Role</strong> and <strong>Employee ID</strong> can only be changed by the ICT.
-                                </p>
+                            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                                <div className="mb-3 flex items-start gap-2 text-xs leading-relaxed text-emerald-800">
+                                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                                    <p>Enter your current password to unlock profile approval fields. Changes require <strong>ICT approval</strong> before they take effect.</p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-semibold text-slate-600">Current Password</label>
+                                        <div className="relative">
+                                            <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                            <input
+                                                type={showApprovalPassword ? "text" : "password"}
+                                                value={approvalPassword}
+                                                onChange={(event) => { setApprovalPassword(event.target.value); setApprovalErr(false); setApprovalMsg(""); }}
+                                                onKeyDown={(event) => { if (event.key === "Enter") void unlockProfileApproval(); }}
+                                                disabled={approvalUnlocked}
+                                                placeholder="Enter password"
+                                                className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-10 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                            />
+                                            <button type="button" onClick={() => setShowApprovalPassword((visible) => !visible)} disabled={approvalUnlocked} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 disabled:cursor-not-allowed">
+                                                {showApprovalPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => void unlockProfileApproval()}
+                                        disabled={approvalUnlocked || unlockingApproval || !approvalPassword.trim()}
+                                        className="flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {unlockingApproval ? <RefreshCw className="h-4 w-4 animate-spin" /> : approvalUnlocked ? <Check className="h-4 w-4 text-emerald-600" /> : <ShieldCheck className="h-4 w-4" />}
+                                        {approvalUnlocked ? "Unlocked" : "Unlock"}
+                                    </button>
+                                </div>
                             </div>
 
+                            <fieldset disabled={!approvalUnlocked} className="contents">
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 
                                 {/* First Name — editable */}
@@ -483,14 +593,14 @@ function SettingsModal({
                                     </div>
                                 </div>
 
-                                {/* Employee ID — locked */}
+                                {/* Employee ID */}
                                 <div>
-                                    <label className="mb-1.5 block text-xs font-semibold text-slate-400 uppercase tracking-wide">
-                                        Employee ID <span className="normal-case font-normal text-slate-300">(locked)</span>
+                                    <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                                        Employee ID <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Editable</span>
                                     </label>
                                     <div className="relative">
                                         <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                                        <input value={profile.employee_id} disabled className="h-11 w-full rounded-xl border border-slate-200 bg-slate-100 pl-9 pr-4 text-sm text-slate-400 cursor-default outline-none" />
+                                        <input value={employeeId} onChange={event => setEmployeeId(event.target.value)} required className="h-11 w-full rounded-xl border border-emerald-300 bg-white pl-9 pr-4 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" />
                                     </div>
                                 </div>
 
@@ -508,7 +618,7 @@ function SettingsModal({
                                         <School className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" />
                                         <select
                                             value={grade}
-                                            onChange={e => { setGrade(e.target.value); setSelectedSections([]); }}
+                                            onChange={e => setGrade(e.target.value)}
                                             className="h-11 w-full appearance-none rounded-xl border border-emerald-300 bg-white pl-9 pr-8 text-sm text-slate-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition cursor-pointer"
                                         >
                                             <option value="">Select Grade</option>
@@ -541,7 +651,7 @@ function SettingsModal({
                                                                 type="button"
                                                                 disabled={isDisabled}
                                                                 onClick={() => {
-                                                                    setSelectedSections(prev =>
+                                                                    updateSelectedSections(prev =>
                                                                         isSelected
                                                                             ? prev.filter(s => s !== opt.name)
                                                                             : [...prev, opt.name].slice(0, 2)
@@ -584,7 +694,7 @@ function SettingsModal({
                                                             {s}
                                                             <button
                                                                 type="button"
-                                                                onClick={() => setSelectedSections(prev => prev.filter(x => x !== s))}
+                                                                onClick={() => updateSelectedSections(prev => prev.filter(x => x !== s))}
                                                                 className="ml-0.5 hover:text-emerald-900"
                                                             >
                                                                 <X className="h-2.5 w-2.5" />
@@ -601,6 +711,7 @@ function SettingsModal({
                                 </div>
 
                             </div>
+                            </fieldset>
 
                             {approvalMsg && (
                                 <div className={`flex items-start gap-2 rounded-xl px-4 py-3 text-sm font-medium ${approvalErr ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
@@ -618,6 +729,7 @@ function SettingsModal({
                                 <textarea
                                     value={note}
                                     onChange={e => setNote(e.target.value)}
+                                    disabled={!approvalUnlocked}
                                     placeholder="Briefly explain why you're requesting these changes (e.g. I changed my personal number)…"
                                     rows={3}
                                     maxLength={300}
@@ -631,11 +743,11 @@ function SettingsModal({
                             </div>
 
                             <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:gap-3">
-                                <button type="button" onClick={() => setView("menu")}
+                                <button type="button" onClick={requestClose}
                                     className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
                                     Cancel
                                 </button>
-                                <button type="button" onClick={handleSendApproval} disabled={isSending || approvalSent}
+                                <button type="button" onClick={handleSendApproval} disabled={!approvalUnlocked || isSending || approvalSent}
                                     className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:opacity-60 sm:flex-1">
                                     {isSending
                                         ? <><RefreshCw className="h-4 w-4 animate-spin" /> Sending…</>
@@ -653,20 +765,19 @@ function SettingsModal({
                             <div className="flex items-start gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
                                 <Check className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
                                 <p className="text-xs text-emerald-700">
-                                    Password changes take effect <strong>immediately</strong> — no Principal approval needed.
+                                    Password changes take effect <strong>immediately</strong> — no ICT approval needed.
                                 </p>
                             </div>
 
-                            {/* Verified password (visual indicator) */}
                             <div>
-                                <label className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                                    Current Password
-                                    <span className="normal-case font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-100">Verified ✓</span>
-                                </label>
+                                <label className="mb-1.5 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Current Password</label>
                                 <div className="relative">
-                                    <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-500" />
-                                    <input value="••••••••••" disabled
-                                        className="h-11 w-full rounded-xl border border-emerald-200 bg-emerald-50/50 pl-9 pr-4 text-sm text-emerald-700 cursor-default outline-none" />
+                                    <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                    <input type={showCurrent ? "text" : "password"} value={currentPw} onChange={e => setCurrentPw(e.target.value)} placeholder="Enter current password"
+                                        className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-10 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:bg-white" />
+                                    <button type="button" onClick={() => setShowCurrent(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                        {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                    </button>
                                 </div>
                             </div>
 
@@ -729,7 +840,7 @@ function SettingsModal({
                             )}
 
                             <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:gap-3">
-                                <button type="button" onClick={() => setView("menu")}
+                                <button type="button" onClick={requestClose}
                                     className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:flex-1">
                                     Cancel
                                 </button>
@@ -746,6 +857,13 @@ function SettingsModal({
 
                 </div>
             </div>
+            {showDiscardDialog ? (
+                <UnsavedChangesDialog
+                    theme="adviser"
+                    onStay={() => setShowDiscardDialog(false)}
+                    onDiscard={closeModal}
+                />
+            ) : null}
         </div>
     );
 }
@@ -756,6 +874,7 @@ export default function AdviserProfilePage() {
     const [loading, setLoading] = useState(true);
     const [loadErr, setLoadErr] = useState("");
     const [showSettings, setShowSettings] = useState(false);
+    const [dismissedAssignmentRequestId, setDismissedAssignmentRequestId] = useState<number | null>(null);
 
     const loadProfile = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
         if (!background) setLoading(true);
@@ -788,6 +907,7 @@ export default function AdviserProfilePage() {
         ? `${formatGradeLabel(profile.grade)} · ${allSections.join(" & ")}`
         : "No section assigned";
     const request = profile?.latest_change_request;
+    const showAssignmentNotice = Boolean(request && request.id !== dismissedAssignmentRequestId);
     const requestStyle = request?.status === "Approved"
         ? "bg-emerald-50 border-emerald-200 text-emerald-800"
         : request?.status === "Rejected"
@@ -885,7 +1005,7 @@ export default function AdviserProfilePage() {
 
                     {/* Right column — read-only */}
                     <div className="flex flex-col gap-5 xl:col-span-8">
-                        {request && (
+                        {request && showAssignmentNotice && (
                             <div className={`rounded-2xl border px-5 py-4 ${requestStyle}`}>
                                 <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
@@ -896,7 +1016,18 @@ export default function AdviserProfilePage() {
                                         </p>
                                         {request.review_note && <p className="mt-2 text-xs font-medium">ICT note: {request.review_note}</p>}
                                     </div>
-                                    <span className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{request.status}</span>
+                                    <div className="flex shrink-0 items-center gap-1.5">
+                                        <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{request.status}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setDismissedAssignmentRequestId(request.id)}
+                                            aria-label="Dismiss assignment change request"
+                                            title="Dismiss"
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg text-current/70 transition hover:bg-white/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current/30"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         )}

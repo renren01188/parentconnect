@@ -7,6 +7,7 @@ import {
   Bell,
   CalendarCheck,
   CheckCheck,
+  Loader2,
   MessageSquare,
   X,
 } from "lucide-react";
@@ -34,6 +35,7 @@ type PageNotification = Notification & {
   /** Root standalone staff_messages ID used for an authorized thread read. */
   staffMessageConversationId?: number;
   parentDeletionNotificationId?: number;
+  parentAccountChangeNotificationId?: number;
   deleteAfter?: string | null;
   createdAt?: string;
 };
@@ -90,23 +92,41 @@ function NotificationsPageContent() {
   const { setUnreadCount, notificationRefreshVersion } = useNotifContext();
 
   const [notifications, setNotifications] = useState<PageNotification[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
   const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<PageNotification | null>(null);
   const fetchSequence = useRef(0);
+  const hasLoadedNotifications = useRef(false);
 
   const loadNotifications = useCallback(async () => {
     const requestId = ++fetchSequence.current;
-    const res = await fetch("/api/parents/notifications", { cache: "no-store" });
-    const data = await res.json().catch(() => null);
-    if (requestId !== fetchSequence.current || !res.ok || !data?.success || !Array.isArray(data.notifications)) return;
+    const isInitialRequest = !hasLoadedNotifications.current;
+    if (isInitialRequest) {
+      setIsInitialLoading(true);
+    } else {
+      setIsRefreshing(true);
+    }
 
-    const snapshot = (data.notifications as PageNotification[])
-      .map((notification) => ({ ...notification, source: "database" as const }));
-    // This endpoint returns the complete authorized feed. Preserve a read
-    // acknowledgement that is still being persisted, but prune entries that
-    // no longer belong in the snapshot (such as a deleted announcement).
-    setNotifications((current) => mergeNotificationFeed(current, snapshot, { removeMissing: true }));
+    try {
+      const res = await fetch("/api/parents/notifications", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (requestId !== fetchSequence.current || !res.ok || !data?.success || !Array.isArray(data.notifications)) return;
+
+      const snapshot = (data.notifications as PageNotification[])
+        .map((notification) => ({ ...notification, source: "database" as const }));
+      // This endpoint returns the complete authorized feed. Preserve a read
+      // acknowledgement that is still being persisted, but prune entries that
+      // no longer belong in the snapshot (such as a deleted announcement).
+      setNotifications((current) => mergeNotificationFeed(current, snapshot, { removeMissing: true }));
+      hasLoadedNotifications.current = true;
+    } finally {
+      if (requestId === fetchSequence.current) {
+        setIsInitialLoading(false);
+        setIsRefreshing(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -184,9 +204,12 @@ function NotificationsPageContent() {
         notificationIds: notifications
           .filter((notif) => notif.source === "database" && !notif.reportId && !notif.staffMessageConversationId && notif.id > 0)
           .filter((notif) => !notif.parentDeletionNotificationId)
+          .filter((notif) => !notif.parentAccountChangeNotificationId)
           .flatMap((notif) => notif.notificationIds ?? [notif.id]),
         parentDeletionNotificationIds: notifications
           .flatMap((notif) => notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []),
+        parentAccountChangeNotificationIds: notifications
+          .flatMap((notif) => notif.parentAccountChangeNotificationId ? [notif.parentAccountChangeNotificationId] : []),
       }),
     }).catch(() => null);
   }, [notifications]);
@@ -209,6 +232,8 @@ function NotificationsPageContent() {
             ? { reportId: notif.reportId }
             : notif.parentDeletionNotificationId
               ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
+            : notif.parentAccountChangeNotificationId
+              ? { parentAccountChangeNotificationId: notif.parentAccountChangeNotificationId }
             : notif.announcementId
               ? { notificationIds: notif.notificationIds ?? [notif.id] }
               : notif.id < 0
@@ -265,9 +290,17 @@ function NotificationsPageContent() {
       <main className="flex min-w-0 flex-1 flex-col px-3 py-5 pb-8 sm:px-4 md:min-h-0 md:overflow-hidden md:px-8 md:py-6">
         <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h1 className="text-xl font-extrabold text-slate-900 sm:text-2xl">
-              Notifications
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-extrabold text-slate-900 sm:text-2xl">
+                Notifications
+              </h1>
+              {isRefreshing && !isInitialLoading ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700" role="status">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  Updating
+                </span>
+              ) : null}
+            </div>
             <p className="mt-1 text-sm text-slate-500">
               Stay updated with your child&apos;s school activities
             </p>
@@ -290,7 +323,7 @@ function NotificationsPageContent() {
           className="mb-5 flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
           style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}
         >
-          {(["All", "Unread", "Principal", "Teacher", "Guidance", "ICT", "Attendance"] as FilterTab[]).map(
+          {(["All", "Unread", "Principal", "Teacher", "Guidance", "ICT", "Attendance", "Account"] as FilterTab[]).map(
             (tab) => {
               const isActive = activeTab === tab;
               const count = tabCounts[tab];
@@ -324,7 +357,13 @@ function NotificationsPageContent() {
 
         <div className="min-h-0 flex-1 overflow-y-auto sm:pr-2">
           <div className="flex flex-col gap-3">
-          {filteredNotifications.map((notif) => {
+          {isInitialLoading ? (
+            <div className="flex min-h-52 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center shadow-sm" role="status" aria-live="polite">
+              <Loader2 className="h-7 w-7 animate-spin text-blue-600" aria-hidden="true" />
+              <p className="mt-3 text-sm font-semibold text-slate-700">Loading notifications...</p>
+              <p className="mt-1 text-xs text-slate-500">Please wait while we retrieve your school updates.</p>
+            </div>
+          ) : filteredNotifications.map((notif) => {
             const {
               Icon,
               iconBg,
@@ -388,7 +427,7 @@ function NotificationsPageContent() {
             );
           })}
 
-          {filteredNotifications.length === 0 && (
+          {!isInitialLoading && filteredNotifications.length === 0 && (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center text-sm text-slate-400">
               No notifications found for this filter.
             </div>
@@ -474,5 +513,16 @@ function NotificationsPageContent() {
 }
 
 export default function NotificationsPage() {
-  return <Suspense fallback={<div className="min-h-screen bg-slate-50" />}><NotificationsPageContent /></Suspense>;
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6" role="status" aria-live="polite">
+        <div className="flex flex-col items-center text-center text-slate-600">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" aria-hidden="true" />
+          <p className="mt-3 text-sm font-semibold">Loading notifications...</p>
+        </div>
+      </div>
+    }>
+      <NotificationsPageContent />
+    </Suspense>
+  );
 }

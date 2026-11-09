@@ -15,6 +15,7 @@ const parentPage = read("src/app/dashboard/parent/reports/page.tsx");
 const adviserPage = read("src/app/dashboard/adviser/reports/page.tsx");
 const adviserLabels = read("src/lib/adviserReportStatusSummary.js");
 const guidancePage = read("src/app/dashboard/guidance/reports/page.tsx");
+const guidanceExport = read("src/lib/guidanceReportExport.ts");
 const principalPage = read("src/app/dashboard/principal/reports/page.tsx");
 const principalLabels = read("src/app/dashboard/principal/reports/layoutState.cjs");
 
@@ -41,6 +42,11 @@ assert.match(adviserLabels, /cancelledByParent\) return "Cancelled by Parents"/)
 assert.match(adviserPage, /Cancelled by Parents/);
 assert.match(guidancePage, /cancelledByParent\) return "Cancelled by Parents"/);
 assert.match(guidancePage, /The Parent cancelled this report\. No further messages can be sent\./);
+assert.match(guidancePage, /function isActuallyResolvedGuidanceReport[\s\S]*?!report\.cancelledByParent/);
+assert.match(guidancePage, /if \(cancelledCount === reports\.length\)[\s\S]*?label: "Cancelled by Parents"/);
+assert.match(guidancePage, /filterTab === "Resolved"\) if \(!g\.reports\.some\(isActuallyResolvedGuidanceReport\)\) return false/);
+assert.match(guidanceExport, /statusFilter === "Resolved" && report\.cancelledByParent/);
+assert.match(guidanceExport, /status: report\.cancelledByParent \? "Cancelled by Parents" : report\.status/);
 assert.match(principalLabels, /cancelledByParent\) return "Cancelled by Parents"/);
 assert.match(principalPage, /Cancelled by Parents\. Messaging is unavailable\./);
 

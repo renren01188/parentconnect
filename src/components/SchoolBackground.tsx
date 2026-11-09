@@ -1,21 +1,19 @@
 import Image from "next/image";
 
-const SCHOOL_BACKGROUND_URL = "https://images.unsplash.com/photo-1580582932707-520aed937b7b?w=1600&q=80";
-
 /**
- * A shared, responsive school image for public pages. Using next/image lets
- * Vercel serve an appropriately sized, cached image instead of every browser
- * downloading the same CSS background at its original size.
+ * The shared public banner image used by every login journey. It intentionally
+ * matches the landing, About, and Contact page banners.
  */
 export function SchoolBackground() {
   return (
     <Image
-      src={SCHOOL_BACKGROUND_URL}
+      src="/hero-school-4.png"
       alt=""
       aria-hidden="true"
       fill
       priority
       sizes="100vw"
+      quality={75}
       className="object-cover object-center"
     />
   );

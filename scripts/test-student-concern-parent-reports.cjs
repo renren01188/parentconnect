@@ -63,7 +63,10 @@ assert.match(parentDashboard, /\["attendance", "reports", "notifications", "anno
 assert.match(parentNotifications, /\.eq\("parent_id", session\.id\)[\s\S]*?\.in\("student_id", \[\.\.\.studentNames\.keys\(\)\]\)[\s\S]*?\.ilike\("subject", "\[Student Concern\]%"\)/);
 assert.match(parentNotifications, /\.from\("parent_adviser_report_messages"\)[\s\S]*?\.in\("sender_role", \["adviser", "guidance", "principal", "subject_teacher"\]\)/);
 assert.match(parentNotifications, /title: isStudentConcern \? report\.subject : "New Subject Teacher Report"/);
-assert.match(parentNotifications, /msg: messageBody \|\| report\.subject/);
+assert.match(
+  parentNotifications,
+  /isSubjectTeacherReport \? "A subject teacher submitted a report for your child\." : report\.subject/,
+);
 assert.match(parentNotifications, /await publishRealtimeInvalidation\(\[\{ role: "parent", id: session\.id \}\], "reports"\)/);
 assert.match(parentNotificationContext, /scope === "reports" \|\| scope === "staff-messages"[\s\S]*?refreshUnreadReportsCount\(\), refreshNotificationFeed\(\)/);
 assert.doesNotMatch(parentDashboard, /FALLBACK_STUDENTS|REMOVED_REPORT_SAMPLE|REMOVED_MESSAGE_SAMPLE/);

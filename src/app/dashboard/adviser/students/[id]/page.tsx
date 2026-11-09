@@ -45,7 +45,24 @@ function Field({ label, required, error, children }: {
   );
 }
 
-function ReviewRow({ label, value }: { label: string; value: string }) {
+const EMPTY_REVIEW_VALUE = "\u2014";
+
+function displayReviewValue(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  // Older records and prior client fallbacks can contain a literal null-like
+  // value or the mojibake representation of an em dash. Neither is student
+  // data, so present one consistent empty-value marker in the View screen.
+  if (
+    !normalized
+    || /^(null|undefined|\?|\u00e2\u20ac\u201d|\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u009d)$/i.test(normalized)
+  ) {
+    return EMPTY_REVIEW_VALUE;
+  }
+  return normalized;
+}
+
+function ReviewRow({ label, value: rawValue }: { label: string; value: string | null | undefined }) {
+  const value = displayReviewValue(rawValue);
   return (
     <div className="flex justify-between py-2 border-b border-slate-100 last:border-0">
       <span className="text-xs text-slate-400 font-medium">{label}</span>

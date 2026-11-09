@@ -195,6 +195,53 @@ export async function getLinkedStudentIds(parentId: number) {
   return [...new Set((data ?? []).map((link) => String(link.student_id)).filter(Boolean))];
 }
 
+type CurrentStudentIdentity = {
+  student_id: string;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string | null;
+  suffix: string | null;
+};
+
+/**
+ * Parent report rows retain the student name that was supplied when the
+ * report was created. Use the current Student Profile name for display so a
+ * corrected learner name is reflected consistently in historical reports.
+ *
+ * The stored report value remains the fallback for a record that no longer
+ * has a corresponding Student Profile, preserving readable history without
+ * rewriting the report itself.
+ */
+export async function withCurrentStudentNames<T extends Pick<ReportRow, "student_id" | "student_name">>(rows: T[]): Promise<T[]> {
+  const studentIds = [...new Set(
+    rows
+      .map((row) => String(row.student_id ?? "").trim())
+      .filter(Boolean),
+  )];
+  if (studentIds.length === 0) return rows;
+
+  const { data, error } = await supabase
+    .from("students")
+    .select("student_id, first_name, middle_name, last_name, suffix")
+    .in("student_id", studentIds);
+  if (error) throw error;
+
+  const studentsById = new Map(
+    ((data ?? []) as CurrentStudentIdentity[]).map((student) => [String(student.student_id), student]),
+  );
+
+  return rows.map((row) => {
+    const student = studentsById.get(String(row.student_id));
+    const currentName = student
+      ? [student.first_name, student.middle_name, student.last_name, student.suffix]
+        .map((part) => String(part ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+      : "";
+    return currentName ? { ...row, student_name: currentName } as T : row;
+  });
+}
+
 export async function getReportForAdviser(id: number, adviserId: number) {
   const { data, error } = await supabase
     .from("parent_adviser_reports")
@@ -324,6 +371,11 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
   };
   const recipientName = isPrincipalConversation ? principalName : isGuidanceConversation ? guidanceName : row.adviser_name;
   const subjectTeacherOpeningMessage = messages.find((msg) => msg.sender_role === "subject_teacher");
+  // A Subject Teacher's identity is available to authorized staff through the
+  // staff-specific report mappers below. It must never be placed in the
+  // Parent's report payload: that payload is also used by the Parent inbox,
+  // realtime refreshes, and the report detail panel.
+  const hasSubjectTeacherOpeningMessage = Boolean(subjectTeacherOpeningMessage);
   // Student concerns are created by the public /report form and become a
   // Parent Report only after the assigned Adviser forwards the concern.
   // A category is not sufficient to identify them because students can select
@@ -337,7 +389,7 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     recipientRole: isPrincipalConversation ? "Principal" : isGuidanceConversation ? "Guidance" : "Class Adviser",
     recipientInitials: initials(recipientName),
     recipientColor: isPrincipalConversation ? "#7c3aed" : isGuidanceConversation ? "#0ea5e9" : "#f59e0b",
-    subject: row.subject,
+    subject: hasSubjectTeacherOpeningMessage ? "Subject Teacher Report" : row.subject,
     // Keep an ISO value for compact dashboard cards. Display components format
     // it in their own locale; they must not parse a presentation label such as
     // `submittedAt` back into a date.
@@ -356,17 +408,15 @@ export function toParentReport(row: ReportRow, messages: MessageRow[], ticket?: 
     section: row.section ?? "",
     studentName: row.student_name,
     isStudentSubmittedConcern,
-    submittedByName: subjectTeacherOpeningMessage?.sender_name,
-    submittedByRole: subjectTeacherOpeningMessage ? "Subject Teacher" : undefined,
-    submittedAt: subjectTeacherOpeningMessage ? formatDate(subjectTeacherOpeningMessage.created_at) : undefined,
     messages: visibleMessages.map((msg) => {
       const senderRole = String(msg.sender_role).trim().toLowerCase();
       const isStaffMessage = senderRole === "adviser" || senderRole === "principal" || senderRole === "guidance" || senderRole === "subject_teacher";
+      const isSubjectTeacherMessage = senderRole === "subject_teacher";
 
       return {
         id: msg.id,
         sender: isStaffMessage ? "staff" : "parent",
-        senderName: isStaffMessage ? msg.sender_name || recipientName : "You",
+        senderName: isSubjectTeacherMessage ? "School staff" : isStaffMessage ? msg.sender_name || recipientName : "You",
         timestamp: formatDate(msg.created_at),
         text: msg.body ?? "",
         threadType: messageThreadType(row, messages, msg),
@@ -560,7 +610,9 @@ export function unreadGuidanceMessageIds(row: ReportRow, messages: MessageRow[])
 
 export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?: GuidanceTicketRow | null) {
   const firstParentMessage = messages.find((msg) => msg.sender_role === "parent");
+  const subjectTeacherOpeningMessage = messages.find((msg) => msg.sender_role === "subject_teacher");
   const firstGuidanceMessage = messages.find((msg) => msg.sender_role === "guidance");
+  const openingMessage = firstParentMessage ?? subjectTeacherOpeningMessage ?? firstGuidanceMessage;
   const threadMessages = guidanceThreadMessages(row, messages);
   const hasUnreadForGuidance = unreadGuidanceMessageIds(row, messages).length > 0;
   const isResolved = row.status === "resolved" || row.status === "cancelled";
@@ -580,10 +632,12 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
     section: row.section ?? "",
     category: categoryForAdviser(row.categories?.[0]),
     subject: row.subject,
-    message: firstParentMessage?.body ?? firstGuidanceMessage?.body ?? "",
-    attachments: attachmentsFromRow(firstParentMessage?.attachments ?? firstGuidanceMessage?.attachments),
+    message: openingMessage?.body ?? "",
+    attachments: attachmentsFromRow(openingMessage?.attachments),
     createdAt: row.created_at,
     lastActivityAt: row.last_message_at || row.created_at,
+    submitted_by_name: openingMessage?.sender_role === "subject_teacher" ? openingMessage.sender_name : undefined,
+    submitted_by_role: openingMessage?.sender_role === "subject_teacher" ? "Subject Teacher" : undefined,
     submitted_at: formatDate(row.created_at),
     status: isResolved ? "Resolved" as const : isAcceptedGuidanceTicket ? "Ongoing" as const : hasUnreadForGuidance ? "New" as const : adviserReportStatus(row.status),
     resolvedByGuidance: resolvedByRole === "Guidance",

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendGuidancePrincipalEscalationEmail } from "@/lib/mailer";
-import { getGuidanceSession, listMessages, toGuidanceReport, unreadGuidanceMessageIds } from "../../../parent-adviser/_lib";
+import { getGuidanceSession, listMessages, toGuidanceReport, unreadGuidanceMessageIds, withCurrentStudentNames } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
@@ -98,9 +98,10 @@ export async function PATCH(
         reportId,
         kind: "status",
       });
+      const [reportWithCurrentStudentName] = await withCurrentStudentNames([report]);
       return NextResponse.json({
         success: true,
-        report: toGuidanceReport(report, refreshedMessages.get(reportId) ?? []),
+        report: toGuidanceReport(reportWithCurrentStudentName ?? report, refreshedMessages.get(reportId) ?? []),
       });
     }
 
@@ -207,9 +208,10 @@ export async function PATCH(
     });
 
     const messages = await listMessages([reportId]);
+    const [reportWithCurrentStudentName] = await withCurrentStudentNames([report]);
     return NextResponse.json({
       success: true,
-      report: toGuidanceReport(report, messages.get(reportId) ?? []),
+      report: toGuidanceReport(reportWithCurrentStudentName ?? report, messages.get(reportId) ?? []),
     });
   } catch (error: unknown) {
     console.error("PATCH /api/reports/guidance/[id]/status error:", error);

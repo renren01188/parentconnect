@@ -8,6 +8,7 @@ export type GuidanceReportExportItem = {
   categories: string[];
   concernLevel: number;
   status: string;
+  cancelledByParent?: boolean;
   submitted_at: string;
   attachment?: string;
   message: string;
@@ -55,7 +56,7 @@ function reportRows(items: GuidanceReportExportItem[]) {
     subject: report.subject,
     categories: report.categories.join(", ") || "Not specified",
     concernLevel: `${report.concernLevel}%`,
-    status: report.status,
+    status: report.cancelledByParent ? "Cancelled by Parents" : report.status,
     submittedAt: report.submitted_at,
     attachment: report.attachment ?? "None",
     message: report.message,
@@ -68,7 +69,10 @@ export function filterGuidanceReports<T extends GuidanceReportExportItem>(
   categoryFilter: string,
 ) {
   return reports.filter((report) => {
-    if (statusFilter !== "All" && report.status !== statusFilter) return false;
+    if (
+      statusFilter !== "All"
+      && (report.status !== statusFilter || (statusFilter === "Resolved" && report.cancelledByParent))
+    ) return false;
     if (categoryFilter !== "All" && !report.categories.includes(categoryFilter)) return false;
     return true;
   });

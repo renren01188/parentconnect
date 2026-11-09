@@ -6,6 +6,7 @@ import { Plus, Calendar, Clock, Eye, Trash2, X, Edit2, UserRound } from "lucide-
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { AnnouncementDeleteConfirmationModal } from "@/components/AnnouncementDeleteConfirmationModal";
 
 type Tab = "principal" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -119,6 +120,9 @@ export default function ICTAnnouncementsPage() {
   const [principalAnnouncements, setPrincipalAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [readKeys, setReadKeys] = useState<Set<string>>(new Set());
   const { refreshCounts, annUnreadCount, setAnnUnreadCount } = useNotifications();
@@ -250,11 +254,29 @@ export default function ICTAnnouncementsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/ict/announcements/${id}`, { method: "DELETE" });
-    const data = await res.json();
-    if (data.success) {
-      setMyAnnouncements(prev => prev.filter(a => a.id !== id));
+  const requestDelete = (announcement: Announcement) => {
+    setDeleteError("");
+    setDeleteTarget(announcement);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const res = await fetch(`/api/ict/announcements/${deleteTarget.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message ?? "Unable to delete this announcement.");
+      }
+
+      setMyAnnouncements(prev => prev.filter(a => a.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Unable to delete this announcement.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -403,7 +425,7 @@ export default function ICTAnnouncementsPage() {
                   </button>
                   <button
                     title="Delete announcement"
-                    onClick={() => handleDelete(announcement.id)}
+                    onClick={() => requestDelete(announcement)}
                     className="w-8 h-8 rounded-lg border border-gray-200 bg-white flex items-center justify-center text-gray-400 hover:text-red-600 hover:border-red-300 hover:bg-red-50 transition"
                   >
                     <Trash2 size={13} />
@@ -571,6 +593,17 @@ export default function ICTAnnouncementsPage() {
           </div>
         </div>
       )}
+      <AnnouncementDeleteConfirmationModal
+        open={deleteTarget !== null}
+        announcement={deleteTarget}
+        theme="ict"
+        deleting={deleting}
+        error={deleteError}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

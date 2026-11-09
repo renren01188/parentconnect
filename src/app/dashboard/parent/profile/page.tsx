@@ -12,6 +12,7 @@ import Sidebar from "../components/Sidebar";
 import { useParentSession } from "../ParentSessionGate";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { dashboardPath } from "@/lib/routeAliases";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
 // ─── Password input ───────────────────────────────────────────────────────────
@@ -151,6 +152,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
     const [pw,    setPw]    = useState({ current: "", next: "", confirm: "" });
     const [pwErr, setPwErr] = useState<Partial<typeof pw>>({});
     const setPwF = (k: keyof typeof pw) => (v: string) => { setPw(p => ({ ...p, [k]: v })); setPwErr(p => ({ ...p, [k]: "" })); };
+    const [showDiscardDialog, setShowDiscardDialog] = useState(false);
 
     // Password strength
     function pwStrength(p: string) {
@@ -243,11 +245,33 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
         }
     }
 
-    function handleClose() {
+    const hasUnsavedChanges = step !== "success" && (
+        changes.length > 0 ||
+        Boolean(authPw.trim()) ||
+        Object.values(pw).some((value) => Boolean(value))
+    );
+
+    function closeModal() {
         setStep("edit"); setAuthPw(""); setAuthErr("");
         setPErr({}); setPwErr({});
         onClose();
     }
+
+    function requestClose() {
+        if (hasUnsavedChanges) {
+            setShowDiscardDialog(true);
+            return;
+        }
+        closeModal();
+    }
+
+    useEffect(() => {
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") requestClose();
+        };
+        window.addEventListener("keydown", handleEscape);
+        return () => window.removeEventListener("keydown", handleEscape);
+    }, [hasUnsavedChanges]);
 
     function switchTab(t: Tab) {
         setTab(t); setStep("edit");
@@ -257,7 +281,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-2 backdrop-blur-sm sm:p-4"
-            onClick={handleClose}>
+            onClick={requestClose}>
             <div className="my-auto flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
                 style={{ maxHeight: "calc(100dvh - 16px)" }} onClick={e => e.stopPropagation()}>
 
@@ -280,7 +304,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                             </p>
                         </div>
                     </div>
-                    <button onClick={handleClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100">
+                    <button onClick={requestClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100">
                         <X className="w-4 h-4" />
                     </button>
                 </div>
@@ -479,7 +503,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                                 </div>
                             )}
 
-                            <button onClick={handleClose}
+                            <button onClick={closeModal}
                                 className="w-full py-3 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition">
                                 Done
                             </button>
@@ -492,7 +516,7 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                     <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-4 sm:flex-row sm:gap-3 sm:px-6">
                         {step === "edit" && (
                             <>
-                                <button onClick={handleClose}
+                                <button onClick={requestClose}
                                     className="min-h-11 w-full rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 sm:w-auto">
                                     Cancel
                                 </button>
@@ -523,6 +547,13 @@ function SettingsModal({ profile, onSave, onClose, initialTab = "profile" }: {
                     </div>
                 )}
             </div>
+            {showDiscardDialog ? (
+                <UnsavedChangesDialog
+                    theme="parent"
+                    onStay={() => setShowDiscardDialog(false)}
+                    onDiscard={closeModal}
+                />
+            ) : null}
         </div>
     );
 }
@@ -636,12 +667,25 @@ export default function ProfilePage() {
             throw new Error(data?.message || "Unable to save profile.");
         }
 
-        setProfile(data.parent ?? updated);
-        setEmailAvailable(Boolean(String(data.parent?.email ?? updated.email ?? "").trim()));
+        const savedProfile = data.parent as Partial<ProfileData>;
+        // Apply the API's confirmed values immediately. Keep UI-only fields
+        // such as the avatar until the next normal profile load supplies them.
+        setProfile((previous) => ({
+            ...previous,
+            firstName: savedProfile.firstName ?? updated.firstName,
+            middleName: savedProfile.middleName ?? updated.middleName,
+            lastName: savedProfile.lastName ?? updated.lastName,
+            suffix: savedProfile.suffix ?? updated.suffix,
+            email: savedProfile.email ?? updated.email,
+            phone: savedProfile.phone ?? updated.phone,
+            address: savedProfile.address ?? updated.address,
+        }));
+        setEmailAvailable(Boolean(String(savedProfile.email ?? updated.email ?? "").trim()));
         // The API returns a refreshed HttpOnly cookie with the saved identity
-        // claims. Refreshing this shared snapshot keeps the sidebar and other
-        // Parent pages in the same logged-in session.
-        await refreshSession();
+        // claims when available. The profile response above is already the
+        // authoritative save result, so a background sidebar refresh must not
+        // delay or turn this successful save into an error.
+        void refreshSession();
         window.dispatchEvent(new Event("parent-profile-updated"));
     }
 

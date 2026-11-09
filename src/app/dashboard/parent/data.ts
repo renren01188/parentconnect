@@ -67,9 +67,6 @@ export interface Report {
   studentName?: string;
   /** An Adviser-forwarded concern submitted by the linked student at /report. */
   isStudentSubmittedConcern?: boolean;
-  submittedByName?: string;
-  submittedByRole?: "Subject Teacher";
-  submittedAt?: string;
   messages: ChatMessage[];
   categories: string[];
   concernLevel: number;

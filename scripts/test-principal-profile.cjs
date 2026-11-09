@@ -32,7 +32,7 @@ assert.doesNotMatch(patchRoute, /auth_version:\s*authVersion/);
 assert.match(patchRoute, /authVersion: session\.payload\.authVersion/);
 assert.match(
   patchRoute,
-  /response\.cookies\.set\("principal_token", newToken, principalSessionCookie\);/,
+  /response\.cookies\.set\("principal_token", newToken, dashboardSessionCookieOptions\);/,
 );
 
 // The modal immediately renders the saved principal returned by the API and

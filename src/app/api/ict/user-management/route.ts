@@ -12,6 +12,7 @@ import {
 import { reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { isFamilyRole, normalizeParentEmail, normalizeParentPhone } from "@/lib/parentEnrollment";
 import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
+import { notifyParentsOfAccountChange } from "@/lib/parentAccountChangeNotifications";
 import { logAudit } from "@/lib/audit";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import { hasCompletedActiveParentSignup } from "@/lib/parentAccountCompletion";
@@ -165,6 +166,14 @@ function fullName(row: {
     row.last_name ?? row.parent_last_name,
     row.suffix ?? row.parent_suffix,
   ].filter(Boolean).join(" ").trim();
+}
+
+function normalizedComparable(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function changed(valueBefore: unknown, valueAfter: unknown) {
+  return normalizedComparable(valueBefore) !== normalizedComparable(valueAfter);
 }
 
 function initials(firstName = "", lastName = "") {
@@ -1252,6 +1261,37 @@ export async function PATCH(req: NextRequest) {
       const sharedAccountHolder = user.sharedFamilyDetailsChanged
         ? accountHolderFromFamily(user.familyDetails, user.relationship)
         : null;
+      const { data: ictActor, error: ictActorError } = await supabase
+        .from("ict_admins")
+        .select("first_name, middle_name, last_name, suffix")
+        .eq("id", auth.session.ictId)
+        .maybeSingle();
+      if (ictActorError) throw ictActorError;
+      const parentChangeActorName = ictActor ? fullName(ictActor) || "ICT personnel" : "ICT personnel";
+
+      const { data: existingParentAccounts, error: existingParentAccountsError } = parentAccountIds.length > 0
+        ? await supabase
+          .from("parents")
+          .select("id, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, email, contact_number, login_contact_number, relationship, address, status")
+          .in("id", parentAccountIds)
+        : { data: [], error: null };
+      if (existingParentAccountsError) throw existingParentAccountsError;
+
+      const parentAccountChangedFields = new Set<string>();
+      if (!wasPendingParent) {
+        for (const existingParent of existingParentAccounts ?? []) {
+          if (changed(existingParent.parent_first_name, sharedAccountHolder?.first_name ?? (user.firstName?.trim() || ""))) parentAccountChangedFields.add("first name");
+          if (changed(existingParent.parent_middle_name, sharedAccountHolder?.middle_name ?? (user.middleName?.trim() || null))) parentAccountChangedFields.add("middle name");
+          if (changed(existingParent.parent_last_name, sharedAccountHolder?.last_name ?? (user.lastName?.trim() || ""))) parentAccountChangedFields.add("last name");
+          if (changed(existingParent.parent_suffix, sharedAccountHolder?.suffix ?? (user.suffix && user.suffix !== "None" ? user.suffix : null))) parentAccountChangedFields.add("suffix");
+          if (changed(existingParent.email, normalizedParentEmail || null)) parentAccountChangedFields.add("email address");
+          if (changed(existingParent.login_contact_number ?? existingParent.contact_number, normalizedParentPhone)) parentAccountChangedFields.add("contact number");
+          if (changed(existingParent.relationship, user.relationship?.trim() || "Guardian")) parentAccountChangedFields.add("relationship");
+          if (changed(existingParent.address, user.address?.trim() || "")) parentAccountChangedFields.add("address");
+          if (changed(existingParent.status, toDbStatus(user.status))) parentAccountChangedFields.add("account status");
+        }
+        if (user.sharedFamilyDetailsChanged) parentAccountChangedFields.add("shared Parent or guardian details");
+      }
       // SF1-imported students can be displayed as a pending Parent row before
       // any parent account exists. This path corrects only the school
       // registration/SF1 fields; the parent supplies account details later
@@ -1315,12 +1355,13 @@ export async function PATCH(req: NextRequest) {
 
       const reconciledStudentIds = new Set<number>();
       const lrnCorrections: Array<{ previous: string; current: string; studentDbId: number }> = [];
+      const studentChangeNotifications: Array<{ studentId: string; changedFields: string[] }> = [];
       for (const student of user.studentDetails ?? []) {
         if (!student.studentId) continue;
         const storedStudentId = student.originalStudentId || student.studentId;
         const { data: storedStudent, error: storedStudentError } = await supabase
           .from("students")
-          .select("id, student_id")
+          .select("id, student_id, first_name, middle_name, last_name, gender, grade, section, rfid_card, birth_date, mother_tongue, ip_ethnic_group, religion, house_street_sitio_purok, barangay, municipality_city, province, learning_modality")
           .eq("student_id", storedStudentId)
           .maybeSingle();
         if (storedStudentError) throw storedStudentError;
@@ -1342,6 +1383,26 @@ export async function PATCH(req: NextRequest) {
           currentStudentId = renamed.student_id as string;
           lrnCorrections.push({ previous: storedStudent.student_id, current: currentStudentId, studentDbId: Number(storedStudent.id) });
         }
+
+        const studentChangedFields = new Set<string>();
+        if (changed(storedStudent.first_name, student.firstName.trim())) studentChangedFields.add("first name");
+        if (changed(storedStudent.middle_name, student.middleName?.trim() || null)) studentChangedFields.add("middle name");
+        if (changed(storedStudent.last_name, student.lastName.trim())) studentChangedFields.add("last name");
+        if (changed(storedStudent.gender, student.gender || null)) studentChangedFields.add("gender");
+        if (changed(storedStudent.student_id, currentStudentId)) studentChangedFields.add("LRN");
+        if (changed(storedStudent.grade, student.grade) || changed(storedStudent.section, student.section)) studentChangedFields.add("grade and section");
+        if (changed(storedStudent.rfid_card, student.rfid || null)) studentChangedFields.add("RFID card");
+        if (changed(storedStudent.birth_date, student.birthDate || null)) studentChangedFields.add("birth date");
+        if (changed(storedStudent.mother_tongue, student.motherTongue?.trim() || null)) studentChangedFields.add("mother tongue");
+        if (changed(storedStudent.ip_ethnic_group, student.ipEthnicGroup?.trim() || null)) studentChangedFields.add("IP / ethnic group");
+        if (changed(storedStudent.religion, student.religion?.trim() || null)) studentChangedFields.add("religion");
+        if (changed(storedStudent.learning_modality, student.learningModality?.trim() || null)) studentChangedFields.add("learning modality");
+        if (
+          changed(storedStudent.house_street_sitio_purok, student.houseStreetSitioPurok?.trim() || null)
+          || changed(storedStudent.barangay, student.barangay?.trim() || null)
+          || changed(storedStudent.municipality_city, student.municipalityCity?.trim() || null)
+          || changed(storedStudent.province, student.province?.trim() || null)
+        ) studentChangedFields.add("address");
 
         const { error: studentUpdateError } = await supabase
           .from("students")
@@ -1380,6 +1441,29 @@ export async function PATCH(req: NextRequest) {
             relationship: guardianRelationshipForStorage(student.guardianRelationship, student.guardianRelationshipOther),
           },
         ];
+        const { data: existingVerificationMembers, error: existingVerificationMembersError } = await supabase
+          .from("student_family_members")
+          .select("role, first_name, middle_name, last_name, suffix, relationship, contact_number")
+          .eq("student_db_id", studentRow.id);
+        if (existingVerificationMembersError) throw existingVerificationMembersError;
+        const currentVerificationByRole = new Map((existingVerificationMembers ?? []).map((member) => [member.role, member]));
+        const expectedVerificationContact = (wasPendingParent
+          ? normalizeParentPhone(student.contactNumber)
+          : normalizedParentPhone
+        ) || null;
+        for (const member of verificationMembers) {
+          const current = currentVerificationByRole.get(member.role);
+          if (
+            changed(current?.first_name, member.first_name)
+            || changed(current?.middle_name, member.middle_name)
+            || changed(current?.last_name, member.last_name)
+            || changed(current?.suffix, member.suffix)
+            || changed(current?.relationship, member.relationship)
+          ) studentChangedFields.add("Parent or guardian verification details");
+          if (changed(current?.contact_number, expectedVerificationContact)) {
+            studentChangedFields.add("recorded contact number");
+          }
+        }
         await saveFamilyMembersForStudents(
           [studentRow.id],
           verificationMembers,
@@ -1393,6 +1477,9 @@ export async function PATCH(req: NextRequest) {
         );
         completedUpdateSteps.push("student family verification records");
         reconciledStudentIds.add(Number(studentRow.id));
+        if (studentChangedFields.size > 0) {
+          studentChangeNotifications.push({ studentId: currentStudentId, changedFields: [...studentChangedFields] });
+        }
       }
 
       if (sharedFamilyMembers && !wasPendingParent && linkedStudentDbIds.size > 0) {
@@ -1433,6 +1520,22 @@ export async function PATCH(req: NextRequest) {
           changes: [{ field: "LRN", from: correction.previous, to: correction.current }],
         })));
       }
+
+      await Promise.all([
+        parentAccountChangedFields.size > 0
+          ? notifyParentsOfAccountChange({
+            actor: { role: "ICT", name: parentChangeActorName },
+            parentIds: parentAccountIds,
+            changedFields: [...parentAccountChangedFields],
+          })
+          : Promise.resolve(),
+        ...studentChangeNotifications.map((change) => notifyParentsOfAccountChange({
+          actor: { role: "ICT", name: parentChangeActorName },
+          parentIds: parentAccountIds,
+          student: { studentId: change.studentId },
+          changedFields: change.changedFields,
+        })),
+      ]);
 
       await publishAccountChange(parentAccountIds.map((id) => ({ role: "parent" as const, id: Number(id) })));
       await Promise.all([...reconciledStudentIds].map((studentDbId) => publishStudentRealtimeInvalidation({ studentDbId })));

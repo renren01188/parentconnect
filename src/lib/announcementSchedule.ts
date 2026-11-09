@@ -65,16 +65,6 @@ export type OptionalAnnouncementSchedule =
   | { ok: true; scheduledAt: string | null }
   | { ok: false; message: string };
 
-function scheduledClockTime(value: unknown) {
-  if (typeof value !== "string") return null;
-  const match = /^(\d{2}):(\d{2})$/.exec(value.trim());
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour > 23 || minute > 59) return null;
-  return `${match[1]}:${match[2]}`;
-}
-
 /**
  * Announcement scheduling is optional. A selected date is a school-calendar
  * date, not a browser-local timestamp, so store it as midnight in Manila.
@@ -96,33 +86,17 @@ export function normalizeOptionalAnnouncementSchedule(
   return { ok: true, scheduledAt: `${day}T00:00:00+08:00` };
 }
 
-/**
- * Optional Manila date-and-time scheduling. Used where a sender can choose a
- * precise delivery time while preserving the existing date-only schedule API.
- */
-export function normalizeOptionalAnnouncementScheduleDateTime(
-  dateValue: unknown,
-  timeValue: unknown,
-  now = new Date(),
-): OptionalAnnouncementSchedule {
-  const dateBlank = dateValue === null || dateValue === undefined || (typeof dateValue === "string" && !dateValue.trim());
-  const timeBlank = timeValue === null || timeValue === undefined || (typeof timeValue === "string" && !timeValue.trim());
-  if (dateBlank && timeBlank) return { ok: true, scheduledAt: null };
-  if (dateBlank || timeBlank) return { ok: false, message: "Choose both a schedule date and time, or leave both blank to send now." };
-
-  const day = scheduledCalendarDay(dateValue);
-  const time = scheduledClockTime(timeValue);
-  if (!day || !time) return { ok: false, message: "Schedule date or time is invalid." };
-  if (!isFutureSchoolCalendarDay(day, now)) {
-    return { ok: false, message: "Schedule date must be a future calendar day in Asia/Manila." };
-  }
-
-  const scheduledAt = `${day}T${time}:00+08:00`;
-  const scheduledInstant = new Date(scheduledAt);
-  if (Number.isNaN(scheduledInstant.getTime()) || scheduledInstant.getTime() <= now.getTime()) {
-    return { ok: false, message: "Schedule time must be in the future in Asia/Manila." };
-  }
-  return { ok: true, scheduledAt };
+/** Formats the selected school-calendar day without exposing an implicit time. */
+export function formatManilaAnnouncementDate(value: string | null | undefined) {
+  const day = scheduledCalendarDay(value);
+  if (!day) return "";
+  const date = new Date(`${day}T00:00:00+08:00`);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: SCHOOL_TIME_ZONE,
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
 }
 
 /** Formats an ISO timestamp as a clearly-labelled Manila schedule time. */

@@ -120,6 +120,43 @@ function guidanceReportStatusLabel(report: Report, options: { escalatedToPrincip
     if (report.escalatedToGuidance) return "Escalated to Guidance";
     return report.status;
 }
+
+function isActuallyResolvedGuidanceReport(report: Report) {
+    return report.status === "Resolved" && !report.cancelledByParent;
+}
+
+function isClosedGuidanceReport(report: Report) {
+    return isActuallyResolvedGuidanceReport(report) || report.cancelledByParent === true;
+}
+
+type GuidanceGroupStatusSummary = {
+    label: string;
+    className: string;
+};
+
+function guidanceGroupStatusSummary(reports: Report[]): GuidanceGroupStatusSummary | null {
+    if (reports.length === 0) return null;
+
+    const resolvedCount = reports.filter(isActuallyResolvedGuidanceReport).length;
+    const cancelledCount = reports.filter((report) => report.cancelledByParent).length;
+    const openCount = reports.length - resolvedCount - cancelledCount;
+
+    if (resolvedCount === reports.length) {
+        return { label: "All Resolved", className: "bg-sky-100 text-sky-700" };
+    }
+    if (cancelledCount === reports.length) {
+        return { label: "Cancelled by Parents", className: "bg-slate-100 text-slate-700" };
+    }
+    if (resolvedCount === 0 && cancelledCount === 0) return null;
+
+    const parts = [
+        openCount > 0 ? `${openCount} Open` : null,
+        resolvedCount > 0 ? `${resolvedCount} Resolved` : null,
+        cancelledCount > 0 ? `${cancelledCount} Cancelled by Parents` : null,
+    ].filter(Boolean);
+    return { label: `Mixed: ${parts.join(" · ")}`, className: "bg-amber-100 text-amber-800" };
+}
+
 function getAdminMsgStatusStyle(status: AdminMsgStatus) {
     switch (status) {
         case "New": return "bg-sky-500 text-white";
@@ -220,7 +257,20 @@ function computeAdviserLevel(cats: string[]): number {
 }
 
 type StaffRecipient = { id: string; name: string; email: string; role: string; type: "staff"; grade?: string; section?: string };
-type ParentRecipient = { id: string; name: string; actualParentName?: string; student: string; gradeLevel: string; section: string; type: "parent" };
+type ParentRecipient = {
+    id: string;
+    parentId: number;
+    parentEmail: string;
+    name: string;
+    actualParentName?: string;
+    studentId: string;
+    student: string;
+    gradeLevel: string;
+    section: string;
+    accountStatus: "Active" | "Not Active";
+    canReceive: boolean;
+    type: "parent";
+};
 type Recipient = StaffRecipient | ParentRecipient;
 type NewMessagePayload = {
     recipient: Recipient;
@@ -461,13 +511,22 @@ function NewMessageModal({
         const query = parentSearch.trim().toLowerCase();
         return parent.gradeLevel === gradeLevel &&
             parent.section === section &&
-            (!query || parent.name.toLowerCase().includes(query) || parent.student.toLowerCase().includes(query));
+            (!query || [parent.name, parent.actualParentName, parent.student, parent.gradeLevel, parent.section, parent.parentEmail]
+                .some((value) => String(value ?? "").toLowerCase().includes(query)));
     });
     const concernLevel = computeAdviserLevel(selectedCats);
     const otherSelected = selectedCats.includes("Other");
     // Direct messages do not carry report categories or concern levels.
     const isMessageMode = true;
-    const canSubmit = recipientId && subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) && (message.trim() || attachments.length > 0) && !sending;
+    const canSubmit = Boolean(
+        recipientId &&
+        subject.trim() &&
+        (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) &&
+        (message.trim() || attachments.length > 0) &&
+        selectedRecipient &&
+        (selectedRecipient.type !== "parent" || selectedRecipient.canReceive) &&
+        !sending,
+    );
     function toggleCat(name: string) { setSelectedCats(p => p.includes(name) ? p.filter(c => c !== name) : [...p, name]); }
     const barColor = concernLevel >= 100 ? "#ef4444" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#10b981";
 
@@ -520,7 +579,7 @@ function NewMessageModal({
     }
 
     return (
-        <div className="guidance-new-message-overlay fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5 md:justify-end" onClick={onClose}>
+        <div className="guidance-new-message-overlay fixed inset-0 z-50 flex items-start justify-end overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
             <div className="guidance-new-message-modal flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
                     <div className="min-w-0">
@@ -551,12 +610,18 @@ function NewMessageModal({
                                     {selectedRecipient ? (
                                         <><RecipientAvatar r={selectedRecipient} />
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.type === "parent" ? selectedRecipient.student : selectedRecipient.name}</p>
-                                                <p className="text-xs text-slate-400 truncate">
-                                                    {selectedRecipient.type === "staff"
-                                                        ? `${selectedRecipient.role} - ${selectedRecipient.email}`
-                                                        : `Parent: ${selectedRecipient.actualParentName || selectedRecipient.name}`}
-                                                </p>
+                                                {selectedRecipient.type === "parent" ? (
+                                                    <>
+                                                        <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.actualParentName || selectedRecipient.name}</p>
+                                                        <p className="text-xs text-slate-400 truncate">{selectedRecipient.gradeLevel} · {selectedRecipient.section} · {selectedRecipient.accountStatus}</p>
+                                                        <p className="text-xs text-slate-400 truncate">Student Name: {selectedRecipient.student}</p>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.name}</p>
+                                                        <p className="text-xs text-slate-400 truncate">{selectedRecipient.role} - {selectedRecipient.email}</p>
+                                                    </>
+                                                )}
                                             </div></>
                                     ) : <p className="text-sm text-slate-400 flex-1">Select a recipient...</p>}
                                     <svg className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${recipientOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -664,13 +729,15 @@ function NewMessageModal({
                                                 <p className="px-3.5 py-4 text-center text-xs font-semibold text-slate-400">No parents found for this section.</p>
                                             ) : (
                                                 filteredParents.map(p => (
-                                                    <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); setRecipientId(p.id); setRecipientOpen(false); }}
-                                                        className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 transition ${recipientId === p.id ? "bg-sky-50" : ""}`}>
+                                                    <button key={p.id} type="button" disabled={!p.canReceive} onMouseDown={e => { e.preventDefault(); if (!p.canReceive) return; setRecipientId(p.id); setRecipientOpen(false); }}
+                                                        className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left transition ${p.canReceive ? "hover:bg-slate-50" : "cursor-not-allowed opacity-60"} ${recipientId === p.id ? "bg-sky-50" : ""}`}>
                                                         <div className={`w-8 h-8 rounded-full ${getAvatarColor(p.name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>{getInitials(p.name)}</div>
                                                         <div className="min-w-0 flex-1">
-                                                            <p className="text-sm font-semibold text-slate-800 truncate">{p.student}</p>
-                                                            <p className="text-xs text-slate-400 truncate">Parent: {p.actualParentName || p.name}</p>
+                                                            <p className="text-sm font-semibold text-slate-800 truncate">{p.actualParentName || p.name}</p>
+                                                            <p className="text-xs text-slate-400 truncate">{p.gradeLevel} · {p.section}</p>
+                                                            <p className="text-xs text-slate-400 truncate">Student Name: {p.student}</p>
                                                         </div>
+                                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${p.canReceive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{p.accountStatus}</span>
                                                         {recipientId === p.id && <CheckCircle className="w-4 h-4 text-sky-500 ml-auto shrink-0" />}
                                                     </button>
                                                 ))
@@ -1081,8 +1148,7 @@ function ReportsPageContent() {
                 ...parent,
                 gradeLevel: parent.gradeLevel || "No grade level",
                 section: parent.section || "No section",
-            }))
-            .filter((parent, index, list) => list.findIndex((item) => item.id === parent.id) === index));
+            })));
         const requestedConversationId = preferredConversationId ?? preferredStaffConversationRef.current;
         if (requestedConversationId && nextMessages.some((message) => (message.conversationId ?? String(message.id)) === requestedConversationId)) {
             preferredStaffConversationRef.current = null;
@@ -1149,6 +1215,7 @@ function ReportsPageContent() {
     const selectedParentReports = selectedParent
         ? reports.filter((report) => parentStudentGroupKey(report) === selectedParent.key).sort(favoriteFirstReport(favoriteReportIds))
         : [];
+    const selectedParentStatusSummary = guidanceGroupStatusSummary(selectedParentReports);
 
     const principalMsgs = adminMsgs;
     const selectedReportId = selectedReport?.id ?? null;
@@ -1255,7 +1322,7 @@ function ReportsPageContent() {
     // Filter parent groups by status tab AND category
     const filteredParentGroups = parentGroups.filter(g => {
         if (filterTab === "Escalated") if (!g.reports.some(r => r.status === "Escalated")) return false;
-        if (filterTab === "Resolved") if (!g.reports.some(r => r.status === "Resolved")) return false;
+        if (filterTab === "Resolved") if (!g.reports.some(isActuallyResolvedGuidanceReport)) return false;
         if (categoryFilter !== "All") if (!g.reports.some(r => r.categories.includes(categoryFilter))) return false;
         return true;
     });
@@ -1716,8 +1783,8 @@ function ReportsPageContent() {
                                 {filteredParentGroups.map(g => {
                                     const isActive = selectedParent?.key === g.key;
                                     const hasFavorite = groupHasFavorite(g, favoriteReportIds);
-                                    const allResolved = g.reports.every(r => r.status === "Resolved");
-                                    const activeReports = g.reports.filter(r => r.status !== "Resolved");
+                                    const statusSummary = guidanceGroupStatusSummary(g.reports);
+                                    const activeReports = g.reports.filter((report) => !isClosedGuidanceReport(report));
                                     const principalEscalatedCount = activeReports.filter(r => principalEscalated[r.id]).length;
                                     const ongoingCount = activeReports.filter(r => {
                                         if (principalEscalated[r.id] || r.status !== "Ongoing") return false;
@@ -1747,13 +1814,13 @@ function ReportsPageContent() {
                                                 </div>
                                             </div>
                                             <div className="mt-2 flex items-center justify-between">
-                                                {allResolved
-                                                    ? <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-sky-100 text-sky-700">✅ All Resolved</span>
+                                                {statusSummary
+                                                    ? <span className={`px-2 py-0.5 text-[11px] font-extrabold rounded-lg ${statusSummary.className}`}>{statusSummary.label === "All Resolved" ? "✅ " : ""}{statusSummary.label}</span>
                                                     : <span />
                                                 }
                                                 <span className="text-[10px] text-slate-400">{g.reports.length} report{g.reports.length !== 1 ? "s" : ""}</span>
                                             </div>
-                                            {!allResolved && hasEscalated && (
+                                            {activeReports.length > 0 && hasEscalated && (
                                                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold">
                                                     {principalEscalatedCount > 0 && <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-3 h-3" />{principalEscalatedCount} escalated to principal</span>}
                                                     {hasOngoing && <span className="rounded-lg bg-violet-600 px-2 py-0.5 text-white">{ongoingCount} in progress</span>}
@@ -1855,8 +1922,10 @@ function ReportsPageContent() {
                                         </div>
                                     </div>
                                     <div className="mt-3">
-                                        {selectedParentReports.every(r => r.status === "Resolved") && (
-                                            <span className="px-2 py-0.5 text-[11px] font-extrabold rounded-lg bg-sky-100 text-sky-700">✅ All Resolved</span>
+                                        {selectedParentStatusSummary && (
+                                            <span className={`px-2 py-0.5 text-[11px] font-extrabold rounded-lg ${selectedParentStatusSummary.className}`}>
+                                                {selectedParentStatusSummary.label === "All Resolved" ? "✅ " : ""}{selectedParentStatusSummary.label}
+                                            </span>
                                         )}
                                     </div>
                                 </div>
@@ -2048,6 +2117,9 @@ function ReportsPageContent() {
                                             <div className="flex-1 min-w-0">
                                                 <h2 className="text-base font-extrabold text-slate-900 leading-snug">{selectedReport.subject}</h2>
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedReport.submitted_at}</p>
+                                                {selectedReport.submitted_by_role === "Subject Teacher" && (
+                                                    <p className="mt-2 text-xs font-semibold text-sky-700">Submitted by: {selectedReport.submitted_by_name} · Subject Teacher · {selectedReport.student_name} · {selectedReport.grade} - {selectedReport.section}</p>
+                                                )}
                                                 <div className="flex flex-wrap gap-1.5 mt-2">
                                                     {selectedReport.categories.map(cat => (
                                                         <span key={cat} className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 font-semibold border border-slate-200">{cat}</span>

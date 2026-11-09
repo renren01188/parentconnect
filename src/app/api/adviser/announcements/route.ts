@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { publishRealtimeInvalidation, recipientsForRoles } from "@/lib/realtimeInvalidation";
 import { logAnnouncementAudit } from "@/lib/announcementAudit";
-import { normalizeOptionalAnnouncementScheduleDateTime } from "@/lib/announcementSchedule";
+import { normalizeOptionalAnnouncementSchedule } from "@/lib/announcementSchedule";
 import { deliverAdviserAnnouncement } from "@/lib/deliverAdviserAnnouncement";
 
 function adviserFullName(adviser: {
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     const title = typeof body.title === "string" && body.title.trim()
       ? body.title.trim()
       : "Announcement from Class Adviser";
-    const schedule = normalizeOptionalAnnouncementScheduleDateTime(body.schedule_date, body.schedule_time);
+    const schedule = normalizeOptionalAnnouncementSchedule(body.schedule_date);
     if (!schedule.ok) return NextResponse.json({ success: false, message: schedule.message }, { status: 400 });
 
     if (!message) {

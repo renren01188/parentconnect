@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import {
   CheckCircle2,
   CreditCard,
@@ -28,13 +29,26 @@ type PasswordForm = {
   confirm: string;
 };
 
+type GuidanceChangeRequest = {
+  id: number;
+  status: "Pending" | "Approved" | "Rejected";
+  created_at: string;
+  reviewed_at: string | null;
+  review_note: string | null;
+  changes: { field: string; from: string; to: string }[];
+};
+
+type GuidanceProfileWithChangeRequest = GuidanceProfile & {
+  latest_change_request: GuidanceChangeRequest | null;
+};
+
 const emptyPasswordForm: PasswordForm = {
   current: "",
   newPass: "",
   confirm: "",
 };
 
-const emptyGuidanceProfile: GuidanceProfile = {
+const emptyGuidanceProfile: GuidanceProfileWithChangeRequest = {
   firstName: "",
   middleName: "",
   lastName: "",
@@ -45,6 +59,7 @@ const emptyGuidanceProfile: GuidanceProfile = {
   school: "",
   role: "",
   status: "",
+  latest_change_request: null,
 };
 
 function Field({
@@ -70,7 +85,7 @@ function Field({
 }
 
 export default function ProfilePage() {
-  const [profile, setProfile] = useState<GuidanceProfile>(emptyGuidanceProfile);
+  const [profile, setProfile] = useState<GuidanceProfileWithChangeRequest>(emptyGuidanceProfile);
   const [requestForm, setRequestForm] = useState<GuidanceProfile>(emptyGuidanceProfile);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [profileError, setProfileError] = useState("");
@@ -87,6 +102,8 @@ export default function ProfilePage() {
   const [passwordSaved, setPasswordSaved] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [dismissedChangeRequestId, setDismissedChangeRequestId] = useState<number | null>(null);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   // Do not overwrite a draft while the settings panel is open. Retain the
   // account invalidation and reconcile the protected profile snapshot as
@@ -96,6 +113,15 @@ export default function ProfilePage() {
   const fullName = getGuidanceFullName(profile);
   const initials = getGuidanceInitials(profile);
   const displayRole = profile.role === "Guidance Counselor" ? "Guidance" : profile.role;
+  const latestChangeRequest = profile.latest_change_request;
+  const showChangeRequestNotice = Boolean(
+    latestChangeRequest && latestChangeRequest.id !== dismissedChangeRequestId,
+  );
+  const changeRequestStyle = latestChangeRequest?.status === "Approved"
+    ? "border-sky-200 bg-sky-50 text-sky-800"
+    : latestChangeRequest?.status === "Rejected"
+      ? "border-red-200 bg-red-50 text-red-800"
+      : "border-amber-200 bg-amber-50 text-amber-800";
 
   const canSendApproval = useMemo(() => {
     return Boolean(
@@ -117,6 +143,21 @@ export default function ProfilePage() {
     passwordChecks.every((check) => check.met) &&
     passwords.newPass === passwords.confirm &&
     passwords.confirm.length > 0;
+
+  const profileDraftChanged = [
+    "firstName",
+    "middleName",
+    "lastName",
+    "suffix",
+    "email",
+    "contactNumber",
+    "employeeId",
+  ].some((key) => requestForm[key as keyof GuidanceProfile] !== profile[key as keyof GuidanceProfile]);
+  const hasUnsavedChanges = !approvalSent && !passwordSaved && (
+    profileDraftChanged ||
+    Boolean(approvalPassword.trim()) ||
+    Object.values(passwords).some((value) => Boolean(value))
+  );
 
   const updateRequestForm = (key: keyof GuidanceProfile) => (value: string) => {
     setRequestForm((prev) => ({ ...prev, [key]: value }));
@@ -233,7 +274,30 @@ export default function ProfilePage() {
     setPasswords(emptyPasswordForm);
     setApprovalPassword("");
     setApprovalUnlocked(false);
+    setShowDiscardDialog(false);
   };
+
+  const closeSettings = () => {
+    setShowDiscardDialog(false);
+    setSettingsOpen(false);
+  };
+
+  const requestCloseSettings = () => {
+    if (hasUnsavedChanges) {
+      setShowDiscardDialog(true);
+      return;
+    }
+    closeSettings();
+  };
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") requestCloseSettings();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [settingsOpen, hasUnsavedChanges]);
 
   if (loadingProfile) {
     return <div className="profile-page" role="status">Loading your profile...</div>;
@@ -279,6 +343,31 @@ export default function ProfilePage() {
         </section>
 
         <section className="profile-main">
+          {latestChangeRequest && showChangeRequestNotice ? (
+            <div className={`flex items-start justify-between gap-3 rounded-2xl border px-5 py-4 ${changeRequestStyle}`}>
+              <div className="min-w-0">
+                <h2 className="text-sm font-extrabold">Profile change request: {latestChangeRequest.status}</h2>
+                <p className="mt-1 text-xs opacity-80">
+                  Submitted {new Date(latestChangeRequest.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}.
+                  {latestChangeRequest.status === "Pending" ? " Your current details remain in effect until ICT reviews the request." : ""}
+                </p>
+                {latestChangeRequest.review_note ? <p className="mt-2 text-xs font-medium">ICT note: {latestChangeRequest.review_note}</p> : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{latestChangeRequest.status}</span>
+                <button
+                  type="button"
+                  onClick={() => setDismissedChangeRequestId(latestChangeRequest.id)}
+                  aria-label="Dismiss profile change request"
+                  title="Dismiss"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-current/70 transition hover:bg-white/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current/30"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="card details-card">
             <div className="section-heading">
               <UserRound size={18} />
@@ -312,14 +401,14 @@ export default function ProfilePage() {
       </div>
 
       {settingsOpen ? (
-        <div className="modal-backdrop" role="presentation">
-          <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Guidance profile settings">
+        <div className="modal-backdrop" role="presentation" onClick={requestCloseSettings}>
+          <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Guidance profile settings" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h2>Settings</h2>
                 <p>Request profile updates or change your password securely.</p>
               </div>
-              <button className="icon-btn" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+              <button className="icon-btn" onClick={requestCloseSettings} aria-label="Close settings">
                 <X size={18} />
               </button>
             </div>
@@ -391,7 +480,7 @@ export default function ProfilePage() {
                 {approvalError ? <div className="error-note" role="alert">{approvalError}</div> : null}
 
                 <div className="modal-actions">
-                  <button className="btn-secondary" onClick={() => setSettingsOpen(false)}>Cancel</button>
+                  <button className="btn-secondary" onClick={requestCloseSettings}>Cancel</button>
                   <button className="btn-primary" onClick={sendApprovalRequest} disabled={!approvalUnlocked || !canSendApproval || approvalSaving || approvalSent}>
                     <Save size={15} />
                     {approvalSaving ? "Sending..." : approvalSent ? "Request Sent" : "Send Approval"}
@@ -448,7 +537,7 @@ export default function ProfilePage() {
                 ) : null}
 
                 <div className="modal-actions">
-                  <button className="btn-secondary" onClick={() => setSettingsOpen(false)}>Cancel</button>
+                  <button className="btn-secondary" onClick={requestCloseSettings}>Cancel</button>
                   <button className="btn-primary" onClick={updatePassword} disabled={!canUpdatePassword || passwordSaving}>
                     <Lock size={15} />
                     {passwordSaving ? "Updating..." : "Update Password"}
@@ -457,6 +546,13 @@ export default function ProfilePage() {
               </div>
             ) : null}
           </div>
+          {showDiscardDialog ? (
+            <UnsavedChangesDialog
+              theme="guidance"
+              onStay={() => setShowDiscardDialog(false)}
+              onDiscard={closeSettings}
+            />
+          ) : null}
         </div>
       ) : null}
 

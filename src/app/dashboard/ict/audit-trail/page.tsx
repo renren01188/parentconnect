@@ -13,7 +13,7 @@ import {
 import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, AUDIT_STATUS_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { AuditExportModal } from "@/components/AuditExportModal";
-import { downloadAuditCsv } from "@/lib/downloadAuditCsv";
+import { downloadAuditPdf } from "@/lib/downloadAuditPdf";
 
 // ─── Types ───────────────────────────────────────────────────
 interface AuditEvent {
@@ -41,30 +41,41 @@ interface AuditEvent {
 const PRIMARY = "#274e13";
 const PER_PAGE_OPTIONS = [8, 15, 25, 50];
 
+
+
+// Local "today" in YYYY-MM-DD (toISOString would use UTC and can be off by a day in PH)
+function getTodayLocal(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+
+
 const ACTION_META: Record<string, { label: string; bg: string; text: string; border: string; Icon: React.ElementType }> = {
-  Login:           { label: "Login",          bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", Icon: LogIn          },
-  Logout:          { label: "Logout",         bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: LogIn          },
-  Create:          { label: "Create",         bg: "#f0fdf4", text: "#059669", border: "#6ee7b7", Icon: Plus           },
-  Update:          { label: "Update",         bg: "#fefce8", text: "#ca8a04", border: "#fde68a", Icon: Edit3          },
-  Delete:          { label: "Delete",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2         },
-  Message:         { label: "Message",        bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare  },
-  System:          { label: "System",         bg: "#f0f9ff", text: "#0284c7", border: "#bae6fd", Icon: Settings       },
-  "Failed Login":  { label: "Failed Login",   bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert    },
-  "Security Alert":{ label: "Security Alert", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert    },
-  "Password Reset":{ label: "Password Reset", bg: "#fdf4ff", text: "#7c3aed", border: "#ddd6fe", Icon: RefreshCw      },
-  Export:          { label: "Export",         bg: "#f0fdf4", text: "#0f766e", border: "#99f6e4", Icon: FileText       },
-  "Submit Report": { label: "Submit Report",  bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText       },
+  Login: { label: "Login", bg: "#eff6ff", text: "#2563eb", border: "#bfdbfe", Icon: LogIn },
+  Logout: { label: "Logout", bg: "#f3f4f6", text: "#6b7280", border: "#e5e7eb", Icon: LogIn },
+  Create: { label: "Create", bg: "#f0fdf4", text: "#059669", border: "#6ee7b7", Icon: Plus },
+  Update: { label: "Update", bg: "#fefce8", text: "#ca8a04", border: "#fde68a", Icon: Edit3 },
+  Delete: { label: "Delete", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: Trash2 },
+  Message: { label: "Message", bg: "#fdf4ff", text: "#9333ea", border: "#e9d5ff", Icon: MessageSquare },
+  System: { label: "System", bg: "#f0f9ff", text: "#0284c7", border: "#bae6fd", Icon: Settings },
+  "Failed Login": { label: "Failed Login", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert },
+  "Security Alert": { label: "Security Alert", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: ShieldAlert },
+  "Password Reset": { label: "Password Reset", bg: "#fdf4ff", text: "#7c3aed", border: "#ddd6fe", Icon: RefreshCw },
+  Export: { label: "Export", bg: "#f0fdf4", text: "#0f766e", border: "#99f6e4", Icon: FileText },
+  "Submit Report": { label: "Submit Report", bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText },
   "Student Report Submitted": { label: "Student Report Submitted", bg: "#fff7ed", text: "#b45309", border: "#fcd34d", Icon: FileText },
-  Approve:         { label: "Approve",        bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", Icon: CheckCircle    },
-  Reject:          { label: "Reject",         bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: AlertTriangle  },
+  Approve: { label: "Approve", bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", Icon: CheckCircle },
+  Reject: { label: "Reject", bg: "#fef2f2", text: "#dc2626", border: "#fecaca", Icon: AlertTriangle },
 };
 
 const ROLE_META: Record<string, { bg: string; text: string; border: string }> = {
-  "ICT":        { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
-  "Adviser":    { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
-  "Guidance":   { bg: "#f3e8ff", text: "#7e22ce", border: "#e9d5ff" },
-  "Principal":  { bg: "#fefce8", text: "#92400e", border: "#fde68a" },
-  "Student":    { bg: "#fff7ed", text: "#c2410c", border: "#fed7aa" },
+  "ICT": { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0" },
+  "Adviser": { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
+  "Guidance": { bg: "#f3e8ff", text: "#7e22ce", border: "#e9d5ff" },
+  "Principal": { bg: "#fefce8", text: "#92400e", border: "#fde68a" },
+  "Student": { bg: "#fff7ed", text: "#c2410c", border: "#fed7aa" },
   "Subject Teacher": { bg: "#f0f9ff", text: "#0369a1", border: "#bae6fd" },
 };
 
@@ -102,7 +113,7 @@ function resolveAction(raw: string): string {
   }
   // Normalise common patterns from DB (e.g. "create_user" → "Create")
   const first = raw.split(/[_\s]/)[0];
-  const cap   = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  const cap = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
   return ACTION_META[cap] ? cap : raw;
 }
 
@@ -183,8 +194,8 @@ function SkeletonRow() {
 function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () => void }) {
   const m = getActionMeta(event.action);
   const initials = getInitials(event.performedBy);
-  const color    = avatarColor(event.performedBy);
-  const role     = event.performedByRole || "Unknown";
+  const color = avatarColor(event.performedBy);
+  const role = event.performedByRole || "Unknown";
 
   return (
     <div
@@ -236,8 +247,8 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
           {/* Details grid */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {[
-              { label: "Timestamp",  value: event.timestamp,  icon: Clock    },
-              { label: "Module",     value: event.module || "—",      icon: Monitor  },
+              { label: "Timestamp", value: event.timestamp, icon: Clock },
+              { label: "Module", value: event.module || "—", icon: Monitor },
             ].map(({ label, value, icon: Icon }) => (
               <div key={label} className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
                 <div className="flex items-center gap-1.5 mb-1">
@@ -299,29 +310,29 @@ function EventDetailModal({ event, onClose }: { event: AuditEvent; onClose: () =
 // ─── Main Page ────────────────────────────────────────────────
 export default function AuditTrailPage() {
   // ── Filter & pagination state ──
-  const [query,        setQuery]       = useState("");
-  const [actionFilter, setActionFilter]= useState("");
-  const [roleFilter,   setRoleFilter]  = useState("");
+  const [query, setQuery] = useState("");
+  const [actionFilter, setActionFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
   const [moduleFilter, setModuleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [dateFilter,   setDateFilter]  = useState("");
+  const [dateFilter, setDateFilter] = useState("");
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">("active");
-  const [page,         setPage]        = useState(1);
-  const [perPage,      setPerPage]     = useState(8);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(8);
 
   // ── UI state ──
-  const [viewEvent,    setViewEvent]   = useState<AuditEvent | null>(null);
-  const [exportOpen,   setExportOpen]  = useState(false);
-  const [actionOpen,   setActionOpen]  = useState(false);
-  const [roleOpen,     setRoleOpen]    = useState(false);
+  const [viewEvent, setViewEvent] = useState<AuditEvent | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [actionOpen, setActionOpen] = useState(false);
+  const [roleOpen, setRoleOpen] = useState(false);
 
   // ── Data state ──
-  const [events,       setEvents]      = useState<AuditEvent[]>([]);
-  const [total,        setTotal]       = useState(0);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [total, setTotal] = useState(0);
   const [securityTotal, setSecurityTotal] = useState(0);
-  const [loading,      setLoading]     = useState(true);
-  const [error,        setError]       = useState<string | null>(null);
-  const [refreshKey,   setRefreshKey]  = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // ── Debounce search ──
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -332,15 +343,15 @@ export default function AuditTrailPage() {
     setError(null);
     try {
       const params = new URLSearchParams({
-        page:    String(page),
+        page: String(page),
         perPage: String(perPage),
       });
-      if (query)        params.set("search", query);
+      if (query) params.set("search", query);
       if (actionFilter) params.set("action", actionFilter);
-      if (roleFilter)   params.set("role",   roleFilter);
+      if (roleFilter) params.set("role", roleFilter);
       if (moduleFilter) params.set("module", moduleFilter);
       if (statusFilter) params.set("status", statusFilter);
-      if (dateFilter)   params.set("date",   dateFilter);
+      if (dateFilter) params.set("date", dateFilter);
       params.set("archive", archiveFilter);
 
       const res = await fetch(`/api/ict/audit-log?${params.toString()}`);
@@ -381,8 +392,8 @@ export default function AuditTrailPage() {
 
   const stats = useMemo(() => ({
     total,
-    logins:   events.filter(e => resolveAction(e.action) === "Login").length,
-    edits:    events.filter(e => ["Submit Report", "Message", "Escalate", "Resolve", "Update", "Approve", "Reject"].includes(resolveAction(e.action))).length,
+    logins: events.filter(e => resolveAction(e.action) === "Login").length,
+    edits: events.filter(e => ["Submit Report", "Message", "Escalate", "Resolve", "Update", "Approve", "Reject"].includes(resolveAction(e.action))).length,
     security: securityTotal,
   }), [events, securityTotal, total]);
 
@@ -392,13 +403,13 @@ export default function AuditTrailPage() {
   }
 
   const exportAuditDate = useCallback((date: string) => (
-    downloadAuditCsv("/api/ict/audit-log", date, "ict-audit-trail")
+    downloadAuditPdf("/api/ict/audit-log", date, "ict-audit-trail")
   ), []);
 
   const statCards = [
-    { label: "Total Events",    value: stats.total,    icon: Activity,    color: "#274e13", bg: "bg-green-50"  },
-    { label: "Login Events",    value: stats.logins,   icon: LogIn,       color: "#2563eb", bg: "bg-blue-50"   },
-    { label: "Edit Actions",    value: stats.edits,    icon: Edit3,       color: "#d97706", bg: "bg-amber-50"  },
+    { label: "Total Events", value: stats.total, icon: Activity, color: "#274e13", bg: "bg-green-50" },
+    { label: "Login Events", value: stats.logins, icon: LogIn, color: "#2563eb", bg: "bg-blue-50" },
+    { label: "Edit Actions", value: stats.edits, icon: Edit3, color: "#d97706", bg: "bg-amber-50" },
     { label: "Security Alerts", value: stats.security, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", actionFilter: "Security Events" },
   ];
 
@@ -423,7 +434,7 @@ export default function AuditTrailPage() {
             className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#1e3d0f]"
           >
             <Download className="w-4 h-4" />
-            Export
+            Export PDF
           </button>
           <button
             onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}
@@ -499,7 +510,14 @@ export default function AuditTrailPage() {
             <input
               type="date"
               value={dateFilter}
-              onChange={(e) => { setDateFilter(e.target.value); setPage(1); }}
+              max={getTodayLocal()}
+              onChange={(e) => {
+                const val = e.target.value;
+                // Guard: block manually typed future dates
+                if (val && val > getTodayLocal()) return;
+                setDateFilter(val);
+                setPage(1);
+              }}
               className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-3 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-[#274e13]/20 focus:border-[#274e13] sm:w-44"
             />
           </div>
@@ -645,9 +663,9 @@ export default function AuditTrailPage() {
                 </tr>
               ) : (
                 events.map((event, idx) => {
-                  const initials  = getInitials(event.performedBy);
-                  const color     = avatarColor(event.performedBy);
-                  const isAlert   = isSecurityAuditAction(event.action);
+                  const initials = getInitials(event.performedBy);
+                  const color = avatarColor(event.performedBy);
+                  const isAlert = isSecurityAuditAction(event.action);
                   const rowNumber = (page - 1) * perPage + idx + 1;
 
                   return (
@@ -701,11 +719,10 @@ export default function AuditTrailPage() {
                       <td className="px-4 py-3.5">
                         <button
                           onClick={() => setViewEvent(event)}
-                          className={`w-8 h-8 rounded-lg flex items-center justify-center transition ${
-                            isAlert
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center transition ${isAlert
                               ? "text-red-400 hover:text-red-600 hover:bg-red-100"
                               : "text-gray-400 hover:text-[#274e13] hover:bg-green-100"
-                          }`}
+                            }`}
                         >
                           <Eye className="w-4 h-4" />
                         </button>
@@ -729,8 +746,8 @@ export default function AuditTrailPage() {
             {loading
               ? "Loading…"
               : total === 0
-              ? "No results"
-              : `Showing ${(page - 1) * perPage + 1}–${Math.min(page * perPage, total)} of ${total.toLocaleString()} events`
+                ? "No results"
+                : `Showing ${(page - 1) * perPage + 1}–${Math.min(page * perPage, total)} of ${total.toLocaleString()} events`
             }
           </p>
 
@@ -766,9 +783,9 @@ export default function AuditTrailPage() {
                     disabled={loading}
                     className="w-8 h-8 rounded-lg text-xs font-bold transition border disabled:opacity-50"
                     style={{
-                      background:  page === p ? PRIMARY  : "white",
-                      color:       page === p ? "white"  : "#6b7280",
-                      borderColor: page === p ? PRIMARY  : "#e5e7eb",
+                      background: page === p ? PRIMARY : "white",
+                      color: page === p ? "white" : "#6b7280",
+                      borderColor: page === p ? PRIMARY : "#e5e7eb",
                     }}
                   >
                     {p}

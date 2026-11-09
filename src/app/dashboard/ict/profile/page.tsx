@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
-import { Save, X, Pencil } from "lucide-react";
+import { Save, X, Pencil, ShieldCheck, UserRound } from "lucide-react";
 
 type IctProfileForm = {
   firstName: string;
@@ -200,7 +200,7 @@ export default function ICTProfilePage() {
           className="flex min-h-11 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 sm:min-h-0"
         >
           <Pencil className="h-3.5 w-3.5" />
-          Edit Profile
+          Settings
         </button>
       </div>
 
@@ -286,8 +286,8 @@ export default function ICTProfilePage() {
           >
             <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6 sm:py-5">
               <div className="min-w-0">
-                <h2 id="ict-edit-profile-title" className="text-lg font-bold text-gray-800">Edit Profile</h2>
-                <p className="mt-0.5 text-xs text-gray-400">Update your personal information.</p>
+                <h2 id="ict-edit-profile-title" className="text-lg font-extrabold text-slate-800">Settings</h2>
+                <p className="mt-0.5 text-xs text-slate-400">Update your profile securely. Changes take effect immediately.</p>
               </div>
               <button
                 type="button"
@@ -300,6 +300,14 @@ export default function ICTProfilePage() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+              <div className="mb-4 flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300 bg-sky-100 px-4 text-sm font-bold text-sky-700">
+                <UserRound className="h-4 w-4" />
+                Profile Settings
+              </div>
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-xs leading-relaxed text-sky-800">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+                <p>ICT profile changes do not require approval and are saved immediately.</p>
+              </div>
               {error && (
                 <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
                   {error}
@@ -308,7 +316,7 @@ export default function ICTProfilePage() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {fields.map(({ label, key, type }) => (
                   <div key={key} className="min-w-0">
-                    <label htmlFor={`ict-profile-${key}`} className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                    <label htmlFor={`ict-profile-${key}`} className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                       {label}
                     </label>
                     <input
@@ -316,7 +324,7 @@ export default function ICTProfilePage() {
                       type={type}
                       value={draft[key as keyof IctProfileForm]}
                       onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))}
-                      className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-800 transition focus:border-[#1a3a0a] focus:outline-none focus:ring-2 focus:ring-[#1a3a0a]/30"
+                      className="min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 transition focus:border-[#1a3a0a] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1a3a0a]/20"
                     />
                   </div>
                 ))}
@@ -327,7 +335,7 @@ export default function ICTProfilePage() {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="min-h-11 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 shadow-sm transition-colors hover:bg-gray-50"
+                className="min-h-11 rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -335,7 +343,7 @@ export default function ICTProfilePage() {
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-[#1a3a0a] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#274e13] disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#1a3a0a] px-5 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-[#274e13] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Save className="h-3.5 w-3.5" />
                 {saving ? "Saving..." : "Save Changes"}

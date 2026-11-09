@@ -1724,14 +1724,6 @@ function ParentReportsPageContent() {
                     </div>
                   )}
 
-                  {selectedReport.submittedByRole === "Subject Teacher" && (
-                    <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-700">
-                      <p><strong>Submitted by:</strong> {selectedReport.submittedByName} · Subject Teacher</p>
-                      <p className="mt-0.5"><strong>Student:</strong> {selectedReport.studentName} · {selectedReport.grade} - {selectedReport.section}</p>
-                      <p className="mt-0.5"><strong>Report date:</strong> {selectedReport.submittedAt}</p>
-                    </div>
-                  )}
-
                   {selectedReport.isStudentSubmittedConcern && (
                     <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-700">
                       <p><strong>Student-submitted concern</strong></p>

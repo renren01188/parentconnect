@@ -23,6 +23,7 @@ import {
   toParentReportSummary,
   toPrincipalReport,
   toPrincipalReportSummary,
+  withCurrentStudentNames,
   type ReportRow,
 } from "./_lib";
 
@@ -154,9 +155,9 @@ function parentDisplayName(parent: ParentIdentity) {
   ].filter(Boolean).join(" ").trim();
 }
 
-/** Resolve sender identity from the parent account so legacy report snapshots
- * cannot show an adviser name in the parent-facing Guidance queue. */
-async function resolveParentIdentities(rows: ReportRow[]): Promise<ReportRow[]> {
+/** Resolve display identities from live account and student records. Stored
+ * report names remain the fallback if a related record is unavailable. */
+async function resolveCurrentReportIdentities(rows: ReportRow[]): Promise<ReportRow[]> {
   const parentIds = [...new Set(rows.flatMap((row) => row.parent_id ? [row.parent_id] : []))];
   const parentEmails = [...new Set(rows.flatMap((row) => row.parent_email ? [row.parent_email] : []))];
   const studentIds = [...new Set(rows.flatMap((row) => row.student_id ? [row.student_id] : []))];
@@ -177,7 +178,7 @@ async function resolveParentIdentities(rows: ReportRow[]): Promise<ReportRow[]> 
   const parentsByEmail = new Map(parents.filter((parent) => parent.email).map((parent) => [parent.email!, parent]));
   const parentsByStudent = new Map(parents.filter((parent) => parent.student_id).map((parent) => [parent.student_id!, parent]));
 
-  return rows.map((row) => {
+  const parentResolvedRows = rows.map((row) => {
     const parent = (row.parent_id ? parentsById.get(row.parent_id) : undefined)
       ?? parentsByEmail.get(row.parent_email)
       ?? parentsByStudent.get(row.student_id);
@@ -185,6 +186,8 @@ async function resolveParentIdentities(rows: ReportRow[]): Promise<ReportRow[]> 
 
     return parent && name ? { ...row, parent_name: name } : row;
   });
+
+  return withCurrentStudentNames(parentResolvedRows);
 }
 
 export async function GET(req: NextRequest) {
@@ -218,7 +221,7 @@ export async function GET(req: NextRequest) {
 
       if (error) throw error;
 
-      const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+      const rows = await resolveCurrentReportIdentities((data ?? []) as unknown as ReportRow[]);
       const [messages, tickets] = await Promise.all([
         (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
         listGuidanceTickets(rows.map((row) => row.id), !summary),
@@ -252,7 +255,7 @@ export async function GET(req: NextRequest) {
 
       // Student-submitted concerns become visible to Principal monitoring only
       // after their linked parent accepts the conversation agreement.
-      const rows = (await resolveParentIdentities((data ?? []) as unknown as ReportRow[]))
+      const rows = (await resolveCurrentReportIdentities((data ?? []) as unknown as ReportRow[]))
         .filter(isPrincipalVisibleReport);
       // The Principal may monitor every visible report, but Guidance must
       // explicitly escalate it before its message history is authorized. Do
@@ -303,7 +306,7 @@ export async function GET(req: NextRequest) {
 
       // Escalated cases are a role-wide Guidance workspace. Ticket assignment
       // remains a coordination detail, never a visibility or write boundary.
-      const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+      const rows = await resolveCurrentReportIdentities((data ?? []) as unknown as ReportRow[]);
       const tickets = await listGuidanceTickets(rows.map((row) => row.id), !summary);
       const messages = await (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id));
       return NextResponse.json({
@@ -338,7 +341,7 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error;
 
-    const rows = await resolveParentIdentities((data ?? []) as unknown as ReportRow[]);
+    const rows = await resolveCurrentReportIdentities((data ?? []) as unknown as ReportRow[]);
     const [messages, tickets] = await Promise.all([
       (summary ? listMessageSummaries : listMessages)(rows.map((row) => row.id)),
       listGuidanceTickets(rows.map((row) => row.id), !summary),

@@ -16,6 +16,7 @@ const guidancePost = read("src/app/api/guidance/announcements/route.ts");
 const guidancePatch = read("src/app/api/guidance/announcements/[id]/route.ts");
 const principalPost = read("src/app/api/principal/announcements/route.ts");
 const principalPatch = read("src/app/api/principal/announcements/[id]/route.ts");
+const adviserPost = read("src/app/api/adviser/announcements/route.ts");
 const ictPage = read("src/app/dashboard/ict/Announcements/page.tsx");
 const guidancePage = read("src/app/dashboard/guidance/announcements/page.tsx");
 const principalPage = read("src/app/dashboard/principal/announcements/page.tsx");
@@ -26,9 +27,8 @@ assert.match(schedule, /value === null \|\| value === undefined/);
 assert.match(schedule, /scheduledAt: null/);
 assert.match(schedule, /\$\{day\}T00:00:00\+08:00/);
 assert.match(schedule, /isDueAnnouncementSchedule/);
-assert.match(schedule, /normalizeOptionalAnnouncementScheduleDateTime/);
 
-for (const route of [ictPost, ictPatch, guidancePost, guidancePatch, principalPost, principalPatch]) {
+for (const route of [ictPost, ictPatch, guidancePost, guidancePatch, principalPost, principalPatch, adviserPost]) {
   assert.match(route, /normalizeOptionalAnnouncementSchedule/);
 }
 

@@ -151,11 +151,12 @@ export async function PATCH(req: NextRequest) {
         }
 
         const body = await req.json();
-        const { id, action, reviewNote, role = "adviser" } = body;
+        const { id, action, reviewNote, role } = body;
+        const requestId = Number(id);
 
-        if (!id || !["approve", "reject"].includes(action)) {
+        if (!Number.isSafeInteger(requestId) || requestId <= 0 || !["approve", "reject"].includes(action) || !["adviser", "guidance"].includes(role)) {
             return NextResponse.json(
-                { success: false, message: "id and action (approve|reject) are required." },
+                { success: false, message: "A valid request ID, role, and action (approve|reject) are required." },
                 { status: 400 }
             );
         }
@@ -166,7 +167,7 @@ export async function PATCH(req: NextRequest) {
             const { data: requestData, error: fetchError } = await supabase
                 .from("guidance_change_requests")
                 .select("id, guidance_id, guidance_name, guidance_email, changes, status")
-                .eq("id", Number(id)).single();
+                .eq("id", requestId).single();
             if (fetchError) throw fetchError;
             if (requestData.status !== "Pending") return NextResponse.json({ success: false, message: "This request has already been reviewed." }, { status: 409 });
             if (action === "approve") {
@@ -189,8 +190,9 @@ export async function PATCH(req: NextRequest) {
                 const name = [update.first_name ?? current.first_name, update.middle_name ?? current.middle_name, update.last_name ?? current.last_name, update.suffix ?? current.suffix].filter(Boolean).join(" ") || "Guidance Counselor";
                 await syncStaffProfile({ role: "guidance", id: Number(requestData.guidance_id), previousName, name, email: String(update.email ?? current.email ?? "") });
             }
-            const { error: updateError } = await supabase.from("guidance_change_requests").update({ status: newStatus, reviewed_at: new Date().toISOString(), reviewed_by_ict_id: session.ictId, review_note: reviewNote ?? ` ${newStatus} by ICT Admin.`.trim() }).eq("id", Number(id)).eq("status", "Pending");
+            const { data: updatedRows, error: updateError } = await supabase.from("guidance_change_requests").update({ status: newStatus, reviewed_at: new Date().toISOString(), reviewed_by_ict_id: session.ictId, review_note: reviewNote ?? ` ${newStatus} by ICT Admin.`.trim() }).eq("id", requestId).eq("status", "Pending").select("id");
             if (updateError) throw updateError;
+            if (!updatedRows?.length) return NextResponse.json({ success: false, message: "This request has already been reviewed." }, { status: 409 });
             await logAudit({
                 action: action === "approve" ? "Approve" : "Reject",
                 performedById: session.ictId,
@@ -211,7 +213,7 @@ export async function PATCH(req: NextRequest) {
         const { data: requestData, error: fetchError } = await supabase
             .from("adviser_change_requests")
             .select("id, adviser_id, adviser_name, adviser_email, changes, status")
-            .eq("id", Number(id))
+            .eq("id", requestId)
             .single();
 
         if (fetchError) throw fetchError;
@@ -241,6 +243,7 @@ export async function PATCH(req: NextRequest) {
                     case "Suffix": profileUpdate["suffix"] = change.to; break;
                     case "Email Address": profileUpdate["email"] = change.to; break;
                     case "Phone Number": profileUpdate["phone"] = change.to; break;
+                    case "Employee ID": profileUpdate["employee_id"] = change.to; break;
                     case "Advisory Class":
                         if (change.newGrade) profileUpdate["grade"] = change.newGrade;
                         if (Array.isArray(change.newSections) && change.newSections.length > 0) {
@@ -299,7 +302,7 @@ export async function PATCH(req: NextRequest) {
                 }
                 const { data: currentAdviser, error: currentAdviserError } = await supabase
                     .from("advisers")
-                    .select("grade, section, sections, first_name, middle_name, last_name, suffix, email")
+                    .select("employee_id, grade, section, sections, first_name, middle_name, last_name, suffix, email")
                     .eq("id", adviser_id)
                     .single();
                 if (currentAdviserError) throw currentAdviserError;
@@ -308,6 +311,12 @@ export async function PATCH(req: NextRequest) {
                         .from("advisers").select("id").eq("email", profileUpdate.email).neq("id", adviser_id).limit(1);
                     if (emailCheckError) throw emailCheckError;
                     if (emailInUse?.length) return NextResponse.json({ success: false, message: "The requested email address is already in use." }, { status: 409 });
+                }
+                if (profileUpdate.employee_id !== undefined) {
+                    await assertStaffEmployeeIdAvailable(profileUpdate.employee_id, {
+                        role: "Adviser",
+                        id: Number(adviser_id),
+                    });
                 }
                 const { error: profileError } = await supabase
                     .from("advisers")
@@ -341,7 +350,7 @@ export async function PATCH(req: NextRequest) {
                         .from("adviser_assignment_history")
                         .insert({
                             adviser_id,
-                            request_id: Number(id),
+                            request_id: requestId,
                             previous_grade: currentAdviser.grade ?? assignmentChange.oldGrade ?? null,
                             previous_sections: Array.isArray(currentAdviser.sections) && currentAdviser.sections.length
                                 ? currentAdviser.sections
@@ -365,7 +374,7 @@ export async function PATCH(req: NextRequest) {
                 reviewed_by_ict_id: session.ictId,
                 review_note: reviewNote ?? (action === "approve" ? "Approved by ICT Admin." : "Rejected by ICT Admin."),
             })
-            .eq("id", Number(id))
+            .eq("id", requestId)
             .eq("status", "Pending")
             .select("id");
         if (updateError) throw updateError;

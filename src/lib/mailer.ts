@@ -735,6 +735,7 @@ export async function sendSubjectTeacherReportNotificationEmail({
   grade,
   section,
   concern,
+  revealReporter = true,
 }: {
   recipientEmail: string;
   recipientName: string;
@@ -745,7 +746,12 @@ export async function sendSubjectTeacherReportNotificationEmail({
   grade: string;
   section: string;
   concern: string;
+  /** Parent-facing notices identify the report type but not the teacher. */
+  revealReporter?: boolean;
 }) {
+  const reporterSummary = revealReporter
+    ? `<p><strong>${teacherName}</strong> (${teacherEmail}) submitted a report for <strong>${studentName}</strong> in ${grade} - ${section}.</p>`
+    : `<p>A subject teacher submitted a report for <strong>${studentName}</strong> in ${grade} - ${section}.</p>`;
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: recipientEmail,
@@ -754,7 +760,7 @@ export async function sendSubjectTeacherReportNotificationEmail({
       <div style="background:#7c3aed;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;"><h1 style="color:white;margin:0;font-size:22px;">ParentConnect</h1><p style="color:#ede9fe;margin:6px 0 0;font-size:13px;">Subject Teacher Report</p></div>
       <div style="background:white;border-radius:12px;padding:24px;border:1px solid #e2e8f0;">
         <p>Hello, <strong>${recipientName}</strong>,</p>
-        <p><strong>${teacherName}</strong> (${teacherEmail}) submitted a report for <strong>${studentName}</strong> in ${grade} - ${section}.</p>
+        ${reporterSummary}
         <p style="font-size:12px;color:#64748b;">This notification is for the ${recipientRole}. Please open ParentConnect to view the report and continue the Parent - Adviser conversation.</p>
         <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:16px;margin-top:16px;"><p style="margin:0;color:#4c1d95;white-space:pre-wrap;">${concern}</p></div>
       </div>

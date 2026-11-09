@@ -4,6 +4,7 @@ import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { sendAdviserParentMessageEmail, sendAdviserPrincipalMessageEmail } from "@/lib/mailer";
 import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { logAudit } from "@/lib/audit";
+import { findParentMessageRecipient, listParentMessageRecipients } from "@/lib/parentMessageRecipients";
 
 type PrincipalRow = {
   id: number;
@@ -12,27 +13,6 @@ type PrincipalRow = {
   last_name: string;
   suffix?: string | null;
   email: string;
-};
-
-type StudentRow = {
-  student_id: string;
-  first_name: string;
-  middle_name?: string | null;
-  last_name: string;
-  suffix?: string | null;
-  grade?: string | null;
-  section?: string | null;
-};
-
-type ParentRow = {
-  id: number;
-  email: string;
-  parent_first_name?: string | null;
-  parent_middle_name?: string | null;
-  parent_last_name?: string | null;
-  parent_suffix?: string | null;
-  student_id: string;
-  students: StudentRow | StudentRow[];
 };
 
 type MessageAttachment = {
@@ -66,14 +46,6 @@ function isMissingAttachmentsColumn(error: { code?: string; message?: string } |
 
 function fullName(parts: Array<string | null | undefined>) {
   return parts.filter(Boolean).join(" ").trim();
-}
-
-function displayParentName(studentName: string) {
-  return `${studentName}'s Parent`;
-}
-
-function studentFromRelation(students: ParentRow["students"]) {
-  return Array.isArray(students) ? students[0] : students;
 }
 
 function cleanAttachments(value: unknown): MessageAttachment[] {
@@ -119,7 +91,7 @@ export async function GET() {
         ? [adviser.section]
         : [];
 
-    const [principalsResult, parentsResult, inboxResult, repliesResult] = await Promise.all([
+    const [principalsResult, allParents, inboxResult, repliesResult] = await Promise.all([
       supabase
         .from("principals")
         .select("id, first_name, middle_name, last_name, suffix, email")
@@ -127,17 +99,7 @@ export async function GET() {
         .eq("is_active", true)
         .eq("archive_status", "active")
         .order("last_name", { ascending: true }),
-      supabase
-        .from("parents")
-        .select(`
-          id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-          students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
-        `)
-        .eq("archive_status", "active")
-        .eq("students.archive_status", "active")
-        .eq("students.grade", adviser.grade)
-        .in("students.section", adviserSections.length > 0 ? adviserSections : [""])
-        .order("parent_last_name", { ascending: true }),
+      listParentMessageRecipients(),
       supabase
         .from("principal_staff_messages")
         .select("*")
@@ -152,7 +114,6 @@ export async function GET() {
     ]);
 
     if (principalsResult.error) throw principalsResult.error;
-    if (parentsResult.error) throw parentsResult.error;
     if (inboxResult.error && !isMissingTableError(inboxResult.error)) throw inboxResult.error;
     if (repliesResult.error && !isMissingTableError(repliesResult.error)) throw repliesResult.error;
 
@@ -165,29 +126,10 @@ export async function GET() {
       email: principal.email,
     }));
 
-    const parents = ((parentsResult.data ?? []) as unknown as ParentRow[]).flatMap((parent) => {
-      const student = studentFromRelation(parent.students);
-      if (!student) return [];
-      const studentName = fullName([student.first_name, student.middle_name, student.last_name, student.suffix]);
-      return {
-        id: `parent:${parent.id}:${student.student_id}`,
-        parentId: parent.id,
-        parentEmail: parent.email,
-        name: displayParentName(studentName),
-        parentName: displayParentName(studentName),
-        actualParentName: fullName([
-          parent.parent_first_name,
-          parent.parent_middle_name,
-          parent.parent_last_name,
-          parent.parent_suffix,
-        ]),
-        studentId: student.student_id,
-        studentName,
-        grade: student.grade ?? "",
-        section: student.section ?? "",
-        type: "parent" as const,
-      };
-    });
+    const parents = allParents.filter((parent) =>
+      parent.grade === adviser.grade &&
+      adviserSections.includes(parent.section),
+    );
 
     const repliesBySource = new Map<number, Array<{ sender: string; message: string; sent_at: string; attachments: MessageAttachment[] }>>();
     for (const row of ((repliesResult.data ?? []) as Array<Record<string, unknown>>)) {
@@ -589,27 +531,15 @@ async function createParentReport({
   message: string;
   attachments: MessageAttachment[];
 }) {
-  const { data: parentRow, error: parentError } = await supabase
-    .from("parents")
-    .select(`
-      id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, student_id,
-      students!inner ( student_id, first_name, middle_name, last_name, suffix, grade, section, archive_status )
-    `)
-    .eq("id", parentId)
-    .eq("student_id", studentId)
-    .eq("archive_status", "active")
-    .eq("students.archive_status", "active")
-    .limit(1)
-    .maybeSingle();
-
-  if (parentError) throw parentError;
-  if (!parentRow) {
+  const recipient = await findParentMessageRecipient(parentId, studentId);
+  if (!recipient) {
     return NextResponse.json({ success: false, message: "Parent recipient not found." }, { status: 404 });
   }
-
-  const student = studentFromRelation((parentRow as unknown as ParentRow).students);
-  if (!student) {
-    return NextResponse.json({ success: false, message: "Student record not found for this parent." }, { status: 404 });
+  if (!recipient.canReceive) {
+    return NextResponse.json(
+      { success: false, message: "This Parent account is not active. The Parent must complete Guardian signup before receiving messages." },
+      { status: 409 },
+    );
   }
   const adviserSections = Array.isArray(adviser.sections) && adviser.sections.length > 0
     ? adviser.sections
@@ -617,7 +547,7 @@ async function createParentReport({
       ? [adviser.section]
       : [];
 
-  if (student.grade !== adviser.grade || !adviserSections.includes(student.section ?? "")) {
+  if (recipient.grade !== adviser.grade || !adviserSections.includes(recipient.section)) {
     return NextResponse.json(
       { success: false, message: "This parent is not assigned to your advisory class." },
       { status: 403 }
@@ -625,15 +555,9 @@ async function createParentReport({
   }
 
   const adviserName = fullName([adviser.first_name, adviser.last_name]);
-  const studentName = fullName([student.first_name, student.middle_name, student.last_name, student.suffix]);
-  const typedParentRow = parentRow as unknown as ParentRow;
-  const actualParentName = fullName([
-    typedParentRow.parent_first_name,
-    typedParentRow.parent_middle_name,
-    typedParentRow.parent_last_name,
-    typedParentRow.parent_suffix,
-  ]);
-  const parentName = displayParentName(studentName);
+  const studentName = recipient.studentName;
+  const actualParentName = recipient.actualParentName;
+  const parentName = recipient.parentName;
 
   // The legacy endpoint remains for existing clients, but direct staff
   // messages are stored in staff_messages and never create report workflow.
@@ -645,9 +569,9 @@ async function createParentReport({
       sender_name: adviserName,
       sender_email: String(adviser.email ?? ""),
       recipient_type: "parent",
-      recipient_id: Number(parentRow.id),
+      recipient_id: recipient.parentId,
       recipient_name: actualParentName || parentName,
-      recipient_email: parentRow.email,
+      recipient_email: recipient.parentEmail,
       subject,
       categories: ["Message"],
       body: message,
@@ -658,19 +582,21 @@ async function createParentReport({
     .single();
   if (messageError) throw messageError;
 
-  await sendAdviserParentMessageEmail({
-    parentEmail: parentRow.email,
-    parentName: actualParentName || parentName,
-    studentName,
-    adviserName,
-    subject,
-    message,
-    hasAttachments: attachments.length > 0,
-  });
+  if (recipient.parentEmail) {
+    await sendAdviserParentMessageEmail({
+      parentEmail: recipient.parentEmail,
+      parentName: actualParentName || parentName,
+      studentName,
+      adviserName,
+      subject,
+      message,
+      hasAttachments: attachments.length > 0,
+    });
+  }
 
   await publishRealtimeInvalidation([
     { role: "adviser", id: Number(adviser.id) },
-    { role: "parent", id: Number(parentRow.id) },
+    { role: "parent", id: recipient.parentId },
   ], "staff-messages");
 
   // ── Audit log ──

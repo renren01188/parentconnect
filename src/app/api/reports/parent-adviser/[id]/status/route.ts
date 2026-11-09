@@ -6,6 +6,7 @@ import {
   listMessages,
   statusFromAdviser,
   toAdviserReport,
+  withCurrentStudentNames,
 } from "../../_lib";
 import { logAudit } from "@/lib/audit";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
@@ -102,16 +103,18 @@ export async function PATCH(
 
     const updatedReport = await getReportForAdviser(reportId, adviser.id);
     const messages = await listMessages([reportId]);
+    const responseRow = updatedReport ?? {
+      ...report,
+      status: normalized,
+      escalated_to_guidance: normalized === "escalated" ? true : report.escalated_to_guidance,
+      status_updated_at: now,
+      updated_at: now,
+    };
+    const [reportWithCurrentStudentName] = await withCurrentStudentNames([responseRow]);
 
     return NextResponse.json({
       success: true,
-      report: toAdviserReport(updatedReport ?? {
-        ...report,
-        status: normalized,
-        escalated_to_guidance: normalized === "escalated" ? true : report.escalated_to_guidance,
-        status_updated_at: now,
-        updated_at: now,
-      }, messages.get(reportId) ?? []),
+      report: toAdviserReport(reportWithCurrentStudentName ?? responseRow, messages.get(reportId) ?? []),
     });
   } catch (error: unknown) {
     console.error("PATCH /api/reports/parent-adviser/[id]/status error:", error);

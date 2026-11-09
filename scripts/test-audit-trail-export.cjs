@@ -11,34 +11,45 @@ const principalRoute = read("src/app/api/principal/audit-log/route.ts");
 const ictPage = read("src/app/dashboard/ict/audit-trail/page.tsx");
 const principalPage = read("src/app/dashboard/principal/audit-trail/page.tsx");
 const modal = read("src/components/AuditExportModal.tsx");
-const csv = read("src/lib/auditCsv.ts");
+const pdf = read("src/lib/auditPdf.ts");
+const download = read("src/lib/downloadAuditPdf.ts");
 
 for (const route of [ictRoute, principalRoute]) {
-  // The already-authenticated Audit API validates the selected Manila day,
-  // exports every page of that date, and leaves normal paginated reads intact.
-  assert.match(route, /const exportCsv\s*=\s*searchParams\.get\("export"\) === "csv"/);
-  assert.match(route, /if \(exportCsv\)[\s\S]*?if \(!dateRange\)[\s\S]*?status: 400/);
+  // The existing role-protected API accepts only a valid date and PDF export,
+  // then includes every audit event on that Manila calendar date.
+  assert.match(route, /const exportPdf\s*=\s*exportFormat === "pdf"/);
+  assert.match(route, /if \(exportFormat && !exportPdf\)[\s\S]*?Audit Trail exports are available as PDF only\./);
+  assert.match(route, /if \(exportPdf\)[\s\S]*?if \(!dateRange\)[\s\S]*?status: 400/);
   assert.match(route, /for \(let from = 0; ; from \+= exportPageSize\)[\s\S]*?\.gte\("created_at", dateRange\.start\)[\s\S]*?\.lt\("created_at", dateRange\.end\)/);
-  assert.match(route, /auditLogRowsToCsv\(exportedRows\)/);
-  assert.match(route, /"Content-Type": "text\/csv; charset=utf-8"/);
+  assert.match(route, /auditLogRowsToPdf\(exportedRows, date\)/);
+  assert.match(route, /"Content-Type": "application\/pdf"/);
+  assert.match(route, /filename="[^"]*-audit-trail-\$\{date\}\.pdf"/);
   assert.match(route, /"X-Content-Type-Options": "nosniff"/);
+  assert.doesNotMatch(route, /auditLogRowsToCsv|text\/csv|exportCsv/);
 }
 
-assert.match(csv, /Timestamp \(Manila\)/);
-assert.match(csv, /text\.replace\(\/"\/g, '\"\"'\)/);
-assert.match(csv, /formatAuditTimestamp\(row\.created_at\)/);
+assert.match(pdf, /export function auditLogRowsToPdf/);
+assert.match(pdf, /formatAuditTimestamp\(row\.created_at\)/);
+assert.match(pdf, /IP address:/);
+assert.match(pdf, /Device \/ browser:/);
+assert.match(download, /export: "pdf"/);
+assert.match(download, /\.pdf/);
 
-// Both pages use the same accessible, responsive modal and their own
-// protected export endpoint. The modal requires a date and offers Export and Close.
+// Both pages use the shared date picker and export only a PDF from their own
+// protected route. The modal explicitly explains the downloaded format.
 assert.match(modal, /type="date"/);
 assert.match(modal, /Choose a date to export\./);
+assert.match(modal, /The selected Audit Trail will be exported as a PDF \(\.pdf\)\./);
+assert.match(modal, /Export PDF/);
 assert.match(modal, />Close<\/button>/);
-assert.match(modal, /Exporting…/);
-assert.match(ictPage, /downloadAuditCsv\("\/api\/ict\/audit-log", date, "ict-audit-trail"\)/);
-assert.match(principalPage, /downloadAuditCsv\("\/api\/principal\/audit-log", date, "principal-audit-trail"\)/);
+assert.match(modal, /Exporting/);
+assert.match(ictPage, />\s*Export PDF\s*<\/button>/);
+assert.match(principalPage, />\s*Export PDF\s*<\/button>/);
+assert.match(ictPage, /downloadAuditPdf\("\/api\/ict\/audit-log", date, "ict-audit-trail"\)/);
+assert.match(principalPage, /downloadAuditPdf\("\/api\/principal\/audit-log", date, "principal-audit-trail"\)/);
 assert.equal((ictPage.match(/setExportOpen\(true\)/g) ?? []).length, 1);
 assert.equal((principalPage.match(/setExportOpen\(true\)/g) ?? []).length, 1);
 assert.match(ictPage, /<AuditExportModal accentColor="#274e13"/);
 assert.match(principalPage, /<AuditExportModal accentColor=\{PRIMARY\}/);
 
-console.log("audit trail date export checks passed");
+console.log("audit trail PDF export checks passed");

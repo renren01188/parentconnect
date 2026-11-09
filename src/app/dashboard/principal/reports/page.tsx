@@ -174,6 +174,8 @@ type ParentRecipient = {
   student: string;
   gradeLevel: string;
   section: string;
+  accountStatus: "Active" | "Not Active";
+  canReceive: boolean;
   type: "parent";
 };
 
@@ -1018,14 +1020,23 @@ function NewMessageModal({
     const query = parentSearch.trim().toLowerCase();
     return parent.gradeLevel === gradeLevel &&
       parent.section === section &&
-      (!query || parent.name.toLowerCase().includes(query) || parent.student.toLowerCase().includes(query));
+      (!query || [parent.name, parent.actualParentName, parent.student, parent.gradeLevel, parent.section, parent.parentEmail]
+        .some((value) => String(value ?? "").toLowerCase().includes(query)));
   });
   const concernLevel = computeMessageLevel(selectedCats);
   const otherSelected = selectedCats.includes("Other");
   // This is a direct-message composer, so it never collects report-only
   // category or concern-level metadata.
   const isMessageMode = true;
-  const canSubmit = !!recipientId && !!subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || !!otherText.trim()))) && (!!message.trim() || attachments.length > 0) && !sending;
+  const canSubmit = Boolean(
+    recipientId &&
+    subject.trim() &&
+    (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) &&
+    (message.trim() || attachments.length > 0) &&
+    selectedRecipient &&
+    (selectedRecipient.type !== "parent" || selectedRecipient.canReceive) &&
+    !sending,
+  );
   const barColor = concernLevel >= 100 ? "#dc2626" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#0ea5e9";
 
   function toggleCategory(name: string) {
@@ -1051,7 +1062,7 @@ function NewMessageModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:justify-end sm:p-5" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-end overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
       <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[500px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
           <div className="min-w-0">
@@ -1091,8 +1102,18 @@ function NewMessageModal({
                     <>
                       <RecipientAvatar recipient={selectedRecipient} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-800">{selectedRecipient.type === "parent" ? selectedRecipient.student : selectedRecipient.name}</p>
-                        <p className="text-xs text-slate-400">{selectedRecipient.type === "staff" ? `${selectedRecipient.role} · ${selectedRecipient.email}` : `Parent: ${selectedRecipient.name}`}</p>
+                        {selectedRecipient.type === "parent" ? (
+                          <>
+                            <p className="truncate text-sm font-semibold text-slate-800">{selectedRecipient.actualParentName || selectedRecipient.name}</p>
+                            <p className="truncate text-xs text-slate-400">{selectedRecipient.gradeLevel} · {selectedRecipient.section} · {selectedRecipient.accountStatus}</p>
+                            <p className="truncate text-xs text-slate-400">Student Name: {selectedRecipient.student}</p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="truncate text-sm font-semibold text-slate-800">{selectedRecipient.name}</p>
+                            <p className="text-xs text-slate-400">{selectedRecipient.role} · {selectedRecipient.email}</p>
+                          </>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -1182,14 +1203,17 @@ function NewMessageModal({
                           <button
                             key={parent.id}
                             type="button"
-                            onMouseDown={(event) => { event.preventDefault(); setRecipientId(parent.id); setRecipientOpen(false); }}
-                            className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition hover:bg-slate-50 ${recipientId === parent.id ? "bg-violet-50" : ""}`}
+                            disabled={!parent.canReceive}
+                            onMouseDown={(event) => { event.preventDefault(); if (!parent.canReceive) return; setRecipientId(parent.id); setRecipientOpen(false); }}
+                            className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition ${parent.canReceive ? "hover:bg-slate-50" : "cursor-not-allowed opacity-60"} ${recipientId === parent.id ? "bg-violet-50" : ""}`}
                           >
                             <RecipientAvatar recipient={parent} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-800">{parent.student}</p>
-                              <p className="truncate text-xs text-slate-400">Parent: {parent.name}</p>
+                              <p className="truncate text-sm font-semibold text-slate-800">{parent.actualParentName || parent.name}</p>
+                              <p className="truncate text-xs text-slate-400">{parent.gradeLevel} · {parent.section}</p>
+                              <p className="truncate text-xs text-slate-400">Student Name: {parent.student}</p>
                             </div>
+                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${parent.canReceive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{parent.accountStatus}</span>
                             {recipientId === parent.id && <CheckCircle className="ml-auto h-4 w-4 shrink-0 text-violet-600" />}
                           </button>
                         ))
@@ -3002,6 +3026,9 @@ function PrincipalReportsPageContent() {
                           <div className="min-w-0 flex-1">
                             <h2 className="text-base font-extrabold leading-snug text-slate-900">{selectedReport.subject}</h2>
                             <p className="mt-0.5 text-xs text-slate-400">{selectedReport.submitted_at}</p>
+                            {selectedReport.submitted_by_role === "Subject Teacher" && (
+                              <p className="mt-2 text-xs font-semibold text-violet-700">Submitted by: {selectedReport.submitted_by_name} · Subject Teacher · {selectedReport.student_name} · {selectedReport.grade} - {selectedReport.section}</p>
+                            )}
                             <div className="mt-2 flex flex-wrap gap-1.5">
                               {selectedReport.categories.map((category) => (
                                 <span key={category} className="rounded-lg border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{category}</span>

@@ -4,6 +4,7 @@ import { isParentFamilyRole, type ParentFamilyRole } from "@/lib/activeParentLin
 import { logAudit } from "@/lib/audit";
 import { guardianRelationshipForStorage, isMissingOtherGuardianRelationship } from "@/lib/guardianRelationship";
 import { normalizeParentPhone } from "@/lib/parentEnrollment";
+import { notifyParentsOfAccountChange } from "@/lib/parentAccountChangeNotifications";
 import { ensureParentStudentLink, reconcileParentStudentLinks } from "@/lib/reconcileParentStudentLinks";
 import { publishAccountRealtimeInvalidation, publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { supabase } from "@/lib/supabase";
@@ -466,6 +467,24 @@ export async function POST(request: NextRequest) {
       }],
       metadata: { parentId: parent.id, relationship, supersededParentIds, reconciledStudentIds: reconciliation.studentIds },
     });
+
+    const actorName = [ict.first_name, ict.middle_name, ict.last_name, ict.suffix].filter(Boolean).join(" ").trim() || "ICT personnel";
+    await Promise.all([
+      notifyParentsOfAccountChange({
+        actor: { role: "ICT", name: actorName },
+        parentIds: [parent.id],
+        student: { studentId: student.student_id },
+        changedFields: ["Parent or guardian link"],
+      }),
+      ...(supersededParentIds.length > 0
+        ? [notifyParentsOfAccountChange({
+          actor: { role: "ICT", name: actorName },
+          parentIds: supersededParentIds,
+          student: { studentId: student.student_id },
+          changedFields: ["Parent or guardian link"],
+        })]
+        : []),
+    ]);
 
     await Promise.all([
       publishStudentRealtimeInvalidation({ studentDbId: student.id, studentId: student.student_id }),

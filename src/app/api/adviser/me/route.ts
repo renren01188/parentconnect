@@ -12,6 +12,11 @@ import { publishAccountRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import bcrypt from "bcryptjs";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { logAudit } from "@/lib/audit";
+import {
+  assertStaffEmployeeIdAvailable,
+  isStaffEmployeeIdConflict,
+  staffEmployeeIdConflictMessage,
+} from "@/lib/staffEmployeeId";
 
 export async function GET() {
   try {
@@ -136,12 +141,24 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const { firstName, middleName, lastName, suffix, email, phone, grade, sections, note, currentPassword } = await req.json();
+    const {
+      firstName,
+      middleName,
+      lastName,
+      suffix,
+      email,
+      phone,
+      employeeId,
+      grade,
+      sections,
+      note,
+      currentPassword,
+    } = await req.json();
     // sections: string[] — up to 2 section names, e.g. ["Amethyst", "Emerald"]
 
-    if (!firstName?.trim() || !lastName?.trim() || !email?.trim() || !currentPassword) {
+    if (!firstName?.trim() || !lastName?.trim() || !email?.trim() || !employeeId?.trim() || !currentPassword) {
       return NextResponse.json(
-        { success: false, message: "First name, last name, email, and current password are required." },
+        { success: false, message: "First name, last name, email, Employee ID, and current password are required." },
         { status: 400 }
       );
     }
@@ -162,7 +179,7 @@ export async function PATCH(req: NextRequest) {
     // Fetch current state
     const { data: current, error: fetchError } = await supabase
       .from("advisers")
-      .select("first_name, middle_name, last_name, suffix, email, phone, grade, section, sections, password_hash")
+      .select("employee_id, first_name, middle_name, last_name, suffix, email, phone, grade, section, sections, password_hash")
       .eq("id", adviser.id)
       .single();
 
@@ -197,6 +214,11 @@ export async function PATCH(req: NextRequest) {
     // Name fields
     const normalizedFirstName = String(firstName).trim();
     const normalizedLastName = String(lastName).trim();
+    const normalizedEmployeeId = String(employeeId).trim();
+    await assertStaffEmployeeIdAvailable(normalizedEmployeeId, {
+      role: "Adviser",
+      id: Number(adviser.id),
+    });
     if (normalizedFirstName !== current.first_name)
       changes.push({ field: "First Name", from: current.first_name ?? "", to: normalizedFirstName });
     if (middleName !== undefined && (middleName ?? "") !== (current.middle_name ?? ""))
@@ -211,6 +233,8 @@ export async function PATCH(req: NextRequest) {
       changes.push({ field: "Email Address", from: current.email ?? "", to: normalizedEmail });
     if (normalizedPhone !== (current.phone ?? ""))
       changes.push({ field: "Phone Number", from: current.phone ?? "", to: normalizedPhone });
+    if (normalizedEmployeeId !== (current.employee_id ?? ""))
+      changes.push({ field: "Employee ID", from: current.employee_id ?? "", to: normalizedEmployeeId });
 
     // Advisory Class
     const incomingSections: string[] = Array.isArray(sections) ? sections.slice(0, 2) : [];
@@ -306,6 +330,12 @@ export async function PATCH(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("PATCH /api/adviser/me error:", error);
+    if (isStaffEmployeeIdConflict(error)) {
+      return NextResponse.json(
+        { success: false, message: staffEmployeeIdConflictMessage(error) },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { success: false, message: error.message || "Server error." },
       { status: 500 }

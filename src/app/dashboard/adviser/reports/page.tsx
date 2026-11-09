@@ -305,6 +305,8 @@ type ParentRecipient = {
     studentName: string;
     grade: string;
     section: string;
+    accountStatus: "Active" | "Not Active";
+    canReceive: boolean;
     type: "parent";
 };
 
@@ -375,6 +377,7 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
     const [parentRecipients, setParentRecipients] = useState<ParentRecipient[]>([]);
     const [adviserSearch, setAdviserSearch] = useState("");
     const [parentSearch, setParentSearch] = useState("");
+    const [parentSection, setParentSection] = useState("");
     const recipientRef = useRef<HTMLDivElement>(null);
     const allRecipients: Recipient[] = [...principalRecipients, ...guidanceRecipients, ...schoolAdviserRecipients, ...parentRecipients];
     const selectedRecipient = allRecipients.find(r => r.id === recipientId);
@@ -388,8 +391,11 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
             recipient.section,
         ].some((value) => String(value ?? "").toLowerCase().includes(query));
     });
+    const parentSections = Array.from(new Set(parentRecipients.map((recipient) => recipient.section).filter(Boolean))).sort();
+    const selectedParentSection = parentSections.length === 1 ? parentSections[0] : parentSection;
     const filteredParents = parentRecipients.filter((recipient) => {
         const query = parentSearch.trim().toLowerCase();
+        if (recipient.section !== selectedParentSection) return false;
         if (!query) return true;
         return [
             recipient.name,
@@ -406,7 +412,15 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
     // This composer creates a direct message, not a report.  Categories and
     // concern level therefore never belong to this form.
     const isMessageMode = true;
-    const canSubmit = recipientId && subject.trim() && (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) && (message.trim() || attachments.length > 0) && !sending;
+    const canSubmit = Boolean(
+        recipientId &&
+        subject.trim() &&
+        (isMessageMode || (selectedCats.length > 0 && (!otherSelected || otherText.trim()))) &&
+        (message.trim() || attachments.length > 0) &&
+        selectedRecipient &&
+        (selectedRecipient.type !== "parent" || selectedRecipient.canReceive) &&
+        !sending,
+    );
     function toggleCat(name: string) { setSelectedCats(p => p.includes(name) ? p.filter(c => c !== name) : [...p, name]); }
     const barColor = concernLevel >= 100 ? "#ef4444" : concernLevel >= 75 ? "#f97316" : concernLevel >= 50 ? "#eab308" : "#10b981";
 
@@ -497,8 +511,8 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
-            <div className="my-auto flex w-full max-w-[480px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "calc(100dvh - 24px)" }} onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-start justify-end overflow-y-auto bg-black/45 p-3 sm:p-5" onClick={onClose}>
+            <div className="my-auto flex w-full max-w-[500px] flex-col overflow-y-auto rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "calc(100dvh - 24px)" }} onClick={e => e.stopPropagation()}>
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-5 sm:px-6">
                     <div>
                         <h2 className="text-xl font-extrabold text-slate-900">Send a Concern</h2>
@@ -528,16 +542,24 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
                                     {selectedRecipient ? (
                                         <><RecipientAvatar r={selectedRecipient} />
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.type === "parent" ? selectedRecipient.studentName : selectedRecipient.name}</p>
-                                                <p className="text-xs text-slate-400 truncate">
-                                                    {selectedRecipient.type === "admin"
-                                                        ? `Principal - ${selectedRecipient.email}`
-                                                        : selectedRecipient.type === "staff"
-                                                            ? selectedRecipient.role === "Guidance"
-                                                                ? `Guidance - ${selectedRecipient.email}`
-                                                                : `School Adviser - ${selectedRecipient.email}`
-                                                            : `Parent: ${selectedRecipient.actualParentName || selectedRecipient.name}`}
-                                                </p>
+                                                {selectedRecipient.type === "parent" ? (
+                                                    <>
+                                                        <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.actualParentName || selectedRecipient.name}</p>
+                                                        <p className="text-xs text-slate-400 truncate">{selectedRecipient.grade} · {selectedRecipient.section} · {selectedRecipient.accountStatus}</p>
+                                                        <p className="text-xs text-slate-400 truncate">Student Name: {selectedRecipient.studentName}</p>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <p className="text-sm font-semibold text-slate-800 truncate">{selectedRecipient.name}</p>
+                                                        <p className="text-xs text-slate-400 truncate">
+                                                            {selectedRecipient.type === "admin"
+                                                                ? `Principal - ${selectedRecipient.email}`
+                                                                : selectedRecipient.role === "Guidance"
+                                                                    ? `Guidance - ${selectedRecipient.email}`
+                                                                    : `School Adviser - ${selectedRecipient.email}`}
+                                                        </p>
+                                                    </>
+                                                )}
                                             </div></>
                                     ) : <p className="text-sm text-slate-400 flex-1">Select a recipient...</p>}
                                     <svg className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${recipientOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -610,24 +632,49 @@ function NewMessageModal({ onClose, onSent }: { onClose: () => void; onSent?: (c
 
                                         <div className="px-3 py-2 bg-slate-50 border-t border-b border-slate-100"><p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Parents</p></div>
                                         <div className="p-3 border-b border-slate-100 bg-white">
+                                            {parentSections.length > 1 && (
+                                                <label className="mb-2 block">
+                                                    <span className="mb-1 block text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Choose Section</span>
+                                                    <select
+                                                        value={parentSection}
+                                                        onChange={(event) => {
+                                                            setParentSection(event.target.value);
+                                                            if (selectedRecipient?.type === "parent") setRecipientId("");
+                                                        }}
+                                                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                                                    >
+                                                        <option value="">Choose section</option>
+                                                        {parentSections.map((section) => <option key={section} value={section}>{section}</option>)}
+                                                    </select>
+                                                </label>
+                                            )}
                                             <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
                                                 <Search className="w-3.5 h-3.5 text-slate-400" />
                                                 <input
                                                     value={parentSearch}
                                                     onChange={(e) => setParentSearch(e.target.value)}
+                                                    disabled={!selectedParentSection}
                                                     placeholder="Search parent or student..."
-                                                    className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+                                                    className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none placeholder:text-slate-400 disabled:text-slate-300"
                                                 />
                                             </div>
                                         </div>
-                                        {!loadingRecipients && filteredParents.length === 0 && (
-                                            <p className="px-3.5 py-3 text-xs font-semibold text-slate-400">No parent accounts found for your advisory class.</p>
+                                        {!loadingRecipients && !selectedParentSection && (
+                                            <p className="px-3.5 py-3 text-xs font-semibold text-slate-400">Choose a section to show its parents and students.</p>
                                         )}
-                                        {filteredParents.map(p => (
-                                            <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); setRecipientId(p.id); setRecipientOpen(false); }}
-                                                className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 transition ${recipientId === p.id ? "bg-emerald-50" : ""}`}>
+                                        {!loadingRecipients && selectedParentSection && filteredParents.length === 0 && (
+                                            <p className="px-3.5 py-3 text-xs font-semibold text-slate-400">No parent records found for this section.</p>
+                                        )}
+                                        {selectedParentSection && filteredParents.map(p => (
+                                            <button key={p.id} type="button" disabled={!p.canReceive} onMouseDown={e => { e.preventDefault(); if (!p.canReceive) return; setRecipientId(p.id); setRecipientOpen(false); }}
+                                                className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left transition ${p.canReceive ? "hover:bg-slate-50" : "cursor-not-allowed opacity-60"} ${recipientId === p.id ? "bg-emerald-50" : ""}`}>
                                                 <div className={`w-8 h-8 rounded-full ${getAvatarColor(p.name)} flex items-center justify-center text-white text-xs font-bold shrink-0`}>{getInitials(p.name)}</div>
-                                                <div><p className="text-sm font-semibold text-slate-800">{p.studentName}</p><p className="text-xs text-slate-400">Parent: {p.actualParentName || p.name}</p></div>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="truncate text-sm font-semibold text-slate-800">{p.actualParentName || p.name}</p>
+                                                    <p className="truncate text-xs text-slate-400">{p.grade} · {p.section}</p>
+                                                    <p className="truncate text-xs text-slate-400">Student Name: {p.studentName}</p>
+                                                </div>
+                                                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${p.canReceive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{p.accountStatus}</span>
                                                 {recipientId === p.id && <CheckCircle className="w-4 h-4 text-emerald-500 ml-auto shrink-0" />}
                                             </button>
                                         ))}

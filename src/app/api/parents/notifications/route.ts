@@ -85,6 +85,18 @@ type ParentDeletionNotification = {
   created_at: string;
 };
 
+type ParentAccountChangeNotification = {
+  id: number;
+  parent_id: number;
+  student_id: string | null;
+  change_scope: "student" | "parent_account";
+  changed_fields: string[] | null;
+  actor_role: "Adviser" | "ICT";
+  actor_name: string;
+  read_at: string | null;
+  created_at: string;
+};
+
 type StaffMessageNotification = {
   id: number;
   source_message_id: number | null;
@@ -269,6 +281,14 @@ function scheduledDeletionMessage(deleteAfter: string | null) {
   return `Your ParentConnect account is scheduled for deletion on ${dateLabel}. Contact the ICT office immediately if this is unexpected.`;
 }
 
+function listChangedFields(fields: string[] | null) {
+  const labels = (fields ?? []).map((field) => String(field ?? "").trim()).filter(Boolean);
+  if (labels.length === 0) return "profile details";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
 async function getParentSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get("parent_token")?.value;
@@ -396,6 +416,14 @@ export async function GET() {
       .limit(100);
 
     if (notificationError) throw notificationError;
+
+    const { data: parentAccountChangeNotifications, error: parentAccountChangeNotificationsError } = await supabase
+      .from("parent_account_change_notifications")
+      .select("id, parent_id, student_id, change_scope, changed_fields, actor_role, actor_name, read_at, created_at")
+      .eq("parent_id", session.id)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (parentAccountChangeNotificationsError) throw parentAccountChangeNotificationsError;
 
     // Subject Teacher reports remain in the existing report workflow. Their
     // notification is derived from that source row, so it cannot duplicate or
@@ -725,6 +753,36 @@ export async function GET() {
       }]
       : [];
 
+    const parentAccountChangeRows = ((parentAccountChangeNotifications ?? []) as ParentAccountChangeNotification[])
+      .map((notification) => {
+        const studentName = notification.student_id
+          ? studentNames.get(String(notification.student_id).trim()) || "your child"
+          : null;
+        const actorRole = notification.actor_role === "ICT" ? "ICT" : "Adviser";
+        const actorName = String(notification.actor_name ?? "").trim() || actorRole;
+        const changedFields = listChangedFields(notification.changed_fields);
+        const isStudentChange = notification.change_scope === "student";
+        return {
+          // This range remains distinct from all other durable notification
+          // sources, while the real table ID is retained for an authorized
+          // mark-as-read request.
+          id: 1_750_000_000 + Number(notification.id),
+          parentAccountChangeNotificationId: Number(notification.id),
+          type: "alert" as const,
+          title: isStudentChange ? "Student information updated" : "Parent account information updated",
+          msg: isStudentChange
+            ? `${actorName} (${actorRole}) updated ${studentName}'s record: ${changedFields}.`
+            : `${actorName} (${actorRole}) updated your Parent account: ${changedFields}.`,
+          time: timeLabel(notification.created_at),
+          category: "Account" as const,
+          unread: !notification.read_at,
+          tab: ["All", ...(!notification.read_at ? ["Unread" as const] : []), "Account" as const],
+          senderName: actorName,
+          senderRole: actorRole,
+          createdAt: notification.created_at,
+        };
+      });
+
     const staffMessageNotificationRows = collapseStaffMessageNotifications(staffMessageRows)
       .map(({ conversationId, latestMessage: message, unread }) => {
         const messageId = Number(message.id);
@@ -789,19 +847,24 @@ export async function GET() {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...staffMessageNotificationRows, ...acceptedGuidanceTicketNotificationRows]
+    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...parentAccountChangeRows, ...staffMessageNotificationRows, ...acceptedGuidanceTicketNotificationRows]
       .concat(reportNotificationRows.map((report) => {
         const isStudentConcern = /^\[Student Concern\]\s*/i.test(String(report.subject ?? ""));
         const latestMessage = latestReportMessageById.get(Number(report.id));
         const unread = latestMessage ? !latestMessage.read_by_parent : !report.parent_seen_at;
-        const senderRole = latestMessage?.sender_role === "subject_teacher"
+        const isSubjectTeacherReport = latestMessage?.sender_role === "subject_teacher";
+        const senderRole = isSubjectTeacherReport
           ? "Subject Teacher"
           : latestMessage?.sender_role === "principal"
             ? "Principal"
             : latestMessage?.sender_role === "guidance"
               ? "Guidance"
               : "Adviser";
-        const senderName = String(latestMessage?.sender_name ?? report.adviser_name ?? senderRole).trim() || senderRole;
+        // A Subject Teacher's name is staff-only report metadata. Keep the
+        // Parent alert actionable without disclosing the reporter.
+        const senderName = isSubjectTeacherReport
+          ? "School staff"
+          : String(latestMessage?.sender_name ?? report.adviser_name ?? senderRole).trim() || senderRole;
         const createdAt = latestMessage?.created_at ?? report.created_at;
         const messageBody = String(latestMessage?.body ?? "").trim();
         const category = senderRole === "Adviser" || senderRole === "Subject Teacher"
@@ -814,7 +877,7 @@ export async function GET() {
           reportId: report.id,
           type: "message" as const,
           title: isStudentConcern ? report.subject : "New Subject Teacher Report",
-          msg: messageBody || report.subject,
+          msg: messageBody || (isSubjectTeacherReport ? "A subject teacher submitted a report for your child." : report.subject),
           time: timeLabel(createdAt),
           category,
           unread,
@@ -881,6 +944,14 @@ export async function PATCH(req: NextRequest) {
         ? body.parentDeletionNotificationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
         : []),
     ];
+    const parentAccountChangeNotificationIds = [
+      ...(Number.isSafeInteger(Number(body.parentAccountChangeNotificationId)) && Number(body.parentAccountChangeNotificationId) > 0
+        ? [Number(body.parentAccountChangeNotificationId)]
+        : []),
+      ...(Array.isArray(body.parentAccountChangeNotificationIds)
+        ? body.parentAccountChangeNotificationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
+        : []),
+    ];
     const reportId = Number(body.reportId);
     const reportIds = [
       ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
@@ -918,7 +989,17 @@ export async function PATCH(req: NextRequest) {
       if (error) throw error;
     }
 
-    if (notificationId || notificationIds.length > 0 || parentDeletionNotificationIds.length > 0) {
+    if (parentAccountChangeNotificationIds.length > 0) {
+      const { error } = await supabase
+        .from("parent_account_change_notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("parent_id", session.id)
+        .in("id", [...new Set(parentAccountChangeNotificationIds)])
+        .is("read_at", null);
+      if (error) throw error;
+    }
+
+    if (notificationId || notificationIds.length > 0 || parentDeletionNotificationIds.length > 0 || parentAccountChangeNotificationIds.length > 0) {
       // Marking an announcement or deletion notice read is durable state too:
       // any other open Parent tab must reconcile its sidebar/feed immediately.
       await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "notifications");

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Calendar, Download, X } from "lucide-react";
+import { Calendar, FileText, X } from "lucide-react";
 
 type AuditExportModalProps = {
   accentColor: string;
@@ -46,7 +46,7 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
           <div className="min-w-0">
             <h2 id="audit-export-title" className="text-lg font-extrabold text-slate-900">Export Audit Trail</h2>
-            <p className="mt-1 text-sm text-slate-500">Download all audit events recorded on one Manila calendar date.</p>
+            <p className="mt-1 text-sm text-slate-500">Download all audit events recorded on one Manila calendar date as a PDF.</p>
           </div>
           <button type="button" onClick={onClose} disabled={exporting} aria-label="Close export audit trail" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">
             <X className="h-5 w-5" />
@@ -68,12 +68,16 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
               />
             </span>
           </label>
+          <div role="note" className="flex items-start gap-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-800">
+            <FileText className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>The selected Audit Trail will be exported as a PDF (.pdf).</span>
+          </div>
         </div>
 
         <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
           <button type="button" onClick={onClose} disabled={exporting} className="min-h-11 rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Close</button>
           <button type="button" onClick={submit} disabled={exporting || !date} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50" style={{ background: accentColor }}>
-            <Download className="h-4 w-4" /> {exporting ? "Exporting…" : "Export"}
+            <FileText className="h-4 w-4" /> {exporting ? "Exporting…" : "Export PDF"}
           </button>
         </div>
       </div>

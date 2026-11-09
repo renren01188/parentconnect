@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getGuidanceSession } from "../../parent-adviser/_lib";
+import { getGuidanceSession, withCurrentStudentNames } from "../../parent-adviser/_lib";
 
 export async function GET() {
   try {
@@ -29,7 +29,8 @@ export async function GET() {
       ? await supabase.from("parent_adviser_reports").select("id, parent_id, parent_name, student_id, student_name, adviser_id, adviser_name, subject").in("id", reportIds)
       : { data: [], error: null };
     if (reportsError) throw reportsError;
-    const reportById = new Map((reports ?? []).map((report) => [report.id, report]));
+    const currentStudentReports = await withCurrentStudentNames(reports ?? []);
+    const reportById = new Map(currentStudentReports.map((report) => [report.id, report]));
     return NextResponse.json({
       success: true,
       tickets: (tickets ?? []).map((ticket) => ({

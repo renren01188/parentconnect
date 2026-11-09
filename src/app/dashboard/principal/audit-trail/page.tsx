@@ -13,7 +13,7 @@ import {
 import { AUDIT_ACTION_OPTIONS, AUDIT_ROLE_OPTIONS, AUDIT_STATUS_OPTIONS, isSecurityAuditAction, normalizeAuditAction } from "@/lib/audit-filter-options";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { AuditExportModal } from "@/components/AuditExportModal";
-import { downloadAuditCsv } from "@/lib/downloadAuditCsv";
+import { downloadAuditPdf } from "@/lib/downloadAuditPdf";
 
 // ─── Theme ───────────────────────────────────────────────────
 const PRIMARY = "#522081";
@@ -391,7 +391,7 @@ export default function AuditTrailPage() {
   }
 
   const exportAuditDate = useCallback((date: string) => (
-    downloadAuditCsv("/api/principal/audit-log", date, "principal-audit-trail")
+    downloadAuditPdf("/api/principal/audit-log", date, "principal-audit-trail")
   ), []);
 
   const statCards = [
@@ -423,7 +423,7 @@ export default function AuditTrailPage() {
             style={{ background: PRIMARY }}
           >
             <Download className="w-4 h-4" />
-            Export
+            Export PDF
           </button>
           <button
             onClick={() => { setPage(1); setRefreshKey(k => k + 1); }}

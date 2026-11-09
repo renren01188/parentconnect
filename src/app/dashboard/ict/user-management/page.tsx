@@ -94,6 +94,12 @@ interface ApprovalRequest {
   note?: string; reviewedAt?: string; reviewNote?: string;
 }
 
+// Adviser and Guidance requests live in separate tables, so both can have the
+// same numeric ID. A request must always be identified by its role and ID.
+function approvalKey(request: Pick<ApprovalRequest, "id" | "role">) {
+  return `${request.role ?? "adviser"}:${request.id}`;
+}
+
 function displayGuidanceLabel(value: string) {
   return value === "Guidance Counselor" ? "Guidance" : value;
 }
@@ -2059,23 +2065,41 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
 // ─── Approval Requests Modal ────────────────────────────
 function ApprovalModal({ requests, onClose, onApprove, onReject }: {
   requests: ApprovalRequest[]; onClose: () => void;
-  onApprove: (id: string) => void; onReject: (id: string) => void;
+  onApprove: (request: ApprovalRequest) => Promise<boolean>;
+  onReject: (request: ApprovalRequest) => Promise<boolean>;
 }) {
   const [filterStatus, setFilterStatus] = useState<"All" | ApprovalStatus>("All");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<"approve" | "reject" | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [actionSaving, setActionSaving] = useState(false);
 
   const sorted = [...requests].sort((a, b) => b.requestedAtMs - a.requestedAtMs);
   const filtered = sorted.filter(r => filterStatus === "All" ? true : r.status === filterStatus);
   const pendingCount = requests.filter(r => r.status === "Pending").length;
   const approvedCount = requests.filter(r => r.status === "Approved").length;
   const rejectedCount = requests.filter(r => r.status === "Rejected").length;
-  const selected = requests.find(r => r.id === selectedId) ?? null;
+  const selected = requests.find(r => approvalKey(r) === selectedKey) ?? null;
 
-  function handleAction(action: "approve" | "reject") {
-    if (!selectedId) return;
-    if (action === "approve") onApprove(selectedId); else onReject(selectedId);
-    setConfirmAction(null); setSelectedId(null);
+  async function handleAction(action: "approve" | "reject") {
+    if (!selected || actionSaving) return;
+    setActionError("");
+    setActionSaving(true);
+    try {
+      const succeeded = action === "approve"
+        ? await onApprove(selected)
+        : await onReject(selected);
+      if (succeeded) {
+        setConfirmAction(null);
+        setSelectedKey(null);
+      } else {
+        setActionError("The request was not updated. It remains pending.");
+      }
+    } catch {
+      setActionError("The request was not updated. It remains pending.");
+    } finally {
+      setActionSaving(false);
+    }
   }
 
   useEffect(() => {
@@ -2130,9 +2154,10 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                 </div>
               ) : filtered.map(req => {
                 const m = APPROVAL_STATUS_META[req.status];
-                const isSelected = selectedId === req.id;
+                const requestKey = approvalKey(req);
+                const isSelected = selectedKey === requestKey;
                 return (
-                  <button key={req.id} onClick={() => { setSelectedId(req.id); setConfirmAction(null); }}
+                  <button key={requestKey} onClick={() => { setSelectedKey(requestKey); setConfirmAction(null); setActionError(""); }}
                     className="w-full text-left px-4 py-3.5 border-b border-gray-50 transition-all hover:bg-green-50/40"
                     style={{ background: isSelected ? "rgba(39,78,19,0.06)" : undefined }}>
                     <div className="flex items-start gap-2.5">
@@ -2218,10 +2243,11 @@ function ApprovalModal({ requests, onClose, onApprove, onReject }: {
                         <p className="text-xs mb-4" style={{ color: confirmAction === "approve" ? "#065f46" : "#991b1b" }}>{confirmAction === "approve" ? "This will apply all requested changes to the adviser's profile and notify them." : "This will reject the request and notify the adviser."}</p>
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <button onClick={() => setConfirmAction(null)} className="flex-1 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-                          <button onClick={() => handleAction(confirmAction)} className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-bold text-white transition hover:opacity-90" style={{ background: confirmAction === "approve" ? "#059669" : "#dc2626" }}>
-                            <CheckCircle className="w-4 h-4" /> Yes, {confirmAction === "approve" ? "Approve" : "Reject"}
+                          <button disabled={actionSaving} onClick={() => void handleAction(confirmAction)} className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60" style={{ background: confirmAction === "approve" ? "#059669" : "#dc2626" }}>
+                            <CheckCircle className="w-4 h-4" /> {actionSaving ? "Saving..." : `Yes, ${confirmAction === "approve" ? "Approve" : "Reject"}`}
                           </button>
                         </div>
+                        {actionError && <p className="mt-3 text-xs font-semibold text-red-600" role="alert">{actionError}</p>}
                       </div>
                     )}
                   </div>
@@ -2446,17 +2472,21 @@ export default function UserManagementPage() {
     }, ...prev]);
   }
 
-  async function handleApprove(id: string) {
-    const req = approvals.find(a => a.id === id);
-    if (!req) return;
+  async function handleApprove(req: ApprovalRequest) {
+    try {
 
-    await fetch("/api/ict/approvals", {
+    const response = await fetch("/api/ict/approvals", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action: "approve", role: req.role ?? "adviser" }),
+      body: JSON.stringify({ id: req.id, action: "approve", role: req.role ?? "adviser" }),
     });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.success) {
+      setLoadError(result?.message || "Unable to approve this request.");
+      return false;
+    }
 
-    setApprovals(prev => prev.map(a => a.id === id
+    setApprovals(prev => prev.map(a => approvalKey(a) === approvalKey(req)
       ? { ...a, status: "Approved", reviewedAt: nowTimestamp(), reviewNote: "Approved by ICT Admin." }
       : a
     ));
@@ -2464,7 +2494,7 @@ export default function UserManagementPage() {
     await addAudit({
       action: "approved",
       targetUser: req.adviserName,
-      targetRole: "Adviser",
+      targetRole: req.role === "guidance" ? "Guidance" : "Adviser",
       targetEmail: req.adviserEmail,
       performedBy: "ICT Admin",
       details: "Approved profile update request.",
@@ -2472,25 +2502,39 @@ export default function UserManagementPage() {
     });
 
     await loadData(); // ADD THIS — refreshes the user list from DB
+    return true;
+    } catch {
+      setLoadError("Unable to approve this request.");
+      return false;
+    }
   }
 
-  async function handleReject(id: string) {
-    const req = approvals.find(a => a.id === id);
-    if (!req) return;
-    await fetch("/api/ict/approvals", {
+  async function handleReject(req: ApprovalRequest) {
+    try {
+    const response = await fetch("/api/ict/approvals", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action: "reject", role: req.role ?? "adviser" }),
+      body: JSON.stringify({ id: req.id, action: "reject", role: req.role ?? "adviser" }),
     });
-    setApprovals(prev => prev.map(a => a.id === id
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.success) {
+      setLoadError(result?.message || "Unable to reject this request.");
+      return false;
+    }
+    setApprovals(prev => prev.map(a => approvalKey(a) === approvalKey(req)
       ? { ...a, status: "Rejected", reviewedAt: nowTimestamp(), reviewNote: "Rejected by ICT Admin." }
       : a
     ));
     await addAudit({
-      action: "rejected", targetUser: req.adviserName, targetRole: "Adviser",
+      action: "rejected", targetUser: req.adviserName, targetRole: req.role === "guidance" ? "Guidance" : "Adviser",
       targetEmail: req.adviserEmail, performedBy: "ICT Admin",
       details: "Rejected profile update request."
     });
+    return true;
+    } catch {
+      setLoadError("Unable to reject this request.");
+      return false;
+    }
   }
 
   async function updateScheduledDeletion(id: number, action: "approve" | "reject" | "restore" | "delete-now") {
@@ -2813,7 +2857,7 @@ export default function UserManagementPage() {
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3"><Bell className="w-3.5 h-3.5 text-amber-500 shrink-0" /><p className="text-xs font-bold text-amber-700">{pendingApprovalCount} request{pendingApprovalCount !== 1 ? "s" : ""} pending</p></div>
                 <div className="space-y-2">
                   {approvals.filter(a => a.status === "Pending").slice(0, 3).map(req => (
-                    <button key={req.id} onClick={() => setShowApprovals(true)} className="w-full text-left flex items-start gap-2 p-2 rounded-xl hover:bg-amber-50 transition">
+                    <button key={approvalKey(req)} onClick={() => setShowApprovals(true)} className="w-full text-left flex items-start gap-2 p-2 rounded-xl hover:bg-amber-50 transition">
                       <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 bg-[#274e13]/10 text-[#274e13]">{req.adviserInitials}</div>
                       <div className="min-w-0 flex-1"><p className="text-xs font-semibold text-gray-700 truncate">{req.adviserName}</p><p className="text-[10px] text-gray-400">{req.changes.length} field{req.changes.length !== 1 ? "s" : ""} · {req.requestedAt.split("·")[0].trim()}</p></div>
                     </button>

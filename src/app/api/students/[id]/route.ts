@@ -15,6 +15,7 @@ import {
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
 import { normalizeParentLoginContactNumber } from "@/lib/parentLoginIdentifier";
 import { synchronizeParentContactForActiveStudents } from "@/lib/parentContactSync";
+import { notifyParentsOfAccountChange } from "@/lib/parentAccountChangeNotifications";
 import { logAudit } from "@/lib/audit";
 
 function errorMessage(error: unknown) {
@@ -26,6 +27,14 @@ function normalizeRecordedContactNumber(value: unknown) {
   const contactNumber = value.replace(/\D/g, "");
   if (contactNumber && contactNumber.length !== 11) return null;
   return contactNumber;
+}
+
+function normalizedComparable(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function changed(valueBefore: unknown, valueAfter: unknown) {
+  return normalizedComparable(valueBefore) !== normalizedComparable(valueAfter);
 }
 
 // ── GET /api/students/[id] ────────────────────────────────────────────────────
@@ -213,7 +222,7 @@ export async function PATCH(
     }
 
     const { data: existing, error: fetchError } = await supabase
-      .from("students").select("id, student_id, grade, section, class_session, transfer_status")
+      .from("students").select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, class_session, transfer_status")
       .eq("id", id)
       .eq("grade", adviser.grade)
       .in("section", adviserSections)
@@ -252,11 +261,28 @@ export async function PATCH(
     const currentStudentId = existing.student_id;
     const { data: existingLinks, error: existingLinksError } = await supabase
       .from("parent_student_links")
-      .select("parent_id")
+      .select("parent_id, relationship")
       .eq("student_id", currentStudentId)
       .limit(1);
     if (existingLinksError) throw existingLinksError;
     const linkedParentId = existingLinks?.[0]?.parent_id as number | undefined;
+    const existingLinkRelationship = existingLinks?.[0]?.relationship as string | null | undefined;
+    const { data: existingParent, error: existingParentError } = linkedParentId
+      ? await supabase
+        .from("parents")
+        .select("parent_first_name, parent_middle_name, parent_last_name, parent_suffix, contact_number, login_contact_number, email, address")
+        .eq("id", linkedParentId)
+        .maybeSingle()
+      : { data: null, error: null };
+    if (existingParentError) throw existingParentError;
+
+    const { data: existingFamilyMembers, error: existingFamilyMembersError } = Array.isArray(familyMembers)
+      ? await supabase
+        .from("student_family_members")
+        .select("role, first_name, middle_name, last_name, suffix, relationship, contact_number")
+        .eq("student_db_id", Number(existing.id))
+      : { data: [], error: null };
+    if (existingFamilyMembersError) throw existingFamilyMembersError;
 
     if (studentId && studentId !== currentStudentId) {
       const { data: idCheck } = await supabase
@@ -321,6 +347,58 @@ export async function PATCH(
       });
     if (normalizedRemark.error) {
       return NextResponse.json({ success: false, message: normalizedRemark.error }, { status: 400 });
+    }
+
+    // Build the Parent-facing description from the saved values, not merely
+    // from fields posted by the browser. The edit form posts its full model,
+    // so this prevents a notification when an Adviser simply opens and saves
+    // an unchanged record.
+    const changedFields = new Set<string>();
+    if (firstName && changed(existing.first_name, firstName)) changedFields.add("first name");
+    if (changed(existing.middle_name, normalizeMiddleName(middleName))) changedFields.add("middle name");
+    if (lastName && changed(existing.last_name, lastName)) changedFields.add("last name");
+    if (changed(existing.suffix, suffix ?? null)) changedFields.add("suffix");
+    if (gender && changed(existing.gender, gender)) changedFields.add("gender");
+    if (studentId && changed(currentStudentId, studentId)) changedFields.add("LRN");
+    if (changed(existing.grade, targetGrade) || changed(existing.section, targetSection)) {
+      changedFields.add("grade and section");
+    }
+
+    if (linkedParentId && existingParent) {
+      if (parentFirstName && changed(existingParent.parent_first_name, parentFirstName)) changedFields.add("Parent first name");
+      if (changed(existingParent.parent_middle_name, normalizeMiddleName(parentMiddleName))) changedFields.add("Parent middle name");
+      if (parentLastName && changed(existingParent.parent_last_name, parentLastName)) changedFields.add("Parent last name");
+      if (changed(existingParent.parent_suffix, parentSuffix ?? null)) changedFields.add("Parent suffix");
+      if (normalizedAccountContactNumber && changed(existingParent.login_contact_number ?? existingParent.contact_number, normalizedAccountContactNumber)) {
+        changedFields.add("Parent contact number");
+      }
+      if (typeof email === "string" && changed(existingParent.email, email.trim().toLowerCase())) changedFields.add("Parent email address");
+      if (address !== undefined && changed(existingParent.address, address)) changedFields.add("Parent address");
+      if (changed(existingLinkRelationship, relationship || "Guardian")) changedFields.add("Parent relationship");
+    }
+
+    if (Array.isArray(familyMembers)) {
+      const currentFamilyByRole = new Map((existingFamilyMembers ?? []).map((member) => [member.role, member]));
+      for (const member of familyMembers) {
+        if (!["Father", "Mother", "Guardian"].includes(member?.role)) continue;
+        const current = currentFamilyByRole.get(member.role);
+        const expectedRelationship = member.role === "Guardian"
+          ? guardianRelationshipForStorage(member.relationship, member.guardianRelationshipOther)
+          : member.role;
+        const familyNameChanged = changed(current?.first_name, typeof member.firstName === "string" ? member.firstName.trim() : "")
+          || changed(current?.middle_name, normalizeMiddleName(member.middleName) ?? "")
+          || changed(current?.last_name, typeof member.lastName === "string" ? member.lastName.trim() : "")
+          || changed(current?.suffix, typeof member.suffix === "string" ? member.suffix.trim() : "")
+          || changed(current?.relationship, expectedRelationship);
+        if (familyNameChanged) changedFields.add("Parent or guardian verification details");
+
+        const expectedContact = linkedParentId
+          ? normalizedAccountContactNumber
+          : normalizedRecordedContactNumber;
+        if (expectedContact !== undefined && changed(current?.contact_number, expectedContact || null)) {
+          changedFields.add("recorded contact number");
+        }
+      }
     }
 
     const { error: studentUpdateError } = await supabase
@@ -475,6 +553,14 @@ export async function PATCH(
     }
 
     await reconcileParentStudentLinks({ studentDbId: Number(existing.id) });
+    await notifyParentsOfAccountChange({
+      actor: {
+        role: "Adviser",
+        name: `${adviser.first_name} ${adviser.last_name}`.trim(),
+      },
+      student: { studentId: newStudentId },
+      changedFields: [...changedFields],
+    });
     await logAudit({
       action: assignmentChanged ? "Student Transferred" : "Student Profile Updated",
       performedById: adviser.id,

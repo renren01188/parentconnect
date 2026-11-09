@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getPrincipalSession, isPrincipalVisibleReport, listGuidanceTickets, listMessages, toPrincipalReport } from "../../../parent-adviser/_lib";
+import { getPrincipalSession, isPrincipalVisibleReport, listGuidanceTickets, listMessages, toPrincipalReport, withCurrentStudentNames } from "../../../parent-adviser/_lib";
 import { logAudit } from "@/lib/audit";
 import { principalReportReadKey } from "@/lib/principalReportReadState.cjs";
 import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
@@ -112,10 +112,11 @@ export async function PATCH(
       reportId,
       kind: "status",
     });
+    const [reportWithCurrentStudentName] = await withCurrentStudentNames([report]);
 
     return NextResponse.json({
       success: true,
-      report: toPrincipalReport(report, refreshedMessages.get(reportId) ?? [], ticket, true),
+      report: toPrincipalReport(reportWithCurrentStudentName ?? report, refreshedMessages.get(reportId) ?? [], ticket, true),
     });
   } catch (error: unknown) {
     console.error("PATCH /api/reports/principal/[id]/status error:", error);

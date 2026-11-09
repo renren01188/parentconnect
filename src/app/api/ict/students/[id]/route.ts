@@ -6,6 +6,7 @@ import { publishStudentRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 import { normalizeMiddleName } from "@/lib/sf1Name";
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
 import { normalizeStudentAge } from "@/lib/studentAge";
+import { notifyParentsOfAccountChange } from "@/lib/parentAccountChangeNotifications";
 import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,14 @@ function errorMessage(error: unknown) {
 
 function optionalText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizedComparable(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function changed(valueBefore: unknown, valueAfter: unknown) {
+  return normalizedComparable(valueBefore) !== normalizedComparable(valueAfter);
 }
 
 function ictName(ict: { first_name?: string; middle_name?: string | null; last_name?: string; suffix?: string | null }) {
@@ -86,7 +95,7 @@ export async function PATCH(
     const [{ data: existing, error: existingError }, { data: validSection, error: sectionError }] = await Promise.all([
       supabase
         .from("students")
-        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, class_session, transfer_status")
+        .select("id, student_id, first_name, middle_name, last_name, suffix, gender, grade, section, class_session, transfer_status, birth_date, age, mother_tongue, ip_ethnic_group, religion, learning_modality, house_street_sitio_purok, barangay, municipality_city, province")
         .eq("id", studentDbId)
         .eq("archive_status", "active")
         .maybeSingle(),
@@ -164,6 +173,31 @@ export async function PATCH(
       }
     }
 
+    // The modal submits the full student profile. Compare it to the stored
+    // record so the Parent only receives a notification for a real ICT
+    // correction, with field labels rather than sensitive before/after data.
+    const changedFields = new Set<string>();
+    if (changed(existing.first_name, firstName)) changedFields.add("first name");
+    if (changed(existing.middle_name, middleName)) changedFields.add("middle name");
+    if (changed(existing.last_name, lastName)) changedFields.add("last name");
+    if (changed(existing.suffix, suffix)) changedFields.add("suffix");
+    if (changed(existing.gender, gender)) changedFields.add("gender");
+    if (changed(existing.student_id, studentId)) changedFields.add("LRN");
+    if (changed(existing.grade, grade) || changed(existing.section, section)) changedFields.add("grade and section");
+    if (changed(existing.birth_date, optionalText(body.birthDate))) changedFields.add("birth date");
+    if (changed(existing.age, normalizedAge.value)) changedFields.add("age");
+    if (changed(existing.mother_tongue, optionalText(body.motherTongue))) changedFields.add("mother tongue");
+    if (changed(existing.ip_ethnic_group, optionalText(body.ipEthnicGroup))) changedFields.add("IP / ethnic group");
+    if (changed(existing.religion, optionalText(body.religion))) changedFields.add("religion");
+    if (changed(existing.learning_modality, optionalText(body.learningModality))) changedFields.add("learning modality");
+    if (
+      changed(existing.house_street_sitio_purok, optionalText(body.houseStreetSitioPurok))
+      || changed(existing.barangay, optionalText(body.barangay))
+      || changed(existing.municipality_city, optionalText(body.municipalityCity))
+      || changed(existing.province, optionalText(body.province))
+    ) changedFields.add("address");
+    if (normalizedRemark.value) changedFields.add("SF2 remark");
+
     const update = {
       first_name: firstName,
       middle_name: middleName,
@@ -221,6 +255,11 @@ export async function PATCH(
     }
 
     await reconcileParentStudentLinks({ studentDbId });
+    await notifyParentsOfAccountChange({
+      actor: { role: "ICT", name: ictName(ict) },
+      student: { studentId },
+      changedFields: [...changedFields],
+    });
     await logAudit({
       action: "Student Profile Updated",
       performedById: ict.id,

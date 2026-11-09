@@ -196,6 +196,7 @@ export async function POST(req: NextRequest) {
         grade: student.grade,
         section: student.section,
         concern,
+        revealReporter: false,
       }),
       adviser.email ? sendSubjectTeacherReportNotificationEmail({
         recipientEmail: adviser.email,

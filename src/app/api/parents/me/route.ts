@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
@@ -26,6 +26,81 @@ function fullName(row: {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
+}
+
+/**
+ * A Parent profile update is committed as soon as the `parents` row is
+ * written. Follow-up synchronization must never convert that successful save
+ * into a 500 response that tells the Parent their change failed.
+ */
+async function runProfilePostSaveTask(label: string, task: () => Promise<void>) {
+  try {
+    await task();
+  } catch (error) {
+    console.error(`PATCH /api/parents/me ${label} after profile save:`, error);
+  }
+}
+
+function queueProfilePostSaveTasks({
+  parentId,
+  normalizedPhone,
+  updatedParentName,
+  normalizedEmail,
+}: {
+  parentId: number;
+  normalizedPhone: string;
+  updatedParentName: string;
+  normalizedEmail: string;
+}) {
+  after(async () => {
+    // Each task is deliberately isolated. The Parent's saved profile remains
+    // successful even if a transient notification/audit/database dependency
+    // needs operator attention after the response has been sent.
+    await runProfilePostSaveTask("contact synchronization", async () => {
+      await synchronizeParentContactForActiveStudents(parentId, normalizedPhone);
+    });
+
+    await runProfilePostSaveTask("audit logging", async () => {
+      await logAudit({
+        action: "Update",
+        performedBy: updatedParentName || "Parent",
+        performedByRole: "Parent",
+        performedByEmail: normalizedEmail || undefined,
+        targetUser: updatedParentName || "Parent",
+        targetRole: "Parent",
+        targetEmail: normalizedEmail || "not-applicable",
+        module: "Profile",
+        details: "Updated their profile.",
+      });
+    });
+
+    await runProfilePostSaveTask("report profile synchronization", async () => {
+      // Reports store a rendering snapshot. Update only rows owned by this
+      // Parent account; never use a potentially shared email as the key.
+      const { data: linkedReports, error: reportsError } = await supabase
+        .from("parent_adviser_reports")
+        .update({ parent_name: updatedParentName, parent_email: normalizedEmail || null })
+        .eq("parent_id", parentId)
+        .select("id");
+
+      if (reportsError) throw reportsError;
+
+      const reportIds = (linkedReports ?? []).map((report) => report.id);
+      if (reportIds.length === 0) return;
+
+      const { error: messageUpdateError } = await supabase
+        .from("parent_adviser_report_messages")
+        .update({ sender_name: updatedParentName })
+        .eq("sender_role", "parent")
+        .in("report_id", reportIds);
+
+      if (messageUpdateError) throw messageUpdateError;
+    });
+
+    await runProfilePostSaveTask("realtime invalidation", async () => {
+      await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
+    });
+  });
 }
 
 type LinkedStudentRow = {
@@ -290,20 +365,6 @@ export async function PATCH(req: NextRequest) {
       address: address?.trim() || null,
     };
 
-    const { error: updateError } = await supabase
-      .from("parents")
-      .update(updatePayload)
-      .eq("id", parentId);
-
-    if (updateError) throw updateError;
-
-    // The Parent account is the current attendance recipient after signup.
-    // Keep its active children's school verification records in step so a
-    // later LRN-based action never leaves an old contact number behind.
-    await synchronizeParentContactForActiveStudents(parentId, normalizedPhone);
-
-    // Reports store a snapshot for staff rendering. Update only rows owned by
-    // this account; never use a shared email address as an ownership key.
     const updatedParentName = [
       updatePayload.parent_first_name,
       updatePayload.parent_middle_name,
@@ -311,48 +372,35 @@ export async function PATCH(req: NextRequest) {
       updatePayload.parent_suffix,
     ].filter(Boolean).join(" ");
 
-    await logAudit({
-      action: "Update",
-      performedBy: updatedParentName || "Parent",
-      performedByRole: "Parent",
-      performedByEmail: normalizedEmail || undefined,
-      targetUser: updatedParentName || "Parent",
-      targetRole: "Parent",
-      targetEmail: normalizedEmail || "not-applicable",
-      module: "Profile",
-      details: "Updated their profile.",
-    });
-
-    const { data: linkedReports, error: reportsError } = await supabase
-      .from("parent_adviser_reports")
-      .update({ parent_name: updatedParentName, parent_email: normalizedEmail || null })
-      .eq("parent_id", parentId)
-      .select("id");
-
-    if (reportsError) throw reportsError;
-
-    // Conversation rows can also expose the sender's name in staff views.
-    // Keep those labels consistent with the parent profile as well.
-    const reportIds = (linkedReports ?? []).map((report) => report.id);
-    if (reportIds.length > 0) {
-      const { error: messageUpdateError } = await supabase
-        .from("parent_adviser_report_messages")
-        .update({ sender_name: updatedParentName })
-        .eq("sender_role", "parent")
-        .in("report_id", reportIds);
-
-      if (messageUpdateError) throw messageUpdateError;
+    // A renewed token is useful after identity changes, but an existing valid
+    // session must remain usable if renewal cannot be issued. Do this before
+    // the database write and never misreport a committed profile save because
+    // a deployment has a session-secret configuration problem.
+    let newToken: string | null = null;
+    try {
+      ({ token: newToken } = await issueDashboardIdleSession({
+        ...verified.payload,
+        email: normalizedEmail || null,
+        parentName: updatedParentName,
+      }));
+    } catch (sessionRefreshError) {
+      console.error("PATCH /api/parents/me session renewal failed:", sessionRefreshError);
     }
 
-    const newPayload = {
-      ...verified.payload,
-      email: normalizedEmail || null,
-      parentName: updatedParentName,
-    };
+    const { error: updateError } = await supabase
+      .from("parents")
+      .update(updatePayload)
+      .eq("id", parentId);
 
-    const { token: newToken } = await issueDashboardIdleSession(newPayload);
+    if (updateError) throw updateError;
 
-    await publishAccountRealtimeInvalidation([{ role: "parent", id: parentId }]);
+    queueProfilePostSaveTasks({
+      parentId,
+      normalizedPhone,
+      updatedParentName,
+      normalizedEmail,
+    });
+
     const response = NextResponse.json({
       success: true,
       parent: {
@@ -366,9 +414,12 @@ export async function PATCH(req: NextRequest) {
       },
       message: "Profile updated successfully.",
     });
-    // Return the refreshed token on the same response as the saved account.
-    // This preserves the current dashboard session after an email/name edit.
-    response.cookies.set("parent_token", newToken, dashboardSessionCookieOptions);
+    // Return a refreshed token when available. If renewal was unavailable,
+    // retain the already-authenticated cookie instead of rejecting a saved
+    // profile update.
+    if (newToken) {
+      response.cookies.set("parent_token", newToken, dashboardSessionCookieOptions);
+    }
     return response;
   } catch (error: unknown) {
     console.error("PATCH /api/parents/me error:", error);

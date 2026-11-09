@@ -6,6 +6,7 @@ import { useNotifContext } from "../context/NotificationContext";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
+import { AnnouncementDeleteConfirmationModal } from "@/components/AnnouncementDeleteConfirmationModal";
 
 type Tab = "incoming" | "mine";
 type AnnouncementStatus = "Published" | "Scheduled";
@@ -72,6 +73,9 @@ export default function AnnouncementsPage() {
   const [incomingAnnouncements, setIncomingAnnouncements] = useState<IncomingAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const isFormReady = Boolean(form.title.trim() && form.body.trim());
 
@@ -181,10 +185,30 @@ export default function AnnouncementsPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    const response = await fetch(`/api/guidance/announcements/${id}`, { method: "DELETE" });
-    const data = await response.json().catch(() => null);
-    if (response.ok && data?.success) setMyAnnouncements((current) => current.filter((item) => item.id !== id));
+  const requestDelete = (announcement: Announcement) => {
+    setDeleteError("");
+    setDeleteTarget(announcement);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(`/api/guidance/announcements/${deleteTarget.id}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.message ?? "Unable to delete this announcement.");
+      }
+
+      setMyAnnouncements((current) => current.filter((item) => item.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Unable to delete this announcement.");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleViewIncomingAnnouncement = (announcement: IncomingAnnouncement) => {
@@ -244,7 +268,7 @@ export default function AnnouncementsPage() {
             <article key={announcement.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><span className={`inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${announcement.status === "Scheduled" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{announcement.status === "Scheduled" && <Clock className="h-3.5 w-3.5" />}{announcement.status}</span><div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-400"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">{announcement.audience}</span><span className="inline-flex items-center gap-1"><Calendar className="h-3.5 w-3.5" />{announcement.status === "Scheduled" ? `Scheduled: ${formatDisplay(announcement.scheduled_at)}` : formatDisplay(announcement.created_at)}</span></div></div>
               <h2 className="mt-4 break-words text-base font-extrabold text-slate-800">{announcement.title}</h2><p className="mt-2 break-words text-sm leading-relaxed text-slate-600">{announcement.message}</p>
-              <div className="mt-4 flex justify-end gap-2"><button type="button" aria-label="Edit announcement" onClick={() => openEditAnnouncement(announcement)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700"><Edit2 className="h-4 w-4" /></button><button type="button" aria-label="Delete announcement" onClick={() => handleDelete(announcement.id)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button></div>
+              <div className="mt-4 flex justify-end gap-2"><button type="button" aria-label="Edit announcement" onClick={() => openEditAnnouncement(announcement)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700"><Edit2 className="h-4 w-4" /></button><button type="button" aria-label="Delete announcement" onClick={() => requestDelete(announcement)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button></div>
             </article>
           ))}
         </section>
@@ -269,6 +293,17 @@ export default function AnnouncementsPage() {
           </div>
         </div>
       )}
+      <AnnouncementDeleteConfirmationModal
+        open={deleteTarget !== null}
+        announcement={deleteTarget}
+        theme="guidance"
+        deleting={deleting}
+        error={deleteError}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }
