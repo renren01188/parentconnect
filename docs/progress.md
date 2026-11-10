@@ -27,6 +27,32 @@ unless a named check has been run and recorded below.
 - **Verified:** `npm.cmd run test:public-header-branding`,
   `npx.cmd tsc --noEmit`, and `npm.cmd run build` passed on 2026-11-09.
 
+### Contact Us required identity fields
+
+- **Complete:** The public Contact Us form now visibly marks Name and Email
+  with an accessible red `*` and screen-reader-required text. Existing browser
+  and server validation continue to require valid values before delivery.
+- **Affected files:** `src/app/contact-us/page.tsx`,
+  `scripts/test-contact-us-required-fields.cjs`, and `package.json`.
+- **Verified:** `npm.cmd run test:contact-us-required-fields`,
+  `npx.cmd tsc --noEmit`, and `npm.cmd run lint` passed on 2026-11-10.
+
+### Legacy deletion-email queue retirement
+
+- **Complete in source:** removed the unused deletion-email status endpoint
+  and added a migration that removes the empty `deletion_email_job_items` and
+  `deletion_email_jobs` tables. The migration stops instead of discarding data
+  if either table contains a row. The active scheduled-deletion, requester,
+  target, and Parent in-app notification tables are unchanged.
+- **Affected files:** the retired `/api/deletion-email-jobs` route,
+  `20261110120000_remove_legacy_deletion_email_tables.sql`, and
+  `scripts/test-legacy-deletion-email-retirement.cjs`.
+- **Verified:** `npm.cmd run test:legacy-deletion-email-retirement`, focused
+  ESLint, `npx.cmd tsc --noEmit`, and `git diff --check` passed on
+  2026-11-10. The full repository lint remains blocked by pre-existing errors
+  outside this change. Remote application is pending: the available Supabase
+  connection accepts read-only SQL and this workspace is not CLI-linked.
+
 ### Parent profile save
 
 - **Complete:** `dashboard/parent/profile` and `/api/parents/me` now treat
@@ -91,18 +117,18 @@ unless a named check has been run and recorded below.
   both role and request ID. Adviser and Guidance request tables can each have
   the same numeric ID; approving one no longer changes the other row in the
   modal. The API requires a valid role and ID, and the UI leaves a request
-  pending when the API does not confirm its update. The Approvals button and
-  Pending Approval filter now always show the real number of currently pending
-  requests; opening either view does not hide the count. The ICT sidebar shows
-  that same count beside User Management and refreshes from the protected
-  approval endpoint after the existing relevant realtime events.
+  pending when the API does not confirm its update. Approval review is
+  available from the User Management Approval Requests sidebar card; the
+  duplicate header button and Pending Approval directory filter are removed.
+  The ICT sidebar shows the real pending count beside User Management and
+  refreshes it from the protected approval endpoint after the existing
+  relevant realtime events.
 - **Affected files:** `src/app/dashboard/ict/user-management/page.tsx`,
   `src/app/api/ict/approvals/route.ts`, `scripts/test-ict-approval-selection.cjs`,
   and `package.json`.
 - **Verified:** `npm.cmd run test:ict-approval-selection`,
-  `npx.cmd tsc --noEmit`, and `npm.cmd run build` passed on 2026-11-09.
-  Browser verification with same-number Adviser and Guidance request IDs is
-  still **unverified**.
+  `npx.cmd tsc --noEmit`, and `npm.cmd run lint` passed on 2026-11-10.
+  Browser verification of the sidebar entry point remains **unverified**.
 
 ### Current student names in existing Parent reports
 
@@ -198,19 +224,28 @@ unless a named check has been run and recorded below.
 ### Adviser assignment-request notice
 
 - **Complete:** The current Adviser assignment-change request notice now has a
-  dismiss (X) action. It hides only that request for the current page session;
-  it does not modify the request, approval status, or ICT history.
+  dismiss (X) action. It persists the current request ID in that Adviser's
+  browser, so the notice remains hidden after a page refresh. It does not
+  modify the request, approval status, or ICT history; a newer request appears
+  normally.
+- **Affected files:** `src/app/dashboard/adviser/profile/page.tsx` and
+  `scripts/test-profile-save-flows.cjs`.
+- **Verified:** `npm.cmd run test:profile-save-flows`, `npx.cmd tsc --noEmit`,
+  `npm.cmd run lint`, and `git diff --check` passed on 2026-11-10. Browser
+  confirmation of dismiss, refresh, and a later request remains unverified.
 
 ### Guidance profile-request notice
 
 - **Complete:** Guidance Profile now displays its existing latest ICT profile
   request as a blue status notice (Pending, Approved, or Rejected), including
-  the ICT note when present. Its X action hides only that request for the
-  current page session and does not modify approval data.
+  the ICT note when present. Its X action persists that request ID in the
+  Guidance Counselor's browser, so it remains hidden after refresh; a newer
+  request remains visible. It does not modify approval data.
 - **Affected files:** `src/app/dashboard/guidance/profile/page.tsx` and
   `scripts/test-profile-save-flows.cjs`.
 - **Verified:** `npm.cmd run test:profile-save-flows`, `npx.cmd tsc --noEmit`,
-  and `npm.cmd run build` passed on 2026-11-09.
+  `npm.cmd run lint`, and `git diff --check` passed on 2026-11-10. Browser
+  confirmation of dismiss, refresh, and a later request remains unverified.
 
 ### Announcement deletion confirmation
 

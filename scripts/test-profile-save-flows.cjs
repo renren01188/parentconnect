@@ -62,9 +62,12 @@ assert.match(guidanceProfile, /setApprovalError\(error instanceof Error \? error
 assert.match(guidanceProfile, /approvalError \? <div className="error-note" role="alert">/);
 assert.match(guidanceProfile, /latest_change_request/);
 assert.match(guidanceProfile, /dismissedChangeRequestId/);
+assert.match(guidanceProfile, /function guidanceChangeRequestNoticeStorageKey\(guidanceId: number\)/);
+assert.match(guidanceProfile, /window\.localStorage\.getItem\(guidanceChangeRequestNoticeStorageKey\(profile\.id\)\)/);
+assert.match(guidanceProfile, /window\.localStorage\.setItem\(guidanceChangeRequestNoticeStorageKey\(profile\.id\), String\(requestId\)\)/);
 assert.match(guidanceProfile, /Profile change request:/);
 assert.match(guidanceProfile, /Dismiss profile change request/);
-assert.match(guidanceProfile, /setDismissedChangeRequestId\(latestChangeRequest\.id\)/);
+assert.match(guidanceProfile, /onClick=\{dismissChangeRequestNotice\}/);
 
 // An Adviser with an existing pending request receives a clear, non-error
 // state rather than a misleading failure after the request was already saved.
@@ -120,8 +123,11 @@ assert.match(adviserProfile, /updateSelectedSections/);
 assert.doesNotMatch(adviserProfile, /setGrade\(e\.target\.value\);\s*setSelectedSections\(\[\]\)/);
 assert.match(adviserProfile, /border-emerald-300 bg-emerald-100 text-emerald-700/);
 assert.match(adviserProfile, /dismissedAssignmentRequestId/);
+assert.match(adviserProfile, /function assignmentNoticeStorageKey\(adviserId: number\)/);
+assert.match(adviserProfile, /window\.localStorage\.getItem\(assignmentNoticeStorageKey\(profile\.id\)\)/);
+assert.match(adviserProfile, /window\.localStorage\.setItem\(assignmentNoticeStorageKey\(profile\.id\), String\(requestId\)\)/);
 assert.match(adviserProfile, /Dismiss assignment change request/);
-assert.match(adviserProfile, /setDismissedAssignmentRequestId\(request\.id\)/);
+assert.match(adviserProfile, /onClick=\{\(\) => dismissAssignmentNotice\(request\.id\)\}/);
 assert.match(principalProfile, /border border-violet-100 bg-violet-50/);
 
 // Account settings must remain focused on personal information and password

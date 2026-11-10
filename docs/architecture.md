@@ -135,6 +135,20 @@ request is sent. `AnnouncementDeleteConfirmationModal.tsx` is shared by the
 Adviser, Guidance, ICT, and Principal announcement UIs; their existing
 role-scoped announcement APIs remain the authorization boundary.
 
+The public `/contact-us` form marks its required Name and Email identity fields
+with an accessible `*`; browser and `/api/contact-us` validation continue to
+reject empty or invalid identity details before a message is delivered.
+
+### Scheduled deletion and archive
+
+`scheduled_deletions` is the source of truth for deletion requests, approvals,
+the recovery period, archive/restore history, and the protected scheduled
+processor. Database triggers retain requester/target reference rows and create
+Parent in-app deletion notices when a Parent deletion becomes scheduled. The
+retired `deletion_email_jobs` queue and its items table are not part of this
+flow; migration `20261110120000_remove_legacy_deletion_email_tables.sql`
+locks and removes them only when both are empty.
+
 ### Profile settings
 
 Parent, Adviser, Guidance, and Principal profile settings are client-side
@@ -146,17 +160,22 @@ The dialog receives the role theme (`parent`, `adviser`, `guidance`, or
 advisory-section selections are held per selected grade in the dialog; only
 the active grade and its selected sections are sent in the existing approval
 request. The Adviser profile's latest assignment-request notice can be
-dismissed locally by request ID without modifying its approval record. Guidance
+dismissed in that adviser's browser by request ID; it persists across reloads
+without modifying the approval record, and a newer request is shown. Guidance
 uses the latest profile request already returned by `/api/guidance/me` to show
-the same local-only, dismissible request-status notice in its own blue theme.
+a request-ID-based dismissible notice in its own blue theme. Its dismissal is
+also stored only in that Guidance Counselor's browser, persists across reloads,
+and does not alter the approval record.
 
 ICT staff-profile approvals are served by `/api/ict/approvals`. Adviser and
 Guidance request tables have independent IDs, so the User Management modal
 uses a compound `role:id` selection key and sends both values to the API. A
 successful response is required before the selected row changes status; the
-other request rows remain pending. The ICT sidebar uses the same protected API
-to show the current Pending count beside User Management and refreshes it from
-the existing ICT audit/account invalidations and visibility recovery path.
+other request rows remain pending. User Management keeps approval review in its
+Approval Requests sidebar card, avoiding duplicate header and directory-filter
+entry points. The ICT sidebar uses the same protected API to show the current
+Pending count beside User Management and refreshes it from the existing ICT
+audit/account invalidations and visibility recovery path.
 
 ## Development and verification
 

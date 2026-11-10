@@ -28,6 +28,10 @@ function formatGradeLabel(grade: string | null) {
     return grade.trim().replace(/^Grade\s+/i, "Grade ");
 }
 
+function assignmentNoticeStorageKey(adviserId: number) {
+    return `parentconnect:adviser-assignment-notice-dismissed:${adviserId}`;
+}
+
 interface AdviserProfile {
     id: number;
     employee_id: string;
@@ -875,6 +879,7 @@ export default function AdviserProfilePage() {
     const [loadErr, setLoadErr] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [dismissedAssignmentRequestId, setDismissedAssignmentRequestId] = useState<number | null>(null);
+    const [assignmentNoticeDismissalReady, setAssignmentNoticeDismissalReady] = useState(false);
 
     const loadProfile = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
         if (!background) setLoading(true);
@@ -892,6 +897,46 @@ export default function AdviserProfilePage() {
     }, []);
 
     useEffect(() => { loadProfile(); }, []);
+
+    // Dismissing this status notice is a browser-only preference. Scope it to
+    // both the adviser and request so a future request is shown normally.
+    useEffect(() => {
+        const requestId = profile?.latest_change_request?.id;
+        if (!profile) {
+            setDismissedAssignmentRequestId(null);
+            setAssignmentNoticeDismissalReady(false);
+            return;
+        }
+        if (!requestId) {
+            setDismissedAssignmentRequestId(null);
+            setAssignmentNoticeDismissalReady(true);
+            return;
+        }
+
+        try {
+            const dismissedRequestId = window.localStorage.getItem(assignmentNoticeStorageKey(profile.id));
+            setDismissedAssignmentRequestId(dismissedRequestId === String(requestId) ? requestId : null);
+            if (dismissedRequestId && dismissedRequestId !== String(requestId)) {
+                window.localStorage.removeItem(assignmentNoticeStorageKey(profile.id));
+            }
+        } catch {
+            // Storage can be disabled by the browser. Keep the in-memory
+            // dismissal behavior rather than preventing the notice from closing.
+        } finally {
+            setAssignmentNoticeDismissalReady(true);
+        }
+    }, [profile?.id, profile?.latest_change_request?.id]);
+
+    function dismissAssignmentNotice(requestId: number) {
+        setDismissedAssignmentRequestId(requestId);
+        if (!profile) return;
+
+        try {
+            window.localStorage.setItem(assignmentNoticeStorageKey(profile.id), String(requestId));
+        } catch {
+            // The visible notice is already dismissed for this page session.
+        }
+    }
 
     // The former postgres_changes subscriptions could never deliver because
     // advisers and adviser_change_requests have RLS and custom dashboard
@@ -1005,7 +1050,7 @@ export default function AdviserProfilePage() {
 
                     {/* Right column — read-only */}
                     <div className="flex flex-col gap-5 xl:col-span-8">
-                        {request && showAssignmentNotice && (
+                        {request && assignmentNoticeDismissalReady && showAssignmentNotice && (
                             <div className={`rounded-2xl border px-5 py-4 ${requestStyle}`}>
                                 <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
@@ -1020,7 +1065,7 @@ export default function AdviserProfilePage() {
                                         <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{request.status}</span>
                                         <button
                                             type="button"
-                                            onClick={() => setDismissedAssignmentRequestId(request.id)}
+                                            onClick={() => dismissAssignmentNotice(request.id)}
                                             aria-label="Dismiss assignment change request"
                                             title="Dismiss"
                                             className="flex h-8 w-8 items-center justify-center rounded-lg text-current/70 transition hover:bg-white/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current/30"

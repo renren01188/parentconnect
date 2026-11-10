@@ -22,11 +22,15 @@ assert.match(userManagement, /setApprovals\(prev => prev\.map\(a => approvalKey\
 assert.match(userManagement, /if \(!response\.ok \|\| !result\?\.success\)[\s\S]*?return false/);
 assert.match(userManagement, /The request was not updated\. It remains pending\./);
 
-// The count shown on both Approval entry points is always the saved current
-// number of pending requests; opening the panel must not hide or subtract it.
+// Approval review remains available from the sidebar with the real pending
+// count. The duplicate header button and table filter are intentionally gone.
 assert.match(userManagement, /const pendingApprovalCount = approvals\.filter\(a => a\.status === "Pending"\)\.length/);
-assert.match(userManagement, /badge: pendingApprovalCount/);
-assert.match(userManagement, /\{pendingApprovalCount > 0 && <span[^>]*>\{pendingApprovalCount\}<\/span>\}/);
+assert.match(userManagement, /Approval Requests/);
+assert.match(userManagement, /Review All Requests/);
+assert.doesNotMatch(userManagement, /Pending Approval/);
+assert.doesNotMatch(userManagement, /openApprovals/);
+assert.doesNotMatch(userManagement, /filterMode === "approval"/);
+assert.doesNotMatch(userManagement, /<FileCheck className="w-4 h-4" \/> Approvals/);
 assert.doesNotMatch(userManagement, /dismissedApprovalBadgeCount|visibleApprovalBadgeCount/);
 
 // The dashboard-wide ICT sidebar reads the same protected approval endpoint

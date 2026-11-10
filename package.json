@@ -142,6 +142,8 @@
     "test:principal-attendance-export-period": "node scripts/test-principal-attendance-export-period.cjs",
     "test:parent-report-reply-email-suppression": "node scripts/test-parent-report-reply-email-suppression.cjs",
     "test:message-image-attachments": "node scripts/test-message-image-attachments.cjs",
+    "test:contact-us-required-fields": "node scripts/test-contact-us-required-fields.cjs",
+    "test:legacy-deletion-email-retirement": "node scripts/test-legacy-deletion-email-retirement.cjs",
     "test:public-header-branding": "node scripts/test-public-header-branding.cjs"
   },
   "dependencies": {

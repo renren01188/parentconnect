@@ -2340,7 +2340,7 @@ export default function UserManagementPage() {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
-  const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent" | "approval">("all");
+  const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent">("all");
   const [parentStudentGrade, setParentStudentGrade] = useState("");
   const [parentStudentSection, setParentStudentSection] = useState("");
   const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "not_registered">("all");
@@ -2370,7 +2370,7 @@ export default function UserManagementPage() {
     if (!background) setLoading(true);
     setLoadError("");
     try {
-       const apiRole = filterMode === "approval" ? "adviser" : filterMode === "parent" ? "parent_students" : filterMode;
+       const apiRole = filterMode === "parent" ? "parent_students" : filterMode;
        const approvalsPromise = fetch("/api/ict/approvals");
        const auditPromise = fetch("/api/ict/audit-log");
        const deletionsPromise = fetch("/api/scheduled-deletions");
@@ -2382,10 +2382,6 @@ export default function UserManagementPage() {
          if (parentStudentGrade) userParams.set("parentGrade", parentStudentGrade);
          if (parentStudentSection) userParams.set("parentSection", parentStudentSection);
          userParams.set("parentLinkState", parentStudentLinkState);
-       }
-       if (filterMode === "approval") {
-         const pendingEmails = (approvalsData.approvals ?? []).filter((approval: ApprovalRequest) => approval.status === "Pending").map((approval: ApprovalRequest) => approval.adviserEmail).filter(Boolean);
-         userParams.set("emails", pendingEmails.length ? pendingEmails.join(",") : "__no_pending_approval__");
        }
        const [usersRes, auditRes, deletionsRes, transfersRes] = await Promise.all([
         fetch(`/api/ict/user-management?${userParams.toString()}`),
@@ -2446,9 +2442,6 @@ export default function UserManagementPage() {
     }
   });
   const pendingApprovalCount = approvals.filter(a => a.status === "Pending").length;
-  const openApprovals = () => {
-    setShowApprovals(true);
-  };
 
   async function addAudit(e: Omit<AuditEntry, "id" | "timestamp" | "timestampMs">) {
     await writeAudit(e);
@@ -2539,9 +2532,7 @@ export default function UserManagementPage() {
     await loadData();
   }
 
-  const rows = useMemo(() => filterMode === "approval"
-    ? users.filter(u => approvals.some(a => a.adviserEmail === u.email && a.status === "Pending"))
-    : users, [approvals, filterMode, users]);
+  const rows = users;
   const totalPages = pagination.totalPages;
   const counts = serverCounts;
   const parentStudentSections = useMemo(
@@ -2569,10 +2560,6 @@ export default function UserManagementPage() {
           </button>
           <button onClick={() => setShowAdviserTransfers(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f]"><Clock className="w-4 h-4" /> Adviser Transfers{scheduledTransferCount > 0 && <span className="-mr-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-extrabold text-white">{scheduledTransferCount}</span>}</button>
           <button onClick={() => setShowBulkDeletion(true)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-bold text-red-700 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Bulk Deletion{pendingDeletionRequestCount > 0 && <span className="-mr-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">{pendingDeletionRequestCount}</span>}</button>
-          <button onClick={openApprovals} className="flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold transition hover:bg-white" style={{ borderColor: pendingApprovalCount > 0 ? "#f59e0b" : PRIMARY, color: pendingApprovalCount > 0 ? "#d97706" : PRIMARY, background: pendingApprovalCount > 0 ? "#fffbeb" : "white" }}>
-            <FileCheck className="w-4 h-4" /> Approvals
-            {pendingApprovalCount > 0 && <span className="ml-0.5 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full text-white bg-amber-500">{pendingApprovalCount}</span>}
-          </button>
         </div>
       </div>
 
@@ -2636,12 +2623,11 @@ export default function UserManagementPage() {
               <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                 <span className="text-xs font-bold text-gray-400 shrink-0">Filter by:</span>
                 <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible">
-                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }, { value: "approval", label: "Pending Approval", badge: pendingApprovalCount }] as { value: string; label: string; badge?: number }[]).map(({ value, label, badge }) => (
-                    <button key={value} onClick={() => { setFilterMode(value as typeof filterMode); setPage(1); }}
+                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }] as { value: typeof filterMode; label: string }[]).map(({ value, label }) => (
+                    <button key={value} onClick={() => { setFilterMode(value); setPage(1); }}
                       className="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition sm:py-1.5"
-                      style={{ background: filterMode === value ? (value === "approval" ? "#fffbeb" : PRIMARY) : "white", color: filterMode === value ? (value === "approval" ? "#d97706" : "white") : "#6b7280", borderColor: filterMode === value ? (value === "approval" ? "#fde68a" : PRIMARY) : "#e5e7eb" }}>
-                      {value === "approval" && <Bell className="w-3 h-3" />}{label}
-                      {badge !== undefined && badge > 0 && <span className="text-[10px] font-extrabold px-1 py-0.5 rounded-full text-white bg-amber-500 ml-0.5">{badge}</span>}
+                      style={{ background: filterMode === value ? PRIMARY : "white", color: filterMode === value ? "white" : "#6b7280", borderColor: filterMode === value ? PRIMARY : "#e5e7eb" }}>
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -2703,12 +2689,6 @@ export default function UserManagementPage() {
                   </div>
                   <p className="mt-2 text-[11px] text-gray-500">Counts are students in the selected grade and section. A student is linked only after a parent account has signed up.</p>
                 </section>
-              )}
-              {filterMode === "approval" && (
-                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                  <Bell className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                  <p className="text-xs text-amber-700">Showing advisers with <strong>pending profile approval requests</strong>. <button onClick={() => setShowApprovals(true)} className="font-bold underline hover:no-underline">Open Approval Panel →</button></p>
-                </div>
               )}
             </div>
           </div>
@@ -2780,7 +2760,7 @@ export default function UserManagementPage() {
               })}
               {rows.length === 0 && (
                 <tr><td colSpan={5} className="py-14 text-center">
-                  {filterMode === "approval" ? (<div><CheckCircle2 className="w-10 h-10 text-emerald-300 mx-auto mb-3" /><p className="text-sm text-gray-400 font-semibold">No pending approval requests</p></div>) : (<div><Users className="w-10 h-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">No users match your filters.</p></div>)}
+                  <div><Users className="w-10 h-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">No users match your filters.</p></div>
                 </td></tr>
               )}
             </tbody>
@@ -2821,7 +2801,7 @@ export default function UserManagementPage() {
           </>}
 
           <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <p className="text-xs text-gray-400">{rows.length === 0 ? "No results" : `Showing ${(pagination.page - 1) * PER_PAGE + 1}–${Math.min(pagination.page * PER_PAGE, pagination.total)} of ${filterMode === "approval" ? rows.length : pagination.total} ${isParentStudentDirectory ? "students" : "users"}`}</p>
+            <p className="text-xs text-gray-400">{rows.length === 0 ? "No results" : `Showing ${(pagination.page - 1) * PER_PAGE + 1}–${Math.min(pagination.page * PER_PAGE, pagination.total)} of ${pagination.total} ${isParentStudentDirectory ? "students" : "users"}`}</p>
             <div className="flex max-w-full items-center gap-1 overflow-hidden">
               <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-white hover:shadow-sm disabled:opacity-30 transition border border-gray-200"><ChevronLeft className="w-4 h-4" /></button>
               {Array.from({ length: totalPages }, (_, i) => i + 1).filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 1).map((n, index, visiblePages) => (

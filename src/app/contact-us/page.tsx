@@ -147,7 +147,7 @@ export default function ContactUsPage() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                          Name
+                          Name <span aria-hidden="true" className="text-red-500">*</span><span className="sr-only"> (required)</span>
                         </label>
                         <input
                           type="text"
@@ -161,7 +161,7 @@ export default function ContactUsPage() {
                       </div>
                       <div>
                         <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                          Email
+                          Email <span aria-hidden="true" className="text-red-500">*</span><span className="sr-only"> (required)</span>
                         </label>
                         <input
                           type="email"

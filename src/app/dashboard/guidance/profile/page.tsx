@@ -39,6 +39,7 @@ type GuidanceChangeRequest = {
 };
 
 type GuidanceProfileWithChangeRequest = GuidanceProfile & {
+  id: number;
   latest_change_request: GuidanceChangeRequest | null;
 };
 
@@ -49,6 +50,7 @@ const emptyPasswordForm: PasswordForm = {
 };
 
 const emptyGuidanceProfile: GuidanceProfileWithChangeRequest = {
+  id: 0,
   firstName: "",
   middleName: "",
   lastName: "",
@@ -61,6 +63,10 @@ const emptyGuidanceProfile: GuidanceProfileWithChangeRequest = {
   status: "",
   latest_change_request: null,
 };
+
+function guidanceChangeRequestNoticeStorageKey(guidanceId: number) {
+  return `parentconnect:guidance-profile-change-notice-dismissed:${guidanceId}`;
+}
 
 function Field({
   label,
@@ -104,6 +110,7 @@ export default function ProfilePage() {
   const [passwordError, setPasswordError] = useState("");
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [dismissedChangeRequestId, setDismissedChangeRequestId] = useState<number | null>(null);
+  const [changeRequestDismissalReady, setChangeRequestDismissalReady] = useState(false);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   // Do not overwrite a draft while the settings panel is open. Retain the
   // account invalidation and reconcile the protected profile snapshot as
@@ -188,6 +195,46 @@ export default function ProfilePage() {
 
     return () => { isMounted = false; };
   }, [profileRefreshKey]);
+
+  // The status notice is a browser-only preference. A new request has a new
+  // ID, so it remains visible even when the prior request was dismissed.
+  useEffect(() => {
+    const requestId = profile.latest_change_request?.id;
+    if (!profile.id) {
+      setDismissedChangeRequestId(null);
+      setChangeRequestDismissalReady(false);
+      return;
+    }
+    if (!requestId) {
+      setDismissedChangeRequestId(null);
+      setChangeRequestDismissalReady(true);
+      return;
+    }
+
+    try {
+      const dismissedRequestId = window.localStorage.getItem(guidanceChangeRequestNoticeStorageKey(profile.id));
+      setDismissedChangeRequestId(dismissedRequestId === String(requestId) ? requestId : null);
+      if (dismissedRequestId && dismissedRequestId !== String(requestId)) {
+        window.localStorage.removeItem(guidanceChangeRequestNoticeStorageKey(profile.id));
+      }
+    } catch {
+      // Storage can be disabled. Keep the in-memory dismissal behavior.
+    } finally {
+      setChangeRequestDismissalReady(true);
+    }
+  }, [profile.id, profile.latest_change_request?.id]);
+
+  const dismissChangeRequestNotice = () => {
+    const requestId = profile.latest_change_request?.id;
+    if (!requestId) return;
+
+    setDismissedChangeRequestId(requestId);
+    try {
+      window.localStorage.setItem(guidanceChangeRequestNoticeStorageKey(profile.id), String(requestId));
+    } catch {
+      // The visible notice is already dismissed for this page session.
+    }
+  };
 
   useSessionInvalidation((event) => {
     if (event.scope && event.scope !== "accounts") return;
@@ -343,7 +390,7 @@ export default function ProfilePage() {
         </section>
 
         <section className="profile-main">
-          {latestChangeRequest && showChangeRequestNotice ? (
+          {latestChangeRequest && changeRequestDismissalReady && showChangeRequestNotice ? (
             <div className={`flex items-start justify-between gap-3 rounded-2xl border px-5 py-4 ${changeRequestStyle}`}>
               <div className="min-w-0">
                 <h2 className="text-sm font-extrabold">Profile change request: {latestChangeRequest.status}</h2>
@@ -357,7 +404,7 @@ export default function ProfilePage() {
                 <span className="rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{latestChangeRequest.status}</span>
                 <button
                   type="button"
-                  onClick={() => setDismissedChangeRequestId(latestChangeRequest.id)}
+                  onClick={dismissChangeRequestNotice}
                   aria-label="Dismiss profile change request"
                   title="Dismiss"
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-current/70 transition hover:bg-white/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current/30"
