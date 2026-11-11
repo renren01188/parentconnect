@@ -209,19 +209,19 @@ const unismsStatusSource = fs.readFileSync(
 );
 const scanSource = fs.readFileSync(path.join(root, "src/app/api/attendance/scan/route.ts"), "utf8");
 const normalizedJobsMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261022120000_update_attendance_sms_good_day_greeting.sql"),
+  path.join(root, "supabase/legacy-migrations/20261022120000_update_attendance_sms_good_day_greeting.sql"),
   "utf8",
 );
 const recoveryMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261022142000_harden_attendance_sms_recovery.sql"),
+  path.join(root, "supabase/legacy-migrations/20261022142000_harden_attendance_sms_recovery.sql"),
   "utf8",
 );
 const dispatchLeaseMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261022143000_limit_attendance_sms_dispatch.sql"),
+  path.join(root, "supabase/legacy-migrations/20261022143000_limit_attendance_sms_dispatch.sql"),
   "utf8",
 );
 const pendingSemaphoreStatusMigration = fs.readFileSync(
-  path.join(root, "supabase/migrations/20261023100000_reconcile_semaphore_pending_sms_statuses.sql"),
+  path.join(root, "supabase/legacy-migrations/20261023100000_reconcile_semaphore_pending_sms_statuses.sql"),
   "utf8",
 );
 const recoveryScript = fs.readFileSync(path.join(root, "scripts/dispatch-pending-attendance-sms.cjs"), "utf8");

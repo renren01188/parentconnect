@@ -89,6 +89,10 @@ const ictPatch = ictRoute.match(/export async function PATCH[\s\S]*?(?=\n}\n?$)/
 assert.match(ictRoute, /issueDashboardIdleSession/);
 assert.match(ictPatch, /const response = NextResponse\.json\([\s\S]*?response\.cookies\.set\("ict_token", newToken, dashboardSessionCookieOptions\);/);
 assert.match(ictProfile, /ICT profile changes do not require approval and are saved immediately\./);
+assert.match(ictProfile, /border-\[#274e13\]\/30 bg-\[#274e13\]\/10[\s\S]*?text-\[#1a3a0a\]/);
+assert.match(ictProfile, /border-\[#274e13\]\/20 bg-green-50[\s\S]*?text-\[#1a3a0a\]/);
+assert.match(ictProfile, /ShieldCheck className="mt-0\.5 h-4 w-4 shrink-0 text-\[#274e13\]"/);
+assert.doesNotMatch(ictProfile, /sky-/);
 
 // Principal changes remain direct saves (with password confirmation), not
 // ICT approval requests; the modal now uses the same Settings language.

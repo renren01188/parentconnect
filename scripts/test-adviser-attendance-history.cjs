@@ -8,7 +8,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const route = read("src/app/api/attendance/history/route.ts");
 const page = read("src/app/dashboard/adviser/attendance/page.tsx");
-const migration = read("supabase/migrations/20261022113000_snapshot_attendance_student_scope.sql");
+const migration = read("supabase/legacy-migrations/20261022113000_snapshot_attendance_student_scope.sql");
 
 assert.match(route, /isValidDateOnly\(date\)/, "History must reject invalid date query values.");
 assert.match(route, /student_grade_snapshot, student_section_snapshot/, "History must read the recorded adviser scope.");

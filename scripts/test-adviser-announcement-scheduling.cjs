@@ -37,7 +37,7 @@ const route = read("src/app/api/adviser/announcements/route.ts");
 const deleteRoute = read("src/app/api/adviser/announcements/[id]/route.ts");
 const processor = read("src/lib/processScheduledAnnouncements.ts");
 const delivery = read("src/lib/deliverAdviserAnnouncement.ts");
-const migration = read("supabase/migrations/20261108090000_add_adviser_announcement_scheduling.sql");
+const migration = read("supabase/legacy-migrations/20261108090000_add_adviser_announcement_scheduling.sql");
 
 assert.match(page, /const CHAR_LIMIT = 1000/);
 assert.match(page, /maxLength=\{CHAR_LIMIT\}/);

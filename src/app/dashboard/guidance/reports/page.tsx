@@ -30,6 +30,7 @@ import {
 } from "@/lib/guidanceReportExport";
 import GuidanceReportsGuide from "../components/GuidanceReportsGuide";
 import { formatStudentGradeSection } from "@/lib/studentGradeSection";
+import { schoolGradeLevelOptions } from "@/lib/schoolGradeLevels";
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -506,7 +507,7 @@ function NewMessageModal({
         const q = staffSearch.trim().toLowerCase();
         return !q || r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q) || r.role.toLowerCase().includes(q);
     });
-    const gradeLevels = Array.from(new Set(parentRecipients.map((parent) => parent.gradeLevel).filter(Boolean))).sort();
+    const gradeLevels = schoolGradeLevelOptions(parentRecipients.map((parent) => parent.gradeLevel));
     const availableSections = Array.from(new Set(parentRecipients.filter((parent) => parent.gradeLevel === gradeLevel).map((parent) => parent.section))).sort();
     const filteredParents = parentRecipients.filter((parent) => {
         const query = parentSearch.trim().toLowerCase();

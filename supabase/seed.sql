@@ -1,0 +1,3 @@
+-- Keep local development free of deployed student, parent, and attendance
+-- records. Add only fictional, authorized demo data here when it is needed
+-- for an offline presentation.

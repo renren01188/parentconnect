@@ -28,7 +28,7 @@ const reportsRoute = read("src/app/api/reports/parent-adviser/route.ts");
 const adviserStatusRoute = read("src/app/api/reports/parent-adviser/[id]/status/route.ts");
 const guidanceStatusRoute = read("src/app/api/reports/guidance/[id]/status/route.ts");
 const principalStatusRoute = read("src/app/api/reports/principal/[id]/status/route.ts");
-const migration = read("supabase/migrations/20261105120000_add_parent_report_resolver_role.sql");
+const migration = read("supabase/legacy-migrations/20261105120000_add_parent_report_resolver_role.sql");
 
 assert.doesNotMatch(principalPage, /ResolvedBadge/);
 assert.match(principalPage, /!isResolvedReport && <PriorityBadge level=\{report\.concernLevel\} compact \/>/);

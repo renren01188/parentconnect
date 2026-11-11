@@ -7,7 +7,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-const migration = read("supabase/migrations/20261021110000_add_grade_to_class_sessions.sql");
+const migration = read("supabase/legacy-migrations/20261021110000_add_grade_to_class_sessions.sql");
 const classSessionApi = read("src/app/api/attendance/class-session/route.ts");
 const ictProfiles = read("src/app/dashboard/ict/StudentProfiles/page.tsx");
 const adviserAttendance = read("src/app/dashboard/adviser/attendance/page.tsx");

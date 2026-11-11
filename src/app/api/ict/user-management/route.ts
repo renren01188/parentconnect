@@ -16,6 +16,7 @@ import { notifyParentsOfAccountChange } from "@/lib/parentAccountChangeNotificat
 import { logAudit } from "@/lib/audit";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import { hasCompletedActiveParentSignup } from "@/lib/parentAccountCompletion";
+import { GUIDANCE_DEPARTMENT_LABEL } from "@/lib/guidanceDisplayLabel";
 import { processDueScheduledDeletions } from "@/lib/processScheduledDeletions";
 import { processDueAdviserTransfers } from "@/lib/processDueAdviserTransfers";
 import {
@@ -544,7 +545,7 @@ export async function GET(request: NextRequest) {
       name: fullName(guidance),
       email: guidance.email ?? "",
       role: "Guidance",
-      classGrade: "Student Support Services",
+      classGrade: GUIDANCE_DEPARTMENT_LABEL,
       status: normalizeStatus(guidance.status),
       firstName: guidance.first_name ?? "",
       middleName: guidance.middle_name ?? "",

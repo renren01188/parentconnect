@@ -29,6 +29,7 @@ import { sortByLatestActivity } from "@/lib/latestActivityOrder";
 import { isPrincipalReportUnread, markPrincipalReportRead } from "@/lib/principalReportReadState.cjs";
 import PrincipalReportsGuide from "../components/PrincipalReportsGuide";
 import { formatStudentGradeSection } from "@/lib/studentGradeSection";
+import { schoolGradeLevelOptions } from "@/lib/schoolGradeLevels";
 import {
   detailPanelLayout,
   findSelectedParentGroup,
@@ -1014,7 +1015,7 @@ function NewMessageModal({
 
   const allRecipients: Recipient[] = [...staffRecipients, ...parentRecipients];
   const selectedRecipient = allRecipients.find((recipient) => recipient.id === recipientId);
-  const gradeLevels = Array.from(new Set(parentRecipients.map((parent) => parent.gradeLevel).filter(Boolean))).sort();
+  const gradeLevels = schoolGradeLevelOptions(parentRecipients.map((parent) => parent.gradeLevel));
   const availableSections = Array.from(new Set(parentRecipients.filter((parent) => parent.gradeLevel === gradeLevel).map((parent) => parent.section))).sort();
   const filteredParents = parentRecipients.filter((parent) => {
     const query = parentSearch.trim().toLowerCase();

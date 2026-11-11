@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-const migration = read("supabase/migrations/20261023103000_add_parent_attendance_recording_source.sql");
+const migration = read("supabase/legacy-migrations/20261023103000_add_parent_attendance_recording_source.sql");
 const manual = read("src/app/api/attendance/manual/route.ts");
 const scan = read("src/app/api/attendance/scan/route.ts");
 const rapidTap = read("src/app/api/attendance/rapid-tap-correction/route.ts");

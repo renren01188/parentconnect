@@ -10,7 +10,7 @@ const XLSX = require("xlsx");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-const migration = read("supabase/migrations/20261021120000_add_student_sf1_remarks.sql");
+const migration = read("supabase/legacy-migrations/20261021120000_add_student_sf1_remarks.sql");
 const registration = read("src/components/student-parent-registration/StudentParentRegistration.tsx");
 const createStudentApi = read("src/app/api/students/route.ts");
 const detailApi = read("src/app/api/students/[id]/route.ts");
@@ -26,7 +26,7 @@ const ictStudentProfileApi = read("src/app/api/ict/students/[id]/route.ts");
 const ictStudentProfilesPage = read("src/app/dashboard/ict/StudentProfiles/page.tsx");
 const ictUserManagementApi = read("src/app/api/ict/user-management/route.ts");
 const ictUserManagementPage = read("src/app/dashboard/ict/user-management/page.tsx");
-const parentRemarksMigration = read("supabase/migrations/20261021130000_add_parent_account_remarks.sql");
+const parentRemarksMigration = read("supabase/legacy-migrations/20261021130000_add_parent_account_remarks.sql");
 
 // Dated records are student-ID based, constrained to the three SF2 remark
 // types, and retain a transfer school or dropout reason without touching

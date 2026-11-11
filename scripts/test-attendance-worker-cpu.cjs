@@ -49,7 +49,7 @@ const worker = loadTypeScriptModule("src/lib/attendanceSmsWorker.ts", {
 
 const workerSource = read("src/lib/attendanceSmsWorker.ts");
 const absenceSource = read("src/lib/automaticAttendanceAbsence.ts");
-const migration = read("supabase/migrations/20261023101000_reduce_attendance_worker_cpu.sql");
+const migration = read("supabase/legacy-migrations/20261023101000_reduce_attendance_worker_cpu.sql");
 
 assert.equal(worker.shouldRunScheduledSemaphoreReconciliation(0), true);
 assert.equal(worker.shouldRunScheduledSemaphoreReconciliation(60_000), false);

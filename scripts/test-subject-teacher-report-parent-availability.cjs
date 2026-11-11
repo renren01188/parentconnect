@@ -8,7 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const route = read("src/app/api/subject-teacher-reports/route.ts");
 const page = read("src/app/report/subject-teacher/page.tsx");
-const migration = read("supabase/migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
+const migration = read("supabase/legacy-migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
 
 // A report must be routable to the assigned Adviser even when a Parent has
 // not completed signup, has no email, or is not linked yet. Parent details are

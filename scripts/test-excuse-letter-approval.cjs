@@ -13,8 +13,8 @@ const parentRoute = read("src/app/api/excuse-letters/route.ts");
 const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
 const parentPage = read("src/app/dashboard/parent/attendance/page.tsx");
 const adviserAuth = read("src/lib/getAdviserFromToken.ts");
-const decisionMigration = read("supabase/migrations/20261020110000_fix_excuse_letter_decision_rpc.sql");
-const manualExcuseMigration = read("supabase/migrations/20261020130000_add_manual_excuse_range_processing.sql");
+const decisionMigration = read("supabase/legacy-migrations/20261020110000_fix_excuse_letter_decision_rpc.sql");
+const manualExcuseMigration = read("supabase/legacy-migrations/20261020130000_add_manual_excuse_range_processing.sql");
 
 // Parent collection requests are authenticated by the Parent middleware, but
 // the Adviser list and decision endpoints must reach their own Adviser guard.

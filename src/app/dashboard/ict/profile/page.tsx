@@ -300,12 +300,12 @@ export default function ICTProfilePage() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
-              <div className="mb-4 flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300 bg-sky-100 px-4 text-sm font-bold text-sky-700">
+              <div className="mb-4 flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#274e13]/30 bg-[#274e13]/10 px-4 text-sm font-bold text-[#1a3a0a]">
                 <UserRound className="h-4 w-4" />
                 Profile Settings
               </div>
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-xs leading-relaxed text-sky-800">
-                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-[#274e13]/20 bg-green-50 px-4 py-3 text-xs leading-relaxed text-[#1a3a0a]">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#274e13]" />
                 <p>ICT profile changes do not require approval and are saved immediately.</p>
               </div>
               {error && (

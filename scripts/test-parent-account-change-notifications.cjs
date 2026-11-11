@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-const migration = read("supabase/migrations/20261109100000_add_parent_account_change_notifications.sql");
+const migration = read("supabase/legacy-migrations/20261109100000_add_parent_account_change_notifications.sql");
 const helper = read("src/lib/parentAccountChangeNotifications.ts");
 const adviserStudentRoute = read("src/app/api/students/[id]/route.ts");
 const ictStudentRoute = read("src/app/api/ict/students/[id]/route.ts");

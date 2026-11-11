@@ -9,7 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const signup = read("src/app/api/parents/signup/route.ts");
 const signupOtp = read("src/app/api/parents/signup-otp/route.ts");
 const verifyTemporaryPassword = read("src/app/api/parents/verify-temp-password/route.ts");
-const archivedIdentifierMigration = read("supabase/migrations/20261106100000_allow_archived_parent_identifier_reuse.sql");
+const archivedIdentifierMigration = read("supabase/legacy-migrations/20261106100000_allow_archived_parent_identifier_reuse.sql");
 const otp = read("src/lib/parentVerificationOtp.ts");
 const guardianPage = read("src/app/login/guardian/page.tsx");
 const forgotPasswordPage = read("src/app/login/guardian/forgot-password/page.tsx");

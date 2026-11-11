@@ -11,6 +11,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import { GUIDANCE_DEPARTMENT_LABEL } from "@/lib/guidanceDisplayLabel";
 
 type Student = {
   displayName: string;
@@ -840,7 +841,7 @@ export function BulkDeletionModal({
                         {(item.type === "adviser" || item.type === "guidance") && (
                           <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                             <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">Employee Number</span><span className="font-bold text-slate-700">{item.employeeId || "Not available"}</span></div>
-                            <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">{item.type === "guidance" ? "Department" : "Advisory"}</span><span className="font-bold text-slate-700">{item.advisory || (item.type === "guidance" ? "Student Support Services" : "Not assigned")}</span></div>
+                            <div className="rounded-lg bg-white px-3 py-2"><span className="block font-semibold text-slate-400">{item.type === "guidance" ? "Department" : "Advisory"}</span><span className="font-bold text-slate-700">{item.type === "guidance" ? GUIDANCE_DEPARTMENT_LABEL : item.advisory || "Not assigned"}</span></div>
                           </div>
                         )}
                         {(item.type === "parent" || item.type === "student") &&

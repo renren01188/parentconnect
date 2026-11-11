@@ -228,9 +228,19 @@ async function adviserMayMessageParent(parentId: number, studentId: string) {
 async function participantCanReceiveStaffMessage(type: ParticipantRole, id: number) {
   if (!Number.isSafeInteger(id) || id <= 0) return false;
 
-  const query = type === "parent"
-    ? supabase.from("parents").select("id, status, archive_status, password_set").eq("id", id)
-    : type === "adviser"
+  if (type === "parent") {
+    const { data, error } = await supabase
+      .from("parents")
+      .select("id, parent_first_name, parent_last_name, password_set, status, archive_status")
+      .eq("id", id)
+      .eq("status", "active")
+      .eq("archive_status", "active")
+      .maybeSingle();
+    if (error) throw error;
+    return Boolean(data && parentHasCompletedSignup(data));
+  }
+
+  const query = type === "adviser"
       ? supabase.from("advisers").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
       : type === "guidance"
         ? supabase.from("guidance_counselors").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active")
@@ -239,10 +249,7 @@ async function participantCanReceiveStaffMessage(type: ParticipantRole, id: numb
           : supabase.from("ict_admins").select("id").eq("id", id).eq("status", "active").eq("archive_status", "active");
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  if (!data) return false;
-  return type === "parent"
-    ? parentHasCompletedSignup(data as unknown as { status?: string | null; archive_status?: string | null; password_set?: boolean | number | null })
-    : true;
+  return Boolean(data);
 }
 
 function roleLabel(type: string) {

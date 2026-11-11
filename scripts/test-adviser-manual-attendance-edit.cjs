@@ -9,7 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const manualRoute = read("src/app/api/attendance/manual/route.ts");
 const editRoute = read("src/app/api/attendance/edit/route.ts");
 const adviserPage = read("src/app/dashboard/adviser/attendance/page.tsx");
-const manualExcuseMigration = read("supabase/migrations/20261020130000_add_manual_excuse_range_processing.sql");
+const manualExcuseMigration = read("supabase/legacy-migrations/20261020130000_add_manual_excuse_range_processing.sql");
 
 // An Excused manual Time In requires a reason and a calendar range. It uses
 // the same protected database path as an approved excuse letter and cannot

@@ -7,8 +7,8 @@ const ts = require("typescript");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-const migration = read("supabase/migrations/20261020200000_add_parent_verification_otp_challenges.sql");
-const persistenceMigration = read("supabase/migrations/20261020210000_persist_parent_reset_otp_limits.sql");
+const migration = read("supabase/legacy-migrations/20261020200000_add_parent_verification_otp_challenges.sql");
+const persistenceMigration = read("supabase/legacy-migrations/20261020210000_persist_parent_reset_otp_limits.sql");
 const otpHelper = read("src/lib/parentVerificationOtp.ts");
 const signup = read("src/app/api/parents/signup/route.ts");
 const signupOtp = read("src/app/api/parents/signup-otp/route.ts");

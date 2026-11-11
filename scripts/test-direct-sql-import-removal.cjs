@@ -11,7 +11,7 @@ const loginRoute = read("src/app/api/auth/login/route.ts");
 const loginPage = read("src/app/login/guardian/page.tsx");
 const middleware = read("src/proxy.ts");
 const parentState = read("src/lib/parentRegistrationState.ts");
-const migration = read("supabase/migrations/20261027120000_remove_direct_parent_account_owner_feature.sql");
+const migration = read("supabase/legacy-migrations/20261027120000_remove_direct_parent_account_owner_feature.sql");
 const packageJson = read("package.json");
 
 // Normal Guardian authentication still supports temporary-password setup and

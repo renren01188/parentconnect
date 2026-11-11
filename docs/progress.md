@@ -6,6 +6,32 @@ This is a source-tree snapshot, not a release checklist. It records verified
 paths and working-tree state only; feature behavior is not considered verified
 unless a named check has been run and recorded below.
 
+### Offline local Supabase bootstrap
+
+- **Complete in source:** `supabase/migrations/20261111120000_remote_schema_baseline.sql`
+  is a schema-only export of the deployed project, allowing a new Docker-based
+  local Supabase instance to start even though the hosted project predates
+  tracked migration history. Historical incremental SQL remains intact under
+  `supabase/legacy-migrations/`; it is reference material and is not replayed
+  by the local CLI. Migration-source regression checks read that archive.
+- **Local safety:** `supabase/seed.sql` is deliberately empty, so a reset does
+  not copy deployed student, parent, attendance, or other school records. The
+  local Auth URLs now target the application's `localhost:3001` development
+  port.
+- **Deployment boundary:** Do not run `supabase db push --remote` with this
+  baseline until the deployed migration history is deliberately reviewed and
+  recorded; the baseline already represents its current schema.
+- **Verified:** `npx.cmd supabase db reset --local` rebuilt the Docker database,
+  applied the baseline, ran the seed, and restarted services on 2026-11-11.
+  The section-rename, guardian-password-reset, and ICT bulk-deletion checks
+  passed; all archived migration references resolve and `git diff --check`
+  passed. Twenty-five archive-reading regression checks passed. Four unrelated
+  source-expectation checks remain stale: calendar schedule expects
+  `isScheduledAttendanceDate` after its route adopted
+  `attendanceReportDaysForMonth`; parent enrollment expects the former OTP
+  redirect; adviser announcement scheduling expects former copy; and SF2
+  remarks expects the prior monthly-query text.
+
 ### ICT Manage Class Sessions rename repair
 
 - **Complete in source:** the production rename failure was traced to PostgreSQL
@@ -401,13 +427,47 @@ unless a named check has been run and recorded below.
   width, with a clear Account & Family / Linked Students panel switch instead
   of showing both areas side by side. It retains one scrollable content area,
   a persistent Cancel / Review Changes action bar, and compact responsive
-  family-name grids. The existing save, validation, link-correction, and API
-  behavior are unchanged.
-- **Affected files:** `src/app/dashboard/ict/user-management/page.tsx` and
-  the ICT User Management architecture note.
+  family-name grids. Its action-bar helper text is placed above a wrapping
+  button row so Review Changes remains fully visible at compact widths. The
+  existing save, validation, link-correction, and API behavior are unchanged.
+  The Adviser-conflict modal calls its immediate action **Transfer Affective
+  Immediately**, and related transfer validation messages use the same label.
+  Its immediate-transfer confirmation and the Scheduled Adviser Transfers
+  cancellation confirmation are now in-app, ICT-styled dialogs rather than
+  browser prompts; they retain the existing transfer and cancellation checks.
+Cancelling the Edit Adviser review or section-handover preview returns to the
+saved grade/sections and remounts the section picker so chips, selected rows,
+and its count reset together, while keeping unrelated profile draft fields. An
+assignment is persisted only by the existing confirmed save or transfer action.
+  The directory now maps its headers from the active role filter: Advisers use
+  **Class / Grade** / **Assignment**, while ICT and Guidance use **Department**
+  / **Responsibility**. All Users and Parents & Students retain their headers.
+  A shared Guidance display label supplies **Student Support and Advising** to
+  existing and newly created Guidance rows, including their lowercase
+  responsibility text.
+- **Affected files:** `src/app/dashboard/ict/user-management/page.tsx`, its
+  list API, `guidanceDisplayLabel`, Bulk Deletion display, focused regression
+  check, and the ICT User Management architecture note.
 - **Verified:** `npm.cmd run test:ict-user-management-account-update`,
-  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10. Browser
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-11. Browser
   visual verification at desktop and narrow mobile widths remains unverified.
+  Focused lint reaches 22 existing `no-explicit-any` errors (19 in the User
+  Management API and three in the page) plus seven existing unused-symbol
+  warnings in the page; none are in the affected presentation, label, or
+  confirmation code.
+
+### ICT Profile Settings theme
+
+- **Complete in source:** The ICT Profile Settings modal now uses the
+  dashboard's dark-green accent palette for its profile tab and immediate-save
+  notice instead of the former blue palette. Its controls, validation, and
+  existing direct-save behavior are unchanged.
+- **Affected files:** `src/app/dashboard/ict/profile/page.tsx`,
+  `scripts/test-profile-save-flows.cjs`, and the profile-settings architecture
+  note.
+- **Verified:** `npm.cmd run test:profile-save-flows`, focused ICT Profile
+  ESLint, and `npx.cmd tsc --noEmit` passed on 2026-11-11. Browser visual
+  verification remains unverified.
 
 ### Parent profile save
 
@@ -577,8 +637,19 @@ unless a named check has been run and recorded below.
   aligned to the top right of the viewport, with the existing responsive width,
   scrolling, overlay, and close behavior preserved. Parent-recipient cards now
   emphasize the Parent/Guardian and show the student name on their bottom line.
-- **Verification:** `npm.cmd run test:send-concern-recipients` confirms the
-  three modal overlays use the common top-right placement contract.
+- **Complete in source:** Guidance and Principal now always offer Grade 1
+  through Grade 6 in their school-wide Parent selectors. The shared recipient
+  lookup removes retired SF1 `Parent Account Owner` placeholders and reuses the
+  completed-signup rule for list, send, and Parent-participant validation.
+- **Affected files:** `schoolGradeLevels`, `parentMessageRecipients`, the
+  staff-message route, Guidance/Principal report pages, and the recipient
+  regression check.
+- **Verified:** `npm.cmd run test:send-concern-recipients`,
+  `npm.cmd run test:staff-direct-messages`, and `npx.cmd tsc --noEmit` passed
+  on 2026-11-11. Focused ESLint had no errors and reached eight pre-existing
+  warnings in the Principal report page outside this change. The unrelated
+  `test:guidance-parent-live-messaging` currently stops on its stale typing-hook
+  assertion; its hook was not changed by this work.
 
 ### Profile Settings draft protection and Adviser class selection
 

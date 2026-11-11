@@ -28,7 +28,7 @@ const absent = read("src/lib/automaticAttendanceAbsence.ts");
 const monthly = read("src/app/api/attendance/monthly/route.ts");
 const principalSummary = read("src/app/api/attendance/monthly-summary/route.ts");
 const studentProfiles = read("src/app/dashboard/ict/StudentProfiles/page.tsx");
-const migration = read("supabase/migrations/20261019110000_add_school_year_attendance_weekdays.sql");
+const migration = read("supabase/legacy-migrations/20261019110000_add_school_year_attendance_weekdays.sql");
 assert.match(calendar, /Date\.UTC\(year, month - 1, day\)/);
 assert.match(calendar, /getUTCDay\(\)/);
 assert.match(calendar, /scheduledAttendanceDates/);

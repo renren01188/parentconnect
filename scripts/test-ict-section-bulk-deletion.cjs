@@ -13,8 +13,8 @@ const archival = read("src/lib/permanentDeletion.ts");
 const userManagementApi = read("src/app/api/ict/user-management/route.ts");
 const bulkUi = read("src/app/dashboard/ict/user-management/BulkDeletionModal.tsx");
 const adviserBulkUi = read("src/app/dashboard/adviser/students/BulkDeleteModal.tsx");
-const migration = read("supabase/migrations/20261105150000_ensure_occupied_sections_cannot_be_deleted.sql");
-const scheduledDeletionMigration = read("supabase/migrations/20261111100000_enforce_one_active_scheduled_deletion_per_target.sql");
+const migration = read("supabase/legacy-migrations/20261105150000_ensure_occupied_sections_cannot_be_deleted.sql");
+const scheduledDeletionMigration = read("supabase/legacy-migrations/20261111100000_enforce_one_active_scheduled_deletion_per_target.sql");
 const deletionAccess = read("src/lib/deletionAccess.ts");
 
 // The displayed count and server preflight ignore only explicitly archived or

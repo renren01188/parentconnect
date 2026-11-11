@@ -9,8 +9,8 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const sectionApi = read("src/app/api/sections/route.ts");
 const createUserPage = read("src/app/dashboard/ict/user-management/create-user/page.tsx");
-const migration = read("supabase/migrations/20261021100000_rename_sections_in_place.sql");
-const ambiguityRepairMigration = read("supabase/migrations/20261111103000_fix_section_rename_column_ambiguity.sql");
+const migration = read("supabase/legacy-migrations/20261021100000_rename_sections_in_place.sql");
+const ambiguityRepairMigration = read("supabase/legacy-migrations/20261111103000_fix_section_rename_column_ambiguity.sql");
 
 // The client has an explicit rename action and checks every section in the
 // grade, not merely the currently visible class-session tab.

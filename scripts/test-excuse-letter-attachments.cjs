@@ -8,7 +8,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const route = read("src/app/api/excuse-letters/route.ts");
 const page = read("src/app/dashboard/parent/attendance/page.tsx");
-const optionalAttachmentMigration = read("supabase/migrations/20261020120000_make_excuse_letter_attachment_optional.sql");
+const optionalAttachmentMigration = read("supabase/legacy-migrations/20261020120000_make_excuse_letter_attachment_optional.sql");
 
 // No `attachments` property and an empty attachment list are both accepted.
 // If a file is supplied, retain the one-file cap and payload validation.

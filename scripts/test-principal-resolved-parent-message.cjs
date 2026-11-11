@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-const migration = read("supabase/migrations/20261105140000_link_principal_parent_messages_to_reports.sql");
+const migration = read("supabase/legacy-migrations/20261105140000_link_principal_parent_messages_to_reports.sql");
 const route = read("src/app/api/reports/principal/[id]/parent-message/route.ts");
 const staffMessages = read("src/app/api/reports/staff-messages/route.ts");
 const principalReports = read("src/app/dashboard/principal/reports/page.tsx");

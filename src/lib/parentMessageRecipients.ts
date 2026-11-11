@@ -1,4 +1,7 @@
-import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
+import {
+  hasCompletedActiveParentSignup,
+  isImportedParentPlaceholder,
+} from "@/lib/parentAccountCompletion";
 import { supabase } from "@/lib/supabase";
 
 type ParentRow = {
@@ -58,19 +61,13 @@ function fullName(parts: Array<string | null | undefined>) {
     .join(" ");
 }
 
-function isPasswordSet(value: ParentRow["password_set"]) {
-  return value === true || Number(value) === 1;
-}
-
 /**
- * An injected school-family row can be active while still awaiting Guardian
- * signup. Only a usable account with a completed password setup may receive
- * direct staff messages.
+ * A message recipient must be a completed, active guardian account with a
+ * real name. Imported "Parent Account Owner" placeholders never qualify,
+ * even where a legacy import marked their password as set.
  */
-export function parentHasCompletedSignup(
-  parent: Pick<ParentRow, "status" | "archive_status" | "password_set">,
-) {
-  return parentAccountCanAccess(parent) && isPasswordSet(parent.password_set);
+export function parentHasCompletedSignup(parent: ParentRow) {
+  return hasCompletedActiveParentSignup(parent);
 }
 
 function toRecipient(parent: ParentRow, student: StudentRow, relationship?: string | null): ParentMessageRecipient {
@@ -149,7 +146,8 @@ export async function listParentMessageRecipients() {
   if (studentResult.error) throw studentResult.error;
   if (linkResult.error) throw linkResult.error;
 
-  const parents = (parentResult.data ?? []) as ParentRow[];
+  const parents = ((parentResult.data ?? []) as ParentRow[])
+    .filter((parent) => !isImportedParentPlaceholder(parent));
   const students = new Map(
     ((studentResult.data ?? []) as StudentRow[])
       .filter(activeStudent)
@@ -211,7 +209,7 @@ export async function findParentMessageRecipient(parentId: number, studentId: st
 
   const parent = parentResult.data as ParentRow | null;
   const student = studentResult.data as StudentRow | null;
-  if (!parent || !activeStudent(student)) return null;
+  if (!parent || isImportedParentPlaceholder(parent) || !activeStudent(student)) return null;
 
   const link = linkResult.data as ParentStudentLinkRow | null;
   const isLegacyDirectLink = String(parent.student_id ?? "").trim() === studentId;

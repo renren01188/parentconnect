@@ -18,7 +18,7 @@ const scheduledAnnouncements = read("src/lib/processScheduledAnnouncements.ts");
 const guidanceIncoming = read("src/app/api/guidance/principal-announcements/route.ts");
 const ictIncoming = read("src/app/api/ict/principal-announcements/route.ts");
 const adviserNotifications = read("src/app/api/adviser/notifications/route.ts");
-const migration = read("supabase/migrations/20261017130000_allow_ict_parent_announcement_notifications.sql");
+const migration = read("supabase/legacy-migrations/20261017130000_allow_ict_parent_announcement_notifications.sql");
 
 // ICT exposes the requested choices, stores the existing canonical adviser
 // value, and expands Everyone to all four recipient roles.

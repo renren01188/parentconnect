@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-const migration = read("supabase/migrations/20261021150000_add_guidance_report_favorites.sql");
+const migration = read("supabase/legacy-migrations/20261021150000_add_guidance_report_favorites.sql");
 const route = read("src/app/api/reports/guidance/favorites/route.ts");
 const page = read("src/app/dashboard/guidance/reports/page.tsx");
 

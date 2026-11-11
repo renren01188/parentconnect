@@ -6,6 +6,10 @@ import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { getStudentAge } from "@/lib/studentAge";
 import { isPreSignupParentRecord } from "@/lib/parentRegistrationState";
 import {
+  GUIDANCE_DEPARTMENT_LABEL,
+  GUIDANCE_RESPONSIBILITY_LABEL,
+} from "@/lib/guidanceDisplayLabel";
+import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
   isMissingOtherGuardianRelationship,
   splitGuardianRelationship,
@@ -33,6 +37,7 @@ type Status = "Active" | "Inactive" | "Pending Activation";
 type AuditAction = "created" | "edited" | "activated" | "deactivated" | "deleted" | "approved" | "rejected";
 type ApprovalStatus = "Pending" | "Approved" | "Rejected";
 type Gender = "Male" | "Female" | "";
+type UserFilterMode = "all" | "adviser" | "ict" | "guidance" | "parent";
 interface DeleteSchedule { scheduledAtMs: number; deleteAtMs: number; }
 interface ScheduledDeletion { id: number; target_type: "student" | "parent" | "adviser" | "ict" | "guidance"; target_id: string; target_name: string; target_email?: string | null; reason: string; status: "PendingICT" | "Scheduled" | "Rejected" | "Restored" | "Archived" | "Deleted"; requested_at: string; delete_after?: string | null; grade?: string | null; section?: string | null; }
 interface AdviserTransferConflict {
@@ -118,6 +123,13 @@ function parentStudentLinkBadgeClass(state: UserRow["parentStudentLinkState"]) {
 // ─── Constants ────────────────────────────────────────────
 const PRIMARY = "#274e13";
 const PER_PAGE = 5;
+const USER_DIRECTORY_HEADERS: Record<UserFilterMode, readonly [string, string, string, string, string]> = {
+  all: ["User", "Role", "Class / Grade", "Student(s)", ""],
+  adviser: ["User", "Role", "Class / Grade", "Assignment", ""],
+  ict: ["User", "Role", "Department", "Responsibility", ""],
+  guidance: ["User", "Role", "Department", "Responsibility", ""],
+  parent: ["Student", "Link status", "Class / Grade", "Parents / Guardian", ""],
+};
 
 const INITIAL_SECTIONS: Record<string, string[]> = {
   "Grade 1": ["Rizal", "Mabini"], "Grade 2": ["Bonifacio", "Del Pilar"],
@@ -959,6 +971,73 @@ function DeleteApprovalModal({ user, onClose, onAudit, onRequestSent }: {
 }
 
 // ─── Edit Adviser Modal ───────────────────────────────────
+function TransferConfirmationModal({
+  title,
+  description,
+  confirmLabel,
+  confirming,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: React.ReactNode;
+  confirmLabel: string;
+  confirming?: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    if (confirming) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirming, onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4"
+      role="presentation"
+      onClick={() => {
+        if (!confirming) onCancel();
+      }}
+    >
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="transfer-confirmation-title"
+        aria-describedby="transfer-confirmation-description"
+        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 id="transfer-confirmation-title" className="text-base font-extrabold text-slate-900">{title}</h2>
+            <p id="transfer-confirmation-description" className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+          </div>
+        </div>
+
+        {error && <p role="alert" className="mt-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</p>}
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onCancel} disabled={confirming} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+            Go back
+          </button>
+          <button type="button" onClick={onConfirm} disabled={confirming} className="min-h-11 rounded-xl bg-red-600 px-4 text-sm font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+            {confirming ? "Saving…" : confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 type EditStep = "edit" | "confirm" | "transfer" | "success" | "sent";
 
 function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }: {
@@ -980,6 +1059,8 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
   const [releaseCurrentAssignment, setReleaseCurrentAssignment] = useState(false);
   const [transferEffectiveDate, setTransferEffectiveDate] = useState(tomorrowManilaDate);
   const [transferNote, setTransferNote] = useState("");
+  const [showImmediateTransferConfirmation, setShowImmediateTransferConfirmation] = useState(false);
+  const [assignmentPickerKey, setAssignmentPickerKey] = useState(0);
   const isICT = user.role === "ICT";
   const isGuidance = user.role === "Guidance";
   const isPendingActivation = user.status === "Pending Activation";
@@ -1090,7 +1171,6 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       return;
     }
     const targetSections = transferConflicts.map((conflict) => conflict.section);
-    if (effect === "immediate" && !window.confirm(`Transfer Grade ${transferConflict.grade} – ${targetSections.join(", ")} to ${fullName} now? The outgoing adviser will lose access immediately.${transferRelocation ? ` ${fullName} will also leave Grade ${transferRelocation.grade} – ${transferRelocation.sections.join(", ")}.` : ""}`)) return;
 
     setSaving(true);
     setPasswordError("");
@@ -1124,6 +1204,32 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       setSaving(false);
     }
   }
+
+  function requestImmediateTransfer() {
+    if (!transferConflict || transferConflicts.length === 0) return;
+    if (transferRelocation && !releaseCurrentAssignment) {
+      setPasswordError(`Confirm that ${fullName} will leave Grade ${transferRelocation.grade} - ${transferRelocation.sections.join(", ")} before continuing.`);
+      return;
+    }
+    setShowImmediateTransferConfirmation(true);
+  }
+
+  function discardPendingClassAssignment() {
+    // Review Changes is only a preview. Restore the persisted assignment while
+    // keeping every unrelated field in the current ICT draft intact.
+    setForm((current) => ({ ...current, classGrade: user.classGrade }));
+    // GradeSectionPicker owns its selected chips/rows internally. Remount it
+    // after restoring the form value so all picker visuals match the saved row.
+    setAssignmentPickerKey((current) => current + 1);
+    setTransferConflicts([]);
+    setTransferRelocation(null);
+    setReleaseCurrentAssignment(false);
+    setTransferNote("");
+    setShowImmediateTransferConfirmation(false);
+    setPasswordError("");
+    setStep("edit");
+  }
+
   async function handleSend() {
     setSaving(true);
     try {
@@ -1242,7 +1348,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
       <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
           {(step === "confirm" || step === "transfer") && (
-            <button onClick={() => setStep("edit")} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
+            <button onClick={discardPendingClassAssignment} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
@@ -1310,8 +1416,8 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
               {isICT
                 ? <FInput label="Access Scope" required value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />
                 : isGuidance
-                  ? <p className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm font-semibold text-gray-600">Student Support Services</p>
-                  : <GradeSectionPicker value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />}
+                  ? <p className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm font-semibold text-gray-600">{GUIDANCE_DEPARTMENT_LABEL}</p>
+                  : <GradeSectionPicker key={assignmentPickerKey} value={form.classGrade} onChange={v => setForm(p => ({ ...p, classGrade: v }))} />}
             </div>
             {!isPendingActivation && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
@@ -1390,10 +1496,10 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
             </div>
             {passwordError && <p role="alert" className="text-xs font-semibold text-red-600">{passwordError}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-              <button onClick={() => setStep("edit")} disabled={saving} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 disabled:opacity-60">Go Back</button>
+              <button onClick={discardPendingClassAssignment} disabled={saving} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 disabled:opacity-60">Cancel</button>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <button onClick={() => handleTransfer("immediate")} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-60">
-                  <AlertTriangle className="h-4 w-4" /> Effect Transfer Immediately
+                <button onClick={requestImmediateTransfer} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-60">
+                  <AlertTriangle className="h-4 w-4" /> Transfer Affective Immediately
                 </button>
                 <button onClick={() => handleTransfer("schedule")} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#1e3d0f] disabled:opacity-60">
                   {saving ? "Saving…" : <><Clock className="h-4 w-4" /> Schedule Transfer</>}
@@ -1401,6 +1507,21 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
               </div>
             </div>
           </div>
+        )}
+
+        {showImmediateTransferConfirmation && transferConflict && (
+          <TransferConfirmationModal
+            title="Transfer section immediately?"
+            description={<>
+              Transfer Grade {transferConflict.grade} – {transferConflicts.map((conflict) => conflict.section).join(", ")} to {fullName} now? {[...new Set(transferConflicts.map((conflict) => conflict.outgoingAdviserName))].join(", ")} will lose access immediately.{transferRelocation ? ` ${fullName} will also leave Grade ${transferRelocation.grade} – ${transferRelocation.sections.join(", ")}.` : ""}
+            </>}
+            confirmLabel="Transfer Affective Immediately"
+            onCancel={() => setShowImmediateTransferConfirmation(false)}
+            onConfirm={() => {
+              setShowImmediateTransferConfirmation(false);
+              void handleTransfer("immediate");
+            }}
+          />
         )}
 
         {step === "confirm" && (
@@ -1429,7 +1550,7 @@ function EditAdviserModal({ user, onClose, onAudit, onSave, onTransferChanged }:
             </div>
             {passwordError && <p role="alert" className="text-xs font-semibold text-red-600">{passwordError}</p>}
             <div className="flex gap-3">
-              <button onClick={() => setStep("edit")} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Go Back</button>
+              <button onClick={discardPendingClassAssignment} className="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
               <button onClick={handleSend} disabled={saving}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-60 hover:opacity-90 bg-[#274e13]">
                 {saving ? <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Saving…</> : <><Save className="w-4 h-4" />Save Changes</>}
@@ -1450,11 +1571,15 @@ function AdviserTransferQueueModal({ configured, transfers, onClose, onChanged }
 }) {
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [transferToCancel, setTransferToCancel] = useState<ScheduledAdviserTransfer | null>(null);
+  const [cancelConfirmationError, setCancelConfirmationError] = useState("");
 
-  async function cancelTransfer(transfer: ScheduledAdviserTransfer) {
-    if (!window.confirm(`Cancel the scheduled transfer of Grade ${transfer.grade} – ${transfer.section}?`)) return;
+  async function cancelTransfer() {
+    if (!transferToCancel) return;
+    const transfer = transferToCancel;
     setCancellingId(transfer.id);
     setError("");
+    setCancelConfirmationError("");
     try {
       const response = await fetch("/api/adviser-transfers", {
         method: "POST",
@@ -1464,15 +1589,19 @@ function AdviserTransferQueueModal({ configured, transfers, onClose, onChanged }
       const result = await response.json();
       if (!result.success) throw new Error(result.message || "Unable to cancel this transfer.");
       await onChanged();
+      setTransferToCancel(null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Unable to cancel this transfer.");
+      const message = err instanceof Error ? err.message : "Unable to cancel this transfer.";
+      setError(message);
+      setCancelConfirmationError(message);
     } finally {
       setCancellingId(null);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" style={{ maxHeight: "85vh" }} onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center gap-3 border-b border-gray-100 px-6 py-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#274e13]/10 text-[#274e13]"><Clock className="h-4 w-4" /></div>
@@ -1487,13 +1616,25 @@ function AdviserTransferQueueModal({ configured, transfers, onClose, onChanged }
             <div key={transfer.id} className={`rounded-xl border p-4 ${transfer.status === "Failed" ? "border-red-200 bg-red-50" : "border-gray-200 bg-gray-50"}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div><p className="text-sm font-bold text-gray-800">Grade {transfer.grade} – {transfer.section}</p><p className="mt-1 text-xs text-gray-600"><strong>{transfer.outgoing_name}</strong> <span className="px-1 text-gray-400">→</span> <strong>{transfer.incoming_name}</strong></p><p className="mt-2 text-[11px] font-semibold text-[#274e13]">{transfer.status === "Scheduled" ? `Effective ${new Date(transfer.effective_at).toLocaleDateString("en-US", { timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric" })}` : transfer.failure_reason || "Transfer failed"}</p>{transfer.note && <p className="mt-1 text-[11px] text-gray-500">Note: {transfer.note}</p>}</div>
-                {transfer.status === "Scheduled" && <button onClick={() => cancelTransfer(transfer)} disabled={cancellingId === transfer.id} className="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-60">{cancellingId === transfer.id ? "Cancelling…" : "Cancel Transfer"}</button>}
+                {transfer.status === "Scheduled" && <button onClick={() => { setCancelConfirmationError(""); setTransferToCancel(transfer); }} disabled={cancellingId === transfer.id} className="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-60">{cancellingId === transfer.id ? "Cancelling…" : "Cancel Transfer"}</button>}
               </div>
             </div>
           ))}
         </div>
       </div>
-    </div>
+      </div>
+      {transferToCancel && (
+        <TransferConfirmationModal
+          title="Cancel scheduled transfer?"
+          description={<>Cancel the scheduled transfer of Grade {transferToCancel.grade} – {transferToCancel.section} from {transferToCancel.outgoing_name} to {transferToCancel.incoming_name}?</>}
+          confirmLabel="Cancel transfer"
+          confirming={cancellingId === transferToCancel.id}
+          error={cancelConfirmationError}
+          onCancel={() => { if (!cancellingId) setTransferToCancel(null); }}
+          onConfirm={() => void cancelTransfer()}
+        />
+      )}
+    </>
   );
 }
 
@@ -2044,12 +2185,12 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                 </aside>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-4">
+            <div className="flex shrink-0 flex-col gap-2 border-t border-gray-200 bg-white px-4 py-3 sm:px-6 sm:py-4">
               <p className="text-xs text-gray-500">Review changes before saving them to the Parent account.</p>
-              <div className="flex gap-3">
-                <button onClick={onClose} className="flex-1 rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:flex-none">Cancel</button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button onClick={onClose} className="shrink-0 whitespace-nowrap rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">Cancel</button>
                 <button onClick={handleReview} disabled={!hasChanges}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none sm:px-6">
+                  className="flex shrink-0 whitespace-nowrap items-center justify-center gap-2 rounded-xl bg-[#274e13] px-4 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5">
                   <Save className="w-4 h-4" /> Review Changes
                 </button>
                 </div>
@@ -2381,7 +2522,7 @@ export default function UserManagementPage() {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [page, setPage] = useState(1);
-  const [filterMode, setFilterMode] = useState<"all" | "adviser" | "ict" | "guidance" | "parent">("all");
+  const [filterMode, setFilterMode] = useState<UserFilterMode>("all");
   const [parentStudentGrade, setParentStudentGrade] = useState("");
   const [parentStudentSection, setParentStudentSection] = useState("");
   const [parentStudentLinkState, setParentStudentLinkState] = useState<"all" | "linked" | "not_registered">("all");
@@ -2587,6 +2728,7 @@ export default function UserManagementPage() {
     [parentStudentFilters.sections, parentStudentGrade],
   );
   const isParentStudentDirectory = filterMode === "parent";
+  const userDirectoryHeaders = USER_DIRECTORY_HEADERS[filterMode];
   const scheduledDeletionCount = users.filter((u) => u.deleteSchedule).length;
   const pendingDeletionRequestCount = scheduledDeletions.filter((item) => item.status === "PendingICT").length;
   const scheduledTransferCount = scheduledAdviserTransfers.filter((item) => item.status === "Scheduled").length;
@@ -2668,7 +2810,7 @@ export default function UserManagementPage() {
               <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                 <span className="text-xs font-bold text-gray-400 shrink-0">Filter by:</span>
                 <div className="flex w-full gap-1.5 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible">
-                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }] as { value: typeof filterMode; label: string }[]).map(({ value, label }) => (
+                  {([{ value: "all", label: "All Users" }, { value: "adviser", label: "Advisers" }, { value: "ict", label: "ICT" }, { value: "guidance", label: "Guidance" }, { value: "parent", label: "Parents & Students" }] as { value: UserFilterMode; label: string }[]).map(({ value, label }) => (
                     <button key={value} onClick={() => { setFilterMode(value); setPage(1); }}
                       className="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition sm:py-1.5"
                       style={{ background: filterMode === value ? PRIMARY : "white", color: filterMode === value ? "white" : "#6b7280", borderColor: filterMode === value ? PRIMARY : "#e5e7eb" }}>
@@ -2743,10 +2885,7 @@ export default function UserManagementPage() {
           <table className="hidden w-full lg:table">
             <thead>
               <tr className="bg-gray-50/80 border-b border-gray-100">
-                {(isParentStudentDirectory
-                  ? ["Student", "Link status", "Class / Grade", "Parents / Guardian", ""]
-                  : ["User", "Role", "Class / Grade", "Student(s)", ""]
-                ).map(h => (
+                {userDirectoryHeaders.map(h => (
                   <th key={h} className="text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider px-5 py-3">{h}</th>
                 ))}
               </tr>
@@ -2785,7 +2924,7 @@ export default function UserManagementPage() {
                         ? <div className="flex flex-col gap-1">{u.students.map((s, i) => <span key={i} className="text-xs text-gray-700 truncate">{s}</span>)}</div>
                         : u.role === "Adviser" ? <span className="text-xs text-gray-400 italic">Class adviser</span>
                         : u.role === "ICT" ? <span className="text-xs text-gray-400 italic">System administration</span>
-                          : u.role === "Guidance" ? <span className="text-xs text-gray-400 italic">Student support services</span>
+                          : u.role === "Guidance" ? <span className="text-xs text-gray-400 italic">{GUIDANCE_RESPONSIBILITY_LABEL}</span>
                             : <span className="text-xs text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3.5">

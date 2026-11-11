@@ -8,7 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const page = read("src/app/report/subject-teacher/page.tsx");
 const submitRoute = read("src/app/api/subject-teacher-reports/route.ts");
-const migration = read("supabase/migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
+const migration = read("supabase/legacy-migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
 const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
 
 const categories = [

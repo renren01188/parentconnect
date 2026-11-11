@@ -11,7 +11,7 @@ const scanRoute = read("src/app/api/attendance/scan/route.ts");
 const correctionRoute = read("src/app/api/attendance/rapid-tap-correction/route.ts");
 const queueStorage = read("src/lib/attendanceRapidTapQueue.ts");
 const smsQueue = read("src/lib/attendanceSmsQueue.ts");
-const migration = read("supabase/migrations/20261022103000_add_attendance_scan_request_id.sql");
+const migration = read("supabase/legacy-migrations/20261022103000_add_attendance_scan_request_id.sql");
 
 assert.doesNotMatch(adviserPage, /RfidScannerMode|rfidScannerMode|setRfidScannerMode/);
 assert.doesNotMatch(adviserPage, />\s*Default\s*</);

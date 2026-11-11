@@ -5,7 +5,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-const migration = read("supabase/migrations/20261019100000_enforce_global_staff_employee_ids.sql");
+const migration = read("supabase/legacy-migrations/20261019100000_enforce_global_staff_employee_ids.sql");
 const employeeIdLib = read("src/lib/staffEmployeeId.ts");
 const adviserRegister = read("src/app/api/adviser/register/route.ts");
 const ictRegister = read("src/app/api/ict/register/route.ts");

@@ -276,14 +276,14 @@ export async function POST(request: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) return NextResponse.json({ success: false, message: "Choose the transfer effective date." }, { status: 400 });
     const effectiveAt = new Date(`${effectiveDate}T00:00:00+08:00`);
     if (Number.isNaN(effectiveAt.getTime()) || effectiveAt.getTime() <= Date.now()) {
-      return NextResponse.json({ success: false, message: "Choose a future effective date, or use Effect Transfer Immediately." }, { status: 400 });
+      return NextResponse.json({ success: false, message: "Choose a future effective date, or use Transfer Affective Immediately." }, { status: 400 });
     }
 
     const { data, error } = await supabase.from("scheduled_adviser_transfers")
       .insert(transferRows(effectiveAt.toISOString()))
       .select("id");
     if (error) {
-      if (isMissingTransferSchema(error)) return NextResponse.json({ success: false, code: "SCHEDULED_TRANSFERS_NOT_CONFIGURED", message: "Scheduled transfers need the database migration to be deployed. You can still use Effect Transfer Immediately." }, { status: 503 });
+      if (isMissingTransferSchema(error)) return NextResponse.json({ success: false, code: "SCHEDULED_TRANSFERS_NOT_CONFIGURED", message: "Scheduled transfers need the database migration to be deployed. You can still use Transfer Affective Immediately." }, { status: 503 });
       if (error.code === "23505") return NextResponse.json({ success: false, message: "A transfer is already scheduled for one of these sections." }, { status: 409 });
       throw error;
     }

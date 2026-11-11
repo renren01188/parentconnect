@@ -9,7 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const page = read("src/app/report/subject-teacher/page.tsx");
 const verifyOtp = read("src/app/api/subject-teacher-reports/verify-otp/route.ts");
 const submitReport = read("src/app/api/subject-teacher-reports/route.ts");
-const migration = read("supabase/migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
+const migration = read("supabase/legacy-migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
 
 // CAPTCHA tokens are single-use. A successful send must reset the widget so
 // a resend cannot reuse the token that Google has already consumed.

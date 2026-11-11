@@ -57,7 +57,13 @@ restriction is also enforced by an API—inspect the route involved.
 - Server client: `src/lib/supabase.ts`; browser client:
   `src/lib/supabaseBrowser.ts`.
 - Schema migrations: `supabase/migrations/*.sql`; local Supabase settings:
-  `supabase/config.toml`.
+  `supabase/config.toml`. `20261111120000_remote_schema_baseline.sql` is the
+  schema-only snapshot used to bootstrap Docker-based local development. The
+  preceding hand-applied incremental SQL is retained in
+  `supabase/legacy-migrations/` for reference only and is deliberately not
+  replayed by the local CLI. `supabase/seed.sql` intentionally contains no
+  deployed school records; add only fictional, authorized demo data for an
+  offline presentation.
 - Database diagrams under `ERD/` and data-flow diagrams under `DFD/` are
   reference artifacts. Confirm current behavior in the route handlers,
   utilities, and migrations before relying on them.
@@ -113,8 +119,28 @@ but Adviser View/Edit and ICT Edit Parent Account hide it after the Parent has
 completed password setup; the active Parent contact number is the visible
 account contact from then on. The ICT Edit Parent Account modal keeps one
 scrolling content region with a persistent action bar and a compact
-Account/Family or Linked Students panel switch. This presentation layer does
-not change its existing save, validation, or authorization paths.
+Account/Family or Linked Students panel switch. Its helper text sits above a
+wrapping action row, so **Review Changes** is never clipped at the modal's
+compact width. This presentation layer does not change its existing save,
+validation, or authorization paths.
+Immediate Adviser transfers and scheduled-transfer cancellations use the same
+ICT-styled confirmation dialog rather than browser confirmation prompts. The
+dialog supports Escape and backdrop dismissal while preserving the existing
+transfer and cancellation API validation.
+The Edit Adviser **Review Changes** and section-handover screens are previews:
+cancelling either restores the saved class assignment and remounts the section
+picker so its chips, highlighted rows, and count match the persisted
+grade/sections. Draft edits to the other profile fields remain available. The
+assignment is written only by the existing confirmed profile-save or transfer
+action.
+The User Management directory derives its third and fourth desktop-column
+headers from the active role filter: Advisers use **Class / Grade** and
+**Assignment**, while ICT and Guidance use **Department** and
+**Responsibility**. The All Users and Parents & Students headers remain
+unchanged. `guidanceDisplayLabel.ts` supplies the canonical Guidance department
+and responsibility wording to both the server row mapper and client displays,
+so existing and newly created accounts show **Student Support and Advising**
+without a data migration.
 The Adviser SF1 Import Registration preview returns the existing learner's
 name, LRN, and section for duplicate LRNs. Its compact, paginated expander
 keeps those learners out of both the detailed preview and the submitted import
@@ -179,7 +205,12 @@ Subject Teacher reports retain the named reporter in the Adviser mapper and in
 Guidance/Principal detail payloads only after their existing escalation access
 rules permit those roles to read the report. The Parent mapper, Parent report
 UI, Parent notification feed, and Parent-facing submission email redact that
-identity and use generic Subject Teacher/School staff wording.
+identity and use generic Subject Teacher/School staff wording. Guidance and
+Principal Parent-recipient selectors always offer the six school grade levels,
+even before a Parent in one of those grades has completed registration. Their
+shared recipient directory excludes retired SF1 `Parent Account Owner`
+placeholder rows and permits messaging only to a completed, active guardian
+account with a real name.
 Contact ICT uses the selected opaque `ict:<account-id>` recipient value through
 the Adviser, Guidance, and Principal contact routes. Their shared
 `ictMessageRecipients.ts` lookup lists only active, non-archived ICT accounts
@@ -298,6 +329,9 @@ uses the latest profile request already returned by `/api/guidance/me` to show
 a request-ID-based dismissible notice in its own blue theme. Its dismissal is
 also stored only in that Guidance Counselor's browser, persists across reloads,
 and does not alter the approval record.
+The ICT Profile Settings modal uses the same dark-green ICT dashboard palette
+for its profile tab and immediate-save notice; the form controls and direct
+profile-save behavior are unchanged.
 
 ICT staff-profile approvals are served by `/api/ict/approvals`. Adviser and
 Guidance request tables have independent IDs, so the User Management modal

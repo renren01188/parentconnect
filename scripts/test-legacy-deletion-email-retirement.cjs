@@ -6,7 +6,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const legacyRoute = path.join(root, "src", "app", "api", "deletion-email-jobs", "route.ts");
-const migration = read("supabase/migrations/20261110120000_remove_legacy_deletion_email_tables.sql");
+const migration = read("supabase/legacy-migrations/20261110120000_remove_legacy_deletion_email_tables.sql");
 
 // The retired status endpoint was the final application reader of the old
 // queue. It must not be restored after the tables are removed.

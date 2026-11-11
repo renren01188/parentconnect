@@ -12,7 +12,7 @@ const studentsRoute = read("src/app/api/ict/students/route.ts");
 const rfidRoute = read("src/app/api/ict/rfid/route.ts");
 const scanRoute = read("src/app/api/attendance/scan/route.ts");
 const adviserAttendance = read("src/app/dashboard/adviser/attendance/page.tsx");
-const migration = read("supabase/migrations/20261021160000_enforce_normalized_rfid_uniqueness.sql");
+const migration = read("supabase/legacy-migrations/20261021160000_enforce_normalized_rfid_uniqueness.sql");
 
 // The modal uses two small grade-level reads, caches them while it is open,
 // and changes sections locally rather than requesting the server again.
