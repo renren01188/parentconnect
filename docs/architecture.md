@@ -146,6 +146,11 @@ narrow-screen layout retains an icon-only Back control to return to the report
 list. Subject Teacher Notify Parent drafts use the report description as the
 concern and refer only to generic school staff, preserving the teacher's
 identity in Parent-facing text.
+Locked Adviser Parent and Student/Subject Teacher concerns, plus locked
+Guidance Parent concerns, show the shared `ConcernViewAgreement` notice before
+their existing **See the Concern** action. Its acknowledgement is browser-local
+to the currently opened concern and clears when another concern is selected;
+it only unlocks that existing detail view and does not escalate a concern.
 The public Student Report page at `/report` requires the submitter to scroll
 through and acknowledge the **Reporting Guidelines and Privacy Notice** before
 its existing CAPTCHA-gated submission can proceed. The notice explains the
@@ -163,6 +168,15 @@ Guidance/Principal detail payloads only after their existing escalation access
 rules permit those roles to read the report. The Parent mapper, Parent report
 UI, Parent notification feed, and Parent-facing submission email redact that
 identity and use generic Subject Teacher/School staff wording.
+Contact ICT uses the selected opaque `ict:<account-id>` recipient value through
+the Adviser, Guidance, and Principal contact routes. Their shared
+`ictMessageRecipients.ts` lookup lists only active, non-archived ICT accounts
+and re-validates exactly that account before a new root or reply is saved.
+`/dashboard/ict/inbox` reads `/api/reports/staff-messages?role=ict`, whose
+server query and unread summary both scope sender/recipient rows to the
+signed-in ICT account ID. The same saved-participant check is repeated before
+opening, reading, typing in, or replying to a direct conversation, so one ICT
+account cannot receive or open another account's Contact ICT thread.
 The public Subject Teacher submission route creates an Adviser-owned
 `student_reports` record after the student and Adviser are verified. Its
 optional Parent link is only a snapshot for a later Adviser **Notify Parent**
@@ -208,7 +222,12 @@ profile update into an error response.
 ICT and Principal Audit Trail pages use their respective authorized
 `/api/{ict,principal}/audit-log?export=pdf&date=YYYY-MM-DD` routes. The export
 is a PDF of all events on the chosen Manila calendar date; CSV is not an
-export option.
+export option. Their table response also includes role-authorized summary totals
+for total events, logins, edit actions, and security alerts. Those totals follow
+the selected **Recent** or **Archived** tab while deliberately ignoring search,
+date, module, status, and pagination filters. The shared export modal and
+protected routes reject future Manila dates while continuing to allow today and
+earlier dates.
 
 Announcement deletion is confirmed in the client before a role-specific DELETE
 request is sent. `AnnouncementDeleteConfirmationModal.tsx` is shared by the

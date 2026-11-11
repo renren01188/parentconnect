@@ -2,6 +2,10 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
 import { getIctFromToken } from "@/lib/getIctFromToken";
+import {
+    findEligibleIctMessageRecipient,
+    listEligibleIctMessageRecipients,
+} from "@/lib/ictMessageRecipients";
 import { sendStaffMessageEmail } from "@/lib/mailer";
 import { idempotencyKeyFrom, isUniqueViolation } from "@/lib/serverIdempotency";
 import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
@@ -181,24 +185,12 @@ function mapConversation(root: StaffMessageRow, replies: StaffMessageRow[], sess
 
 async function recipientsFor(session: Session): Promise<Recipient[]> {
     if (session.type === "guidance") {
-        const { data, error } = await supabase
-            .from("ict_admins")
-            .select("id, first_name, middle_name, last_name, suffix, email, status")
-            .eq("status", "active")
-            .order("last_name", { ascending: true });
-
-        if (error) throw error;
-
-        return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
-            id: `ict:${row.id}`,
+        const recipients = await listEligibleIctMessageRecipients();
+        return recipients.map((recipient) => ({
+            id: recipient.recipientId,
             role: "ICT" as const,
-            name: fullName([
-                row.first_name as string | null,
-                row.middle_name as string | null,
-                row.last_name as string | null,
-                row.suffix as string | null,
-            ]) || "ICT Personnel",
-                email: String(row.email ?? ""),
+            name: recipient.name,
+            email: recipient.email,
         }));
     }
 
@@ -226,7 +218,17 @@ async function recipientsFor(session: Session): Promise<Recipient[]> {
 async function findRecipient(session: Session, recipientId: string) {
     const [type, rawId] = recipientId.split(":") as [Role, string];
     const id = Number(rawId);
-    if (type !== otherRole(session.type) || !Number.isFinite(id)) return null;
+    if (type !== otherRole(session.type) || !Number.isSafeInteger(id) || id <= 0) return null;
+
+    if (type === "ict") {
+        const recipient = await findEligibleIctMessageRecipient(recipientId);
+        return recipient ? {
+            id: recipient.recipientId,
+            role: "ICT" as const,
+            name: recipient.name,
+            email: recipient.email,
+        } : null;
+    }
 
     const recipients = await recipientsFor(session);
     return recipients.find((recipient) => recipient.id === `${type}:${id}`) ?? null;

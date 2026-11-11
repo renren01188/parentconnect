@@ -128,6 +128,19 @@ export function auditActionDatabaseValues(value: string): readonly string[] {
   return databaseValuesFor(AUDIT_ACTION_OPTIONS, value);
 }
 
+// These are the existing Audit Trail card classifications. Keep their database
+// values in one place so the server totals do not depend on the current page.
+export const AUDIT_LOGIN_EVENT_ACTION_VALUES = auditActionDatabaseValues("Login");
+export const AUDIT_EDIT_ACTION_VALUES = [...new Set([
+  "Submit Report",
+  "Message",
+  "Escalate",
+  "Resolve",
+  "Update",
+  "Approve",
+  "Reject",
+].flatMap((action) => auditActionDatabaseValues(action)))];
+
 export function auditStatusDatabaseValues(value: string): readonly string[] {
   return AUDIT_STATUS_OPTIONS.find((option) => option.value === value)?.databaseValues ?? [];
 }

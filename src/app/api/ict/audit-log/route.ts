@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 import { supabase } from "@/lib/supabase";
-import { AUDIT_SECURITY_ALERT_ACTION_VALUES, auditActionDatabaseValues, auditRoleDatabaseValues, auditStatusDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
+import { AUDIT_EDIT_ACTION_VALUES, AUDIT_LOGIN_EVENT_ACTION_VALUES, AUDIT_SECURITY_ALERT_ACTION_VALUES, auditActionDatabaseValues, auditRoleDatabaseValues, auditStatusDatabaseValues, displayGuidanceLabel, normalizeAuditRole } from "@/lib/audit-filter-options";
 import { parseAuditArchiveFilter } from "@/lib/auditArchive";
-import { auditManilaDateRange, formatAuditTimestamp } from "@/lib/auditPresentation";
+import { auditManilaDateRange, formatAuditTimestamp, isFutureAuditManilaDate } from "@/lib/auditPresentation";
 import { auditLogRowsToPdf } from "@/lib/auditPdf";
 
 const SECRET = new TextEncoder().encode(
@@ -82,6 +82,9 @@ export async function GET(req: NextRequest) {
       if (!dateRange) {
         return NextResponse.json({ success: false, message: "Choose a valid date to export." }, { status: 400 });
       }
+      if (isFutureAuditManilaDate(date)) {
+        return NextResponse.json({ success: false, message: "Choose today or an earlier date." }, { status: 400 });
+      }
 
       const exportedRows: AuditLogRow[] = [];
       const exportPageSize = 1_000;
@@ -137,28 +140,49 @@ export async function GET(req: NextRequest) {
     );
     if (dateRange) query = query.gte("created_at", dateRange.start).lt("created_at", dateRange.end);
 
-    // The Security Alerts card must represent all recent security events, not
-    // merely whichever rows happen to be on the current pagination page.
-    let securityQuery = supabase
-      .from("audit_log")
-      .select("id", { count: "exact", head: true })
+    // Summary cards follow the selected Recent/Archived tab, but deliberately
+    // ignore all other table filters and pagination. ICT is already authorized
+    // above to view every event in the selected archive scope.
+    const createArchiveSummaryQuery = () => {
+      let summaryQuery = supabase
+        .from("audit_log")
+        .select("id", { count: "exact", head: true });
+      summaryQuery = archive === "archived"
+        ? summaryQuery.lt("created_at", archiveCutoff)
+        : summaryQuery.gte("created_at", archiveCutoff);
+      return summaryQuery;
+    };
+    const totalEventsQuery = createArchiveSummaryQuery();
+    const loginEventsQuery = createArchiveSummaryQuery()
+      .in("action", [...AUDIT_LOGIN_EVENT_ACTION_VALUES]);
+    const editActionsQuery = createArchiveSummaryQuery()
+      .in("action", AUDIT_EDIT_ACTION_VALUES);
+    const securityAlertsQuery = createArchiveSummaryQuery()
       .in("action", [...AUDIT_SECURITY_ALERT_ACTION_VALUES]);
-    securityQuery = archive === "archived"
-      ? securityQuery.lt("created_at", archiveCutoff)
-      : securityQuery.gte("created_at", archiveCutoff);
-    if (dateRange) securityQuery = securityQuery.gte("created_at", dateRange.start).lt("created_at", dateRange.end);
 
     // Pagination
     const from = (page - 1) * perPage;
     const to   = from + perPage - 1;
     query = query.range(from, to);
 
-    const [{ data, error, count }, { error: securityError, count: securityTotal }] = await Promise.all([
+    const [
+      { data, error, count },
+      { error: totalEventsError, count: totalEvents },
+      { error: loginEventsError, count: loginEvents },
+      { error: editActionsError, count: editActions },
+      { error: securityAlertsError, count: securityAlerts },
+    ] = await Promise.all([
       query,
-      securityQuery,
+      totalEventsQuery,
+      loginEventsQuery,
+      editActionsQuery,
+      securityAlertsQuery,
     ]);
     if (error) throw error;
-    if (securityError) throw securityError;
+    if (totalEventsError) throw totalEventsError;
+    if (loginEventsError) throw loginEventsError;
+    if (editActionsError) throw editActionsError;
+    if (securityAlertsError) throw securityAlertsError;
 
     const entries = ((data ?? []) as AuditLogRow[]).map((row) => ({
       id:          String(row.id),
@@ -193,7 +217,12 @@ export async function GET(req: NextRequest) {
       success:  true,
       auditLog: entries,
       total:    count ?? 0,
-      securityTotal: securityTotal ?? 0,
+      summaryTotals: {
+        totalEvents: totalEvents ?? 0,
+        loginEvents: loginEvents ?? 0,
+        editActions: editActions ?? 0,
+        securityAlerts: securityAlerts ?? 0,
+      },
       page,
       perPage,
     });

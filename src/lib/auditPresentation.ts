@@ -29,7 +29,7 @@ export function auditManilaDateRange(value: string): { start: string; end: strin
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
 
   const start = new Date(`${value}T00:00:00+08:00`);
-  if (Number.isNaN(start.getTime())) return null;
+  if (Number.isNaN(start.getTime()) || auditManilaDate(start) !== value) return null;
 
   return {
     start: start.toISOString(),
@@ -49,4 +49,14 @@ export function auditManilaDate(value: string | number | Date): string {
   }).formatToParts(timestamp);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
   return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** The current school-calendar date, safe for both browser date inputs and
+ * server-side export validation. */
+export function auditManilaToday(): string {
+  return auditManilaDate(new Date());
+}
+
+export function isFutureAuditManilaDate(value: string, now: string | number | Date = new Date()): boolean {
+  return auditManilaDateRange(value) !== null && value > auditManilaDate(now);
 }

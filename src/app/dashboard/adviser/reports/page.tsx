@@ -24,6 +24,7 @@ import {
     summarizeAdviserReportStatuses,
 } from "@/lib/adviserReportStatusSummary";
 import { ConcernExportModal } from "@/components/reports/ConcernExportModal";
+import { ConcernViewAgreement } from "@/components/reports/ConcernViewAgreement";
 import {
     createGuidanceReportsExcel as buildAdviserReportsExcel,
     createGuidanceReportsPdf as buildAdviserReportsPdf,
@@ -1024,6 +1025,7 @@ function ReportsPageContent() {
     // Tracks which reports the adviser has explicitly unlocked (clicked "See the concern")
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
     const [unlockedStudentReports, setUnlockedStudentReports] = useState<Set<number>>(new Set()); // ✅ add here
+    const [viewAgreementConcernKey, setViewAgreementConcernKey] = useState<string | null>(null);
 
     const reportsForCategoryFilter = useMemo(() => reports.filter((report) => {
         if (filterTab === "Pending") return adviserReportStatusCategory(report) === "pending";
@@ -1196,7 +1198,12 @@ function ReportsPageContent() {
         if (name) {
             const groups = groupByParent(reports);
             const g = groups.find(g => g.parent_name === name);
-            if (g) { setSelectedParent(g); setSelectedReport(g.reports[0] ?? null); setViewStep("detail"); }
+            if (g) {
+                setViewAgreementConcernKey(null);
+                setSelectedParent(g);
+                setSelectedReport(g.reports[0] ?? null);
+                setViewStep("detail");
+            }
         }
     }, [searchParams]);
 
@@ -1652,12 +1659,19 @@ function ReportsPageContent() {
 
     // Selecting a report should not consume the pending-review lock.
     function selectReport(r: Report) {
+        setViewAgreementConcernKey(null);
         setSelectedReport(r);
         setReplyText("");
         setReplyAttachments([]);
         void loadReportDetail(r.id).catch((error) => {
             setActionError(error instanceof Error ? error.message : "Unable to load this conversation.");
         });
+    }
+
+    function selectStudentReport(r: StudentReport) {
+        setViewAgreementConcernKey(null);
+        setSelectedStudRep(r);
+        setViewStep("detail");
     }
 
     function selectAdminMsg(m: AdminMessage) {
@@ -2038,7 +2052,7 @@ function ReportsPageContent() {
                                         .map(r => {
                                             const isSubjectTeacherReport = r.submitted_by_role === "Subject Teacher";
                                             return (
-                                            <button key={r.id} onClick={() => { setSelectedStudRep(r); setViewStep("detail"); }}
+                                            <button key={r.id} onClick={() => selectStudentReport(r)}
                                                 className={`w-full text-left rounded-xl px-3 py-3 border transition ${selectedStudRep?.id === r.id ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                                 <div className="flex items-start justify-between gap-2 mb-1">
                                                     <div className="min-w-0 flex-1">
@@ -2157,7 +2171,14 @@ function ReportsPageContent() {
                                                     <span className="font-semibold text-slate-700">{selectedReport.categories.join(" · ")}</span><br />
                                                     {selectedReport.subject}
                                                 </p>
+                                                <ConcernViewAgreement
+                                                    checkboxId={`adviser-parent-concern-agreement-${selectedReport.id}`}
+                                                    checked={viewAgreementConcernKey === `parent:${selectedReport.id}`}
+                                                    onCheckedChange={(checked) => setViewAgreementConcernKey(checked ? `parent:${selectedReport.id}` : null)}
+                                                />
                                                 <button
+                                                    type="button"
+                                                    disabled={viewAgreementConcernKey !== `parent:${selectedReport.id}`}
                                                     onClick={() => {
                                                         setUnlockedReports(prev => new Set(prev).add(selectedReport.id));
                                                         // Viewing a new report starts review. Reopening a replied
@@ -2168,7 +2189,7 @@ function ReportsPageContent() {
                                                             true,
                                                         );
                                                     }}
-                                                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition shadow-md w-full justify-center"
+                                                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-emerald-300 disabled:shadow-none"
                                                 >
                                                     <Eye className="w-4 h-4" /> See the concern
                                                 </button>
@@ -2425,7 +2446,14 @@ function ReportsPageContent() {
                                                     <span className="font-semibold text-slate-700">{selectedStudRep.category}</span><br />
                                                     {selectedStudRep.title}
                                                 </p>
+                                                <ConcernViewAgreement
+                                                    checkboxId={`adviser-student-concern-agreement-${selectedStudRep.id}`}
+                                                    checked={viewAgreementConcernKey === `student:${selectedStudRep.id}`}
+                                                    onCheckedChange={(checked) => setViewAgreementConcernKey(checked ? `student:${selectedStudRep.id}` : null)}
+                                                />
                                                 <button
+                                                    type="button"
+                                                    disabled={viewAgreementConcernKey !== `student:${selectedStudRep.id}`}
                                                     onClick={async () => {
                                                         await fetch(`/api/student-reports/${selectedStudRep.id}/status`, {
                                                             method: "PATCH",
@@ -2436,7 +2464,7 @@ function ReportsPageContent() {
                                                         setStudentReps(prev => prev.map(r => r.id === selectedStudRep.id ? { ...r, status: "Ongoing" } : r));
                                                         setSelectedStudRep(prev => prev ? { ...prev, status: "Ongoing" } : prev);
                                                     }}
-                                                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold transition shadow-md w-full justify-center"
+                                                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-emerald-300 disabled:shadow-none"
                                                 >
                                                     <Eye className="w-4 h-4" /> See the concern
                                                 </button>
@@ -2792,6 +2820,7 @@ function ReportsPageContent() {
                         // Switch to Parent tab so the adviser can see the forwarded report
                         setLeftTab("Parent");
                         if (forwardedReport) {
+                            setViewAgreementConcernKey(null);
                             setSelectedReport(forwardedReport);
                             setSelectedParent(groupByParent([forwardedReport])[0] ?? null);
                             setUnlockedReports(prev => new Set(prev).add(forwardedReport.id));

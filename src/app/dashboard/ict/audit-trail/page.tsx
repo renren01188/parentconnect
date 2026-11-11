@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   Activity, LogIn, Edit3, ShieldAlert, Eye,
@@ -36,6 +36,20 @@ interface AuditEvent {
   // Extra
   changes: unknown[];
 }
+
+interface AuditSummaryTotals {
+  totalEvents: number;
+  loginEvents: number;
+  editActions: number;
+  securityAlerts: number;
+}
+
+const EMPTY_SUMMARY_TOTALS: AuditSummaryTotals = {
+  totalEvents: 0,
+  loginEvents: 0,
+  editActions: 0,
+  securityAlerts: 0,
+};
 
 // ─── Constants ────────────────────────────────────────────────
 const PRIMARY = "#274e13";
@@ -329,7 +343,7 @@ export default function AuditTrailPage() {
   // ── Data state ──
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [total, setTotal] = useState(0);
-  const [securityTotal, setSecurityTotal] = useState(0);
+  const [summaryTotals, setSummaryTotals] = useState<AuditSummaryTotals>(EMPTY_SUMMARY_TOTALS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -363,7 +377,7 @@ export default function AuditTrailPage() {
 
       setEvents(json.auditLog ?? []);
       setTotal(json.total ?? 0);
-      setSecurityTotal(json.securityTotal ?? 0);
+      setSummaryTotals(json.summaryTotals ?? EMPTY_SUMMARY_TOTALS);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -390,12 +404,7 @@ export default function AuditTrailPage() {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const hasFilters = !!(query || actionFilter || roleFilter || moduleFilter || statusFilter || dateFilter || archiveFilter === "archived");
 
-  const stats = useMemo(() => ({
-    total,
-    logins: events.filter(e => resolveAction(e.action) === "Login").length,
-    edits: events.filter(e => ["Submit Report", "Message", "Escalate", "Resolve", "Update", "Approve", "Reject"].includes(resolveAction(e.action))).length,
-    security: securityTotal,
-  }), [events, securityTotal, total]);
+  const stats = summaryTotals;
 
   function resetFilters() {
     setQuery(""); setActionFilter("");
@@ -407,10 +416,10 @@ export default function AuditTrailPage() {
   ), []);
 
   const statCards = [
-    { label: "Total Events", value: stats.total, icon: Activity, color: "#274e13", bg: "bg-green-50" },
-    { label: "Login Events", value: stats.logins, icon: LogIn, color: "#2563eb", bg: "bg-blue-50" },
-    { label: "Edit Actions", value: stats.edits, icon: Edit3, color: "#d97706", bg: "bg-amber-50" },
-    { label: "Security Alerts", value: stats.security, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", actionFilter: "Security Events" },
+    { label: "Total Events", value: stats.totalEvents, icon: Activity, color: "#274e13", bg: "bg-green-50" },
+    { label: "Login Events", value: stats.loginEvents, icon: LogIn, color: "#2563eb", bg: "bg-blue-50" },
+    { label: "Edit Actions", value: stats.editActions, icon: Edit3, color: "#d97706", bg: "bg-amber-50" },
+    { label: "Security Alerts", value: stats.securityAlerts, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", actionFilter: "Security Events" },
   ];
 
   return (

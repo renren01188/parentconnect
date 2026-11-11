@@ -66,6 +66,7 @@
     "test:ict-section-bulk-deletion": "node scripts/test-ict-section-bulk-deletion.cjs",
     "test:ict-section-rename": "node scripts/test-ict-section-rename.cjs",
     "test:report-realtime": "node scripts/test-report-realtime.cjs",
+    "test:report-concern-view-agreement": "node scripts/test-report-concern-view-agreement.cjs",
     "test:report-category-filter-freshness": "node scripts/test-report-category-filter-freshness.cjs",
     "test:adviser-parent-message-presentation": "node scripts/test-adviser-parent-message-presentation.cjs",
     "test:parent-report-cancellation": "node scripts/test-parent-report-cancellation.cjs",

@@ -16,6 +16,7 @@ const browserSupabase = read("src/lib/supabaseBrowser.ts");
 const ictNotifications = read("src/app/dashboard/ict/context/NotificationContext.tsx");
 const guidanceIctRoute = read("src/app/api/guidance-ict/messages/route.ts");
 const principalIctRoute = read("src/app/api/principal-ict/messages/route.ts");
+const ictMessageRecipients = read("src/lib/ictMessageRecipients.ts");
 
 const contactPairs = [
   {
@@ -77,7 +78,23 @@ for (const pair of contactPairs) {
   assert.match(context, /ictBadgeVersionRef\.current \+= 1/);
   assert.match(context, /contact-ict-seen-at/);
   assert.match(context, /seenAfter/);
+
+  // New Message carries the selected opaque ICT account ID through the
+  // dropdown. Each server route must re-check that exact eligible account
+  // immediately before it persists a root or a reply.
+  assert.match(page, /value=\{recipient\.id\}/);
+  assert.match(route, /listEligibleIctMessageRecipients/);
+  assert.match(route, /findEligibleIctMessageRecipient\(recipientId\)/);
+  assert.match(route, /id: recipient\.recipientId/);
 }
+
+// The shared lookup accepts only a single ict:<positive-id> value and filters
+// both list and point validation by active, non-archived accounts. This keeps
+// display labels from acting as routing identifiers and closes stale account
+// delivery at the server boundary.
+assert.match(ictMessageRecipients, /value\.match\(\/\^ict:\(\[1-9\]\[0-9\]\*\)\$\//);
+assert.match(ictMessageRecipients, /\.eq\("status", "active"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
+assert.match(ictMessageRecipients, /\.eq\("id", id\)[\s\S]*?\.eq\("status", "active"\)[\s\S]*?\.eq\("archive_status", "active"\)/);
 
 // ICT's role-pair endpoints are also safe to call directly in either
 // direction. Their recipient lookup must resolve the matching role table,
@@ -142,6 +159,16 @@ assert.match(ictNotifications, /badgeVersion === inboxBadgeVersionRef\.current/)
 assert.match(ictNotifications, /inboxCountRequestVersionRef/);
 assert.match(ictNotifications, /requestVersion === inboxCountRequestVersionRef\.current/);
 assert.match(sharedRoute, /searchParams\.get\("summary"\) === "1"[\s\S]*?recipient_type", current\.type[\s\S]*?unreadConversationIds/);
+assert.match(
+  sharedRoute,
+  /\.or\(`and\(sender_type\.eq\.\$\{current\.type\},sender_id\.eq\.\$\{current\.id\}\),and\(recipient_type\.eq\.\$\{current\.type\},recipient_id\.eq\.\$\{current\.id\}\)`\)/,
+  "The server must scope every ICT Inbox snapshot to the signed-in account ID.",
+);
+assert.match(
+  sharedRoute,
+  /const isParticipant =[\s\S]*?root\.sender_type === current\.type[\s\S]*?root\.recipient_type === current\.type/,
+  "Opening or replying to a direct conversation must re-check the saved participants.",
+);
 assert.match(read("src/app/api/principal-ict/messages/route.ts"), /kind: "message",[\s\S]*?conversationId: conversationId\(rootId \?\? Number\(createdMessage\.id\)\)/);
 // A first subscription has the same short race window as a reconnect. Its
 // completion must therefore reconcile the page's protected snapshot too.
@@ -151,7 +178,7 @@ assert.match(sessionInvalidation, /dispatchConnectionStatus\(status\)/);
 assert.match(sessionInvalidation, /if \(!client\) \{[\s\S]*?dispatchConnectionStatus\("CHANNEL_ERROR"\)/);
 assert.match(browserSupabase, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY[\s\S]*?NEXT_PUBLIC_SUPABASE_ANON_KEY/);
 assert.match(realtimeHook, /useSessionInvalidation\([\s\S]*?\(status\) => \{/);
-assert.match(realtimeHook, /connectionStatus === "SUBSCRIBED" \? 300_000 : 2_000/);
+assert.match(realtimeHook, /connectionStatus === "SUBSCRIBED" \? 300_000 : 30_000/);
 assert.match(realtimeHook, /Checking for new messages automatically/);
 // Multiple role cookies can legitimately coexist in a testing or admin
 // browser. The mounted dashboard must request its own opaque capability

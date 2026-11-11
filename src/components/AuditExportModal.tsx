@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Calendar, FileText, X } from "lucide-react";
+import { auditManilaToday, isFutureAuditManilaDate } from "@/lib/auditPresentation";
 
 type AuditExportModalProps = {
   accentColor: string;
@@ -13,10 +14,16 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
   const [date, setDate] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const today = auditManilaToday();
+  const futureDateError = isFutureAuditManilaDate(date) ? "Choose today or an earlier date." : null;
 
   const submit = async () => {
     if (!date) {
       setError("Choose a date to export.");
+      return;
+    }
+    if (futureDateError) {
+      setError(futureDateError);
       return;
     }
     setError(null);
@@ -54,7 +61,7 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
         </div>
 
         <div className="space-y-3 px-5 py-5 sm:px-6">
-          {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</div>}
+          {(futureDateError ?? error) && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{futureDateError ?? error}</div>}
           <label className="block text-sm font-bold text-slate-700">
             Date
             <span className="ml-1 text-red-500">*</span>
@@ -63,6 +70,7 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
               <input
                 type="date"
                 value={date}
+                max={today}
                 onChange={(event) => { setDate(event.target.value); setError(null); }}
                 className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-700 outline-none"
               />
@@ -76,7 +84,7 @@ export function AuditExportModal({ accentColor, onClose, onExport }: AuditExport
 
         <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
           <button type="button" onClick={onClose} disabled={exporting} className="min-h-11 rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Close</button>
-          <button type="button" onClick={submit} disabled={exporting || !date} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50" style={{ background: accentColor }}>
+          <button type="button" onClick={submit} disabled={exporting || !date || Boolean(futureDateError)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50" style={{ background: accentColor }}>
             <FileText className="h-4 w-4" /> {exporting ? "Exporting…" : "Export PDF"}
           </button>
         </div>

@@ -20,6 +20,8 @@ for (const route of [ictRoute, principalRoute]) {
   assert.match(route, /const exportPdf\s*=\s*exportFormat === "pdf"/);
   assert.match(route, /if \(exportFormat && !exportPdf\)[\s\S]*?Audit Trail exports are available as PDF only\./);
   assert.match(route, /if \(exportPdf\)[\s\S]*?if \(!dateRange\)[\s\S]*?status: 400/);
+  assert.match(route, /isFutureAuditManilaDate\(date\)/);
+  assert.match(route, /Choose today or an earlier date\./);
   assert.match(route, /for \(let from = 0; ; from \+= exportPageSize\)[\s\S]*?\.gte\("created_at", dateRange\.start\)[\s\S]*?\.lt\("created_at", dateRange\.end\)/);
   assert.match(route, /auditLogRowsToPdf\(exportedRows, date\)/);
   assert.match(route, /"Content-Type": "application\/pdf"/);
@@ -39,6 +41,11 @@ assert.match(download, /\.pdf/);
 // protected route. The modal explicitly explains the downloaded format.
 assert.match(modal, /type="date"/);
 assert.match(modal, /Choose a date to export\./);
+assert.match(modal, /auditManilaToday/);
+assert.match(modal, /isFutureAuditManilaDate\(date\)/);
+assert.match(modal, /max=\{today\}/);
+assert.match(modal, /Choose today or an earlier date\./);
+assert.match(modal, /disabled=\{exporting \|\| !date \|\| Boolean\(futureDateError\)\}/);
 assert.match(modal, /The selected Audit Trail will be exported as a PDF \(\.pdf\)\./);
 assert.match(modal, /Export PDF/);
 assert.match(modal, />Close<\/button>/);

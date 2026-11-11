@@ -6,6 +6,61 @@ This is a source-tree snapshot, not a release checklist. It records verified
 paths and working-tree state only; feature behavior is not considered verified
 unless a named check has been run and recorded below.
 
+### Audit Trail archive-scoped summaries and export-date validation
+
+- **Complete in source:** ICT and Principal Audit Trail responses now return
+  role-authorized totals for all four summary cards separately from the
+  filtered, paged table count. The cards cover the whole selected **Recent** or
+  **Archived** tab, and Refresh reloads both in the same request; search, date,
+  module, status, and pagination leave the cards unchanged.
+- **Export boundary:** The shared modal caps its native date calendar at the
+  current `Asia/Manila` date, immediately explains a manually entered future
+  date, and disables **Export PDF**. Both protected PDF routes reject direct
+  future-date requests with the same message.
+- **Affected files:** the ICT and Principal Audit Trail routes/pages,
+  `AuditExportModal.tsx`, audit classification/date helpers, and the existing
+  focused audit regression checks.
+- **Verified:** Supabase read-only inspection found 1,459 audit records, more
+  than the default eight-row page. `npm.cmd run test:audit-trail`,
+  `npm.cmd run test:audit-trail-export`, `npx.cmd tsc --noEmit`, and
+  `npm.cmd run build` passed on 2026-11-11. Authenticated browser verification
+  remains unrecorded.
+
+### Adviser and Guidance concern-view agreement
+
+- **Complete in source:** Locked Adviser Parent and Student/Subject Teacher
+  concerns, and locked Guidance Parent concerns, now show the required Terms
+  and Agreement notice above **See the Concern**. The button stays disabled
+  until its concern-specific checkbox is checked and resets when another
+  concern is selected. The existing detail-view handler remains separate from
+  escalation.
+- **Affected files:** both report pages, the shared
+  `ConcernViewAgreement` component, and
+  `scripts/test-report-concern-view-agreement.cjs`.
+- **Verified:** `npm.cmd run test:report-concern-view-agreement`,
+  `npx.cmd tsc --noEmit`, and `npm.cmd run build` passed on 2026-11-11.
+  Browser-role verification remains unrecorded because this checkout has no
+  authenticated test session.
+
+### Account-specific Contact ICT delivery
+
+- **Complete in source:** Adviser, Guidance, and Principal Contact ICT
+  dropdowns retain the selected `ict:<account-id>` value through their existing
+  sends. The shared ICT-recipient helper lists active, non-archived accounts
+  and re-validates that exact account before a new message or reply is stored.
+- **Inbox isolation:** The ICT Inbox and its unread summary use the signed-in
+  ICT account ID in their server-side `staff_messages` filters. Direct
+  conversation reads, typing, and replies retain the existing saved-participant
+  check, so another ICT account cannot open or act on the thread.
+- **Affected files:** the three Contact ICT APIs,
+  `src/lib/ictMessageRecipients.ts`, the Contact ICT regression check, and the
+  messaging architecture note.
+- **Verified:** `npm.cmd run test:contact-ict-realtime`, focused ESLint, and
+  `npx.cmd tsc --noEmit` passed on 2026-11-11. Supabase read-only inspection
+  found two active, non-archived ICT accounts. The requested six browser sends
+  plus refresh/reply checks require test-account credentials; no browser test
+  session was available in this checkout.
+
 ### ICT Adviser and Guidance bulk deletion safeguards
 
 - **Complete in source:** The ICT bulk-deletion modal now receives its compact,

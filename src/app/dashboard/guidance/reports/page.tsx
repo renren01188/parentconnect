@@ -16,6 +16,7 @@ import {
 import { useNotifContext } from "../context/NotificationContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { MessageAttachments } from "@/components/MessageAttachments";
+import { ConcernViewAgreement } from "@/components/reports/ConcernViewAgreement";
 import { ResolveConfirmationModal } from "@/components/ResolveConfirmationModal";
 import { useReportMessagesRealtime } from "@/hooks/useReportMessagesRealtime";
 import { useReportTyping } from "@/hooks/useReportTyping";
@@ -1191,6 +1192,7 @@ function ReportsPageContent() {
 
     // Tracks which reports the adviser has explicitly unlocked (clicked "See the concern")
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
+    const [viewAgreementConcernKey, setViewAgreementConcernKey] = useState<number | null>(null);
 
     // ── Handle deep-link from notification ───────────────────────────────
     useEffect(() => {
@@ -1201,7 +1203,12 @@ function ReportsPageContent() {
         if (name) {
             const groups = groupByParent(reports);
             const g = groups.find(g => g.parent_name === name);
-            if (g) { setSelectedParent(g); setSelectedReport(g.reports[0] ?? null); setViewStep("detail"); }
+            if (g) {
+                setViewAgreementConcernKey(null);
+                setSelectedParent(g);
+                setSelectedReport(g.reports[0] ?? null);
+                setViewStep("detail");
+            }
         }
     }, [searchParams]);
 
@@ -1637,6 +1644,7 @@ function ReportsPageContent() {
 
     // When a report is selected, auto-mark as Read
     function selectReport(r: Report) {
+        setViewAgreementConcernKey(null);
         setSelectedAdminMsg(null);
         setSelectedReport(r);
         forceParentScrollRef.current = true;
@@ -2098,9 +2106,16 @@ function ReportsPageContent() {
                                                     <span className="font-semibold text-slate-700">{selectedReport.categories.join(" · ")}</span><br />
                                                     {selectedReport.subject}
                                                 </p>
+                                                <ConcernViewAgreement
+                                                    checkboxId={`guidance-concern-agreement-${selectedReport.id}`}
+                                                    checked={viewAgreementConcernKey === selectedReport.id}
+                                                    onCheckedChange={(checked) => setViewAgreementConcernKey(checked ? selectedReport.id : null)}
+                                                />
                                                 <button
+                                                    type="button"
+                                                    disabled={viewAgreementConcernKey !== selectedReport.id}
                                                     onClick={() => markGuidanceSeen(selectedReport.id)}
-                                                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold transition shadow-md w-full justify-center"
+                                                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:bg-sky-300 disabled:shadow-none"
                                                 >
                                                     <Eye className="w-4 h-4" /> See the concern
                                                 </button>
