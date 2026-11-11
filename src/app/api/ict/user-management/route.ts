@@ -856,13 +856,19 @@ export async function GET(request: NextRequest) {
       const totalPages = Math.max(1, Math.ceil(matchingParentStudents.length / requestedPageSize));
       const page = Math.min(requestedPage, totalPages);
       const pageStart = (page - 1) * requestedPageSize;
-      const parentStudentGrades = [...new Set(parentStudentRows.map((student) => student.studentDetails?.[0]?.grade ?? "").filter(Boolean))]
-        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
-      const parentStudentSections = parentStudentRows
-        .map((student) => ({ grade: student.studentDetails?.[0]?.grade ?? "", name: student.studentDetails?.[0]?.section ?? "" }))
+      // Parent/student filters must include every section configured by ICT,
+      // including a new or empty section that has no parent/student row yet.
+      // Retain student-derived entries as a fallback for legacy rosters whose
+      // section has not been added to the configuration table.
+      const parentStudentSections = [
+        ...(sectionCatalog ?? []).map((section) => ({ grade: String(section.grade ?? ""), name: String(section.name ?? "") })),
+        ...parentStudentRows.map((student) => ({ grade: student.studentDetails?.[0]?.grade ?? "", name: student.studentDetails?.[0]?.section ?? "" })),
+      ]
         .filter((section) => section.grade && section.name)
         .filter((section, index, allSections) => allSections.findIndex((candidate) => candidate.grade === section.grade && candidate.name === section.name) === index)
         .sort((left, right) => left.grade.localeCompare(right.grade, undefined, { numeric: true, sensitivity: "base" }) || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+      const parentStudentGrades = [...new Set(parentStudentSections.map((section) => section.grade))]
+        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
 
       return NextResponse.json({
         success: true,

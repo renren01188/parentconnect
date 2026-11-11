@@ -48,6 +48,31 @@ assert.match(classSessionApi, /Late and absent are independent ICT-configured at
 assert.match(classSessionApi, /late_after: lateAfter/);
 assert.match(classSessionApi, /absent_after: absentAfter/);
 
+// The Adviser Class Session card reads the selected section's authoritative
+// assignment, then matches only that session's saved schedule. It never uses
+// the first returned session or another session that happens to be active.
+assert.match(classSessionApi, /function requestedSection/);
+assert.match(classSessionApi, /const selectedSection = requestedSection\(req\)/);
+assert.match(classSessionApi, /adviserSections\.includes\(selectedSection\)/);
+assert.match(classSessionApi, /\.from\("sections"\)[\s\S]*?\.select\("class_session"\)[\s\S]*?\.eq\("grade", grade\)[\s\S]*?\.eq\("name", selectedSection\)/);
+assert.match(classSessionApi, /section_session_type: selectedSectionSessionType/);
+assert.match(adviserAttendance, /const sectionParam = activeSection \? `\?section=\$\{encodeURIComponent\(activeSection\)\}` : ""/);
+assert.match(adviserAttendance, /data\.section_session_type === "Morning" \|\| data\.section_session_type === "Afternoon"/);
+assert.match(adviserAttendance, /const requestId = \+\+classSessionRequestRef\.current/);
+assert.match(adviserAttendance, /requestId !== classSessionRequestRef\.current/);
+const adviserCardScheduleLookup = adviserAttendance.slice(
+  adviserAttendance.indexOf("const selectedSectionScheduleType"),
+  adviserAttendance.indexOf("const timeOutWindowStartsAt"),
+);
+assert.match(adviserCardScheduleLookup, /scheduleSection === activeSection/);
+assert.match(adviserCardScheduleLookup, /classSessions\.find\(\(session\) => session\.session_type === selectedSectionScheduleType\)/);
+assert.doesNotMatch(adviserCardScheduleLookup, /session\.status === "Active"|classSessions\[0\]/);
+assert.match(adviserAttendance, /classSessionCardSchedule\.session_type/);
+assert.match(adviserAttendance, /classSessionCardSchedule\.scheduled_start/);
+assert.match(adviserAttendance, /classSessionCardSchedule\.scheduled_end/);
+assert.match(adviserAttendance, /classSessionCardSchedule\.late_after/);
+assert.match(adviserAttendance, /classSessionCardSchedule\.absent_after/);
+
 // ICT selects a grade and includes it on every save/load request. Adviser
 // refresh already consumes the dashboard invalidation without page reload.
 assert.match(ictProfiles, /htmlFor="class-control-grade"/);

@@ -46,6 +46,23 @@ unless a named check has been run and recorded below.
   The migration still needs to be applied through the normal deployment path
   before the affected production batch can be retried.
 
+### Adviser Class Session card section lookup
+
+- **Complete in source:** The Adviser Attendance Class Session card now reads
+  the active assigned section's saved Morning/Afternoon assignment through the
+  protected class-session lookup and renders only that grade/session schedule.
+  It shows the saved start, end, Late After, and Absent After values; an older
+  section request cannot overwrite a newer selection or Check Schedule refresh.
+  Scanner behavior is unchanged.
+- **Affected files:** the class-session route, Adviser Attendance card,
+  grade/session schedule regression check, and attendance architecture note.
+- **Verified:** a read-only database query on 2026-11-12 confirmed Grade 1
+  Morning1 is Morning (06:00–12:00, late 07:00, absent 13:00) and Afternoon1
+  is Afternoon (13:00–17:00, late 14:00, absent 18:00). Focused source checks,
+  TypeScript, and whitespace validation passed on 2026-11-12. Focused lint
+  passed with four existing unused-symbol warnings in the Adviser Attendance
+  page; authenticated browser verification remains unrecorded.
+
 ### Audit Trail archive-scoped summaries and export-date validation
 
 - **Complete in source:** ICT and Principal Audit Trail responses now return
@@ -53,6 +70,10 @@ unless a named check has been run and recorded below.
   filtered, paged table count. The cards cover the whole selected **Recent** or
   **Archived** tab, and Refresh reloads both in the same request; search, date,
   module, status, and pagination leave the cards unchanged.
+- **Summary-card filtering:** All four cards are keyboard-accessible filters in
+  both role views. Total Events clears the action filter; Login Events, Edit
+  Actions, and Security Alerts apply the shared categories that exactly match
+  their server-side totals and reset the table to page one.
 - **Export boundary:** The shared modal caps its native date calendar at the
   current `Asia/Manila` date, immediately explains a manually entered future
   date, and disables **Export PDF**. Both protected PDF routes reject direct
@@ -63,8 +84,10 @@ unless a named check has been run and recorded below.
 - **Verified:** Supabase read-only inspection found 1,459 audit records, more
   than the default eight-row page. `npm.cmd run test:audit-trail`,
   `npm.cmd run test:audit-trail-export`, `npx.cmd tsc --noEmit`, and
-  `npm.cmd run build` passed on 2026-11-11. Authenticated browser verification
-  remains unrecorded.
+  `npm.cmd run build` passed on 2026-11-11. The expanded
+  `npm.cmd run test:audit-trail`, `npx.cmd tsc --noEmit`, focused page lint,
+  and whitespace validation passed on 2026-11-12; authenticated browser
+  verification remains unrecorded.
 
 ### Adviser and Guidance concern-view agreement
 
@@ -445,12 +468,15 @@ assignment is persisted only by the existing confirmed save or transfer action.
   **Responsibility**; and Parents & Students uses **Class / Grade** /
   **Student(s)**. A shared Guidance display label supplies **Student Support
   and Advising** to existing and newly created Guidance rows, including their
-  lowercase responsibility text.
+  lowercase responsibility text. Its grade/section selector derives from the
+  full ICT-configured section catalog, retaining empty sections and a fallback
+  for legacy student assignments.
 - **Affected files:** `src/app/dashboard/ict/user-management/page.tsx`, its
   list API, `guidanceDisplayLabel`, Bulk Deletion display, focused regression
   check, and the ICT User Management architecture note.
 - **Verified:** `npm.cmd run test:ict-user-management-account-update`,
-  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-11. Browser
+  `npm.cmd run test:ict-parent-student-filters`, `npx.cmd tsc --noEmit`, and
+  `git diff --check` passed on 2026-11-12. Browser
   visual verification at desktop and narrow mobile widths remains unverified.
   Focused lint reaches 22 existing `no-explicit-any` errors (19 in the User
   Management API and three in the page) plus seven existing unused-symbol

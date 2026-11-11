@@ -137,6 +137,10 @@ function requestedGrade(req: NextRequest) {
   return req.nextUrl.searchParams.get("grade")?.trim() ?? "";
 }
 
+function requestedSection(req: NextRequest) {
+  return req.nextUrl.searchParams.get("section")?.trim() ?? "";
+}
+
 // A daily row is a snapshot of the schedule ICT saved.  Its visible state is
 // deliberately time-derived: advisers must never need a separate start/end
 // setting before the scanner follows the configured window.
@@ -168,7 +172,9 @@ async function isSchoolHoliday(schoolYearId: number, date: string) {
 
 /**
  * GET /api/attendance/class-session
- * Returns today's Morning and Afternoon session rows.
+ * Returns today's Morning and Afternoon session rows. An Adviser may also
+ * request the saved session assignment for one of their own sections so the
+ * attendance card can display that section's matching schedule.
  * If rows don't exist yet, creates "Not Started" defaults.
  */
 export async function GET(req: NextRequest) {
@@ -183,6 +189,7 @@ export async function GET(req: NextRequest) {
     }
 
     const requested = requestedGrade(req);
+    const selectedSection = requestedSection(req);
     const adviserGrade = adviser?.grade?.trim() ?? "";
     let grade: string;
 
@@ -210,6 +217,30 @@ export async function GET(req: NextRequest) {
       grade = adviserGrade;
     }
 
+    let selectedSectionSessionType: "Morning" | "Afternoon" | null = null;
+    if (selectedSection) {
+      if (!adviser) {
+        return NextResponse.json({ success: false, message: "Only an Adviser can request a section schedule." }, { status: 403 });
+      }
+      const adviserSections = adviser.sections.length > 0
+        ? adviser.sections
+        : adviser.section ? [adviser.section] : [];
+      if (!adviserSections.includes(selectedSection)) {
+        return NextResponse.json({ success: false, message: "You can view only schedules for your assigned sections." }, { status: 403 });
+      }
+
+      const { data: sectionAssignment, error: sectionAssignmentError } = await supabase
+        .from("sections")
+        .select("class_session")
+        .eq("grade", grade)
+        .eq("name", selectedSection)
+        .maybeSingle();
+      if (sectionAssignmentError) throw sectionAssignmentError;
+      if (sectionAssignment?.class_session === "Morning" || sectionAssignment?.class_session === "Afternoon") {
+        selectedSectionSessionType = sectionAssignment.class_session;
+      }
+    }
+
     const today = getToday();
 
     const { data: activeSY, error: schoolYearError } = await supabase
@@ -223,6 +254,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         success: true,
         grade,
+        section_session_type: selectedSectionSessionType,
         sessions: [],
         availability: {
           available: false,
@@ -237,7 +269,7 @@ export async function GET(req: NextRequest) {
       activeSY.end_date,
     );
     if (!schoolYearAvailability.available) {
-      return NextResponse.json({ success: true, grade, sessions: [], availability: schoolYearAvailability });
+      return NextResponse.json({ success: true, grade, section_session_type: selectedSectionSessionType, sessions: [], availability: schoolYearAvailability });
     }
 
     if (!isScheduledAttendanceDate(
@@ -249,6 +281,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         success: true,
         grade,
+        section_session_type: selectedSectionSessionType,
         sessions: [],
         availability: {
           available: false,
@@ -260,6 +293,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         success: true,
         grade,
+        section_session_type: selectedSectionSessionType,
         sessions: [],
         availability: {
           available: false,
@@ -322,6 +356,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       grade,
+      section_session_type: selectedSectionSessionType,
     // Saved ICT times are authoritative. A persisted Ended state may shorten
     // the window when ICT deliberately closes a session early.
       sessions,

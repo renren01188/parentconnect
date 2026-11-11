@@ -88,6 +88,12 @@ The Adviser Rapid Tap processing notice appears only after browser queue
 storage is restored and a scan is actively capturing, queued, saving, or
 retrying. Failed scans use a separate attention notice with their existing
 Review/Retry controls, so an empty queue does not briefly appear as processing.
+The Adviser Attendance **Class Session** card requests the selected assigned
+section with its authenticated grade. The protected class-session route reads
+that section's saved `class_session` assignment, and the card selects only the
+matching live grade/session schedule for its label, start/end, Late After, and
+Absent After values. A request token prevents an older section response from
+overwriting the card after a section switch or **Check Schedule** refresh.
 The Parent history API treats an automatic Absent `Time Out` as a missing
 physical checkout: it keeps the real Time In, exposes `missing_time_out`, and
 does not display the automatic finalization as a departure. The Parent
@@ -142,6 +148,9 @@ Parents & Students uses **Class / Grade** and **Student(s)**.
 responsibility wording to both the server row mapper and client displays, so
 existing and newly created accounts show **Student Support and Advising**
 without a data migration.
+The Parents & Students grade/section filter is populated from ICT's configured
+section catalog rather than only the visible student rows, so empty sections
+remain selectable; student-derived legacy sections are retained as a fallback.
 The Adviser SF1 Import Registration preview returns the existing learner's
 name, LRN, and section for duplicate LRNs. Its compact, paginated expander
 keeps those learners out of both the detailed preview and the submitted import
@@ -271,7 +280,9 @@ for total events, logins, edit actions, and security alerts. Those totals follow
 the selected **Recent** or **Archived** tab while deliberately ignoring search,
 date, module, status, and pagination filters. The shared export modal and
 protected routes reject future Manila dates while continuing to allow today and
-earlier dates.
+earlier dates. Every summary card is an accessible action filter: **Total
+Events** clears it, while **Login Events**, **Edit Actions**, and **Security
+Alerts** apply the same shared classifications used to calculate their totals.
 
 Announcement deletion is confirmed in the client before a role-specific DELETE
 request is sent. `AnnouncementDeleteConfirmationModal.tsx` is shared by the

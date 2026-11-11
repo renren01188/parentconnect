@@ -20,6 +20,9 @@ assert.match(route, /parentStudentFilters:\s*\{/);
 assert.match(route, /parentGrade/);
 assert.match(route, /parentSection/);
 assert.match(route, /parentLinkState/);
+assert.match(route, /Parent\/student filters must include every section configured by ICT/);
+assert.match(route, /\.\.\.\(sectionCatalog \?\? \[\]\)\.map\(\(section\) => \(\{ grade: String\(section\.grade \?\? ""\), name: String\(section\.name \?\? ""\) \}\)\)/);
+assert.match(route, /const parentStudentGrades = \[\.\.\.new Set\(parentStudentSections\.map\(\(section\) => section\.grade\)\)\]/);
 assert.match(route, /hasCompletedActiveParentSignup\(parent\)/);
 assert.match(route, /const verificationParent = father \?\? mother \?\? guardian/);
 assert.match(route, /const preSignupParent = visibleLinks/);
@@ -92,6 +95,24 @@ assert.deepEqual(gradeOneGold.map((student) => student.state), ["Already Linked"
 assert.equal(gradeOneGold.filter((student) => student.state === "Already Linked").length, 2);
 assert.equal(gradeOneGold.filter((student) => student.state === "Not Registered").length, 1);
 assert.equal(directory.find((student) => student.studentId === "2001").state, "Not Registered");
+
+// Configured sections remain selectable even without a current student row;
+// legacy student rows remain available if their section was not configured.
+const configuredSections = [
+  { grade: "Grade 1", name: "Morning1" },
+  { grade: "Grade 1", name: "Afternoon1" },
+  { grade: "Grade 2", name: "Morning2" },
+];
+const legacyStudentSection = { grade: "Grade 2", name: "Legacy" };
+const filterSections = [...configuredSections, legacyStudentSection]
+  .filter((section, index, allSections) => allSections.findIndex((candidate) => candidate.grade === section.grade && candidate.name === section.name) === index)
+  .sort((left, right) => left.grade.localeCompare(right.grade, undefined, { numeric: true }) || left.name.localeCompare(right.name));
+assert.deepEqual(
+  filterSections.filter((section) => section.grade === "Grade 1").map((section) => section.name),
+  ["Afternoon1", "Morning1"],
+  "all configured Grade 1 sections remain in the selector",
+);
+assert.ok(filterSections.some((section) => section.name === "Legacy"), "legacy student sections remain selectable");
 
 // The UI sends cascading selections to the same API branch and retains the
 // established server pagination/search mechanism.

@@ -12,6 +12,21 @@ export const AUDIT_ROLE_OPTIONS = [
   { value: "Principal", label: "Principal", databaseValues: ["Principal"] },
 ] as const;
 
+const AUDIT_EDIT_ACTION_DATABASE_VALUES = [
+  "Submit Report",
+  "Report Submitted",
+  "Message",
+  "Message Sent",
+  "Escalate",
+  "Resolve",
+  "Update",
+  "edited",
+  "Approve",
+  "approved",
+  "Reject",
+  "rejected",
+] as const;
+
 export const AUDIT_ACTION_OPTIONS = [
   { value: "Login", label: "Login", databaseValues: ["Login"] },
   { value: "Logout", label: "Logout", databaseValues: ["Logout"] },
@@ -31,6 +46,8 @@ export const AUDIT_ACTION_OPTIONS = [
   { value: "Update", label: "Update", databaseValues: ["Update", "edited"] },
   { value: "Approve", label: "Approve", databaseValues: ["Approve", "approved"] },
   { value: "Reject", label: "Reject", databaseValues: ["Reject", "rejected"] },
+  // This grouped filter matches the Edit Actions summary card exactly.
+  { value: "Edit Actions", label: "Edit Actions", databaseValues: AUDIT_EDIT_ACTION_DATABASE_VALUES },
   { value: "Delete", label: "Delete", databaseValues: ["deleted", "Permanently Delete"] },
   { value: "Message", label: "Message", databaseValues: ["Message", "Message Sent"] },
   { value: "Announcement Published", label: "Announcement Published", databaseValues: ["Announcement Published"] },
@@ -131,15 +148,7 @@ export function auditActionDatabaseValues(value: string): readonly string[] {
 // These are the existing Audit Trail card classifications. Keep their database
 // values in one place so the server totals do not depend on the current page.
 export const AUDIT_LOGIN_EVENT_ACTION_VALUES = auditActionDatabaseValues("Login");
-export const AUDIT_EDIT_ACTION_VALUES = [...new Set([
-  "Submit Report",
-  "Message",
-  "Escalate",
-  "Resolve",
-  "Update",
-  "Approve",
-  "Reject",
-].flatMap((action) => auditActionDatabaseValues(action)))];
+export const AUDIT_EDIT_ACTION_VALUES = [...AUDIT_EDIT_ACTION_DATABASE_VALUES];
 
 export function auditStatusDatabaseValues(value: string): readonly string[] {
   return AUDIT_STATUS_OPTIONS.find((option) => option.value === value)?.databaseValues ?? [];

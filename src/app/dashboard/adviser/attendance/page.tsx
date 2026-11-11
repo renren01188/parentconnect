@@ -2102,6 +2102,8 @@ export default function AdviserAttendancePage() {
     // ── Class session ──
     const [classSession, setClassSession] = useState<ClassSessionInfo | null>(null);
     const [classSessions, setClassSessions] = useState<ClassSessionInfo[]>([]);
+    const [selectedSectionSessionType, setSelectedSectionSessionType] = useState<"Morning" | "Afternoon" | null>(null);
+    const [scheduleSection, setScheduleSection] = useState("");
     const [sessionLoading, setSessionLoading] = useState(false);
     const [manilaMinutes, setManilaMinutes] = useState<number | null>(null);
 
@@ -2121,6 +2123,7 @@ export default function AdviserAttendancePage() {
     const rapidTapHadWorkRef = useRef(false);
     const rfidSaveInFlightRef = useRef(false);
     const studentsLoadRequestRef = useRef(0);
+    const classSessionRequestRef = useRef(0);
 
     // A school-wide session can be active while this adviser's section belongs
     // to the other session. Scanning must be enabled only for matching sections.
@@ -2324,13 +2327,22 @@ export default function AdviserAttendancePage() {
     }
 
     const loadClassSession = useCallback(async (background = false) => {
+        const requestId = ++classSessionRequestRef.current;
         try {
             if (!background) setSessionLoading(true);
-            const res = await fetch("/api/attendance/class-session", { cache: "no-store" });
+            const sectionParam = activeSection ? `?section=${encodeURIComponent(activeSection)}` : "";
+            const res = await fetch(`/api/attendance/class-session${sectionParam}`, { cache: "no-store" });
             const data = await res.json();
+            if (requestId !== classSessionRequestRef.current) return;
             if (data.success) {
                 const sessions = (data.sessions || []) as ClassSessionInfo[];
                 setClassSessions(sessions);
+                setSelectedSectionSessionType(
+                    data.section_session_type === "Morning" || data.section_session_type === "Afternoon"
+                        ? data.section_session_type
+                        : null,
+                );
+                setScheduleSection(activeSection);
                 const active = sessions.find((session) => session.status === "Active");
                 const upcoming = sessions.find((session) => session.status === "Not Started");
                 setClassSession(active || null);
@@ -2347,12 +2359,13 @@ export default function AdviserAttendancePage() {
                 setScanMessage(data.message || "Failed to load class session");
             }
         } catch (error) {
+            if (requestId !== classSessionRequestRef.current) return;
             console.error("Failed to load class session:", error);
             setScanMessage("Failed to load class session");
         } finally {
-            if (!background) setSessionLoading(false);
+            if (!background && requestId === classSessionRequestRef.current) setSessionLoading(false);
         }
-    }, []);
+    }, [activeSection]);
 
     const processRapidTapQueue = useCallback(async () => {
         if (
@@ -3233,12 +3246,33 @@ export default function AdviserAttendancePage() {
 
     const adviserName = adviser?.full_name || "Class Adviser";
     const todayStr = toLocalDateString(new Date());
-    const selectedSchedule = classSessions.find((session) => session.session_type === selectedSectionSession)
+    const scannerSchedule = classSessions.find((session) => session.session_type === selectedSectionSession)
         ?? classSessions.find((session) => session.status === "Active")
         ?? classSessions[0]
         ?? null;
-    const timeOutWindowStartsAt = selectedSchedule
-        ? Math.max(0, timeToMinutes(selectedSchedule.scheduled_end) - TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES)
+    // The Class Session card must use the selected section's assignment from
+    // the sections table, never the first roster row or another active session.
+    const selectedSectionScheduleType = scheduleSection === activeSection
+        ? selectedSectionSessionType
+        : null;
+    const classSessionCardLoading = Boolean(activeSection && scheduleSection !== activeSection);
+    const classSessionCardSchedule = selectedSectionScheduleType
+        ? classSessions.find((session) => session.session_type === selectedSectionScheduleType) ?? null
+        : null;
+    const isClassSessionCardActive = classSessionCardSchedule?.status === "Active";
+    const classSessionCardMessage = classSessionCardSchedule
+        ? isClassSessionCardActive
+            ? `${classSessionCardSchedule.session_type} class is accepting RFID scans`
+            : classSessionCardSchedule.status === "Not Started"
+                ? `Not started. Scanning opens at ${formatTime(classSessionCardSchedule.scheduled_start)} under ICT's saved schedule.`
+                : "Ended. Scanning is unavailable outside ICT's saved class schedule."
+        : classSessionCardLoading
+            ? "Loading this section's saved class schedule..."
+            : activeSection
+                ? "ICT has not assigned a session to this section yet."
+                : scanMessage;
+    const timeOutWindowStartsAt = scannerSchedule
+        ? Math.max(0, timeToMinutes(scannerSchedule.scheduled_end) - TIME_OUT_WINDOW_BEFORE_SCHEDULED_END_MINUTES)
         : null;
     const scannerLabel = timeOutWindowStartsAt !== null && manilaMinutes !== null && manilaMinutes >= timeOutWindowStartsAt
         ? "Time Out"
@@ -3382,28 +3416,24 @@ export default function AdviserAttendancePage() {
                     </button>
                 </div>
 
-                <div className={`flex flex-col rounded-2xl border p-4 shadow-sm transition-all duration-200 sm:p-5 ${isScanningOpen ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
-                    <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl ${isScanningOpen ? "bg-white/20" : "bg-slate-50"}`}>
-                        <PlayCircle className={`h-4 w-4 ${isScanningOpen ? "text-white" : "text-slate-500"}`} />
+                <div className={`flex flex-col rounded-2xl border p-4 shadow-sm transition-all duration-200 sm:p-5 ${isClassSessionCardActive ? "border-emerald-500 bg-emerald-500 text-white ring-2 ring-emerald-200" : "border-slate-100 bg-white text-slate-800"}`}>
+                    <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl ${isClassSessionCardActive ? "bg-white/20" : "bg-slate-50"}`}>
+                        <PlayCircle className={`h-4 w-4 ${isClassSessionCardActive ? "text-white" : "text-slate-500"}`} />
                     </div>
                     <h3 className="text-sm font-bold">Class Session</h3>
-                    <p className="mt-1 text-xs opacity-80">
-                        {isScanningOpen && classSession
-                            ? `${classSession.session_type} class is accepting RFID scans`
-                            : scanMessage}
-                    </p>
-                    {selectedSchedule ? (
+                    <p className="mt-1 text-xs opacity-80">{classSessionCardMessage}</p>
+                    {classSessionCardSchedule ? (
                         <p className="mt-3 rounded-lg bg-white/15 px-2.5 py-2 text-[11px] leading-5 opacity-95">
-                            {selectedSchedule.session_type}: {formatTime(selectedSchedule.scheduled_start)} – {formatTime(selectedSchedule.scheduled_end)}<br />
-                            Late after {formatTime(selectedSchedule.late_after ?? null)} · Absent after {formatTime(selectedSchedule.absent_after ?? null)}
+                            {classSessionCardSchedule.session_type}: {formatTime(classSessionCardSchedule.scheduled_start)} – {formatTime(classSessionCardSchedule.scheduled_end)}<br />
+                            Late after {formatTime(classSessionCardSchedule.late_after ?? null)} · Absent after {formatTime(classSessionCardSchedule.absent_after ?? null)}
                         </p>
                     ) : (
-                        <p className="mt-3 text-[11px] opacity-80">ICT has not saved a schedule for this class yet.</p>
+                        <p className="mt-3 text-[11px] opacity-80">{classSessionCardLoading ? "Loading this section's saved schedule..." : "ICT has not saved a schedule for this class yet."}</p>
                     )}
                     <button
                         onClick={() => { setActiveTopAction(null); setShowHistory(false); loadClassSession(); focusScanner(); }}
-                        className={`mt-auto min-h-11 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${isScanningOpen ? "bg-white text-emerald-600" : "bg-slate-800 hover:bg-slate-900 text-white"}`}>
-                        {sessionLoading ? "Checking..." : isScanningOpen ? "Scanning Active" : "Check Schedule"}
+                        className={`mt-auto min-h-11 w-full rounded-xl py-2.5 text-xs font-bold transition-colors ${isClassSessionCardActive ? "bg-white text-emerald-600" : "bg-slate-800 hover:bg-slate-900 text-white"}`}>
+                        {sessionLoading ? "Checking..." : isClassSessionCardActive ? "Scanning Active" : "Check Schedule"}
                     </button>
                 </div>
 

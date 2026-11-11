@@ -416,10 +416,10 @@ export default function AuditTrailPage() {
   ), []);
 
   const statCards = [
-    { label: "Total Events", value: stats.totalEvents, icon: Activity, color: "#274e13", bg: "bg-green-50" },
-    { label: "Login Events", value: stats.loginEvents, icon: LogIn, color: "#2563eb", bg: "bg-blue-50" },
-    { label: "Edit Actions", value: stats.editActions, icon: Edit3, color: "#d97706", bg: "bg-amber-50" },
-    { label: "Security Alerts", value: stats.securityAlerts, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", actionFilter: "Security Events" },
+    { label: "Total Events", value: stats.totalEvents, icon: Activity, color: "#274e13", bg: "bg-green-50", filterValue: "", ariaLabel: "Show all audit events", borderClass: "border-green-100 hover:border-green-300 hover:bg-green-50/30 focus:ring-green-200" },
+    { label: "Login Events", value: stats.loginEvents, icon: LogIn, color: "#2563eb", bg: "bg-blue-50", filterValue: "Login", ariaLabel: "Show login events", borderClass: "border-blue-100 hover:border-blue-300 hover:bg-blue-50/30 focus:ring-blue-200" },
+    { label: "Edit Actions", value: stats.editActions, icon: Edit3, color: "#d97706", bg: "bg-amber-50", filterValue: "Edit Actions", ariaLabel: "Show edit action events", borderClass: "border-amber-100 hover:border-amber-300 hover:bg-amber-50/30 focus:ring-amber-200" },
+    { label: "Security Alerts", value: stats.securityAlerts, icon: ShieldAlert, color: "#dc2626", bg: "bg-red-50", filterValue: "Security Events", ariaLabel: "Show security alert events", borderClass: "border-red-100 hover:border-red-300 hover:bg-red-50/30 focus:ring-red-200" },
   ];
 
   return (
@@ -458,7 +458,7 @@ export default function AuditTrailPage() {
 
       {/* ── Stats ── */}
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {statCards.map(({ label, value, icon: Icon, color, bg, actionFilter }) => {
+        {statCards.map(({ label, value, icon: Icon, color, bg, filterValue, ariaLabel, borderClass }) => {
           const content = <>
             <div className={`w-12 h-12 rounded-xl ${bg} flex items-center justify-center shrink-0`}>
               <Icon className="w-5 h-5" style={{ color }} />
@@ -470,11 +470,18 @@ export default function AuditTrailPage() {
               <p className="text-xs font-semibold text-gray-400 mt-0.5">{label}</p>
             </div>
           </>;
-          return actionFilter ? (
-            <button key={label} type="button" onClick={() => { setActionFilter(actionFilter); setPage(1); }} className="flex items-center gap-4 rounded-xl border border-red-100 bg-white p-4 text-left shadow-sm transition hover:border-red-300 hover:bg-red-50/30 focus:outline-none focus:ring-2 focus:ring-red-200 sm:p-5" aria-label="Show security alert events">
+          return (
+            <button
+              key={label}
+              type="button"
+              onClick={() => { setActionFilter(filterValue); setPage(1); }}
+              className={`flex w-full cursor-pointer items-center gap-4 rounded-xl border bg-white p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 sm:p-5 ${borderClass}`}
+              aria-label={ariaLabel}
+              aria-pressed={actionFilter === filterValue}
+            >
               {content}
             </button>
-          ) : <div key={label} className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">{content}</div>;
+          );
         })}
       </div>
 
