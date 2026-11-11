@@ -30,7 +30,7 @@ type ParentSummary = {
 function Badge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
-    <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold leading-none text-white">
+    <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-indigo-200 px-1 text-[10px] font-extrabold leading-none text-indigo-950">
       {count > 99 ? "99+" : count}
     </span>
   );

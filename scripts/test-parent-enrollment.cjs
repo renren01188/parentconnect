@@ -46,6 +46,9 @@ assert.match(adviserStudentRoute, /The recorded contact number must be exactly 1
 assert.match(adviserStudentRoute, /normalizedRecordedContactNumber !== undefined/);
 assert.match(adviserStudentPage, /Recorded Contact Number/);
 assert.match(adviserStudentPage, /Leave blank when SF1 has no number/);
+assert.match(adviserStudentPage, /const hasCompletedParentSignup = parentAccountLinked/);
+assert.match(adviserStudentPage, /!hasCompletedParentSignup && \(/);
+assert.match(adviserStudentPage, /!hasCompletedParentSignup && \(\s*<Field label="Recorded Contact Number"/);
 assert.match(adviserStudentRoute, /login_contact_number: normalizedAccountContactNumber/);
 assert.match(parentProfileRoute, /login_contact_number: normalizedPhone/);
 assert.match(parentProfileRoute, /synchronizeParentContactForActiveStudents/);

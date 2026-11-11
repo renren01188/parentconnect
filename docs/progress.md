@@ -6,6 +6,190 @@ This is a source-tree snapshot, not a release checklist. It records verified
 paths and working-tree state only; feature behavior is not considered verified
 unless a named check has been run and recorded below.
 
+### ICT Adviser and Guidance bulk deletion safeguards
+
+- **Complete in source:** The ICT bulk-deletion modal now receives its compact,
+  unpaginated Adviser and Guidance candidate lists from the protected User
+  Management API. Selecting either role is no longer limited to the current
+  directory page.
+- **Server boundary:** `/api/scheduled-deletions` now verifies every selected
+  Adviser/Guidance (and any supported ICT) account against its role table,
+  rejects archived, stale, or already-scheduled targets, and ignores
+  browser-supplied staff names and email addresses. Scheduled staff accounts
+  use the existing account-archive email; the Parent-only suspension and
+  in-app notice behavior remains unchanged.
+- **Schema:** added
+  `20261111100000_enforce_one_active_scheduled_deletion_per_target.sql`. It
+  blocks deployment rather than silently changing history if duplicate active
+  deletion requests already exist, then enforces one Pending ICT/Scheduled
+  request per target to close concurrent-request races.
+- **Affected files:** ICT User Management API/modal/page, scheduled-deletion
+  route, focused bulk-deletion regression check, the migration, and the
+  scheduled-deletion architecture note.
+- **Verified:** `npm.cmd run test:ict-section-bulk-deletion` and
+  `npx.cmd tsc --noEmit` passed on 2026-11-11. Focused lint found no issue in
+  the changed modal or scheduled-deletion route, but stops at 22 pre-existing
+  `no-explicit-any` errors and seven unused-value warnings in ICT User
+  Management's existing page/API code. Remote migration application and a
+  browser smoke test with multiple Adviser/Guidance candidates remain
+  unverified.
+
+### Manual Grade 1 database cleanup SQL
+
+- **Prepared only:** `supabase/manual-sql/20261111_permanently_delete_grade_1.sql`
+  is a copy-and-run Supabase SQL Editor script, not a migration. It validates
+  that selected Parents and scheduled-deletion requests are exclusive to Grade
+  1, hard-deletes the Grade 1 scope in one transaction, removes both report
+  conversations and standalone staff-to-Parent threads for those Parents, and
+  restores the two database hard-delete triggers before committing.
+- **Not run from source:** an authorized database owner must execute it in the
+  Supabase SQL Editor. It intentionally leaves global audit-trail data intact
+  because that data is not safely Grade-scoped.
+
+### Parent New Report student selector layout
+
+- **Complete in source:** The linked-student selector is now an anchored
+  overlay with its own viewport-safe scroll area. Opening it no longer adds
+  height to, resizes, or recenters the New Report modal.
+- **Affected files:** `src/app/dashboard/parent/reports/page.tsx` and the
+  Reports and messages architecture note.
+- **Verified:** `npm.cmd run test:parent-report-student-selector-layout`,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-11.
+  The configured `test:parent-report-list-filters` script is missing from the
+  checkout, and `test:student-concern-parent-reports` has a stale assertion for
+  a prior report-list implementation; neither failure is caused by this layout
+  change.
+
+### Adviser SF1 import link-status presentation
+
+- **Complete in source:** The Import Registration preview now collapses
+  existing learners into **Already Registered Students: View (count)**. Its
+  five-record pages show the current learner name, LRN, and section in a
+  responsive card grid. Existing records are filtered from the detailed
+  preview, submitted row payload, and **Import X Students** count rather than
+  blocking the remaining new learners.
+- **Complete in source:** Parent-link review now omits unmatched learners and
+  shows only active exact or ambiguous account candidates. Exact matches state
+  **Will be linked to [Parent Name] when imported** unless the relationship is
+  already recorded; ambiguous matches retain the account selector. Shared
+  Parent accounts remain supported for multiple students.
+- **Affected files:** `ImportRegistrationModal.tsx`, `/api/students/import`,
+  `scripts/test-adviser-import-registration-presentation.cjs`, and the
+  student-registration architecture note.
+- **Verified:** `npm.cmd run test:adviser-import-registration-presentation`
+  (including a 12-duplicate-record pagination fixture),
+  `npm.cmd run test:parent-multi-student-signup`, focused ESLint,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-11.
+  Browser verification with a safe adviser import fixture is not yet recorded.
+
+### Role sidebar badge contrast
+
+- **Complete in source:** The numeric sidebar badges retain their existing
+  count, placement, dimensions, and dismissal behavior. Their colors now use
+  Parent indigo, Adviser emerald, ICT green, Principal purple, and Guidance
+  sky backgrounds with dark matching numerals for contrast on both active and
+  inactive sidebar entries. The role sidebars use fixed dark gradients, so
+  these colors remain the same under the application's global dark preference.
+- **Affected files:** the five role-local `components/Sidebar.tsx` files.
+- **Verified:** `npx.cmd tsc --noEmit`, focused lint for Parent/Adviser/
+  Principal/Guidance sidebars, and `git diff --check` passed on 2026-11-11.
+  Focused lint reaches one existing ICT Sidebar effect warning outside the
+  badge renderer. `test:sidebar-badge-dismissal` is independently blocked by
+  a stale Adviser Contact ICT assertion; neither issue was changed here.
+
+### Subject Teacher reports use Student Reports first
+
+- **Complete in source:** `/report/subject-teacher` now saves a verified
+  submission to the assigned Adviser's `student_reports` queue instead of
+  immediately creating a Parent Report. A missing, inactive, or pre-signup
+  Parent no longer affects submission. The Adviser can later use the existing
+  **Notify Parent** action after a completed Parent account is linked.
+- **Privacy:** the Adviser sees the named Subject Teacher in Student Reports.
+  A later forwarded Parent Report keeps that identity for authorised
+  Adviser/Guidance/Principal readers, while Parent report and notification
+  views use anonymous School staff wording.
+- **Schema:** added
+  `20261110130000_route_subject_teacher_reports_to_student_reports.sql` for
+  source metadata, idempotent retries, selected categories, and the existing
+  two-per-Manila-day Subject Teacher limit. Supabase MCP schema inspection on
+  2026-11-10 confirmed the live table needs these columns; its SQL connection
+  is read-only and therefore could not apply the migration. It remains
+  **pending remote deployment** through the normal migration workflow or SQL
+  Editor.
+- **Affected files:** Subject Teacher submission and Student Report forwarding
+  APIs, Parent notification mapping, Adviser Student Reports UI/type mapping,
+  related focused scripts, and the migration above.
+- **Verified:** `test:subject-teacher-report-parent-availability`,
+  `test:subject-teacher-report-security`,
+  `test:subject-teacher-report-categories`,
+  `test:subject-teacher-reporter-privacy`,
+  `test:student-report-submission`, `test:student-concern-parent-reports`,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10.
+  Browser and remote-database verification remain **unverified** until the
+  migration is applied and a real Subject Teacher submission is tested.
+
+### Public Student Report privacy notice
+
+- **Complete in source:** `/report` now labels its required confirmation as
+  **Reporting Guidelines and Privacy Notice**. Its existing scroll-to-enable
+  acknowledgement modal contains the Student Report accuracy, data-use,
+  audit-security, confidentiality, responsible-use, and immediate-danger
+  guidance, followed by **Acknowledge and Continue**. The existing CAPTCHA and
+  report-submission behavior are unchanged.
+- **Affected files:** `src/app/report/page.tsx`,
+  `scripts/test-student-report-submission.cjs`, and the reports architecture
+  note.
+- **Verified:** `npm.cmd run test:student-report-submission`,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10. Browser
+  visual verification remains unverified.
+
+### Adviser Subject Teacher report panels and Parent eligibility
+
+- **Complete in source:** the Adviser navigation label is now **Student &
+  Subject Teacher Reports**. A Subject Teacher report shows the teacher's
+  name in its first panel and at the top of panel two; the
+  panel-two report card and detail header identify the associated learner as
+  `Student: Name`, followed by the submitter attribution. The message-detail
+  breadcrumb no longer repeats the Subject Teacher title. Adviser-only mapping
+  also supports older reports whose teacher name exists only in a
+  `[Subject Teacher Report] Name` title.
+- **Parent forwarding:** Notify Parent now accepts a completed active Parent
+  attached to the exact student through either `parent_student_links` or the
+  legacy `parents.student_id` association. The same eligibility calculation
+  drives the modal, so it no longer incorrectly disables a valid legacy-linked
+  Parent. It does not allow a Parent associated with another student. A blank
+  email address no longer blocks delivery in Parent Reports; only the
+  supplemental email alert is skipped.
+- **Affected files:** Adviser reports UI, Student Reports mapper/list route,
+  Notify Parent route, and the focused Student Report/Subject Teacher scripts.
+- **Verified:** `node scripts/test-student-report-parent-link.cjs`,
+  `node scripts/test-subject-teacher-reporter-privacy.cjs`,
+  `node scripts/test-subject-teacher-report-categories.cjs`,
+  `npx.cmd tsc --noEmit`, focused ESLint, and `git diff --check` passed on
+  2026-11-10. Browser verification is still **unverified**.
+
+### Report message-detail Back controls
+
+- **Complete in source:** Adviser, Guidance, and Principal report/message
+  detail headers no longer repeat the selected report title. Desktop detail
+  headers omit **Back**, while narrow screens show an icon-only Back control;
+  the separate report-list panel controls remain unchanged. Subject Teacher
+  Notify Parent drafts now use the submitted description and generic school
+  staff wording instead of the teacher-name report title.
+- **Verified:** `npm.cmd run test:subject-teacher-reporter-privacy` and
+  `npx.cmd tsc --noEmit` passed on 2026-11-10. Browser viewport verification
+  remains **unverified**.
+
+### Live report-category filters
+
+- **Complete in source:** Parent, Adviser, Guidance, and Principal category
+  filters now recalculate option names and counts from the active report
+  tab/status scope. A category removed by a status change or live refresh
+  resets safely to **All**.
+- **Verified:** `npm.cmd run test:report-category-filter-freshness` and
+  `npx.cmd tsc --noEmit` passed on 2026-11-10. Browser verification remains
+  **unverified**.
+
 ### Documentation task
 
 - **Complete:** added `docs/architecture.md` and this file; updated `AGENTS.md`
@@ -15,27 +199,39 @@ unless a named check has been run and recorded below.
 
 ### Public header school branding
 
-- **Complete:** removed the top-left Santiago Elementary School seal from the
-  landing hero and the shared login header used by all user roles while
-  retaining the school-name text. The lower institutional logos and the public
-  navigation remain unchanged.
-  The landing, all login journeys, About, and Contact now use the same local
-  school-banner image.
+- **Complete:** The landing hero and shared login header used by all user roles
+  now use the Contact Us-style Santiago Elementary School seal immediately to
+  the left of the school name. Their public navigation remains unchanged, but
+  the lower right-side DepEd and Santiago institutional marks are hidden. The
+  About page's ParentConnect introduction now uses
+  the same, larger standalone ParentConnect logo as the browser tab instead of
+  the generic school icon and navy icon tile. The logo is statically bound to
+  the app's icon file so it cannot resolve to the school seal. Its
+  school-information card now displays the official Santiago Elementary School
+  seal instead of a graduation cap. The About and Contact heroes, plus the
+  public Student and Subject Teacher report shells, intentionally hide the
+  separate lower-right DepEd and Santiago institutional marks. The landing,
+  all login journeys, About, and Contact now use the same local school-banner
+  image.
 - **Affected files:** `src/components/HeroSection.tsx`,
   `src/components/LoginLandingHeader.tsx`,
   `scripts/test-public-header-branding.cjs`, and `package.json`.
 - **Verified:** `npm.cmd run test:public-header-branding`,
-  `npx.cmd tsc --noEmit`, and `npm.cmd run build` passed on 2026-11-09.
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10. Browser
+  layout verification remains unverified.
 
-### Contact Us required identity fields
+### Contact Us required fields
 
-- **Complete:** The public Contact Us form now visibly marks Name and Email
-  with an accessible red `*` and screen-reader-required text. Existing browser
-  and server validation continue to require valid values before delivery.
+- **Complete:** The public Contact Us form now visibly marks Name, Email,
+  Subject, and Message with an accessible red `*` and screen-reader-required
+  text. Its disabled Send action now lists the exact outstanding fields and
+  CAPTCHA verification on hover or keyboard focus. Existing browser and server
+  validation continue to require valid values before delivery.
 - **Affected files:** `src/app/contact-us/page.tsx`,
   `scripts/test-contact-us-required-fields.cjs`, and `package.json`.
 - **Verified:** `npm.cmd run test:contact-us-required-fields`,
-  `npx.cmd tsc --noEmit`, and `npm.cmd run lint` passed on 2026-11-10.
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10.
+  Browser hover and keyboard-focus verification remains unverified.
 
 ### Legacy deletion-email queue retirement
 
@@ -53,6 +249,97 @@ unless a named check has been run and recorded below.
   outside this change. Remote application is pending: the available Supabase
   connection accepts read-only SQL and this workspace is not CLI-linked.
 
+### Adviser RFID replacement roster freshness
+
+- **Complete in source:** the Adviser attendance Register RFID modal now
+  ignores delayed roster responses that began before a confirmed RFID
+  replacement. The API-confirmed new UID therefore remains visible instead of
+  being overwritten by the prior card value.
+- **Affected files:** `dashboard/adviser/attendance/page.tsx` and
+  `scripts/test-adviser-rfid-registration.cjs`.
+- **Verified:** `npm.cmd run test:adviser-rfid-registration`, focused ESLint,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10.
+  Browser replacement with a second RFID card remains **unverified**.
+
+### Adviser Rapid Tap queue visibility
+
+- **Complete in source:** the RFID processing notice now waits for browser
+  queue restoration and appears only while a scan is capturing, queued,
+  saving, or retrying. Failed scans retain their existing Review/Retry actions
+  in a separate attention notice, rather than being shown as a processing
+  queue.
+- **Affected files:** `dashboard/adviser/attendance/page.tsx`,
+  `scripts/test-attendance-rapid-tap.cjs`, and the attendance architecture
+  note.
+- **Verified:** `npm.cmd run test:attendance-rapid-tap`, `npx.cmd tsc --noEmit`,
+  and `git diff --check` passed on 2026-11-10. Browser RFID confirmation
+  remains unverified.
+
+### Parent attendance missing-Time-Out status
+
+- **Complete in source:** an automatic Absent Time Out is now treated as a
+  final attendance result rather than a physical checkout in Parent-facing
+  data. Parent Attendance keeps the real Time In and no Time Out; the Parent
+  dashboard no longer calls that learner RFID-verified or at school. It
+  instead identifies the missing checkout and final Absent result.
+- **Notifications:** the Parent receives an in-app Missing Time Out alert
+  naming the check-in time. The Adviser absence notification adds the same
+  per-student Time In detail when an automatic missing checkout caused the
+  absence.
+- **Affected files:** Parent history/dashboard and notification API, Adviser
+  notification API, `scripts/test-parent-attendance-history.cjs`, and the
+  attendance architecture notes.
+- **Verified:** `npm.cmd run test:parent-attendance-history`,
+  `npm.cmd run test:attendance-auto-absence`, `npx.cmd tsc --noEmit`, and
+  `git diff --check` passed on 2026-11-10. The focused source lint reaches
+  three existing `no-explicit-any` errors in the Parent dashboard, outside this
+  change. Browser verification remains unverified.
+
+### Student registration birth-date age calculation
+
+- **Complete in source:** Adviser Add Student and ICT Create User's shared
+  student-roster form require a birth date for a learner who is at least four
+  completed years old. Age is read-only and automatically calculated from that
+  date. `/api/students` independently enforces the age boundary and stores its
+  own calculated age, ignoring a crafted submitted age value.
+- **Affected files:** `StudentParentRegistration`, the student-create route,
+  the student age/birth-date utilities, and their focused checks.
+- **Verified:** `node scripts/test-student-birthdate-validation.cjs`,
+  `node scripts/test-student-age-and-assignment.cjs`, `npx.cmd tsc --noEmit`,
+  focused source ESLint, and `git diff --check` passed on 2026-11-10. The
+  focused source lint reports three pre-existing warnings in the shared form;
+  browser validation remains **unverified**.
+
+### Post-signup verification-contact visibility
+
+- **Complete in source:** Adviser Student View and Edit no longer display the
+  recorded verification contact number once its linked Parent has completed
+  password setup. ICT's Edit Parent Account modal now displays that field only
+  for pre-signup records. The stored verification value remains available for
+  the registration flow, and the active Parent contact remains visible.
+- **Affected files:** the Adviser Student View, ICT User Management, and their
+  focused source checks.
+- **Verified:** `npm.cmd run test:ict-user-management-account-update`, direct
+  source guard checks, `npx.cmd tsc --noEmit`, and `git diff --check` passed
+  on 2026-11-10. `test:parent-enrollment` currently stops at its pre-existing
+  assertion for the retired `/login/guardian/send-otp` redirect, before its
+  visibility assertions run. Focused lint also reaches three pre-existing
+  `no-explicit-any` errors in ICT User Management outside this change.
+
+### ICT Edit Parent Account presentation
+
+- **Complete in source:** the ICT Parent-edit modal now keeps its compact
+  width, with a clear Account & Family / Linked Students panel switch instead
+  of showing both areas side by side. It retains one scrollable content area,
+  a persistent Cancel / Review Changes action bar, and compact responsive
+  family-name grids. The existing save, validation, link-correction, and API
+  behavior are unchanged.
+- **Affected files:** `src/app/dashboard/ict/user-management/page.tsx` and
+  the ICT User Management architecture note.
+- **Verified:** `npm.cmd run test:ict-user-management-account-update`,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-10. Browser
+  visual verification at desktop and narrow mobile widths remains unverified.
+
 ### Parent profile save
 
 - **Complete:** `dashboard/parent/profile` and `/api/parents/me` now treat
@@ -66,6 +353,28 @@ unless a named check has been run and recorded below.
   check covers the immediate state update and the GET mapping used when Profile
   is reopened; no live Parent record was modified for this verification.
 
+### ICT Attendance Notifications queue
+
+- **Complete in source:** The SMS queue now reads the actual Parent name
+  columns (`parent_first_name`, `parent_middle_name`, `parent_last_name`, and
+  `parent_suffix`), rather than selecting nonexistent generic name columns.
+  This prevents `/api/ict/attendance-sms-jobs` from returning the modal's
+  **Could not load attendance SMS jobs** warning. The email queue endpoint uses
+  the same correct mapping for consistency.
+- **Presentation:** The Attendance Notifications modal retains its SMS delivery
+  queue and no longer fetches or displays an Email delivery queue. Background
+  attendance email delivery remains unchanged.
+- **Affected files:** the ICT attendance SMS/email job routes, ICT Student
+  Profiles modal, focused attendance queue checks, and the attendance
+  architecture note.
+- **Verified:** `npm.cmd run test:ict-attendance-sms-delivery-queue`,
+  `npm.cmd run test:attendance-email-failover`,
+  `npm.cmd run test:attendance-notifications`, `npx.cmd tsc --noEmit`, and
+  `git diff --check` passed on 2026-11-11. Focused lint reaches five
+  pre-existing errors and ten warnings elsewhere in `StudentProfiles/page.tsx`;
+  none are in the changed modal/API paths. Read-only live schema inspection
+  confirmed the Parent column names that caused the failure.
+
 ### Attendance Email-only delivery override
 
 - **Complete in source:** ICT's **Email only** setting now sends attendance
@@ -74,10 +383,9 @@ unless a named check has been run and recorded below.
   Parent opt-out. Pending, unclaimed SMS jobs are safely skipped and queued for
   eligible email delivery when ICT changes into Email-only mode; already sent
   or provider-claimed SMS jobs are not modified.
-- **Visibility:** ICT Student Profiles now displays a separately searchable,
-  scrollable Email delivery queue using Parent name first and student name
-  below it. The existing scheduled attendance queue route now processes both
-  SMS and email jobs.
+- **Visibility:** The existing scheduled attendance queue route processes both
+  SMS and email jobs. The ICT modal shows only the SMS delivery queue; email
+  delivery remains a background worker flow.
 - **Affected files:** attendance notification settings, SMS/email queue and
   worker routes, Parent notification preferences/Profile UI, ICT Student
   Profiles UI, `/api/ict/attendance-email-jobs`,

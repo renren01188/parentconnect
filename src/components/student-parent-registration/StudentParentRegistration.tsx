@@ -11,8 +11,11 @@ import {
   GUARDIAN_RELATIONSHIP_OPTIONS,
   isMissingOtherGuardianRelationship,
 } from "@/lib/guardianRelationship";
-import { normalizeStudentAge } from "@/lib/studentAge";
-import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
+import { calculateStudentAge, normalizeStudentAge } from "@/lib/studentAge";
+import {
+  latestStudentRegistrationBirthDate,
+  normalizeStudentRegistrationBirthDate,
+} from "@/lib/studentBirthDate";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 import { dashboardPath } from "@/lib/routeAliases";
 
@@ -580,6 +583,7 @@ export function StudentParentRegistration({
   // The date input and validation use the same school-local calendar day as
   // the API, avoiding an off-by-one day around UTC midnight.
   const localToday = getSchoolClock().date;
+  const latestBirthDate = latestStudentRegistrationBirthDate(localToday);
   const setForm = (updater: FormUpdater) => {
     setStudents(prev => prev.map((student, index) => {
       if (index !== activeStudentIndex) return student;
@@ -793,18 +797,24 @@ export function StudentParentRegistration({
       guardianFirstName: "guardianParentId", guardianMiddleName: "guardianParentId", guardianLastName: "guardianParentId", guardianSuffix: "guardianParentId",
     };
     const linkedParentIdField = parentLinkFieldByName[field];
-    const applyField = (previous: FormData) => field === "religion"
-      ? { ...previous, religion: value, religionOther: value === "Others" ? previous.religionOther : "" }
-      : field === "remarkType"
-        ? {
-          ...previous,
-          remarkType: value,
-          remarkNote: value === "Dropped out" ? previous.remarkNote : "",
-          remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? previous.remarkSchoolName : "",
-        }
-        : linkedParentIdField
-          ? { ...previous, [field]: value, [linkedParentIdField]: "" }
-          : { ...previous, [field]: value };
+    const applyField = (previous: FormData) => field === "birthDate"
+      ? {
+        ...previous,
+        birthDate: value,
+        age: calculateStudentAge(value, localToday)?.toString() ?? "",
+      }
+      : field === "religion"
+        ? { ...previous, religion: value, religionOther: value === "Others" ? previous.religionOther : "" }
+        : field === "remarkType"
+          ? {
+            ...previous,
+            remarkType: value,
+            remarkNote: value === "Dropped out" ? previous.remarkNote : "",
+            remarkSchoolName: value === "Transferred In" || value === "Transferred Out" ? previous.remarkSchoolName : "",
+          }
+          : linkedParentIdField
+            ? { ...previous, [field]: value, [linkedParentIdField]: "" }
+            : { ...previous, [field]: value };
     if (isSharedVerificationField(field)) {
       setSharedVerification(applyField);
     } else {
@@ -833,7 +843,7 @@ export function StudentParentRegistration({
     else if (duplicateStudentId)                   E.studentId = "This LRN is already used by another student in this registration.";
   }
   if (show("gender")   && !form.gender)            E.gender   = "Please select a gender.";
-  const birthDateValidation = normalizeStudentBirthDate(form.birthDate, localToday);
+  const birthDateValidation = normalizeStudentRegistrationBirthDate(form.birthDate, localToday);
   if (show("birthDate") && birthDateValidation.error) E.birthDate = birthDateValidation.error;
   const ageValidation = normalizeStudentAge(form.age);
   if (show("age") && ageValidation.error) E.age = ageValidation.error;
@@ -932,7 +942,7 @@ export function StudentParentRegistration({
       const incompleteIndex = students.findIndex(student =>
         !student.firstName.trim() || !student.middleName.trim() || !student.lastName.trim() ||
         !student.studentId.trim() || !/^\d{12}$/.test(student.studentId.trim()) || !student.gender
-        || !!normalizeStudentBirthDate(student.birthDate, localToday).error
+        || !!normalizeStudentRegistrationBirthDate(student.birthDate, localToday).error
         || !!normalizeStudentAge(student.age).error
         || (student.religion === "Others" && !student.religionOther.trim())
         || !hasCompleteStudentRemark(student)
@@ -1001,12 +1011,12 @@ export function StudentParentRegistration({
     const ids = students.map(s => s.studentId.trim()).filter(Boolean);
     const rfids = students.map(s => s.rfidCard.trim().toUpperCase()).filter(Boolean);
     const invalidBirthDateIndex = students.findIndex(student =>
-      Boolean(normalizeStudentBirthDate(student.birthDate, localToday).error)
+      Boolean(normalizeStudentRegistrationBirthDate(student.birthDate, localToday).error)
     );
     if (invalidBirthDateIndex >= 0) {
       if (invalidBirthDateIndex !== activeStudentIndex) selectStudent(invalidBirthDateIndex);
       setTryNext(true);
-      setApiError(normalizeStudentBirthDate(students[invalidBirthDateIndex].birthDate, localToday).error ?? "Birth date is invalid.");
+      setApiError(normalizeStudentRegistrationBirthDate(students[invalidBirthDateIndex].birthDate, localToday).error ?? "Birth date is invalid.");
       return false;
     }
     const incompleteStudent = students.find(s =>
@@ -1351,18 +1361,18 @@ export function StudentParentRegistration({
                     </div>
                   </Field>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field label="Birth Date" error={E.birthDate}>
+                    <Field label="Birth Date" required error={E.birthDate} hint="Learner must be at least 4 years old">
                       <input
                         type="date"
-                        max={localToday}
+                        max={latestBirthDate}
                         className={E.birthDate ? inputErr : inputOk}
                         value={form.birthDate}
                         onChange={e => set("birthDate", e.target.value)}
                         onBlur={() => touch("birthDate")}
                       />
                     </Field>
-                    <Field label="Age" error={E.age} hint="Optional · whole years (1–120)">
-                      <input type="text" inputMode="numeric" maxLength={3} className={E.age ? inputErr : inputOk} placeholder="e.g. 12" value={form.age} onChange={e => set("age", e.target.value)} onBlur={() => touch("age")} />
+                    <Field label="Age" error={E.age} hint="Calculated from birth date">
+                      <input type="text" readOnly aria-readonly="true" className={E.age ? inputErr : inputOk} placeholder="Select a birth date" value={form.age} />
                     </Field>
                     <Field label="Learning Modality">
                       <div className="relative">

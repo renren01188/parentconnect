@@ -8,7 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const page = read("src/app/report/subject-teacher/page.tsx");
 const submitRoute = read("src/app/api/subject-teacher-reports/route.ts");
-const migration = read("supabase/migrations/20261017150000_add_subject_teacher_report_categories.sql");
+const migration = read("supabase/migrations/20261110130000_route_subject_teacher_reports_to_student_reports.sql");
 const adviserReports = read("src/app/dashboard/adviser/reports/page.tsx");
 
 const categories = [
@@ -27,19 +27,17 @@ assert.match(page, /form\.categories\.length === 0/);
 assert.match(page, /checked=\{selected\}/);
 
 // The server accepts only the defined options, requires at least one, and
-// passes the canonical ordered list to the service-role-only RPC.
+// saves the canonical ordered list on the Student Report source row.
 assert.match(submitRoute, /SUBJECT_TEACHER_REPORT_CATEGORIES/);
 assert.match(submitRoute, /submittedCategories\.some/);
-assert.match(submitRoute, /p_categories: categories/);
+assert.match(submitRoute, /subject_teacher_categories: categories/);
 
-// The database procedure validates, de-duplicates, and saves the selection.
-assert.match(migration, /p_categories text\[\]/);
-assert.match(migration, /At least one valid concern category is required/);
-assert.match(migration, /normalized_categories/);
-assert.match(migration, /p_subject, normalized_categories/);
+// The database keeps the complete selection even though Student Reports has
+// one primary category for its list filter.
+assert.match(migration, /subject_teacher_categories text\[\] NOT NULL DEFAULT '\{\}'/);
 
-// Adviser Panel 2 and its detail view render every saved category.
-assert.match(adviserReports, /\{r\.categories\.map\(cat =>/);
-assert.match(adviserReports, /\{selectedReport\.categories\.map\(cat =>/);
+// Adviser Student Report detail renders every saved category.
+assert.match(adviserReports, /const displayCategories = selectedStudRep\.subject_teacher_categories\?\.length/);
+assert.match(adviserReports, /displayCategories\.map\(\(category\) =>/);
 
 console.log("subject teacher report category checks passed");

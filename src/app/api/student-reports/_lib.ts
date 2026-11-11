@@ -17,6 +17,12 @@ export type StudentReportRow = {
   description: string;
   status: string;
   notified_parent: boolean;
+  report_source?: "student" | "subject_teacher" | null;
+  subject_teacher_name?: string | null;
+  subject_teacher_email?: string | null;
+  subject_teacher_categories?: string[] | null;
+  subject_teacher_submission_key?: string | null;
+  subject_teacher_report_date_manila?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -36,7 +42,21 @@ export function fullName(row: {
     .join(" ");
 }
 
+/**
+ * Reports created before Subject Teacher metadata was added retain the
+ * reporter only in their title.  Adviser-only views still need to identify
+ * that teacher without exposing the value in a Parent-facing mapper.
+ */
+function subjectTeacherNameFromLegacyTitle(title: string) {
+  const match = /^\[subject teacher report\]\s*(.+)$/i.exec(title.trim());
+  return match?.[1]?.trim() || null;
+}
+
 export function toAdviserStudentReport(row: StudentReportRow) {
+  const legacyTeacherName = subjectTeacherNameFromLegacyTitle(row.title);
+  const isSubjectTeacherReport = row.report_source === "subject_teacher" || legacyTeacherName !== null;
+  const subjectTeacherName = row.subject_teacher_name?.trim() || legacyTeacherName || "Subject Teacher";
+
   return {
     id: row.id,
     createdAt: row.created_at,
@@ -56,6 +76,13 @@ export function toAdviserStudentReport(row: StudentReportRow) {
     }),
     status: toUiStatus(row.status),
     parent_name: row.parent_name || `${row.student_name}'s Parent`,
+    submitted_by_name: isSubjectTeacherReport
+      ? subjectTeacherName
+      : undefined,
+    submitted_by_role: isSubjectTeacherReport ? "Subject Teacher" : undefined,
+    subject_teacher_categories: isSubjectTeacherReport
+      ? row.subject_teacher_categories ?? []
+      : [],
     replies: [],
     notified_parent: row.notified_parent,
   };

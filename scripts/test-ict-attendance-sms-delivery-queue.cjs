@@ -16,7 +16,7 @@ assert.match(jobsRoute, /\.slice\(-configuredWeekdays\.length\)/);
 assert.match(jobsRoute, /\.in\("attendance_logs\.attendance_date", recentClassDays\)/);
 
 // The response contains names but intentionally not phone numbers or SMS text.
-assert.match(jobsRoute, /parents \( first_name, middle_name, last_name, suffix \)/);
+assert.match(jobsRoute, /parents \( parent_first_name, parent_middle_name, parent_last_name, parent_suffix \)/);
 assert.match(jobsRoute, /students \( first_name, middle_name, last_name, suffix \)/);
 assert.match(jobsRoute, /parent_name: nameOf\(row\.parents\)/);
 assert.match(jobsRoute, /student_name: nameOf\(attendanceLog\?\.students\)/);
@@ -36,8 +36,8 @@ assert.doesNotMatch(studentProfiles, /const attentionSmsJobs/);
 // The modal provides a searchable, independently scrolling queue with parent
 // first, student second, and no internal attendance-log number as its label.
 assert.match(studentProfiles, /Search SMS delivery queue/);
-assert.match(studentProfiles, /Email delivery queue/);
-assert.match(studentProfiles, /Search email delivery queue/);
+assert.doesNotMatch(studentProfiles, /Email delivery queue/);
+assert.doesNotMatch(studentProfiles, /Search email delivery queue/);
 assert.match(studentProfiles, /placeholder="Search parent or student"/);
 assert.match(studentProfiles, /max-h-80 space-y-2 overflow-y-auto/);
 assert.match(studentProfiles, /\{job\.parent_name\}/);

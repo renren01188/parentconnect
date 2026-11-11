@@ -37,11 +37,13 @@ assert.match(scheduledWorker, /processAttendanceEmailJobs\(\)/);
 assert.match(parentPreferences, /schoolDelivery/);
 assert.match(parentPreferences, /attendance_notification_preference/);
 
-// ICT may inspect delivery status but cannot receive email addresses/bodies.
+// Email delivery remains a durable worker flow, but the ICT modal does not
+// expose its queue or email addresses/bodies.
 assert.match(emailJobsRoute, /attendance_email_jobs/);
+assert.match(emailJobsRoute, /parents \( parent_first_name, parent_middle_name, parent_last_name, parent_suffix \)/);
 assert.doesNotMatch(emailJobsRoute, /recipient_email/);
 assert.doesNotMatch(emailJobsRoute, /, message,/);
-assert.match(ictModal, /Email delivery queue/);
-assert.match(ictModal, /Search email delivery queue/);
+assert.doesNotMatch(ictModal, /Email delivery queue/);
+assert.doesNotMatch(ictModal, /Search email delivery queue/);
 
 console.log("Attendance Email-only override and durable queue failover checks passed.");

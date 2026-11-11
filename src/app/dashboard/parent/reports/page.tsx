@@ -509,7 +509,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
             {/* Student selector */}
             <div>
               <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Which student has this concern? <span style={{ color: "#ef4444" }}>*</span></label>
-              <div ref={studentRef}>
+              <div ref={studentRef} style={{ position: "relative" }}>
                 <button type="button" onClick={() => setStudentOpen(p => !p)} aria-haspopup="listbox" aria-expanded={studentOpen}
                   style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, border: selectedStudent ? "1.5px solid #e2e8f0" : "1.5px solid #93c5fd", background: selectedStudent ? "#fff" : "#eff6ff", textAlign: "left", cursor: "pointer", boxSizing: "border-box" }}>
                   <span style={{ width: 34, height: 34, minWidth: 34, borderRadius: "50%", background: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 12 }}>{selectedStudentInitials}</span>
@@ -520,7 +520,7 @@ function NewReportModal({ onClose, onSubmit, advisers, advisersLoading, advisers
                   <ChevronDown style={{ width: 16, height: 16, color: "#94a3b8", transform: studentOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
                 </button>
                 {studentOpen && (
-                  <div role="listbox" aria-label="Linked students" style={{ marginTop: 6, maxHeight: "min(18rem, 35dvh)", overflowY: "auto", background: "#fff", borderRadius: 12, border: "1.5px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
+                  <div role="listbox" aria-label="Linked students" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 20, maxHeight: "min(18rem, calc(100dvh - 13rem))", overflowY: "auto", background: "#fff", borderRadius: 12, border: "1.5px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
                     {studentRecipients.map((recipient) => {
                       const recipientInitials = recipient.studentName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST";
                       const isSelected = selectedStudent?.studentId === recipient.studentId;
@@ -887,17 +887,29 @@ function ParentReportsPageContent() {
   const lastScrolledConversationRef = useRef<string | null>(null);
   const cooldownMessage = reportCooldownMessage(reportSubmissionCooldownUntil, currentTime);
   const cancelTarget = reports.find((report) => report.id === cancelTargetId) ?? null;
-  const parentSubmittedReports = sortParentReportConversations(
+  const parentSubmittedReports = useMemo(() => sortParentReportConversations(
     reports.filter((report) => !report.isStandaloneStaffMessage),
-  );
-  const schoolMessages = sortParentReportConversations(
+  ), [reports]);
+  const schoolMessages = useMemo(() => sortParentReportConversations(
     reports.filter((report) => report.isStandaloneStaffMessage),
-  );
+  ), [reports]);
 
-  // All categories derived from all reports (for the pill row)
-  const allUsedCategories = Array.from(
-    new Set(parentSubmittedReports.flatMap(r => r.categories))
-  ).sort();
+  // Keep category choices and counts in sync with the active staff-message
+  // tab. A category that no longer has a matching report must not leave the
+  // controlled select on an unavailable value after a live refresh.
+  const categoryScopeReports = useMemo(() => filterParentReportConversations(parentSubmittedReports, {
+    tab: activeFilter,
+    category: "All",
+  }), [activeFilter, parentSubmittedReports]);
+  const allUsedCategories = useMemo(() => Array.from(
+    new Set(categoryScopeReports.flatMap(r => r.categories))
+  ).sort(), [categoryScopeReports]);
+
+  useEffect(() => {
+    if (categoryFilter !== "All" && !allUsedCategories.includes(categoryFilter)) {
+      setCategoryFilter("All");
+    }
+  }, [allUsedCategories, categoryFilter]);
 
   const mergePendingMessages = useCallback((nextReports: Report[]) => {
     return nextReports.map((report) => {
@@ -1608,10 +1620,10 @@ function ParentReportsPageContent() {
                     background: categoryFilter !== "All" ? "#eff6ff" : "#fff",
                     color: categoryFilter !== "All" ? "#1d4ed8" : "#475569",
                   }}>
-                  <option value="All">All Categories ({parentSubmittedReports.length})</option>
+                  <option value="All">All Categories ({categoryScopeReports.length})</option>
                   {allUsedCategories.map(cat => (
                     <option key={cat} value={cat}>
-                      {cat} ({parentSubmittedReports.filter(r => r.categories.includes(cat)).length})
+                      {cat} ({categoryScopeReports.filter(r => r.categories.includes(cat)).length})
                     </option>
                   ))}
                 </select>

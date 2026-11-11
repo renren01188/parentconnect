@@ -3,7 +3,6 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 
 type PublicReportPageShellProps = {
   eyebrow: string;
@@ -44,7 +43,7 @@ export function PublicReportPageShell({
           </div>
         </div>
 
-        <div className="relative z-10 grid min-h-[300px] w-full items-center gap-6 px-4 pb-32 pt-7 sm:min-h-[320px] sm:px-6 sm:pb-32 sm:pt-9 lg:min-h-[270px] lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)] lg:gap-12 lg:px-8 lg:py-9 xl:px-10 2xl:px-12">
+        <div className="relative z-10 grid min-h-[300px] w-full items-center gap-6 px-4 py-8 sm:min-h-[320px] sm:px-6 sm:py-10 lg:min-h-[270px] lg:px-8 lg:py-9 xl:px-10 2xl:px-12">
           <div className="w-full max-w-3xl text-left">
             <p className="text-sm font-extrabold tracking-[0.22em] text-sky-200 sm:text-base">PARENTCONNECT</p>
             <p className="mt-4 text-sm font-bold uppercase tracking-[0.16em] text-emerald-200">{eyebrow}</p>
@@ -52,7 +51,6 @@ export function PublicReportPageShell({
             <p className="mt-3 max-w-2xl text-sm leading-6 text-sky-50/90 sm:text-base sm:leading-7">{description}</p>
           </div>
         </div>
-        <LoginInstitutionLogos className="absolute bottom-5 right-4 z-10 sm:bottom-6 sm:right-6 lg:bottom-8 lg:right-8 xl:right-10 2xl:right-12" />
       </header>
 
       <main className="relative flex-1 overflow-hidden bg-[linear-gradient(180deg,#f8fbff_0%,#f1f7f8_100%)] px-3 py-7 sm:px-4 sm:py-12">

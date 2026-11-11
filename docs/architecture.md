@@ -30,10 +30,19 @@ restriction is also enforced by an API—inspect the route involved.
   each dashboard's `components` directory.
 - Public headers: `HeroSection.tsx` serves the landing page and
   `LoginLandingHeader.tsx` serves every user-login journey. Their top header
-  intentionally contains only public navigation; lower institutional marks
-  are separate visual content. `SchoolBackground.tsx` makes every login banner
-  use the same local `/hero-school-4.png` asset as the landing, About, and
-  Contact headers.
+  uses the Santiago Elementary School seal immediately to the left of its
+  school name; neither displays lower right-side institutional marks.
+  `SchoolBackground.tsx` makes every login banner use the same local
+  `/hero-school-4.png` asset as the landing, About, and Contact headers.
+- The About page's introductory ParentConnect card statically imports the app
+  metadata icon from `src/app/icon.png` (the browser-tab logo) at a larger
+  standalone size rather than a generic school glyph or decorative navy tile.
+- Its Santiago Elementary School information card similarly uses the official
+  `/santiago-elementary-logo.png` seal rather than a graduation-cap glyph.
+- `PublicHeroHeader` supports hiding the lower DepEd/Santiago institutional
+  marks for a specific public page; About and Contact Us use this option.
+  `PublicReportPageShell` similarly omits the marks for both public report
+  journeys.
 - Realtime and refresh hooks: `src/hooks/useDebouncedRealtimeRefresh.ts`,
   `useVisibleRefresh.ts`, `useReportMessagesRealtime.ts`,
   `useStaffMessagesRealtime.ts`, and related typing/session/badge hooks.
@@ -66,12 +75,49 @@ History, manual/edit operations, and monthly reporting are under
 `attendanceReportingCalendar.ts`, `finalAttendanceExport.ts`,
 `sf2DailyMark.ts`, and `sf2EnrollmentSummary.ts`. Principal reporting is
 served by `dashboard/principal/AttendanceSummary` and its related API routes.
+The Adviser RFID replacement flow applies the API-confirmed UID locally and
+uses ordered roster reads, so a delayed pre-save roster response cannot restore
+the old UID in the Register RFID modal.
+The Adviser Rapid Tap processing notice appears only after browser queue
+storage is restored and a scan is actively capturing, queued, saving, or
+retrying. Failed scans use a separate attention notice with their existing
+Review/Retry controls, so an empty queue does not briefly appear as processing.
+The Parent history API treats an automatic Absent `Time Out` as a missing
+physical checkout: it keeps the real Time In, exposes `missing_time_out`, and
+does not display the automatic finalization as a departure. The Parent
+dashboard and Parent/Adviser notification feeds use that same final result,
+including the recorded Time In when explaining a missing Time Out.
+
+### Student registration
+
+`StudentParentRegistration` is shared by Adviser student registration and ICT
+Create User's student-roster flow. A required birth date must make the learner
+at least four completed years old on the school-local current date. The client
+shows the resulting whole-year age as read-only, while `/api/students` repeats
+the validation and derives the stored age from the birth date rather than
+trusting a submitted age value.
+The recorded verification contact number is retained for pre-signup matching,
+but Adviser View/Edit and ICT Edit Parent Account hide it after the Parent has
+completed password setup; the active Parent contact number is the visible
+account contact from then on. The ICT Edit Parent Account modal keeps one
+scrolling content region with a persistent action bar and a compact
+Account/Family or Linked Students panel switch. This presentation layer does
+not change its existing save, validation, or authorization paths.
+The Adviser SF1 Import Registration preview returns the existing learner's
+name, LRN, and section for duplicate LRNs. Its compact, paginated expander
+keeps those learners out of both the detailed preview and the submitted import
+payload, so the import count covers only new learners. Parent-link review lists
+only students with active-account candidates: exact matches state whether the
+relationship will be created or is already saved, while ambiguous matches keep
+the existing account selector. Learners without a completed active Parent match
+are omitted from this review; the server-side match validation and multi-student
+Parent linking remain unchanged.
 
 Attendance notification jobs are queued in `attendanceSmsQueue.ts`, processed
-by `attendanceSmsWorker.ts`, and exposed to ICT through
-`/api/ict/attendance-sms-jobs`. Email notification counterparts are in
-`attendanceEmailQueue.ts` and `attendanceEmailWorker.ts`, with ICT queue data
-at `/api/ict/attendance-email-jobs`. The scheduled
+by `attendanceSmsWorker.ts`, and exposed in the ICT Attendance Notifications
+modal through `/api/ict/attendance-sms-jobs`. Email notification counterparts
+remain in `attendanceEmailQueue.ts` and `attendanceEmailWorker.ts`, but the
+modal does not display an email delivery queue. The scheduled
 `/api/internal/process-attendance-sms` worker processes both durable queues.
 When ICT selects Email only, every eligible completed active Parent with a
 valid email receives email regardless of their usual SMS preference; `Neither`
@@ -82,12 +128,30 @@ remains an explicit opt-out.
 Parent/Adviser report operations are centered on
 `/api/reports/parent-adviser` and its `_lib.ts`; Guidance and Principal status
 routes live beneath `/api/reports/guidance` and `/api/reports/principal`.
+The Parent **New Report** student selector is an anchored overlay within its
+modal, so opening the linked-student list does not change the dialog's size;
+the list has its own viewport-safe internal scrolling.
 Report payloads and the Guidance dashboard queue resolve a current Student
 Profile name by LRN at read time, falling back to the stored report-name
 snapshot only when that student record is unavailable. This keeps corrected
 student names consistent in existing Parent, Adviser, Guidance, and Principal
 report views without rewriting report history.
 Realtime report updates use `realtimeInvalidation.ts` and report-message hooks.
+The Parent, Adviser, Guidance, and Principal category dropdowns derive their
+options and counts from the active report tab/status scope. If a realtime or
+status update removes the selected category from that scope, the filter resets
+to **All** rather than leaving an empty, stale selection.
+Report/message detail panels omit duplicated desktop titles, while their
+narrow-screen layout retains an icon-only Back control to return to the report
+list. Subject Teacher Notify Parent drafts use the report description as the
+concern and refer only to generic school staff, preserving the teacher's
+identity in Parent-facing text.
+The public Student Report page at `/report` requires the submitter to scroll
+through and acknowledge the **Reporting Guidelines and Privacy Notice** before
+its existing CAPTCHA-gated submission can proceed. The notice explains the
+school-review purpose, audit security metadata, confidentiality, responsible
+use, and immediate-danger escalation guidance; it does not change the API
+validation or audit-access boundary.
 Standalone staff messages use `/api/reports/staff-messages`; Adviser and
 Principal message paths also have dedicated report routes. Keep standalone
 messages distinct from the report-conversation workflow. The Adviser, Guidance,
@@ -99,10 +163,26 @@ Guidance/Principal detail payloads only after their existing escalation access
 rules permit those roles to read the report. The Parent mapper, Parent report
 UI, Parent notification feed, and Parent-facing submission email redact that
 identity and use generic Subject Teacher/School staff wording.
-The public Subject Teacher submission route always creates the Adviser report
-after the student and Adviser are verified. A link to an eligible Parent is
-retained when one exists, but a Parent email is optional; absent or
-pre-signup Parent records never block the Adviser-only submission.
+The public Subject Teacher submission route creates an Adviser-owned
+`student_reports` record after the student and Adviser are verified. Its
+optional Parent link is only a snapshot for a later Adviser **Notify Parent**
+action; absent or pre-signup Parent records never block submission or create a
+Parent Report. Migration
+`20261110130000_route_subject_teacher_reports_to_student_reports.sql` stores
+the verified teacher metadata, retry key, selected categories, and daily-limit
+boundary on `student_reports`. When an Adviser later forwards it, the Parent
+sees anonymous School staff wording while authorised Adviser/Guidance/Principal
+views retain the Subject Teacher attribution.
+In Adviser Student & Subject Teacher Reports, Subject Teacher submissions are
+grouped by their reporter in the first panel and retain that teacher at the top of panel two;
+the panel-two report card and detail header label the associated learner as
+`Student: Name`, before the staff-only submitter attribution. The Adviser mapper
+also recognizes the older `[Subject Teacher Report] Name` title format. A
+Parent is eligible for the later Notify Parent action only when they have
+completed registration and are attached to that exact student through
+`parent_student_links` or the legacy `parents.student_id` relation. Email is
+optional: the Parent Report is delivered in-app, while a configured email only
+receives the additional email alert.
 
 ### Notifications and announcements
 
@@ -135,9 +215,11 @@ request is sent. `AnnouncementDeleteConfirmationModal.tsx` is shared by the
 Adviser, Guidance, ICT, and Principal announcement UIs; their existing
 role-scoped announcement APIs remain the authorization boundary.
 
-The public `/contact-us` form marks its required Name and Email identity fields
-with an accessible `*`; browser and `/api/contact-us` validation continue to
-reject empty or invalid identity details before a message is delivered.
+The public `/contact-us` form marks its required Name, Email, Subject, and
+Message fields with an accessible `*`; browser and `/api/contact-us`
+validation continue to reject empty or invalid details before a message is
+delivered. While Send is disabled, hovering or keyboard-focusing its wrapper
+lists the outstanding client-side fields and CAPTCHA verification.
 
 ### Scheduled deletion and archive
 
@@ -148,6 +230,25 @@ Parent in-app deletion notices when a Parent deletion becomes scheduled. The
 retired `deletion_email_jobs` queue and its items table are not part of this
 flow; migration `20261110120000_remove_legacy_deletion_email_tables.sql`
 locks and removes them only when both are empty.
+
+ICT User Management's bulk-deletion candidates are compact, unpaginated lists
+for Advisers, Guidance Counselors, Parents, and Students; the paginated
+directory is never the authorization source. `/api/scheduled-deletions`
+re-resolves every selected root from its role table, rejects archived or
+already-scheduled records, and derives staff names/email destinations from the
+protected row. `20261111100000_enforce_one_active_scheduled_deletion_per_target.sql`
+adds the final concurrent-request guard: at most one Pending ICT or Scheduled
+request may exist per target. Parents retain their in-app notice/suspension
+flow, while scheduled Adviser and Guidance accounts receive the existing
+archive email when their saved address is valid.
+
+For an explicitly authorized, one-off permanent Grade 1 purge,
+`supabase/manual-sql/20261111_permanently_delete_grade_1.sql` is a manual
+Supabase SQL Editor script, not an application migration. It validates that
+every selected Parent and scheduled-deletion request is Grade-1-only, removes
+the corresponding report conversations and standalone staff-to-Parent message
+threads, then temporarily bypasses only the two hard-delete guard triggers
+inside one transaction.
 
 ### Profile settings
 

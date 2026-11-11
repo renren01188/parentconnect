@@ -103,7 +103,7 @@ interface StudentData {
   parent_email: string;
   parent_address: string;   // ← new
   parent_account_linked: boolean;
-  password_set: number;
+  password_set: number | boolean | null;
   parent_status: string;
   birth_date?: string | null;
   age?: number | null;
@@ -265,6 +265,11 @@ export default function StudentViewPage() {
   const [originalSection, setOriginalSection] = useState("");
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const parentAccountLinked = student?.parent_account_linked === true;
+  // The registration-verification number remains stored for sign-up
+  // validation, but it is no longer Parent-facing information after the
+  // linked account has completed password setup.
+  const hasCompletedParentSignup = parentAccountLinked
+    && (student?.password_set === true || student?.password_set === 1);
 
   const loadStudent = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
     if (!id) return;
@@ -826,6 +831,7 @@ export default function StudentViewPage() {
                   <div className="border-t border-slate-100 pt-4">
                     <p className="mb-1 text-sm font-bold text-slate-800">Registration verification records</p>
                     <p className="mb-3 text-xs text-slate-500">These names and the optional recorded contact number are saved in the registration record and must match the information used with this student&apos;s LRN when a Father, Mother, or Guardian creates a Parent account.</p>
+                    {!hasCompletedParentSignup && (
                     <Field label="Recorded Contact Number" error={E.recordedContactNumber}>
                       <div className="relative">
                         <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -850,6 +856,7 @@ export default function StudentViewPage() {
                           : "Leave blank when SF1 has no number; the Parent may then provide a number at signup. Once saved, the Parent must use this 11-digit number to sign up."}
                       </p>
                     </Field>
+                    )}
                     <div className="space-y-4">
                       {form.familyMembers.map(member => <div key={member.role} className="rounded-xl border border-slate-200 p-3">
                         <p className="mb-2 text-xs font-bold text-slate-700">{member.role}</p>
@@ -901,7 +908,9 @@ export default function StudentViewPage() {
                   <ReviewRow label="Relationship" value={student.relationship} />
                   <ReviewRow label="Contact"      value={student.contact_number} />
                   <ReviewRow label="Email"        value={student.parent_email} />
-                  <ReviewRow label="Recorded Contact Number" value={recordedContactFromFamilyMembers(student.family_members) || "Not recorded"} />
+                  {!hasCompletedParentSignup && (
+                    <ReviewRow label="Recorded Contact Number" value={recordedContactFromFamilyMembers(student.family_members) || "Not recorded"} />
+                  )}
                   <ReviewRow label="Account"      value={student.password_set ? "Password created ✓" : "Password setup pending"} />
                 </div>
               )}

@@ -20,6 +20,10 @@ type NameRow = {
   middle_name?: string | null;
   last_name?: string | null;
   suffix?: string | null;
+  parent_first_name?: string | null;
+  parent_middle_name?: string | null;
+  parent_last_name?: string | null;
+  parent_suffix?: string | null;
 };
 
 type AttendanceLogJoin = {
@@ -60,7 +64,12 @@ function schoolDateInManila() {
 
 function nameOf(row: NameRow | NameRow[] | null | undefined) {
   const person = Array.isArray(row) ? row[0] : row;
-  const name = [person?.first_name, person?.middle_name, person?.last_name, person?.suffix]
+  const name = [
+    person?.first_name ?? person?.parent_first_name,
+    person?.middle_name ?? person?.parent_middle_name,
+    person?.last_name ?? person?.parent_last_name,
+    person?.suffix ?? person?.parent_suffix,
+  ]
     .filter((part): part is string => Boolean(part && part.trim()))
     .join(" ")
     .trim();
@@ -119,7 +128,7 @@ export async function GET() {
           attendance_date,
           students ( first_name, middle_name, last_name, suffix )
         ),
-        parents ( first_name, middle_name, last_name, suffix )
+        parents ( parent_first_name, parent_middle_name, parent_last_name, parent_suffix )
       `)
       .in("attendance_logs.attendance_date", recentClassDays);
     if (error) throw error;

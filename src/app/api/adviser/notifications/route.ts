@@ -25,13 +25,21 @@ export async function GET() {
         const yesterdayStr = localYesterday.toISOString().split("T")[0];
 
         // ── Fetch all data in parallel ────────────────────────────────────────────
-        const [absentLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes] = await Promise.all([
+        const [absentLogsRes, timeInLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes] = await Promise.all([
             supabase
                 .from("attendance_logs")
-                .select("id, student_id, attendance_date, time_logged")
+                .select("id, student_id, attendance_date, time_logged, type, via")
                 .eq("status", "Absent")
                 .eq("attendance_date", todayStr)
                 .order("time_logged", { ascending: false }),
+
+            supabase
+                .from("attendance_logs")
+                .select("student_id, attendance_date, time_logged")
+                .eq("type", "Time In")
+                .eq("attendance_date", todayStr)
+                .in("status", ["Present", "On Time", "Late"])
+                .order("time_logged", { ascending: true }),
 
             // 2. Students with NO scan today (absent) — get all students in adviser's class
             supabase
@@ -104,6 +112,7 @@ export async function GET() {
 
         const queryError = [
             absentLogsRes,
+            timeInLogsRes,
             absenceRes,
             reportRes,
             studentReportRes,
@@ -174,6 +183,23 @@ export async function GET() {
         const studentName = (student: AdviserStudent) =>
             [student.first_name, student.last_name].filter(Boolean).join(" ").trim() || student.student_id;
 
+        function attendanceTimeLabel(value: string | null | undefined) {
+            if (!value) return "the recorded time";
+            const [rawHour = "0", rawMinute = "0"] = value.split(":");
+            const hour = Number(rawHour);
+            const minute = Number(rawMinute);
+            if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+            return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+        }
+
+        const timeInByStudentId = new Map<string, string>();
+        for (const log of timeInLogsRes.data ?? []) {
+            const studentId = String(log.student_id ?? "").trim().toLowerCase();
+            const time = String(log.time_logged ?? "").trim();
+            if (!studentId || !time || timeInByStudentId.has(studentId)) continue;
+            timeInByStudentId.set(studentId, time);
+        }
+
         const principalNames = new Map(
             (principalsRes.data ?? []).map((principal) => [
                 String(principal.id),
@@ -186,6 +212,7 @@ export async function GET() {
 
         // ── 1. Absence notifications ──────────────────────────────────────────────
         const absentStudents = new Map<string, AdviserStudent>();
+        const missingTimeOutByStudentId = new Map<string, string>();
         let latestAbsenceAt: string | null = null;
 
         // The class-session job writes one Absent log per student. Group the
@@ -196,7 +223,12 @@ export async function GET() {
             if (!student) continue;
 
             const occurredAt = `${log.attendance_date}T${log.time_logged ?? "00:00:00"}`;
-            absentStudents.set(student.student_id.trim().toLowerCase(), student);
+            const studentId = student.student_id.trim().toLowerCase();
+            absentStudents.set(studentId, student);
+            if (log.type === "Time Out" && log.via === "Auto") {
+                const timeIn = timeInByStudentId.get(studentId);
+                if (timeIn) missingTimeOutByStudentId.set(studentId, timeIn);
+            }
             if (!latestAbsenceAt || new Date(occurredAt).getTime() > new Date(latestAbsenceAt).getTime()) {
                 latestAbsenceAt = occurredAt;
             }
@@ -212,12 +244,20 @@ export async function GET() {
             const classLabel = sections.length === 1
                 ? `${adviser.grade} - ${sections[0]}`
                 : `${adviser.grade}${sections.length ? ` - ${sections.join(", ")}` : ""}`;
+            const missingTimeOutDetails = [...missingTimeOutByStudentId]
+                .map(([studentId, timeIn]) => {
+                    const student = absentStudents.get(studentId);
+                    return student
+                        ? `${studentName(student)} checked in at ${attendanceTimeLabel(timeIn)} but has no Time Out recorded.`
+                        : null;
+                })
+                .filter((detail): detail is string => Boolean(detail));
 
             notifications.push({
                 id: key,
                 type: "absence",
                 title: count === 1 ? "Student Marked Absent" : "Students Marked Absent",
-                message: `${count} student${count === 1 ? "" : "s"} marked absent. From **${classLabel}**`,
+                message: `${count} student${count === 1 ? "" : "s"} marked absent. From **${classLabel}**${missingTimeOutDetails.length ? ` ${missingTimeOutDetails.join(" ")}` : ""}`,
                 time: formatTime(latestAbsenceAt),
                 date: getDateLabel(latestAbsenceAt),
                 rawTime: latestAbsenceAt,

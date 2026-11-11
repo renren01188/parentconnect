@@ -1,7 +1,7 @@
 import { ShieldCheck, Sparkles } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 
-import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 import { SchoolBackground } from "@/components/SchoolBackground";
 
 /**
@@ -19,8 +19,17 @@ export function LoginLandingHeader() {
 
       <div className="relative z-10 border-b border-white/15">
         <div className="flex w-full flex-col items-center justify-between gap-3 px-4 py-3 sm:flex-row sm:px-6 lg:px-8 xl:px-10 2xl:px-12">
-          <Link href="/" className="rounded-md text-xs font-extrabold tracking-[0.14em] text-white transition hover:text-sky-100 focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62] sm:text-sm">
-            SANTIAGO ELEMENTARY SCHOOL
+          <Link href="/" className="flex min-w-0 items-center gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62]">
+            <Image
+              src="/santiago-elementary-logo.png"
+              alt="Santiago Elementary School seal"
+              width={36}
+              height={36}
+              className="h-9 w-9 shrink-0 object-contain drop-shadow-sm"
+            />
+            <span className="text-center text-xs font-extrabold uppercase tracking-[0.14em] text-white sm:text-left sm:text-sm">
+              Santiago Elementary School
+            </span>
           </Link>
           <nav aria-label="Main navigation" className="flex items-center gap-5 text-sm font-semibold sm:gap-6">
             <Link href="/contact-us" className="rounded-md text-white/80 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62]">
@@ -33,7 +42,7 @@ export function LoginLandingHeader() {
         </div>
       </div>
 
-      <div className="relative z-10 grid min-h-[220px] w-full items-center gap-6 px-4 py-7 sm:min-h-[244px] sm:px-6 sm:py-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)] lg:gap-12 lg:px-8 xl:px-10 2xl:px-12">
+      <div className="relative z-10 grid min-h-[220px] w-full items-center px-4 py-7 sm:min-h-[244px] sm:px-6 sm:py-8 lg:px-8 xl:px-10 2xl:px-12">
         <div className="w-full max-w-3xl text-left">
           <h1 className="text-3xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-4xl">
             Welcome to ParentConnect.
@@ -51,7 +60,6 @@ export function LoginLandingHeader() {
           </div>
         </div>
 
-        <LoginInstitutionLogos className="hidden justify-end self-end lg:flex" />
       </div>
     </header>
   );

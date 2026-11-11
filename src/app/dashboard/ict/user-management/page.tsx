@@ -617,8 +617,8 @@ function StudentInfoCard({ student, index, total, onChange }: {
   );
 }
 
-function FamilyInformationCard({ family, onChange, title = "Shared family details", description, readOnly = false }: {
-  family: FamilyDetails; onChange: (u: FamilyDetails) => void; title?: string; description?: string; readOnly?: boolean;
+function FamilyInformationCard({ family, onChange, title = "Shared family details", description, readOnly = false, compact = false }: {
+  family: FamilyDetails; onChange: (u: FamilyDetails) => void; title?: string; description?: string; readOnly?: boolean; compact?: boolean;
 }) {
   const set = (key: keyof FamilyDetails) => (value: string) => onChange({ ...family, [key]: value });
   const isFamilyNameField = (key: keyof FamilyDetails) => /^(father|mother|guardian)(First|Middle|Last)Name$/.test(String(key));
@@ -629,19 +629,20 @@ function FamilyInformationCard({ family, onChange, title = "Shared family detail
     : family.guardianRelationshipOther ?? storedGuardianRelationship.other;
   const inp = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#274e13]/20 transition bg-white text-gray-900";
   const readOnlyInput = "w-full px-2.5 py-1.5 text-xs border border-gray-100 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed";
+  const familyFieldGrid = compact ? "grid grid-cols-1 gap-3 sm:grid-cols-2" : "grid grid-cols-1 gap-3";
 
   const field = (label: string, key: keyof FamilyDetails) => <div key={String(key)}><label className="mb-1 block text-[10px] font-semibold text-gray-500">{label}</label><input value={String(family[key] ?? "")} onChange={e => set(key)(isFamilyNameField(key) ? uppercaseFamilyName(e.target.value) : e.target.value)} className={readOnly ? readOnlyInput : inp} readOnly={readOnly} /></div>;
 
   return (
-    <section className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+    <section className={`rounded-xl border border-gray-200 bg-gray-50/60 ${compact ? "p-4" : "p-3"}`}>
       <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">{title}</p>
       <p className="mb-3 text-[10px] text-gray-400">{description ?? "Edit once for this account. This does not change the student registration-verification records."}</p>
       <div className="space-y-3">
-        <div className="rounded-lg border border-blue-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-700">Father&apos;s Name</p><div className="grid grid-cols-1 gap-3">{field("First Name", "fatherFirstName")}{field("Middle Name", "fatherMiddleName")}{field("Last Name", "fatherLastName")}<div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={family.fatherSuffix || ""} onChange={e => set("fatherSuffix")(e.target.value)} className={readOnly ? readOnlyInput : inp} disabled={readOnly}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div></div></div>
-        <div className="rounded-lg border border-pink-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-pink-700">Mother&apos;s Name</p><div className="grid grid-cols-1 gap-3">{field("First Name", "motherFirstName")}{field("Middle Name", "motherMiddleName")}{field("Last Name", "motherLastName")}</div></div>
+        <div className="rounded-lg border border-blue-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-700">Father&apos;s Name</p><div className={familyFieldGrid}>{field("First Name", "fatherFirstName")}{field("Middle Name", "fatherMiddleName")}{field("Last Name", "fatherLastName")}<div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={family.fatherSuffix || ""} onChange={e => set("fatherSuffix")(e.target.value)} className={readOnly ? readOnlyInput : inp} disabled={readOnly}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div></div></div>
+        <div className="rounded-lg border border-pink-100 bg-white p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-pink-700">Mother&apos;s Name</p><div className={familyFieldGrid}>{field("First Name", "motherFirstName")}{field("Middle Name", "motherMiddleName")}{field("Last Name", "motherLastName")}</div></div>
         <div className="rounded-lg border border-emerald-100 bg-white p-3">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Guardian Information</p>
-          <div className="grid grid-cols-1 gap-3">
+          <div className={familyFieldGrid}>
             {field("First Name", "guardianFirstName")}{field("Middle Name", "guardianMiddleName")}{field("Last Name", "guardianLastName")}
             <div><label className="mb-1 block text-[10px] font-semibold text-gray-500">Suffix <span className="text-gray-400">(optional)</span></label><select value={family.guardianSuffix || ""} onChange={e => set("guardianSuffix")(e.target.value)} className={readOnly ? readOnlyInput : inp} disabled={readOnly}><option value="">None</option>{SUFFIX_OPTIONS.filter(suffix => suffix !== "None").map(suffix => <option key={suffix} value={suffix}>{suffix}</option>)}</select></div>
             <div>
@@ -1509,6 +1510,7 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  const [activeEditPanel, setActiveEditPanel] = useState<"account" | "students">("account");
 
   const [form, setForm] = useState({
     firstName: user.firstName || "",
@@ -1794,35 +1796,63 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "95vh" }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="edit-parent-account-title" className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center gap-3 border-b border-gray-100 bg-white px-4 py-3 sm:px-6 sm:py-4">
           {step === "confirm" && (
             <button onClick={() => setStep("edit")} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0">
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
-          <div className="flex-1">
-            <h2 className="text-base font-bold text-gray-900">
-              {step === "edit" ? "Edit Parent Account" : step === "confirm" ? "Confirm Changes" : "Changes Saved!"}
-            </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {step === "edit" ? `Editing: ${user.name}` : step === "confirm" ? "Review changes before saving" : "Changes logged in audit trail"}
-            </p>
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            {step === "edit" && (
+              <div aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#274e13]/10 text-xs font-extrabold text-[#274e13]">
+                {user.initials || "PG"}
+              </div>
+            )}
+            <div className="min-w-0">
+              <h2 id="edit-parent-account-title" className="text-base font-bold text-gray-900">
+                {step === "edit" ? "Edit Parent Account" : step === "confirm" ? "Confirm Changes" : "Changes Saved!"}
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-gray-500">
+                {step === "edit" ? `Editing: ${user.name}` : step === "confirm" ? "Review changes before saving" : "Changes logged in audit trail"}
+              </p>
+            </div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close edit Parent account modal" className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 transition shrink-0"><X className="w-4 h-4" /></button>
         </div>
 
         {step === "edit" && (
-          <div className="overflow-y-auto flex-1">
-            <div className="grid grid-cols-1 divide-y divide-gray-100 md:grid-cols-2 md:divide-x md:divide-y-0">
-              <div className="p-6 space-y-4">
+          <>
+            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50">
+              <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
+                <div className="grid grid-cols-2 rounded-xl bg-gray-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveEditPanel("account")}
+                    aria-pressed={activeEditPanel === "account"}
+                    className={`rounded-lg px-3 py-2 text-xs font-bold transition ${activeEditPanel === "account" ? "bg-white text-[#274e13] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  >
+                    Account & Family
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveEditPanel("students")}
+                    aria-pressed={activeEditPanel === "students"}
+                    className={`rounded-lg px-3 py-2 text-xs font-bold transition ${activeEditPanel === "students" ? "bg-white text-[#274e13] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  >
+                    Linked Students ({editableStudents.length})
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1">
+                <div className={activeEditPanel === "account" ? "min-w-0 space-y-5 p-4 sm:p-6" : "hidden"}>
                 {isPendingImportedParent ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Pre-sign-up family record</p>
                     <p className="mt-1 text-xs leading-5 text-amber-700">No parent account exists yet. Update the school verification records below. A saved contact number must be used at signup; if it is blank, the Parent may provide a number during signup.</p>
                   </div>
-                ) : <>
+                ) : <section className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                   <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Parent / Guardian Information</p>
                   <FInput label="Email Address" value={form.email} onChange={v => setForm(p => ({ ...p, email: v }))} />
                   <div>
@@ -1848,19 +1878,20 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                     </select>
                     <p className="mt-1 text-[11px] text-gray-400">This chooses which current family record may claim the school-verified email and phone.</p>
                   </div>
-                </>}
-                <div className="space-y-3 border-t border-gray-100 pt-4">
+                </section>}
+                <section className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Shared Family Details</p>
                   <FamilyInformationCard
                     family={familyDetails}
                     onChange={updateFamilyDetails}
+                    compact
                     readOnly={isPendingImportedParent}
                     description={isPendingImportedParent
                       ? "A Parent account has not been created. Shared details become editable after signup; edit the verification records below for Parent signup."
                       : "Saving a shared edit synchronizes the existing registration-verification records for every linked student."}
                   />
-                </div>
-                <div className="space-y-3 border-t border-gray-100 pt-4">
+                </section>
+                <section className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Verification Records</p>
                   <p className="text-xs leading-5 text-gray-500">These student registration records are the names and recorded contact number Parent signup checks with each student&apos;s LRN. They are shared with the Adviser student edit page.</p>
                   {editableStudents.map((student, index) => (
@@ -1868,11 +1899,12 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                       key={`${student.studentId}-verification-${index}`}
                       family={familyDetailsFromStudent(student)}
                       onChange={updated => updateStudent(index, applyFamilyDetailsToStudent(student, updated))}
+                      compact
                       title={`Verification record · ${student.displayName || student.studentId}`}
                       description={`Student LRN: ${student.studentId || "Not assigned"}`}
                     />
                   ))}
-                  {editableStudents.map((student, index) => (
+                  {isPendingImportedParent && editableStudents.map((student, index) => (
                     <div key={`${student.studentId}-verification-contact-${index}`} className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
                       <label className="mb-1 block text-[10px] font-semibold text-gray-500">Recorded Contact Number <span className="text-gray-400">(optional)</span></label>
                       <div className="relative">
@@ -1890,16 +1922,12 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                           className={`w-full rounded-lg border px-2.5 py-1.5 pl-8 text-xs outline-none transition ${isPendingImportedParent ? "border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#274e13]/20" : "border-gray-100 bg-gray-50 text-gray-500 cursor-not-allowed"}`}
                         />
                       </div>
-                      <p className="mt-1 text-[10px] leading-4 text-gray-400">
-                        {isPendingImportedParent
-                          ? "Leave blank when SF1 has no number. Once saved, a Parent must use this 11-digit number when signing up."
-                          : "This follows the active Parent account contact number. Update that account above if the number changes."}
-                      </p>
+                      <p className="mt-1 text-[10px] leading-4 text-gray-400">Leave blank when SF1 has no number. Once saved, a Parent must use this 11-digit number when signing up.</p>
                     </div>
                   ))}
-                </div>
+                </section>
                 {canCorrectStudentLink && (
-                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                  <section className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Move Student to This Parent</p>
                       <p className="mt-1 text-xs leading-5 text-gray-500">Enter the student&apos;s LRN, find the student, then confirm the move. The correct Parent or Guardian details are applied automatically. This works before signup or while the record is inactive.</p>
@@ -1940,6 +1968,7 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                             setLinkFamilyDetails(updated);
                             setLinkConfirmed(false);
                           }}
+                          compact
                           title="Existing verification record"
                           description="These are this student's existing school verification fields. The Parent or Guardian name for this correction is taken from the saved account record."
                         />
@@ -1962,9 +1991,9 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                       </div>
                     )}
                     {linkMessage && <p className={`text-[11px] leading-4 ${linkCandidate || /linked|Review/.test(linkMessage) ? "text-[#274e13]" : "text-red-600"}`}>{linkMessage}</p>}
-                  </div>
+                  </section>
                 )}
-                {!isPendingImportedParent && <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
+                {!isPendingImportedParent && <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">Password Change</p>
                   <div className="space-y-3">
                     <div>
@@ -1997,23 +2026,35 @@ function EditParentModal({ user, onClose, onSave, onAudit, onLinked }: {
                     </div>
                   </div>
                   {passwordError && <p className="mt-2 text-[11px] font-semibold text-red-600">{passwordError}</p>}
-                </div>}
+                </section>}
               </div>
-              <div className="p-6 space-y-3 flex flex-col">
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Linked Students ({editableStudents.length})</p>
+                <aside className={activeEditPanel === "students" ? "min-w-0 bg-slate-50 p-4 sm:p-6" : "hidden"}>
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[#274e13]/10 bg-[#f7fbf4] px-4 py-3">
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-[#274e13]">Linked Students</p>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">Expand a student to edit school details. RFID remains managed in the RFID module.</p>
+                    </div>
+                    <span className="rounded-full bg-[#274e13]/10 px-2.5 py-1 text-xs font-bold text-[#274e13]">{editableStudents.length} linked</span>
+                  </div>
+                  <div className="space-y-3">
                 {editableStudents.map((s, i) => (
                   <StudentInfoCard key={i} student={s} index={i} total={editableStudents.length} onChange={u => updateStudent(i, u)} />
                 ))}
-                <div className="pt-3 border-t border-gray-100 flex justify-between gap-3 mt-auto">
-                  <button onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">Cancel</button>
-                  <button onClick={handleReview} disabled={!hasChanges}
-                    className="flex items-center gap-2 px-6 py-2.5 text-sm font-bold text-white rounded-xl transition disabled:opacity-40 hover:opacity-90 bg-[#274e13]">
-                    <Save className="w-4 h-4" /> Review Changes
-                  </button>
-                </div>
+                  </div>
+                </aside>
               </div>
             </div>
-          </div>
+            <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-4">
+              <p className="text-xs text-gray-500">Review changes before saving them to the Parent account.</p>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="flex-1 rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 sm:flex-none">Cancel</button>
+                <button onClick={handleReview} disabled={!hasChanges}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#274e13] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none sm:px-6">
+                  <Save className="w-4 h-4" /> Review Changes
+                </button>
+                </div>
+              </div>
+          </>
         )}
 
         {step === "confirm" && (
@@ -2357,9 +2398,11 @@ export default function UserManagementPage() {
   const [adviserTransfersConfigured, setAdviserTransfersConfigured] = useState(true);
   const [sectionCatalog, setSectionCatalog] = useState<{ grade: string; name: string }[]>([]);
   const [bulkDeletionCandidates, setBulkDeletionCandidates] = useState<{
+    advisers: Array<{ id: number; name: string; email: string; classGrade: string; employeeId?: string }>;
+    guidance: Array<{ id: number; name: string; email: string; classGrade: string; employeeId?: string }>;
     parents: Array<{ id: number; name: string; email: string; students: Array<{ name: string; lrn: string; grade: string; section: string }> }>;
     students: Array<{ id: number; name: string; lrn: string; grade: string; section: string }>;
-  }>({ parents: [], students: [] });
+  }>({ advisers: [], guidance: [], parents: [], students: [] });
   const [showBulkDeletion, setShowBulkDeletion] = useState(false);
   const [showAdviserTransfers, setShowAdviserTransfers] = useState(false);
   const [deletionActionError, setDeletionActionError] = useState("");
@@ -2397,7 +2440,9 @@ export default function UserManagementPage() {
 
       if (usersData.success) {
         setSectionCatalog(usersData.sections ?? []);
-        setBulkDeletionCandidates(usersData.bulkDeletionCandidates ?? { parents: [], students: [] });
+        setBulkDeletionCandidates(usersData.bulkDeletionCandidates ?? {
+          advisers: [], guidance: [], parents: [], students: [],
+        });
         const deletionMap = new Map<string, any>();
         (deletionsData.deletions ?? []).forEach((d: any) => {
           if (d.status === "Scheduled") deletionMap.set(`${d.target_type}:${d.target_id}`, d);
@@ -2869,7 +2914,7 @@ export default function UserManagementPage() {
           onSave={updated => { setUsers(prev => prev.map(u => u.id === updated.id ? updated : u)); setEditUser(null); }}
           onLinked={() => loadData({ background: true })} />
       )}
-      {showBulkDeletion && <BulkDeletionModal users={users} candidates={bulkDeletionCandidates} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
+      {showBulkDeletion && <BulkDeletionModal candidates={bulkDeletionCandidates} queue={scheduledDeletions} sections={sectionCatalog} onClose={() => setShowBulkDeletion(false)} onChanged={loadData} />}
       {showAdviserTransfers && <AdviserTransferQueueModal configured={adviserTransfersConfigured} transfers={scheduledAdviserTransfers} onClose={() => setShowAdviserTransfers(false)} onChanged={loadData} />}
     </div>
   );

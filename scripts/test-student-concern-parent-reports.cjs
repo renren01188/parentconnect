@@ -62,7 +62,8 @@ assert.match(parentDashboard, /\["attendance", "reports", "notifications", "anno
 // as its visible text/read state. It never needs sample dashboard data.
 assert.match(parentNotifications, /\.eq\("parent_id", session\.id\)[\s\S]*?\.in\("student_id", \[\.\.\.studentNames\.keys\(\)\]\)[\s\S]*?\.ilike\("subject", "\[Student Concern\]%"\)/);
 assert.match(parentNotifications, /\.from\("parent_adviser_report_messages"\)[\s\S]*?\.in\("sender_role", \["adviser", "guidance", "principal", "subject_teacher"\]\)/);
-assert.match(parentNotifications, /title: isStudentConcern \? report\.subject : "New Subject Teacher Report"/);
+assert.match(parentNotifications, /const subjectTeacherReportIds = new Set<number>\(\);/);
+assert.match(parentNotifications, /title: isSubjectTeacherReport \? "New Subject Teacher Report"/);
 assert.match(
   parentNotifications,
   /isSubjectTeacherReport \? "A subject teacher submitted a report for your child\." : report\.subject/,

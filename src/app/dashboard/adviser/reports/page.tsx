@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     AlertTriangle, Clock, CheckCircle, Eye,
@@ -51,6 +51,10 @@ interface ParentGroup {
     maxConcernLevel: number;
 }
 interface StudentGroup {
+    key: string;
+    /** The reporter shown in Panel 1; student reports keep the student name. */
+    list_name: string;
+    list_role?: "Subject Teacher";
     student_name: string;
     student_id: string;
     grade_level: string;
@@ -247,11 +251,29 @@ function groupByParent(reports: Report[]): ParentGroup[] {
 function groupByStudent(reports: StudentReport[]): StudentGroup[] {
     const map: Record<string, StudentGroup> = {};
     for (const r of reports) {
-        if (!map[r.student_name]) {
-            map[r.student_name] = { student_name: r.student_name, student_id: r.student_id, grade_level: r.grade_level, section: r.section, initials: getStudentInitials(r.student_name), reports: [], unread: 0 };
+        const isSubjectTeacherReport = r.submitted_by_role === "Subject Teacher";
+        const listName = isSubjectTeacherReport ? r.submitted_by_name || "Subject Teacher" : r.student_name;
+        // A Subject Teacher's reports for one learner share a panel, but are
+        // never mixed with that learner's self-submitted reports.
+        const key = isSubjectTeacherReport
+            ? `subject-teacher:${r.student_id}:${listName.toLowerCase()}`
+            : `student:${r.student_id}`;
+        if (!map[key]) {
+            map[key] = {
+                key,
+                list_name: listName,
+                list_role: isSubjectTeacherReport ? "Subject Teacher" : undefined,
+                student_name: r.student_name,
+                student_id: r.student_id,
+                grade_level: r.grade_level,
+                section: r.section,
+                initials: getStudentInitials(listName),
+                reports: [],
+                unread: 0,
+            };
         }
-        map[r.student_name].reports.push(r);
-        if (r.status === "New") map[r.student_name].unread++;
+        map[key].reports.push(r);
+        if (r.status === "New") map[key].unread++;
     }
     for (const g of Object.values(map)) {
         g.reports.sort(newestReportFirst);
@@ -783,8 +805,13 @@ function NotifyParentModal({
     onSend: (studRep: StudentReport, message: string) => Promise<void | Report>;
     onClose: () => void;
 }) {
-    const concernText = studRep.title || studRep.description;
-    const defaultMsg = `Hi, I wanted to bring to your attention a concern regarding your child ${studRep.student_name}.\n\nConcern: "${concernText}"\n\nKindly reach out so we can discuss how to best support your child. Thank you.`;
+    const isSubjectTeacherReport = studRep.submitted_by_role === "Subject Teacher";
+    const concernText = isSubjectTeacherReport
+        ? studRep.description?.trim() || "A concern was shared by school staff."
+        : studRep.title || studRep.description;
+    const defaultMsg = isSubjectTeacherReport
+        ? `Hi, I wanted to bring to your attention a concern regarding your child ${studRep.student_name}.\n\nConcern shared by school staff: "${concernText}"\n\nKindly reach out so we can discuss how to best support your child. Thank you.`
+        : `Hi, I wanted to bring to your attention a concern regarding your child ${studRep.student_name}.\n\nConcern: "${concernText}"\n\nKindly reach out so we can discuss how to best support your child. Thank you.`;
 
     const [message, setMessage] = useState(defaultMsg);
     const [sent, setSent] = useState(false);
@@ -998,9 +1025,21 @@ function ReportsPageContent() {
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
     const [unlockedStudentReports, setUnlockedStudentReports] = useState<Set<number>>(new Set()); // ✅ add here
 
-    const allReportCategories = Array.from(
-        new Set(reports.flatMap(r => r.categories))
-    ).sort();
+    const reportsForCategoryFilter = useMemo(() => reports.filter((report) => {
+        if (filterTab === "Pending") return adviserReportStatusCategory(report) === "pending";
+        if (filterTab === "Ongoing") return adviserReportStatusCategory(report) === "ongoing";
+        if (filterTab === "Escalated") return adviserReportStatusCategory(report) === "escalated";
+        return true;
+    }), [filterTab, reports]);
+    const allReportCategories = useMemo(() => Array.from(
+        new Set(reportsForCategoryFilter.flatMap(r => r.categories))
+    ).sort(), [reportsForCategoryFilter]);
+
+    useEffect(() => {
+        if (categoryFilter !== "All" && !allReportCategories.includes(categoryFilter)) {
+            setCategoryFilter("All");
+        }
+    }, [allReportCategories, categoryFilter]);
 
     const adminMessageKey = (message: AdminMessage) => message.conversationId ?? `principal-message:${message.id}`;
 
@@ -1093,7 +1132,7 @@ function ReportsPageContent() {
         setSelectedStudRep(current => current ? nextReports.find(r => r.id === current.id) ?? current : current);
         setSelectedStudent(current => {
             if (!current) return current;
-            return groupByStudent(nextReports).find(group => group.student_id === current.student_id) ?? current;
+            return groupByStudent(nextReports).find(group => group.key === current.key) ?? current;
         });
     }, []);
 
@@ -1738,7 +1777,7 @@ function ReportsPageContent() {
                                 return (
                                     <button key={tab} onClick={() => { setLeftTab(tab); setSelectedParent(null); setSelectedReport(null); setSelectedAdminMsg(null); setSelectedStudent(null); setSelectedStudRep(null); setViewStep("list"); }}
                                         className={`flex min-h-11 shrink-0 items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${active ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"}`}>
-                                        <span className="flex items-center gap-2.5">{icons[tab]}{tab === "Principal" ? "Messages" : `${tab} Reports`}</span>
+                                        <span className="flex items-center gap-2.5">{icons[tab]}{tab === "Principal" ? "Messages" : tab === "Student" ? "Student & Subject Teacher Reports" : `${tab} Reports`}</span>
                                         {tabCounts[tab] > 0 && (
                                             <span className={`text-[11px] font-extrabold px-1.5 py-0.5 rounded-full ${active ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}>{tabCounts[tab]}</span>
                                         )}
@@ -1780,10 +1819,10 @@ function ReportsPageContent() {
                                             background: categoryFilter !== "All" ? "#ecfdf5" : "#fff",
                                             color: categoryFilter !== "All" ? "#065f46" : "#475569",
                                         }}>
-                                        <option value="All">All Categories ({reports.length})</option>
+                                        <option value="All">All Categories ({reportsForCategoryFilter.length})</option>
                                         {allReportCategories.map(cat => (
                                             <option key={cat} value={cat}>
-                                                {cat} ({reports.filter(r => r.categories.includes(cat)).length})
+                                                {cat} ({reportsForCategoryFilter.filter(r => r.categories.includes(cat)).length})
                                             </option>
                                         ))}
                                     </select>
@@ -1841,18 +1880,18 @@ function ReportsPageContent() {
                         {leftTab === "Student" && (
                             <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
                                 {studentGroups.map(g => {
-                                    const isActive = selectedStudent?.student_name === g.student_name;
+                                    const isActive = selectedStudent?.key === g.key;
                                     return (
-                                        <button key={g.student_name} onClick={() => { setSelectedStudent(g); setSelectedStudRep(null); setViewStep("reports"); }}
+                                        <button key={g.key} onClick={() => { setSelectedStudent(g); setSelectedStudRep(null); setViewStep("reports"); }}
                                             className={`w-full text-left rounded-xl px-3 py-2.5 transition border ${isActive ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                             <div className="flex items-center gap-2.5">
-                                                <div className={`w-9 h-9 rounded-full ${getAvatarColor(g.student_name)} flex items-center justify-center text-white text-xs font-extrabold shrink-0`}>{g.initials}</div>
+                                                <div className={`w-9 h-9 rounded-full ${getAvatarColor(g.list_name)} flex items-center justify-center text-white text-xs font-extrabold shrink-0`}>{g.initials}</div>
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between">
-                                                        <p className="text-xs font-bold text-slate-800 truncate">{g.student_name}</p>
+                                                        <p className="text-xs font-bold text-slate-800 truncate">{g.list_name}</p>
                                                         {g.unread > 0 && <span className="text-[10px] font-extrabold bg-red-500 text-white rounded-full px-1.5 py-0.5">{g.unread}</span>}
                                                     </div>
-                                                    <p className="text-[11px] text-slate-400">{g.grade_level} · {g.section}</p>
+                                                    <p className="text-[11px] text-slate-400">{g.list_role ?? `${g.grade_level} · ${g.section}`}</p>
                                                     <p className="text-[11px] text-slate-400">{g.reports.length} concern{g.reports.length !== 1 ? "s" : ""}</p>
                                                 </div>
                                             </div>
@@ -1898,14 +1937,13 @@ function ReportsPageContent() {
 
                     {/* ══ SLIDE 2 — Panel 2 (report list for selected parent/student) ══ */}
                     <div className={panelClass(showReportsPanel, "bg-white", "w-full max-w-[420px]")}>
-                        {/* Back button */}
                         <div className="px-3 pt-3 pb-1 border-b border-slate-100 flex items-center gap-2">
                             <button onClick={() => { setSelectedParent(null); setSelectedStudent(null); setSelectedReport(null); setSelectedStudRep(null); setViewStep("list"); }}
                                 className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-emerald-600 transition px-2 py-1.5 rounded-lg hover:bg-emerald-50">
                                 <ChevronRight className="w-3.5 h-3.5 rotate-180" /> Back
                             </button>
                             <span className="text-xs font-semibold text-slate-700 truncate">
-                                {leftTab === "Parent" ? (selectedParent?.parent_name ?? "") : (selectedStudent?.student_name ?? "")}
+                                {leftTab === "Parent" ? (selectedParent?.parent_name ?? "") : (selectedStudent?.list_name ?? "")}
                             </span>
                         </div>
 
@@ -1978,29 +2016,42 @@ function ReportsPageContent() {
                             <>
                                 <div className="px-4 py-4 border-b border-slate-100">
                                     <div className="flex items-center gap-3">
-                                        <div className={`w-10 h-10 rounded-full ${getAvatarColor(selectedStudent.student_name)} flex items-center justify-center text-white text-sm font-extrabold shrink-0`}>{selectedStudent.initials}</div>
+                                        <div className={`w-10 h-10 rounded-full ${getAvatarColor(selectedStudent.list_name)} flex items-center justify-center text-white text-sm font-extrabold shrink-0`}>{selectedStudent.initials}</div>
                                         <div>
-                                            <p className="text-sm font-extrabold text-slate-900">{selectedStudent.student_name}</p>
-                                            <p className="text-xs text-slate-400">{selectedStudent.grade_level} · {selectedStudent.section}</p>
+                                            <p className="text-sm font-extrabold text-slate-900">{selectedStudent.list_name}</p>
+                                            <p className="text-xs text-slate-400">{selectedStudent.list_role ?? `${selectedStudent.grade_level} · ${selectedStudent.section}`}</p>
                                         </div>
                                     </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
                                     {/* Derive live from studentReps so status badges update immediately */}
                                     {studentReps
-                                        .filter(r => r.student_name === selectedStudent.student_name)
+                                        .filter(r => {
+                                            const isSubjectTeacherReport = r.submitted_by_role === "Subject Teacher";
+                                            const listName = isSubjectTeacherReport ? r.submitted_by_name || "Subject Teacher" : r.student_name;
+                                            const groupKey = isSubjectTeacherReport
+                                                ? `subject-teacher:${r.student_id}:${listName.toLowerCase()}`
+                                                : `student:${r.student_id}`;
+                                            return groupKey === selectedStudent.key;
+                                        })
                                         .sort(newestReportFirst)
-                                        .map(r => (
+                                        .map(r => {
+                                            const isSubjectTeacherReport = r.submitted_by_role === "Subject Teacher";
+                                            return (
                                             <button key={r.id} onClick={() => { setSelectedStudRep(r); setViewStep("detail"); }}
                                                 className={`w-full text-left rounded-xl px-3 py-3 border transition ${selectedStudRep?.id === r.id ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-100 hover:bg-slate-50"}`}>
                                                 <div className="flex items-start justify-between gap-2 mb-1">
-                                                    <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.title}</p>
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="text-xs font-bold text-slate-800 leading-snug">{isSubjectTeacherReport ? `Student: ${r.student_name}` : r.title}</p>
+                                                        {isSubjectTeacherReport && <p className="mt-0.5 text-[10px] font-semibold text-blue-700">Subject Teacher Report</p>}
+                                                    </div>
                                                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStudentStatusStyle(r.status)}`}>{r.status}</span>
                                                 </div>
                                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${getStudentCategoryStyle(r.category)}`}>{r.category}</span>
                                                 <p className="text-[10px] text-slate-400 mt-1.5">{r.submitted_at}</p>
                                             </button>
-                                        ))}
+                                            );
+                                        })}
                                 </div>
                             </>
                         )}
@@ -2016,21 +2067,20 @@ function ReportsPageContent() {
 
                     {/* ══ SLIDE 3 — Panel 3 (detail view) ══ */}
                     <div className={`${panelClass(viewStep === "detail" || showEmptyDetail, "bg-slate-50", detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]", detailPosition)} ${showEmptyDetail ? "hidden md:flex" : ""}`}>
-                        {/* Back button */}
-                        <div className="px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2 shrink-0">
-                            <button onClick={() => {
-                                setSelectedReport(null); setSelectedStudRep(null); setSelectedAdminMsg(null);
-                                if ((leftTab === "Parent" && selectedParent) || (leftTab === "Student" && selectedStudent)) setViewStep("reports");
-                                else setViewStep("list");
-                            }}
-                                className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-emerald-600 transition px-2 py-1.5 rounded-lg hover:bg-emerald-50">
-                                <ChevronRight className="w-3.5 h-3.5 rotate-180" /> Back
+                        <div className="flex shrink-0 items-center border-b border-slate-100 bg-white px-3 py-2 md:hidden">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSelectedReport(null); setSelectedStudRep(null); setSelectedAdminMsg(null);
+                                    if ((leftTab === "Parent" && selectedParent) || (leftTab === "Student" && selectedStudent)) setViewStep("reports");
+                                    else setViewStep("list");
+                                }}
+                                aria-label="Back to reports"
+                                className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-600"
+                            >
+                                <ChevronRight className="h-4 w-4 rotate-180" />
                             </button>
-                            <span className="text-xs font-semibold text-slate-700 truncate">
-                                {selectedReport?.subject ?? selectedStudRep?.title ?? selectedAdminMsg?.subject ?? ""}
-                            </span>
                         </div>
-
                         {!selectedReport && !selectedStudRep && !selectedAdminMsg && leftTab !== "Principal" && (
                             <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-slate-50 text-slate-400 px-6 text-center">
                                 <MessageSquare className="w-10 h-10 opacity-30" />
@@ -2318,6 +2368,13 @@ function ReportsPageContent() {
                         {leftTab === "Student" && selectedStudRep && (() => {
                             const isLocked = !unlockedStudentReports.has(selectedStudRep.id) && selectedStudRep.status === "New";
                             const isParentNotified = notifiedStudentReports.has(selectedStudRep.id);
+                            const isSubjectTeacherReport = selectedStudRep.submitted_by_role === "Subject Teacher";
+                            const detailHeading = isSubjectTeacherReport
+                                ? `Student: ${selectedStudRep.student_name}`
+                                : selectedStudRep.title;
+                            const displayCategories = selectedStudRep.subject_teacher_categories?.length
+                                ? selectedStudRep.subject_teacher_categories
+                                : [selectedStudRep.category];
 
                             // ── LOCKED view ──
                             if (isLocked) return (
@@ -2328,10 +2385,15 @@ function ReportsPageContent() {
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide">🔒 Pending Review</span>
                                                 </div>
-                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug mt-1">{selectedStudRep.title}</h2>
+                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug mt-1">{detailHeading}</h2>
+                                                {isSubjectTeacherReport && (
+                                                    <p className="mt-2 text-xs font-semibold text-blue-700">Submitted by: {selectedStudRep.submitted_by_name} · Subject Teacher</p>
+                                                )}
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedStudRep.submitted_at}</p>
                                                 <div className="flex flex-wrap gap-1.5 mt-2">
-                                                    <span className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold border ${getStudentCategoryStyle(selectedStudRep.category)}`}>{selectedStudRep.category}</span>
+                                                    {displayCategories.map((category) => (
+                                                        <span key={category} className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold border ${getStudentCategoryStyle(category as StudentReportCategory)}`}>{category}</span>
+                                                    ))}
                                                 </div>
                                             </div>
                                             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStudentStatusStyle(selectedStudRep.status)}`}>{selectedStudRep.status}</span>
@@ -2390,9 +2452,16 @@ function ReportsPageContent() {
                                     <div className="px-6 py-5 bg-white border-b border-slate-100">
                                         <div className="flex items-start justify-between gap-4">
                                             <div>
-                                                <h2 className="text-base font-extrabold text-slate-900">{selectedStudRep.title}</h2>
+                                                <h2 className="text-base font-extrabold text-slate-900">{detailHeading}</h2>
+                                                {isSubjectTeacherReport && (
+                                                    <p className="mt-2 text-xs font-semibold text-blue-700">Submitted by: {selectedStudRep.submitted_by_name} · Subject Teacher</p>
+                                                )}
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedStudRep.submitted_at}</p>
-                                                <span className={`inline-block mt-2 text-[11px] px-2 py-0.5 rounded-lg font-semibold ${getStudentCategoryStyle(selectedStudRep.category)}`}>{selectedStudRep.category}</span>
+                                                <div className="flex flex-wrap gap-1.5 mt-2">
+                                                    {displayCategories.map((category) => (
+                                                        <span key={category} className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold border ${getStudentCategoryStyle(category as StudentReportCategory)}`}>{category}</span>
+                                                    ))}
+                                                </div>
                                             </div>
                                             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${getStudentStatusStyle(selectedStudRep.status)}`}>{selectedStudRep.status}</span>
                                         </div>
@@ -2400,11 +2469,20 @@ function ReportsPageContent() {
 
                                     {/* Message body + replies */}
                                     <div className="flex-1 overflow-y-auto px-6 py-5">
-                                        {/* Student bubble */}
+                                        {/* Student / Subject Teacher opening report */}
                                         <div className="flex items-start gap-3 mb-5">
                                             <div className={`w-9 h-9 rounded-full ${getAvatarColor(selectedStudRep.student_name)} flex items-center justify-center text-white text-xs font-extrabold shrink-0 mt-0.5`}>{getStudentInitials(selectedStudRep.student_name)}</div>
                                             <div>
-                                                <p className="text-xs font-bold text-slate-800 mb-1">{selectedStudRep.student_name} <span className="font-normal text-slate-400">· {selectedStudRep.grade_level}, {selectedStudRep.section}</span></p>
+                                                <p className="text-xs font-bold text-slate-800 mb-1">
+                                                    {isSubjectTeacherReport
+                                                        ? `Student: ${selectedStudRep.student_name}`
+                                                        : selectedStudRep.student_name}
+                                                    <span className="font-normal text-slate-400">
+                                                        {isSubjectTeacherReport
+                                                            ? ` · ${selectedStudRep.grade_level}, ${selectedStudRep.section} · Submitted by: ${selectedStudRep.submitted_by_name} (Subject Teacher)`
+                                                            : ` · ${selectedStudRep.grade_level}, ${selectedStudRep.section}`}
+                                                    </span>
+                                                </p>
                                                 <div className="bg-white rounded-2xl rounded-tl-none px-4 py-3 shadow-sm border border-slate-100 text-sm text-slate-700 leading-relaxed">
                                                     {selectedStudRep.description}
                                                 </div>

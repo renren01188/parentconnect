@@ -30,7 +30,7 @@ type ParentLinkState = "auto" | "ambiguous" | "none";
 type ParentLinkSuggestion = {
   role: ParentFamilyRole;
   state: ParentLinkState;
-  candidates: ActiveParentLinkCandidate[];
+  candidates: Array<ActiveParentLinkCandidate & { isAlreadyLinked: boolean }>;
 };
 type ParentLinkSelections = Record<string, Partial<Record<ParentFamilyRole, string | number | null>>>;
 
@@ -89,17 +89,60 @@ async function getParentLinkSuggestions(rows: ImportRow[]) {
     return next;
   };
 
-  return Object.fromEntries(await Promise.all(rows.map(async (row) => {
+  const suggestionsByLrn = Object.fromEntries(await Promise.all(rows.map(async (row) => {
     const suggestions = await Promise.all(familyIdentities(row).map(async (identity) => {
       const candidates = await candidatesFor(identity);
       return {
         role: identity.role,
         state: candidates.length === 1 ? "auto" : candidates.length > 1 ? "ambiguous" : "none",
-        candidates,
+        candidates: candidates.map((candidate) => ({ ...candidate, isAlreadyLinked: false })),
       } satisfies ParentLinkSuggestion;
     }));
     return [row.lrn, suggestions] as const;
   }))) as Record<string, ParentLinkSuggestion[]>;
+
+  // The normal preview only asks for suggestions for new learners, so these
+  // links will usually be absent. Retaining this check makes the status exact
+  // if a legacy/pre-created relationship does exist: never call it "already
+  // linked" merely because a Parent account is a name match.
+  const parentIds = [...new Set(Object.values(suggestionsByLrn)
+    .flatMap((suggestions) => suggestions.flatMap((suggestion) => suggestion.candidates.map((candidate) => candidate.id))))];
+  const studentIds = [...new Set(rows.map((row) => row.lrn))];
+  if (!parentIds.length || !studentIds.length) return suggestionsByLrn;
+
+  const [linkResult, legacyParentResult] = await Promise.all([
+    supabase
+      .from("parent_student_links")
+      .select("parent_id, student_id")
+      .in("parent_id", parentIds)
+      .in("student_id", studentIds),
+    supabase
+      .from("parents")
+      .select("id, student_id")
+      .in("id", parentIds)
+      .in("student_id", studentIds),
+  ]);
+  if (linkResult.error) throw linkResult.error;
+  if (legacyParentResult.error) throw legacyParentResult.error;
+
+  const existingLinkKeys = new Set<string>();
+  for (const link of linkResult.data ?? []) {
+    existingLinkKeys.add(`${link.parent_id}:${link.student_id}`);
+  }
+  for (const parent of legacyParentResult.data ?? []) {
+    existingLinkKeys.add(`${parent.id}:${parent.student_id}`);
+  }
+
+  return Object.fromEntries(Object.entries(suggestionsByLrn).map(([lrn, suggestions]) => [
+    lrn,
+    suggestions.map((suggestion) => ({
+      ...suggestion,
+      candidates: suggestion.candidates.map((candidate) => ({
+        ...candidate,
+        isAlreadyLinked: existingLinkKeys.has(`${candidate.id}:${lrn}`),
+      })),
+    })),
+  ])) as Record<string, ParentLinkSuggestion[]>;
 }
 
 function parseSheet(buffer: ArrayBuffer) {
@@ -157,11 +200,28 @@ export async function POST(request: NextRequest) {
     if (!/\.(xls|xlsx)$/i.test(file.name)) return NextResponse.json({ success: false, message: "Only .xls and .xlsx files are supported." }, { status: 400 });
     const result = parseSheet(await file.arrayBuffer());
     const lrns = result.rows.map(row => row.lrn);
-    const { data: existing, error } = lrns.length ? await supabase.from("students").select("student_id").in("student_id", lrns) : { data: [], error: null };
+    const { data: existing, error } = lrns.length
+      ? await supabase
+        .from("students")
+        .select("student_id, first_name, middle_name, last_name, suffix, section")
+        .in("student_id", lrns)
+      : { data: [], error: null };
     if (error) throw error;
-    const existingLrns = (existing ?? []).map(row => row.student_id);
-    const parentLinkSuggestions = await getParentLinkSuggestions(result.rows);
-    return NextResponse.json({ success: true, ...result, existingLrns, parentLinkSuggestions });
+    const existingStudents = (existing ?? [])
+      .map((student) => ({
+        lrn: student.student_id,
+        fullName: [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(" ") || "Unnamed student",
+        section: student.section?.trim() || "No section assigned",
+      }))
+      .sort((left, right) => left.fullName.localeCompare(right.fullName) || left.lrn.localeCompare(right.lrn));
+    const existingLrns = existingStudents.map((student) => student.lrn);
+    const existingLrnSet = new Set(existingLrns);
+    // Existing learners are visible in the preview but are never reviewed for
+    // a new Parent link or sent back to the save endpoint.
+    const parentLinkSuggestions = await getParentLinkSuggestions(
+      result.rows.filter((row) => !existingLrnSet.has(row.lrn)),
+    );
+    return NextResponse.json({ success: true, ...result, existingLrns, existingStudents, parentLinkSuggestions });
   } catch (error) { return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Could not analyze the file." }, { status: 500 }); }
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     CheckCircle, Eye,
@@ -1174,10 +1174,20 @@ function ReportsPageContent() {
         loadGuidanceStaffMessages().catch((error) => console.warn("Unable to load guidance staff messages:", error));
     }, []);
 
-    // All categories across escalated parent reports (for dropdown)
-    const allReportCategories = Array.from(
-        new Set(reports.flatMap(r => r.categories))
-    ).sort();
+    // Keep category choices and counts scoped to the active report status.
+    const reportsForCategoryFilter = useMemo(
+        () => filterGuidanceReports(reports, filterTab, "All"),
+        [filterTab, reports],
+    );
+    const allReportCategories = useMemo(() => Array.from(
+        new Set(reportsForCategoryFilter.flatMap(r => r.categories))
+    ).sort(), [reportsForCategoryFilter]);
+
+    useEffect(() => {
+        if (categoryFilter !== "All" && !allReportCategories.includes(categoryFilter)) {
+            setCategoryFilter("All");
+        }
+    }, [allReportCategories, categoryFilter]);
 
     // Tracks which reports the adviser has explicitly unlocked (clicked "See the concern")
     const [unlockedReports, setUnlockedReports] = useState<Set<number>>(new Set());
@@ -1762,10 +1772,10 @@ function ReportsPageContent() {
                                             background: categoryFilter !== "All" ? "#ecfdf5" : "#fff",
                                             color: categoryFilter !== "All" ? "#065f46" : "#475569",
                                         }}>
-                                        <option value="All">All Categories ({reports.length})</option>
+                                        <option value="All">All Categories ({reportsForCategoryFilter.length})</option>
                                         {allReportCategories.map(cat => (
                                             <option key={cat} value={cat}>
-                                                {cat} ({reports.filter(r => r.categories.includes(cat)).length})
+                                                {cat} ({reportsForCategoryFilter.filter(r => r.categories.includes(cat)).length})
                                             </option>
                                         ))}
                                     </select>
@@ -1896,7 +1906,6 @@ function ReportsPageContent() {
 
                     {/* ══ SLIDE 2 — Panel 2 (report list for selected parent) ══ */}
                     <div className={panelClass(showReportsPanel, "bg-white", `guidance-reports-sublist-panel w-full max-w-[420px] ${viewStep === "detail" ? "guidance-mobile-hide-on-detail" : ""}`)}>
-                        {/* Back button */}
                         <div className="px-3 pt-3 pb-1 border-b border-slate-100 flex items-center gap-2">
                             <button onClick={() => { setSelectedParent(null); setSelectedReport(null); setViewStep("list"); }}
                                 className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-sky-600 transition px-2 py-1.5 rounded-lg hover:bg-sky-50">
@@ -1988,21 +1997,20 @@ function ReportsPageContent() {
 
                     {/* ══ SLIDE 3 — Panel 3 (detail view) ══ */}
                     <div className={panelClass(viewStep === "detail", "bg-slate-50", `guidance-reports-detail-panel ${detailSideBySide ? "right-0 w-auto" : "w-full max-w-[860px]"}`, detailPosition)}>
-                        {/* Back button */}
-                        <div className="px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2 shrink-0">
-                            <button onClick={() => {
-                                setSelectedReport(null); setSelectedAdminMsg(null);
-                                if (leftTab === "Parent" && selectedParent) setViewStep("reports");
-                                else setViewStep("list");
-                            }}
-                                className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-sky-600 transition px-2 py-1.5 rounded-lg hover:bg-sky-50">
-                                <ChevronRight className="w-3.5 h-3.5 rotate-180" /> Back
+                        <div className="flex shrink-0 items-center border-b border-slate-100 bg-white px-3 py-2 md:hidden">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSelectedReport(null); setSelectedAdminMsg(null);
+                                    if (leftTab === "Parent" && selectedParent) setViewStep("reports");
+                                    else setViewStep("list");
+                                }}
+                                aria-label="Back to reports"
+                                className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-sky-50 hover:text-sky-600"
+                            >
+                                <ChevronRight className="h-4 w-4 rotate-180" />
                             </button>
-                            <span className="text-xs font-semibold text-slate-700 truncate">
-                                {selectedReport?.subject ?? selectedAdminMsg?.subject ?? ""}
-                            </span>
                         </div>
-
                         {/* ── Parent report detail ── */}
                         {leftTab === "Parent" && selectedReport && (() => {
                             const isGuidanceEsc = guidanceEscalated[selectedReport.id];

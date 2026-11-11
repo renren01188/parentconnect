@@ -793,6 +793,20 @@ export async function GET(request: NextRequest) {
     // The modal needs a compact, unpaginated source for a genuine bulk action.
     // Do not send full editable profiles simply to select records for archival.
     const bulkDeletionCandidates = {
+      advisers: adviserRows.map((adviser) => ({
+        id: Number(adviser.accountIds?.[0]),
+        name: adviser.name,
+        email: adviser.email,
+        classGrade: adviser.classGrade,
+        employeeId: adviser.employeeId,
+      })),
+      guidance: guidanceRows.map((guidance) => ({
+        id: Number(guidance.accountIds?.[0]),
+        name: guidance.name,
+        email: guidance.email,
+        classGrade: guidance.classGrade,
+        employeeId: guidance.employeeId,
+      })),
       parents: parentRows.map((parent) => ({
         id: Number(parent.accountIds?.[0]),
         name: parent.name,

@@ -8,6 +8,9 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const parentHistory = read("src/app/api/attendance/parent-history/route.ts");
 const parentAttendance = read("src/app/dashboard/parent/attendance/page.tsx");
+const parentDashboard = read("src/app/dashboard/parent/page.tsx");
+const parentNotifications = read("src/app/api/parents/notifications/route.ts");
+const adviserNotifications = read("src/app/api/adviser/notifications/route.ts");
 
 // The API must use the active school year's explicit date range and page
 // through every row rather than showing an all-time or response-capped total.
@@ -23,9 +26,22 @@ assert.match(parentHistory, /isScheduledAttendanceDate/);
 assert.match(parentHistory, /school_holidays/);
 assert.match(parentHistory, /class_sessions/);
 assert.match(parentHistory, /todayClassStatus: hasClassToday \? "Scheduled" : "No Class For Today"/);
-const parentDashboard = read("src/app/dashboard/parent/page.tsx");
 assert.match(parentDashboard, /data\.todayClassStatus !== "No Class For Today"/);
 assert.match(parentDashboard, /No Class For Today/);
+
+// An automatic Absent Time Out confirms that the learner never checked out.
+// The Parent retains the actual Time In but must not see an invented Time Out
+// or an RFID-verified "at school" banner. Both Parent and Adviser feeds must
+// include the recorded arrival time in their missing-Time-Out explanation.
+assert.match(parentHistory, /missing_time_out: boolean/);
+assert.match(parentHistory, /const isAutomaticMissingTimeOut = log\.status === "Absent" && log\.via === "Auto"/);
+assert.match(parentDashboard, /missingTimeOut: boolean/);
+assert.match(parentDashboard, /was marked absent today because no Time Out was recorded/);
+assert.match(parentDashboard, /No Time Out recorded/);
+assert.match(parentNotifications, /Attendance Alert: Missing Time Out/);
+assert.match(parentNotifications, /because no Time Out was recorded after checking in at/);
+assert.match(adviserNotifications, /const timeInByStudentId = new Map<string, string>\(\)/);
+assert.match(adviserNotifications, /checked in at \$\{attendanceTimeLabel\(timeIn\)\} but has no Time Out recorded/);
 
 // An unavailable API is not attendance of zero. The page must fail visibly on
 // initial load and keep its last verified snapshot during a live refresh.

@@ -7,6 +7,18 @@ import { listMessages, toAdviserReport } from "@/app/api/reports/parent-adviser/
 import type { StudentReportRow } from "../../_lib";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 
+type ParentAccount = {
+  id: number;
+  email: string | null;
+  parent_first_name: string | null;
+  parent_middle_name: string | null;
+  parent_last_name: string | null;
+  parent_suffix: string | null;
+  password_set: unknown;
+  status: string | null;
+  archive_status: string | null;
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Server error.";
 }
@@ -23,8 +35,7 @@ function isRegisteredParentAccount(parent: {
     || parent.password_set === "1";
 
   return passwordSet
-    && parentAccountCanAccess(parent)
-    && Boolean(parent.email?.trim());
+    && parentAccountCanAccess(parent);
 }
 
 export async function POST(
@@ -81,7 +92,19 @@ export async function POST(
       .map((parent) => Number(parent.id))
       .filter((parentId) => Number.isSafeInteger(parentId) && parentId > 0))];
 
-    if (linkedParentIds.length === 0) {
+    // Completed Parent accounts created before family-link reconciliation may
+    // retain the same exact student LRN in parents.student_id. Keep that
+    // legacy relationship eligible without allowing a Parent for another
+    // learner to receive this report.
+    const parentAccountColumns = "id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, status, archive_status";
+    const { data: directlyAssignedParents, error: directParentLookupError } = await supabase
+      .from("parents")
+      .select(parentAccountColumns)
+      .eq("student_id", studentReport.student_id);
+
+    if (directParentLookupError) throw directParentLookupError;
+
+    if (linkedParentIds.length === 0 && (directlyAssignedParents ?? []).length === 0) {
       return NextResponse.json(
         { success: false, message: "This student is not linked to a registered Parent account yet. The message cannot be sent." },
         { status: 409 }
@@ -91,14 +114,21 @@ export async function POST(
     // Re-read the linked accounts rather than trusting the email saved when
     // the Student Report was created. A parent may finish sign-up or update
     // their email after the report already exists.
-    const { data: parentAccounts, error: registeredParentLookupError } = await supabase
-      .from("parents")
-      .select("id, email, parent_first_name, parent_middle_name, parent_last_name, parent_suffix, password_set, status, archive_status")
-      .in("id", linkedParentIds);
+    const { data: linkedParentAccounts, error: registeredParentLookupError } = linkedParentIds.length > 0
+      ? await supabase
+        .from("parents")
+        .select(parentAccountColumns)
+        .in("id", linkedParentIds)
+      : { data: [], error: null };
 
     if (registeredParentLookupError) throw registeredParentLookupError;
 
-    const registeredParents = (parentAccounts ?? []).filter((parent) => isRegisteredParentAccount(parent));
+    const parentAccountsById = new Map<number, ParentAccount>();
+    for (const parent of [...(linkedParentAccounts ?? []), ...(directlyAssignedParents ?? [])] as ParentAccount[]) {
+      const parentId = Number(parent.id);
+      if (Number.isSafeInteger(parentId) && parentId > 0) parentAccountsById.set(parentId, parent);
+    }
+    const registeredParents = [...parentAccountsById.values()].filter((parent) => isRegisteredParentAccount(parent));
     const reportParentEmail = studentReport.parent_email?.trim().toLowerCase();
     const parentRow = registeredParents.find((parent) => parent.email?.trim().toLowerCase() === reportParentEmail)
       ?? registeredParents[0];
@@ -165,7 +195,10 @@ export async function POST(
       grade: studentReport.grade,
       section: studentReport.section,
       subject,
-      categories: [studentReport.category],
+      categories: studentReport.report_source === "subject_teacher"
+        && (studentReport.subject_teacher_categories?.length ?? 0) > 0
+        ? studentReport.subject_teacher_categories!
+        : [studentReport.category],
       concern_level: 50,
       // Parent must accept the agreement before the Student Concern
       // conversation begins; unlike parent-created reports this is undecided.
@@ -208,16 +241,34 @@ export async function POST(
 
     if (parentReportError) throw parentReportError;
 
-    const { error: messageError } = await supabase
-      .from("parent_adviser_report_messages")
-      .insert({
+    // Preserve a verified Subject Teacher's opening report for authorised
+    // Adviser/Guidance/Principal readers only. The Parent mapper deliberately
+    // replaces that sender name with "School staff".
+    const subjectTeacherOpening = studentReport.report_source === "subject_teacher"
+      && studentReport.subject_teacher_name?.trim()
+      ? [{
         report_id: parentReport.id,
-        sender_role: "adviser",
-        sender_name: adviserName,
-        body: trimmedMessage,
+        sender_role: "subject_teacher",
+        sender_name: studentReport.subject_teacher_name.trim(),
+        body: studentReport.description,
         read_by_adviser: true,
         read_by_parent: false,
-      });
+      }]
+      : [];
+
+    const { error: messageError } = await supabase
+      .from("parent_adviser_report_messages")
+      .insert([
+        ...subjectTeacherOpening,
+        {
+          report_id: parentReport.id,
+          sender_role: "adviser",
+          sender_name: adviserName,
+          body: trimmedMessage,
+          read_by_adviser: true,
+          read_by_parent: false,
+        },
+      ]);
 
     if (messageError) throw messageError;
 
@@ -249,6 +300,18 @@ export async function POST(
       reportId: parentReport.id,
       kind: "message",
     });
+
+    // Parent Reports is the delivery channel. Email is only an extra alert, so
+    // a completed linked Parent without an email address must still receive
+    // this concern in their dashboard.
+    if (!parentEmail) {
+      return NextResponse.json({
+        success: true,
+        emailSkipped: true,
+        report: adviserReport,
+        message: "Parent notified in Parent Reports. Email was skipped because no email address is set.",
+      });
+    }
 
     try {
       await sendStudentConcernParentNotificationEmail({

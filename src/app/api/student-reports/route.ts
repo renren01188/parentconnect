@@ -39,8 +39,7 @@ function isRegisteredParentAccount(parent: {
     || parent.password_set === "1";
 
   return passwordSet
-    && parentAccountCanAccess(parent)
-    && Boolean(parent.email?.trim());
+    && parentAccountCanAccess(parent);
 }
 
 function manilaDayBounds() {
@@ -156,6 +155,18 @@ export async function GET(req: NextRequest) {
 
     if (parentLinksError) throw parentLinksError;
 
+    // Some older completed Parent accounts predate parent_student_links and
+    // retain their exact child relationship in parents.student_id. Treat that
+    // relationship as eligible too; it is still scoped to this specific LRN.
+    const { data: directlyAssignedParents, error: directParentError } = studentIds.length > 0
+      ? await supabase
+        .from("parents")
+        .select("student_id, email, password_set, status, archive_status")
+        .in("student_id", studentIds)
+      : { data: [], error: null };
+
+    if (directParentError) throw directParentError;
+
     const studentsWithRegisteredParents = new Set<string>();
     for (const link of parentLinks ?? []) {
       const parentRelation = link.parents as unknown;
@@ -169,6 +180,12 @@ export async function GET(req: NextRequest) {
         archive_status?: string | null;
       }))) {
         const studentId = String(link.student_id ?? "").trim();
+        if (studentId) studentsWithRegisteredParents.add(studentId);
+      }
+    }
+    for (const parent of directlyAssignedParents ?? []) {
+      if (isRegisteredParentAccount(parent)) {
+        const studentId = String(parent.student_id ?? "").trim();
         if (studentId) studentsWithRegisteredParents.add(studentId);
       }
     }

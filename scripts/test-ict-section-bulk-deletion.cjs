@@ -14,6 +14,7 @@ const userManagementApi = read("src/app/api/ict/user-management/route.ts");
 const bulkUi = read("src/app/dashboard/ict/user-management/BulkDeletionModal.tsx");
 const adviserBulkUi = read("src/app/dashboard/adviser/students/BulkDeleteModal.tsx");
 const migration = read("supabase/migrations/20261105150000_ensure_occupied_sections_cannot_be_deleted.sql");
+const scheduledDeletionMigration = read("supabase/migrations/20261111100000_enforce_one_active_scheduled_deletion_per_target.sql");
 const deletionAccess = read("src/lib/deletionAccess.ts");
 
 // The displayed count and server preflight ignore only explicitly archived or
@@ -60,14 +61,25 @@ assert.match(userManagementApi, /function isVisibleUserRecord/);
 // ICT bulk selection is unpaginated, supports students and parents, and the
 // server independently validates active root rows and existing requests.
 assert.match(userManagementApi, /const bulkDeletionCandidates =/);
+assert.match(userManagementApi, /advisers: adviserRows\.map/);
+assert.match(userManagementApi, /guidance: guidanceRows\.map/);
 assert.match(userManagementApi, /parents: parentRows\.map/);
 assert.match(userManagementApi, /students: visibleStudents\.map/);
-assert.match(bulkUi, /candidates: \{ parents: ParentCandidate\[\]; students: StudentCandidate\[\] \}/);
+assert.match(bulkUi, /advisers: StaffCandidate\[\];/);
+assert.match(bulkUi, /guidance: StaffCandidate\[\];/);
+assert.match(bulkUi, /const staffUsers = useMemo/);
+assert.match(bulkUi, /candidates\.advisers/);
+assert.match(bulkUi, /candidates\.guidance/);
 assert.match(bulkUi, /setKind\("student"\)/);
 assert.match(bulkUi, /const candidateStudents = useMemo/);
 assert.match(bulkUi, /type: "student"/);
 assert.match(deletionApi, /requestedStudentIds/);
 assert.match(deletionApi, /requestedParentIds/);
+assert.match(deletionApi, /requestedAdviserIds/);
+assert.match(deletionApi, /requestedGuidanceIds/);
+assert.match(deletionApi, /from\("advisers"\)/);
+assert.match(deletionApi, /from\("guidance_counselors"\)/);
+assert.match(deletionApi, /staffName\(staff\)/);
 assert.match(deletionApi, /import \{ isValidEmail \} from "@\/lib\/deletionEmailQueue"/);
 assert.match(deletionApi, /const ictRecipientEmails = \[\.\.\.new Set\(\(ictAdmins \?\? \[\]\)/);
 assert.match(deletionApi, /\.filter\(isValidEmail\)/);
@@ -76,9 +88,19 @@ assert.match(deletionApi, /from\("parents"\)[\s\S]*?archive_status/);
 assert.match(deletionApi, /isActiveArchivableRecord/);
 assert.match(deletionApi, /activeStudentRequests/);
 assert.match(deletionApi, /activeParentRequests/);
+assert.match(deletionApi, /activeAdviserRequests/);
+assert.match(deletionApi, /activeGuidanceRequests/);
 assert.match(deletionApi, /Each record can be selected only once for deletion/);
 assert.match(deletionApi, /student \? studentName\(student\)/);
+assert.match(deletionApi, /sendAccountDeletionScheduledEmail\(\{/);
+assert.match(deletionApi, /isActiveScheduledDeletionConflict/);
 assert.match(bulkUi, /onChanged\(\)/);
+
+// Database uniqueness closes the interval between the route's preflight and
+// its insert, including simultaneous ICT requests for the same staff member.
+assert.match(scheduledDeletionMigration, /GROUP BY target_type, target_id/);
+assert.match(scheduledDeletionMigration, /CREATE UNIQUE INDEX IF NOT EXISTS scheduled_deletions_one_active_target_idx/);
+assert.match(scheduledDeletionMigration, /WHERE status IN \('PendingICT', 'Scheduled'\)/);
 
 // ICT schedules independent root targets for a recoverable 30-day archive;
 // it neither permanently deletes history nor silently archives a linked

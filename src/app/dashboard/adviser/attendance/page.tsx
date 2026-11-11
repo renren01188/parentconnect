@@ -2120,6 +2120,7 @@ export default function AdviserAttendancePage() {
     const rapidTapOrderRef = useRef(0);
     const rapidTapHadWorkRef = useRef(false);
     const rfidSaveInFlightRef = useRef(false);
+    const studentsLoadRequestRef = useRef(0);
 
     // A school-wide session can be active while this adviser's section belongs
     // to the other session. Scanning must be enabled only for matching sections.
@@ -2201,7 +2202,11 @@ export default function AdviserAttendancePage() {
     // Only a scan still eligible for automatic processing should prevent an
     // Adviser from closing the browser.
     const hasRapidTapUnsynced = rapidTapPendingCount > 0;
-    const hasRapidTapQueueItems = rapidTapQueue.length > 0;
+    // Do not show a processing queue until this browser has finished restoring
+    // its durable scans. Failed scans need attention, but are not waiting to
+    // be processed and should not be labelled as a queue.
+    const hasRapidTapProcessingItems = rapidTapStorageReady && rapidTapPendingCount > 0;
+    const hasRapidTapAttentionItems = rapidTapStorageReady && rapidTapFailedCount > 0;
 
     const replaceRapidTapQueue = useCallback((next: RapidTapQueueItem[]) => {
         rapidTapQueueRef.current = next;
@@ -2233,13 +2238,17 @@ export default function AdviserAttendancePage() {
     function focusNewRfidScanner() { newRfidInputRef.current?.focus(); }
 
     const loadStudents = useCallback(async (section?: string) => {
+        // A roster response started before an RFID replacement can arrive
+        // after the confirmed write and restore the old card in the UI. Only
+        // the most recent roster request may update this screen.
+        const requestId = ++studentsLoadRequestRef.current;
         try {
             setIsLoadingStudents(true);
             const sec = section !== undefined ? section : activeSection;
             const qs = sec ? `?limit=200&section=${encodeURIComponent(sec)}` : "?limit=200";
             const res = await fetch(`/api/students${qs}`, { cache: "no-store" });
             const data = await res.json();
-            if (data.success) {
+            if (data.success && requestId === studentsLoadRequestRef.current) {
                 setStudents(data.data || []);
                 if (data.adviser) {
                     setAdviser(data.adviser);
@@ -2249,7 +2258,9 @@ export default function AdviserAttendancePage() {
                 }
             }
         } catch (error) { console.error("Failed to load students:", error); }
-        finally { setIsLoadingStudents(false); }
+        finally {
+            if (requestId === studentsLoadRequestRef.current) setIsLoadingStudents(false);
+        }
     }, [activeSection]);
 
     const loadTodayLogs = useCallback(async (section?: string) => {
@@ -3653,20 +3664,41 @@ export default function AdviserAttendancePage() {
                         </div>
                         <div className="flex flex-col items-center p-4 sm:p-6">
                             <div className="mb-4 w-full space-y-3" aria-live="polite">
-                                    {hasRapidTapQueueItems ? (
+                                    {hasRapidTapProcessingItems ? (
                                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left text-xs leading-5 text-amber-800">
                                             <p className="font-bold">
-                                                {rapidTapPendingCount > 0
-                                                    ? isScanningOpen
-                                                        ? `Processing attendance: ${rapidTapPendingCount} pending`
-                                                        : `Confirming ${rapidTapPendingCount} interrupted scan${rapidTapPendingCount === 1 ? "" : "s"}`
-                                                    : `${rapidTapFailedCount} scan${rapidTapFailedCount === 1 ? "" : "s"} needs review`}
+                                                {isScanningOpen
+                                                    ? `Processing attendance: ${rapidTapPendingCount} pending`
+                                                    : `Confirming ${rapidTapPendingCount} interrupted scan${rapidTapPendingCount === 1 ? "" : "s"}`}
                                             </p>
                                             <p className="mt-1">
                                                 {isScanningOpen
                                                     ? "Please do not close this tab or switch to another browser while attendance records are still being processed in the queue."
                                                     : "The class session is closed. The system is only checking whether each scan was already saved; use Apply only for an authorised manual correction."}
                                             </p>
+                                            {rapidTapStatusSummary && (
+                                                <p className="mt-1 font-medium">Status: {rapidTapStatusSummary}</p>
+                                            )}
+                                            {rapidTapManualReviewCount > 0 && (
+                                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="max-w-sm font-medium">Apply a reviewed scan only when you confirm it belongs to this student and session. Applying records an audited manual Time In correction and does not send a parent SMS.</p>
+                                                    <button type="button" onClick={() => setShowRapidTapReview(true)}
+                                                        className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                                                        View
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {rapidTapRetryableFailedCount > 0 && (
+                                                <button type="button" onClick={retryFailedRapidTapScans}
+                                                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100">
+                                                    Retry {rapidTapRetryableFailedCount} Failed Scan{rapidTapRetryableFailedCount === 1 ? "" : "s"}
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : hasRapidTapAttentionItems ? (
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left text-xs leading-5 text-amber-800">
+                                            <p className="font-bold">{rapidTapFailedCount} scan{rapidTapFailedCount === 1 ? "" : "s"} needs attention</p>
+                                            <p className="mt-1">No RFID scans are waiting to be processed. Review or retry the saved scan details below.</p>
                                             {rapidTapStatusSummary && (
                                                 <p className="mt-1 font-medium">Status: {rapidTapStatusSummary}</p>
                                             )}

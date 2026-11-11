@@ -6,10 +6,15 @@ import { LoginInstitutionLogos } from "@/components/LoginInstitutionLogos";
 type PublicHeroHeaderProps = {
   title: string;
   description: string;
+  showInstitutionLogos?: boolean;
 };
 
 /** Shared public-page header styled to match the ParentConnect landing page. */
-export function PublicHeroHeader({ title, description }: PublicHeroHeaderProps) {
+export function PublicHeroHeader({
+  title,
+  description,
+  showInstitutionLogos = true,
+}: PublicHeroHeaderProps) {
   return (
     <header className="relative isolate overflow-hidden bg-[#132546] text-white">
       <Image
@@ -51,7 +56,7 @@ export function PublicHeroHeader({ title, description }: PublicHeroHeaderProps) 
         </div>
       </div>
 
-      <div className="relative z-10 grid min-h-[280px] w-full items-center gap-8 px-4 py-8 sm:min-h-[300px] sm:px-6 sm:py-10 lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)] lg:gap-12 lg:px-8 lg:py-12 xl:px-10 2xl:px-12">
+      <div className={`relative z-10 grid min-h-[280px] w-full items-center gap-8 px-4 py-8 sm:min-h-[300px] sm:px-6 sm:py-10 ${showInstitutionLogos ? "lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)] lg:gap-12" : ""} lg:px-8 lg:py-12 xl:px-10 2xl:px-12`}>
         <div className="w-full max-w-3xl text-left">
           <Link href="/" aria-label="Go to the ParentConnect landing page" className="inline-block rounded-md text-sm font-extrabold tracking-[0.22em] text-sky-200 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62] sm:text-base">
             PARENTCONNECT
@@ -64,7 +69,9 @@ export function PublicHeroHeader({ title, description }: PublicHeroHeaderProps) 
           </p>
         </div>
 
-        <LoginInstitutionLogos className="justify-start self-end lg:justify-end" />
+        {showInstitutionLogos ? (
+          <LoginInstitutionLogos className="justify-start self-end lg:justify-end" />
+        ) : null}
       </div>
     </header>
   );

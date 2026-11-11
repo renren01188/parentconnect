@@ -23,6 +23,7 @@ assert.match(userManagementRoute, /wasPendingParent[\s\S]*?normalizeParentPhone\
 assert.match(userManagementPage, /event\.scope === "accounts" \|\| event\.scope === "students" \|\| event\.scope === "audit"/);
 assert.match(userManagementPage, /Recorded Contact Number/);
 assert.match(userManagementPage, /Leave blank when SF1 has no number/);
+assert.match(userManagementPage, /isPendingImportedParent && editableStudents\.map\(\(student, index\) => \(/);
 assert.match(studentProfiles, /event\.scope === "students" \|\| event\.scope === "accounts"/);
 assert.match(studentProfiles, /event\.scope === "dashboard" \|\| event\.scope === "accounts"/);
 assert.match(studentProfiles, /if \(!scope \|\| scope === "dashboard"\) void loadSettings\(\)/);

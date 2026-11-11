@@ -200,6 +200,11 @@ export interface StudentReport {
   status: StudentReportStatus;
   /** True only when an active, registered Parent account is linked to this student. */
   parentLinked?: boolean;
+  /** Staff-only attribution for a verified Subject Teacher submission. */
+  submitted_by_name?: string;
+  submitted_by_role?: "Subject Teacher";
+  /** The complete selected category set for a Subject Teacher submission. */
+  subject_teacher_categories?: string[];
   // ✅ Add these:
   parent_name: string;
   replies?: { sender: string; message: string; sent_at: string }[];

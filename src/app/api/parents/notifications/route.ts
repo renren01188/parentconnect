@@ -255,9 +255,16 @@ function attendanceTimeLabel(value: string | null) {
   return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
 
-function attendanceNotificationCopy(log: AttendanceLog, studentName: string) {
+function attendanceNotificationCopy(log: AttendanceLog, studentName: string, checkInTime: string | null) {
   const status = String(log.status ?? "").trim();
   if (status.toLowerCase() === "absent") {
+    const isAutomaticMissingTimeOut = log.type === "Time Out" && log.via === "Auto";
+    if (isAutomaticMissingTimeOut) {
+      return {
+        title: "Attendance Alert: Missing Time Out",
+        message: `${studentName} was marked absent on ${log.attendance_date} because no Time Out was recorded after checking in at ${attendanceTimeLabel(checkInTime)}.`,
+      };
+    }
     return {
       title: "Attendance Alert",
       message: `${studentName} was marked absent on ${log.attendance_date}.`,
@@ -520,8 +527,12 @@ export async function GET() {
       : { data: [] as ParentReportMessageNotification[], error: null };
     if (reportMessageNotificationsError) throw reportMessageNotificationsError;
     const latestReportMessageById = new Map<number, ParentReportMessageNotification>();
+    const subjectTeacherReportIds = new Set<number>();
     for (const message of (reportMessageNotificationRows ?? []) as ParentReportMessageNotification[]) {
       latestReportMessageById.set(Number(message.report_id), message);
+      if (message.sender_role === "subject_teacher") {
+        subjectTeacherReportIds.add(Number(message.report_id));
+      }
     }
 
     const notifications = collapseAnnouncementNotifications(
@@ -700,6 +711,14 @@ export async function GET() {
       if (attendanceLogsError) throw attendanceLogsError;
 
       const logs = (attendanceLogs ?? []) as AttendanceLog[];
+      const timeInByStudentDate = new Map<string, string>();
+      for (const log of logs) {
+        const isRecordedArrival = log.type === "Time In"
+          && ["Present", "On Time", "Late"].includes(String(log.status ?? ""));
+        const key = `${log.student_id}:${log.attendance_date}`;
+        if (!isRecordedArrival || !log.time_logged || timeInByStudentDate.has(key)) continue;
+        timeInByStudentDate.set(key, log.time_logged);
+      }
       const logIds = logs.map((log) => log.id);
       const readLogIds = new Set<number>();
       if (logIds.length > 0) {
@@ -717,7 +736,8 @@ export async function GET() {
       attendanceRows = logs.map((log) => {
         const studentName = studentNames.get(log.student_id) ?? log.student_id;
         const occurredAt = `${log.attendance_date}T${log.time_logged ?? "00:00:00"}`;
-        const notification = attendanceNotificationCopy(log, studentName);
+        const checkInTime = timeInByStudentDate.get(`${log.student_id}:${log.attendance_date}`) ?? null;
+        const notification = attendanceNotificationCopy(log, studentName, checkInTime);
         return {
           // Negative IDs keep attendance records distinct from announcement IDs
           // while preserving the existing numeric notification UI contract.
@@ -852,8 +872,9 @@ export async function GET() {
         const isStudentConcern = /^\[Student Concern\]\s*/i.test(String(report.subject ?? ""));
         const latestMessage = latestReportMessageById.get(Number(report.id));
         const unread = latestMessage ? !latestMessage.read_by_parent : !report.parent_seen_at;
-        const isSubjectTeacherReport = latestMessage?.sender_role === "subject_teacher";
-        const senderRole = isSubjectTeacherReport
+        const isSubjectTeacherReport = subjectTeacherReportIds.has(Number(report.id));
+        const latestIsSubjectTeacherMessage = latestMessage?.sender_role === "subject_teacher";
+        const senderRole = latestIsSubjectTeacherMessage
           ? "Subject Teacher"
           : latestMessage?.sender_role === "principal"
             ? "Principal"
@@ -862,7 +883,7 @@ export async function GET() {
               : "Adviser";
         // A Subject Teacher's name is staff-only report metadata. Keep the
         // Parent alert actionable without disclosing the reporter.
-        const senderName = isSubjectTeacherReport
+        const senderName = latestIsSubjectTeacherMessage
           ? "School staff"
           : String(latestMessage?.sender_name ?? report.adviser_name ?? senderRole).trim() || senderRole;
         const createdAt = latestMessage?.created_at ?? report.created_at;
@@ -876,7 +897,7 @@ export async function GET() {
           id: 1_000_000_000 + report.id,
           reportId: report.id,
           type: "message" as const,
-          title: isStudentConcern ? report.subject : "New Subject Teacher Report",
+          title: isSubjectTeacherReport ? "New Subject Teacher Report" : isStudentConcern ? report.subject : "New report",
           msg: messageBody || (isSubjectTeacherReport ? "A subject teacher submitted a report for your child." : report.subject),
           time: timeLabel(createdAt),
           category,

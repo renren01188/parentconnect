@@ -33,8 +33,8 @@ import {
 import { isScheduledAttendanceDate } from "@/lib/schoolCalendar";
 import { hasReachedSessionEnd, markAutomaticAbsences } from "@/lib/automaticAttendanceAbsence";
 import { normalizeStudentRemark } from "@/lib/studentRemarks";
-import { normalizeStudentAge } from "@/lib/studentAge";
-import { normalizeStudentBirthDate } from "@/lib/studentBirthDate";
+import { calculateStudentAge, normalizeStudentAge } from "@/lib/studentAge";
+import { normalizeStudentRegistrationBirthDate } from "@/lib/studentBirthDate";
 import { getSchoolClock } from "@/lib/attendanceScannerSchedule";
 import { resolveTodayAttendanceStatus } from "@/lib/todayAttendanceStatus";
 import {
@@ -251,7 +251,7 @@ export async function POST(req: NextRequest) {
 
     const {
       firstName, middleName, lastName, suffix,
-      studentId, gender, grade, section, classSession, rfidCard, age,
+      studentId, gender, grade, section, classSession, rfidCard,
       birthDate, motherTongue, ipEthnicGroup, religion, religionSelection, religionOther, learningModality,
       remarkType, remarkDate, remarkNote, remarkSchoolName,
       address, barangay, municipalityCity, province,
@@ -334,18 +334,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const normalizedAge = normalizeStudentAge(age);
-    if (normalizedAge.error) {
-      return NextResponse.json(
-        { success: false, message: normalizedAge.error },
-        { status: 400 },
-      );
-    }
-
-    const normalizedBirthDate = normalizeStudentBirthDate(birthDate, getSchoolClock().date);
+    const localToday = getSchoolClock().date;
+    const normalizedBirthDate = normalizeStudentRegistrationBirthDate(birthDate, localToday);
     if (normalizedBirthDate.error) {
       return NextResponse.json(
         { success: false, message: normalizedBirthDate.error },
+        { status: 400 },
+      );
+    }
+    const calculatedAge = calculateStudentAge(normalizedBirthDate.value, localToday);
+    if (calculatedAge === null) {
+      return NextResponse.json(
+        { success: false, message: "Birth date could not be used to calculate the student's age." },
+        { status: 400 },
+      );
+    }
+    const normalizedCalculatedAge = normalizeStudentAge(calculatedAge);
+    if (normalizedCalculatedAge.error) {
+      return NextResponse.json(
+        { success: false, message: normalizedCalculatedAge.error },
         { status: 400 },
       );
     }
@@ -450,7 +457,7 @@ export async function POST(req: NextRequest) {
       class_session: resolvedClassSession,
       rfid_card: normalizedRfid,
       birth_date: normalizedBirthDate.value,
-      age: normalizedAge.value,
+      age: normalizedCalculatedAge.value,
       mother_tongue: motherTongue || null,
       ip_ethnic_group: ipEthnicGroup || null,
       religion: resolvedReligion || null,

@@ -183,7 +183,7 @@ export default function Sidebar({ isOpen = false, onClose }: { isOpen?: boolean;
                 <span className="flex-1 truncate">{label}</span>
 
                 {badge > 0 && (
-                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-extrabold bg-red-500 text-white leading-none">
+                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-extrabold bg-purple-100 text-purple-950 leading-none">
                     {badge > 99 ? "99+" : badge}
                   </span>
                 )}

@@ -6,7 +6,8 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, Upload, X } from
 type Name = { firstName: string | null; middleName: string | null; lastName: string | null; suffix: string | null };
 type Row = { lrn: string; firstName: string; middleName: string | null; lastName: string; suffix: string | null; sex: string; birthDate: string | null; age: number | null; motherTongue: string | null; ipEthnicGroup: string | null; religion: string | null; houseStreetSitioPurok: string | null; barangay: string | null; municipalityCity: string | null; province: string | null; father: Name; mother: Name; guardian: Name & { relationship: string | null }; contactNumber: string | null; learningModality: string | null };
 type ParentRole = "Father" | "Mother" | "Guardian";
-type ParentCandidate = { id: number; role: ParentRole; displayName: string; maskedContactNumber: string | null };
+type ExistingStudent = { lrn: string; fullName: string; section: string };
+type ParentCandidate = { id: number; role: ParentRole; displayName: string; maskedContactNumber: string | null; isAlreadyLinked: boolean };
 type ParentLinkSuggestion = { role: ParentRole; state: "auto" | "ambiguous" | "none"; candidates: ParentCandidate[] };
 type ParentLinkSuggestions = Record<string, ParentLinkSuggestion[]>;
 type ParentLinkSelections = Record<string, Partial<Record<ParentRole, string>>>;
@@ -34,27 +35,30 @@ function ParentLinkReview({
   selections: ParentLinkSelections;
   onChange: (lrn: string, role: ParentRole, value: string) => void;
 }) {
-  if (!suggestions.length) return null;
+  const linkableSuggestions = suggestions.filter((suggestion) => suggestion.candidates.length > 0);
+  if (!linkableSuggestions.length) return null;
   return (
-    <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
-      <p className="text-xs font-bold text-violet-900">Existing Parent account review</p>
-      <div className="mt-2 space-y-2">
-        {suggestions.map((suggestion) => {
+    <div className="mt-2 space-y-2">
+      {linkableSuggestions.map((suggestion) => {
           const selectedValue = selections[row.lrn]?.[suggestion.role] ?? "";
-          if (suggestion.state === "none") {
-            return <p key={suggestion.role} className="text-[11px] text-slate-600"><strong>{suggestion.role}:</strong> No completed active Parent account matched. The student will remain <strong>Not Registered</strong> until Guardian signup is completed.</p>;
-          }
           if (suggestion.state === "auto") {
             const candidate = suggestion.candidates[0];
-            return <p key={suggestion.role} className="text-[11px] text-emerald-700"><strong>{suggestion.role}:</strong> {candidate.displayName}{candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""} will be linked automatically.</p>;
+            return (
+              <p key={suggestion.role} className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-2.5 py-2 text-[11px] leading-4 text-emerald-900">
+                <strong>{suggestion.role}:</strong>{" "}
+                {candidate.isAlreadyLinked ? `Already linked to ${candidate.displayName}` : `Will be linked to ${candidate.displayName} when imported`}
+                {candidate.maskedContactNumber ? ` (${candidate.maskedContactNumber})` : ""}.
+              </p>
+            );
           }
+          const selectedCandidate = suggestion.candidates.find((candidate) => String(candidate.id) === selectedValue);
           return (
-            <label key={suggestion.role} className="block text-[11px] font-medium text-slate-700">
-              {suggestion.role}: multiple active accounts share this verification name
+            <label key={suggestion.role} className="block rounded-lg border border-amber-100 bg-white/80 px-2.5 py-2 text-[11px] font-medium leading-4 text-amber-900">
+              <span><strong>{suggestion.role}:</strong> multiple active accounts share this verification name</span>
               <select
                 value={selectedValue}
                 onChange={(event) => onChange(row.lrn, suggestion.role, event.target.value)}
-                className="mt-1 block w-full rounded-lg border border-violet-200 bg-white px-2.5 py-2 text-xs outline-none focus:ring-2 focus:ring-violet-400"
+                className="mt-1.5 block w-full rounded-lg border border-amber-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400"
               >
                 <option value="">Choose the correct Parent account</option>
                 {suggestion.candidates.map((candidate) => (
@@ -64,10 +68,14 @@ function ParentLinkReview({
                 ))}
                 <option value="no_link">Do not link an existing Parent account</option>
               </select>
+              {selectedCandidate && (
+                <span className="mt-1.5 block text-emerald-800">
+                  {selectedCandidate.isAlreadyLinked ? `Already linked to ${selectedCandidate.displayName}` : `Will be linked to ${selectedCandidate.displayName} when imported`}.
+                </span>
+              )}
             </label>
           );
-        })}
-      </div>
+      })}
     </div>
   );
 }
@@ -77,7 +85,9 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
   const [rows, setRows] = useState<Row[] | null>(null);
   const [section, setSection] = useState(sections.length === 1 ? sections[0] : "");
   const [errors, setErrors] = useState<string[]>([]);
-  const [existing, setExisting] = useState<string[]>([]);
+  const [existingStudents, setExistingStudents] = useState<ExistingStudent[]>([]);
+  const [showExistingStudents, setShowExistingStudents] = useState(false);
+  const [existingPage, setExistingPage] = useState(1);
   const [parentLinkSuggestions, setParentLinkSuggestions] = useState<ParentLinkSuggestions>({});
   const [parentLinks, setParentLinks] = useState<ParentLinkSelections>({});
   const [busy, setBusy] = useState(false);
@@ -87,7 +97,9 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
     setFile(event.target.files?.[0] ?? null);
     setRows(null);
     setErrors([]);
-    setExisting([]);
+    setExistingStudents([]);
+    setShowExistingStudents(false);
+    setExistingPage(1);
     setParentLinkSuggestions({});
     setParentLinks({});
     setMessage("");
@@ -106,7 +118,9 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
       if (!json.success) throw new Error(json.message);
       setRows(json.rows);
       setErrors(json.errors ?? []);
-      setExisting(json.existingLrns ?? []);
+      setExistingStudents(json.existingStudents ?? []);
+      setShowExistingStudents(false);
+      setExistingPage(1);
       const suggestions = (json.parentLinkSuggestions ?? {}) as ParentLinkSuggestions;
       setParentLinkSuggestions(suggestions);
       setParentLinks(Object.fromEntries(Object.entries(suggestions).map(([lrn, records]) => [
@@ -123,7 +137,7 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
   }
 
   async function importRows() {
-    if (!rows?.length || errors.length || existing.length) return;
+    if (!importableRows.length || errors.length || unresolvedParentLinks) return;
 
     setBusy(true);
     setMessage("");
@@ -131,7 +145,7 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
       const response = await fetch("/api/students/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows, section, parentLinks }),
+        body: JSON.stringify({ rows: importableRows, section, parentLinks }),
       });
       const json = await response.json();
       if (!json.success) throw new Error(json.message);
@@ -143,10 +157,19 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
     }
   }
 
-  const unresolvedParentLinks = Object.entries(parentLinkSuggestions).some(([lrn, records]) =>
-    records.some((record) => record.state === "ambiguous" && !parentLinks[lrn]?.[record.role]),
+  const existingLrns = new Set(existingStudents.map((student) => student.lrn));
+  const importableRows = rows?.filter((row) => !existingLrns.has(row.lrn)) ?? [];
+  const unresolvedParentLinks = importableRows.some((row) =>
+    (parentLinkSuggestions[row.lrn] ?? []).some((record) => record.state === "ambiguous" && !parentLinks[row.lrn]?.[record.role]),
   );
-  const blocked = errors.length > 0 || existing.length > 0 || unresolvedParentLinks;
+  const parentLinkRows = importableRows.filter((row) =>
+    (parentLinkSuggestions[row.lrn] ?? []).some((record) => record.candidates.length > 0),
+  );
+  const existingPageSize = 5;
+  const existingPageCount = Math.ceil(existingStudents.length / existingPageSize);
+  const visibleExistingStudents = existingStudents.slice((existingPage - 1) * existingPageSize, existingPage * existingPageSize);
+  const noImportableRows = Boolean(rows?.length) && importableRows.length === 0;
+  const blocked = errors.length > 0 || noImportableRows || unresolvedParentLinks;
   const updateParentLink = (lrn: string, role: ParentRole, value: string) => {
     setParentLinks((previous) => ({
       ...previous,
@@ -197,27 +220,81 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
             <>
               <div className={`mb-4 flex items-start gap-2 rounded-xl border p-3 ${blocked ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
                 {blocked ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
-                <p className="text-sm font-medium">{blocked ? "Resolve the issues below before importing." : `${rows.length} student record${rows.length === 1 ? "" : "s"} ready to import.`}</p>
+                <p className="text-sm font-medium">
+                  {noImportableRows
+                    ? "Every student in this file is already registered."
+                    : blocked
+                      ? "Resolve the issues below before importing."
+                      : `${importableRows.length} student record${importableRows.length === 1 ? "" : "s"} ready to import.`}
+                </p>
               </div>
               {errors.map(error => <p key={error} className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>)}
-              {existing.length > 0 && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">Already registered LRN(s): {existing.join(", ")}.</p>}
+              {existingStudents.length > 0 && (
+                <section role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-amber-950">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                    <p className="mr-auto text-sm font-extrabold">Already Registered Students:</p>
+                    <button
+                      type="button"
+                      aria-expanded={showExistingStudents}
+                      aria-controls="already-registered-students"
+                      onClick={() => {
+                        setShowExistingStudents((visible) => !visible);
+                        if (!showExistingStudents) setExistingPage(1);
+                      }}
+                      className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                    >
+                      {showExistingStudents ? "Hide" : "View"} ({existingStudents.length})
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-amber-900">These students will be skipped and are not included in the import count.</p>
+                  {showExistingStudents && (
+                    <div id="already-registered-students" className="mt-3">
+                      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5" aria-label="Already registered students">
+                        {visibleExistingStudents.map((student) => (
+                          <li key={student.lrn} className="min-w-0 rounded-lg border border-amber-200 bg-white p-2.5">
+                            <p className="break-words text-xs font-bold text-slate-800">{student.fullName}</p>
+                            <p className="mt-1 font-mono text-[11px] text-slate-500">LRN {student.lrn}</p>
+                            <p className="mt-1 text-[11px] leading-4 text-amber-900">Section: <strong>{student.section}</strong></p>
+                          </li>
+                        ))}
+                      </ul>
+                      {existingPageCount > 1 && (
+                        <nav className="mt-3 flex flex-wrap justify-center gap-1.5" aria-label="Already registered students pages">
+                          {Array.from({ length: existingPageCount }, (_, index) => index + 1).map((pageNumber) => (
+                            <button
+                              key={pageNumber}
+                              type="button"
+                              aria-current={pageNumber === existingPage ? "page" : undefined}
+                              onClick={() => setExistingPage(pageNumber)}
+                              className={`min-h-8 min-w-8 rounded-lg px-2 text-xs font-bold ${pageNumber === existingPage ? "bg-amber-600 text-white" : "border border-amber-200 bg-white text-amber-900 hover:bg-amber-100"}`}
+                            >
+                              {pageNumber}
+                            </button>
+                          ))}
+                        </nav>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
               {unresolvedParentLinks && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Choose an account or confirm that no existing Parent account should be linked for each ambiguous Parent name before importing.</p>}
-              <section className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
-                <h3 className="text-sm font-extrabold text-slate-800">Parent account linking</h3>
-                <p className="mt-1 text-xs leading-5 text-slate-600">An exact active Parent account is linked automatically. If the same verification name belongs to more than one active account, choose the correct one or confirm that none should be linked. Otherwise, the student remains Not Registered until Guardian signup is completed. Archived accounts are never listed.</p>
+              {parentLinkRows.length > 0 && <section className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/30 p-4">
+                <h3 className="text-sm font-extrabold text-emerald-950">Parent account linking</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-600">Only students with a completed active Parent account match are listed. Choose the correct account where more than one name matches. Archived accounts are never listed.</p>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                  {rows.map((row) => (
-                    <div key={row.lrn} className="rounded-xl border border-violet-100 bg-white p-3">
+                  {parentLinkRows.map((row) => (
+                    <div key={row.lrn} className="rounded-xl border border-emerald-100 bg-white p-3">
                       <p className="text-xs font-bold text-slate-800">{name(row)} <span className="font-mono font-normal text-slate-400">· {row.lrn}</span></p>
                       <ParentLinkReview row={row} suggestions={parentLinkSuggestions[row.lrn] ?? []} selections={parentLinks} onChange={updateParentLink} />
                     </div>
                   ))}
                 </div>
-              </section>
+              </section>}
 
               <div className="space-y-3 xl:hidden">
                 <p className="text-xs leading-5 text-slate-500">Review each student below. The compact layout keeps every SF1 field readable on phones and tablets.</p>
-                {rows.map(row => (
+                {importableRows.map(row => (
                   <article key={row.lrn} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3">
                       <div className="min-w-0">
@@ -252,7 +329,7 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
                       <tr>{["LRN", "Name", "Sex", "Age", "Birth Date", "Mother Tongue", "IP", "Religion", "Address", "Father", "Mother", "Guardian / Relationship", "Contact", "Modality", "Grade", "Section"].map(head => <th key={head} className="border-b border-slate-200 px-3 py-3 font-bold">{head}</th>)}</tr>
                     </thead>
                     <tbody>
-                      {rows.map(row => (
+                      {importableRows.map(row => (
                         <tr key={row.lrn} className="border-b border-slate-100 align-top text-slate-600">
                           <td className="px-3 py-3 font-mono">{row.lrn}</td>
                           <td className="px-3 py-3 font-semibold text-slate-700">{name(row)}</td>
@@ -290,7 +367,7 @@ export function ImportRegistrationModal({ sections, onClose, onImported }: { sec
             </button>
           ) : (
             <button onClick={importRows} disabled={busy || blocked} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50 sm:w-auto">
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}Import {rows.length} Student{rows.length === 1 ? "" : "s"}
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}Import {importableRows.length} Student{importableRows.length === 1 ? "" : "s"}
             </button>
           )}
         </div>

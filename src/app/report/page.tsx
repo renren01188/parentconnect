@@ -357,7 +357,7 @@ export default function ReportPage() {
       return;
     }
     if (!termsAccepted) {
-      setError("Read and agree to the Terms and Agreement before submitting your report.");
+      setError("Read and acknowledge the Reporting Guidelines and Privacy Notice before submitting your report.");
       return;
     }
     if (!recaptchaToken) {
@@ -597,13 +597,13 @@ export default function ReportPage() {
                 </div>
 
                 <div>
-                  <FieldLabel label="Terms and Agreement" required />
+                  <FieldLabel label="Reporting Guidelines and Privacy Notice" required />
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-sm font-semibold text-slate-700">
-                      Review and agree before submitting
+                      Review before submitting
                     </p>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      For audit and security purposes, ParentConnect records the submitter&apos;s IP address and device/browser information with this report.
+                      Please read the reporting guidelines and privacy notice before submitting your Student Report.
                     </p>
                     <button
                       type="button"
@@ -614,11 +614,11 @@ export default function ReportPage() {
                           : "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"
                       }`}
                     >
-                      {termsAccepted ? "Terms accepted — review again" : "Review Terms and Agreement"}
+                      {termsAccepted ? "Guidelines acknowledged — review again" : "Review Reporting Guidelines and Privacy Notice"}
                     </button>
                     {termsAccepted && (
                       <p className="mt-2 text-xs font-medium text-emerald-700">
-                        Terms and Agreement accepted. Complete the CAPTCHA, then submit your report.
+                        Reporting Guidelines and Privacy Notice acknowledged. Complete the CAPTCHA, then submit your report.
                       </p>
                     )}
                   </div>
@@ -678,13 +678,13 @@ export default function ReportPage() {
           >
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-4 sm:p-5">
               <div>
-                <h2 id="student-report-terms-title" className="text-lg font-extrabold text-slate-800">Terms and Agreement</h2>
-                <p className="mt-1 text-sm text-slate-500">Read to the end before agreeing.</p>
+                <h2 id="student-report-terms-title" className="text-lg font-extrabold text-slate-800">Reporting Guidelines and Privacy Notice</h2>
+                <p className="mt-1 text-sm text-slate-500">Please read the following information before submitting your report.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setTermsOpen(false)}
-                aria-label="Close Terms and Agreement"
+                aria-label="Close Reporting Guidelines and Privacy Notice"
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
               >
                 <X className="h-4 w-4" />
@@ -693,21 +693,28 @@ export default function ReportPage() {
 
             <div ref={termsRef} onScroll={handleTermsScroll} className="min-h-0 flex-1 overflow-y-auto p-4 text-sm leading-6 text-slate-600 sm:p-5">
               <p>
-                By submitting this Student Report, you confirm that the learner details and concern are accurate, necessary, and related to the identified student.
+                By submitting this Student Report, you acknowledge that the information you provide is accurate and truthful to the best of your knowledge.
               </p>
               <p className="mt-4">
-                ParentConnect records the submitter&apos;s IP address and device/browser information for audit and security purposes. Only authorized ICT and Principal users may view these security details in the Audit Trail event record.
+                ParentConnect collects your name, Learner Reference Number (LRN), grade level, section, and report details to identify the student involved, document concerns, and assist authorized school personnel in addressing the report.
               </p>
               <p className="mt-4">
-                Authorized school personnel may review the student details and report to investigate, document, and respond appropriately. Do not include unnecessary sensitive information, threats, or false statements.
+                For audit and security purposes, ParentConnect also records the submitter&apos;s IP address and device/browser information. Only authorized ICT and Principal users may access these security details through the system&apos;s Audit Trail.
               </p>
               <p className="mt-4">
-                This form is for school-related concerns. If a student is in immediate danger, contact the school or emergency services directly instead of waiting for a report response.
+                Submitted reports will be handled confidentially and accessed only by authorized school personnel for appropriate review, investigation, and action, subject to applicable laws and school policies.
               </p>
-              <p className="mt-8 font-semibold text-slate-800">End of Terms and Agreement.</p>
+              <p className="mt-4">
+                Please use this feature responsibly. Avoid submitting deliberately false information, threats, or unnecessary sensitive details.
+              </p>
+              <p className="mt-4">
+                If a student is in immediate danger, contact a teacher, school official, or emergency services directly instead of waiting for a response through the system.
+              </p>
+              <p className="mt-8 font-semibold text-slate-800">End of Reporting Guidelines and Privacy Notice.</p>
             </div>
 
             <div className="border-t border-slate-100 p-4 sm:p-5">
+              <p className="mb-3 text-sm font-semibold text-slate-800">Acknowledgment</p>
               <label className={`flex items-start gap-3 text-sm ${termsScrolled ? "text-slate-700" : "text-slate-400"}`}>
                 <input
                   type="checkbox"
@@ -716,9 +723,9 @@ export default function ReportPage() {
                   onChange={(event) => setTermsAccepted(event.target.checked)}
                   className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-amber-500 focus:ring-amber-400"
                 />
-                I have read and agree to the Terms and Agreement.
+                I have read and understood the Reporting Guidelines and Privacy Notice.
               </label>
-              {!termsScrolled && <p className="mt-2 text-xs text-amber-700">Scroll to the bottom of the terms to enable the agreement checkbox.</p>}
+              {!termsScrolled && <p className="mt-2 text-xs text-amber-700">Scroll to the bottom of the notice to enable the acknowledgment checkbox.</p>}
               <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
                 <button type="button" onClick={() => setTermsOpen(false)} className="min-h-11 w-full rounded-xl px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 sm:w-auto sm:py-2">
                   Cancel
@@ -729,7 +736,7 @@ export default function ReportPage() {
                   onClick={() => setTermsOpen(false)}
                   className="min-h-11 w-full rounded-xl bg-amber-400 px-4 py-3 text-sm font-bold text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:py-2"
                 >
-                  Agree to Terms
+                  Acknowledge and Continue
                 </button>
               </div>
             </div>

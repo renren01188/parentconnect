@@ -23,8 +23,17 @@ export default function HeroSection() {
 
       <div className="relative z-10 border-b border-white/15">
         <div className="flex w-full flex-col items-center justify-between gap-3 px-4 py-3 sm:flex-row sm:px-6 lg:px-8 xl:px-10 2xl:px-12">
-          <Link href="/" className="rounded-md text-xs font-extrabold tracking-[0.14em] text-white transition hover:text-sky-100 focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62] sm:text-sm">
-            SANTIAGO ELEMENTARY SCHOOL
+          <Link href="/" className="flex min-w-0 items-center gap-3 rounded-md focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62]">
+            <Image
+              src="/santiago-elementary-logo.png"
+              alt="Santiago Elementary School seal"
+              width={36}
+              height={36}
+              className="h-9 w-9 shrink-0 object-contain drop-shadow-sm"
+            />
+            <span className="text-center text-xs font-extrabold uppercase tracking-[0.14em] text-white sm:text-left sm:text-sm">
+              Santiago Elementary School
+            </span>
           </Link>
           <nav aria-label="Main navigation" className="flex items-center gap-5 text-sm font-semibold sm:gap-6">
             <Link href="/contact-us" className="rounded-md text-white/80 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-[#183a62]">
@@ -37,7 +46,7 @@ export default function HeroSection() {
         </div>
       </div>
 
-      <div className="relative z-10 grid min-h-[300px] w-full items-center gap-8 px-4 py-8 sm:min-h-[330px] sm:px-6 sm:py-10 lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)] lg:gap-12 lg:px-8 lg:py-12 xl:px-10 2xl:px-12">
+      <div className="relative z-10 grid min-h-[300px] w-full items-center px-4 py-8 sm:min-h-[330px] sm:px-6 sm:py-10 lg:px-8 lg:py-12 xl:px-10 2xl:px-12">
         <div className="w-full max-w-3xl text-left">
           <p className="text-sm font-extrabold tracking-[0.22em] text-sky-200 sm:text-base">PARENTCONNECT</p>
           <h1 className="mt-2 text-3xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-4xl lg:text-5xl">
@@ -52,28 +61,6 @@ export default function HeroSection() {
           </div>
         </div>
 
-        <div className="absolute bottom-6 right-4 flex items-center justify-end gap-4 sm:right-6 sm:gap-6 lg:bottom-8 lg:right-8 xl:right-10 2xl:right-12">
-          <div className="flex flex-col items-center text-center">
-            <Image
-              src="/deped-logo.png"
-              alt="Department of Education seal"
-              width={64}
-              height={64}
-              className="h-14 w-14 object-contain drop-shadow-xl sm:h-16 sm:w-16"
-            />
-            <span className="mt-2 text-[9px] font-semibold leading-tight text-white/75">DEPARTMENT OF<br />EDUCATION</span>
-          </div>
-          <div className="flex flex-col items-center text-center">
-            <Image
-              src="/santiago-elementary-logo.png"
-              alt="Santiago Elementary School seal"
-              width={64}
-              height={64}
-              className="h-14 w-14 object-contain drop-shadow-xl sm:h-16 sm:w-16"
-            />
-            <span className="mt-2 text-[9px] font-semibold leading-tight text-white/75">SANTIAGO<br />ELEM. SCHOOL</span>
-          </div>
-        </div>
       </div>
     </header>
   );

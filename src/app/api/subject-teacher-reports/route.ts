@@ -4,8 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { sendSubjectTeacherReportNotificationEmail } from "@/lib/mailer";
 import { getVerifiedSubjectTeacher, SUBJECT_TEACHER_REPORT_COOKIE } from "@/lib/subjectTeacherReportAuth";
 import { findAssignedAdviser, fullName, normalize } from "@/app/api/student-reports/_lib";
-import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
-import { publishReportRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { publishStudentReportsRealtimeInvalidation } from "@/lib/realtimeInvalidation";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUBJECT_TEACHER_REPORT_CATEGORIES = ["Academic Concern", "Health/Medical", "Behavioral Issue", "Attendance", "Other", "Permission Request", "General Inquiry"] as const;
@@ -28,6 +27,13 @@ function manilaDate() {
   }).formatToParts();
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+function studentReportCategory(categories: readonly string[]): "Behavioral" | "Safety" | "Academic" | "Other" {
+  if (categories.includes("Behavioral Issue")) return "Behavioral";
+  if (categories.includes("Academic Concern")) return "Academic";
+  if (categories.includes("Health/Medical") || categories.includes("Attendance")) return "Safety";
+  return "Other";
 }
 
 export async function POST(req: NextRequest) {
@@ -103,12 +109,10 @@ export async function POST(req: NextRequest) {
 
     type Parent = { id: number; email: string | null; parent_first_name: string | null; parent_middle_name: string | null; parent_last_name: string | null; parent_suffix: string | null; status: string | null; archive_status: string | null };
     const parents = (parentLinks ?? []).map((link) => link.parents as unknown as Parent);
-    // A Subject Teacher report is first and foremost an Adviser workflow. A
-    // Parent account is optional at submission time: a linked SMS-only Parent
-    // can still receive the in-app report, while an unlinked/pre-signup
-    // student must not prevent the Adviser from receiving the concern.
-    const parent = parents.find(parentAccountCanAccess);
-    const parentId = parent?.id ?? null;
+    // A Subject Teacher report is an Adviser-owned Student Report. Parent
+    // data is only an optional snapshot for a later Adviser "Notify Parent"
+    // action; completed Parent signup is never a submission requirement.
+    const parent = parents[0] ?? null;
     const parentEmail = trimmed(parent?.email);
 
     const teacherName = [teacherFirstName, teacherMiddleName, teacherLastName, teacherSuffix].filter(Boolean).join(" ");
@@ -120,9 +124,8 @@ export async function POST(req: NextRequest) {
         last_name: parent.parent_last_name,
         suffix: parent.parent_suffix,
       }) || "Parent / Guardian"
-      : "No Parent / Guardian account linked";
+      : null;
     const adviserName = fullName(adviser) || "Class Adviser";
-    const now = new Date().toISOString();
     const reportDay = manilaDate();
     const subject = `[Subject Teacher Report] ${teacherName}`;
 
@@ -130,7 +133,7 @@ export async function POST(req: NextRequest) {
     // applying the daily limit so an already-saved report remains retrievable
     // even after the teacher has reached that limit.
     const { data: existingSubmission, error: existingSubmissionError } = await supabase
-      .from("parent_adviser_reports")
+      .from("student_reports")
       .select("id")
       .eq("subject_teacher_submission_key", submissionKey)
       .maybeSingle();
@@ -142,8 +145,9 @@ export async function POST(req: NextRequest) {
     }
 
     const { count: reportsToday, error: reportsTodayError } = await supabase
-      .from("parent_adviser_reports")
+      .from("student_reports")
       .select("id", { count: "exact", head: true })
+      .eq("report_source", "subject_teacher")
       .eq("subject_teacher_email", subjectTeacher.email)
       .eq("subject_teacher_report_date_manila", reportDay);
     if (reportsTodayError) throw reportsTodayError;
@@ -154,27 +158,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data: report, error: reportError } = await supabase.rpc("submit_subject_teacher_report", {
-      p_parent_id: parentId,
-      // `parent_email` is a legacy non-null report column. An empty value
-      // intentionally means this report has no email-deliverable Parent; it
-      // is never used as a Parent-account lookup key.
-      p_parent_email: parentEmail,
-      p_parent_name: parentName,
-      p_adviser_id: adviser.id,
-      p_adviser_name: adviserName,
-      p_student_id: student.student_id,
-      p_student_name: studentName,
-      p_grade: student.grade,
-      p_section: student.section,
-      p_subject: subject,
-      p_subject_teacher_email: subjectTeacher.email,
-      p_teacher_name: teacherName,
-      p_concern: concern,
-      p_submission_key: submissionKey,
-      p_categories: categories,
-      p_created_at: now,
-    }).single();
+    const { data: report, error: reportError } = await supabase
+      .from("student_reports")
+      .insert({
+        student_db_id: student.id,
+        student_id: student.student_id,
+        student_name: studentName,
+        grade: student.grade,
+        section: student.section,
+        adviser_id: adviser.id,
+        parent_email: parentEmail || null,
+        parent_name: parentName,
+        category: studentReportCategory(categories),
+        title: subject,
+        description: concern,
+        status: "new",
+        report_date_manila: reportDay,
+        report_source: "subject_teacher",
+        subject_teacher_name: teacherName,
+        subject_teacher_email: subjectTeacher.email,
+        subject_teacher_categories: categories,
+        subject_teacher_submission_key: submissionKey,
+        subject_teacher_report_date_manila: reportDay,
+      })
+      .select("id")
+      .single();
     if (reportError) {
       if (reportError.code === "P0001" && reportError.message.includes("SUBJECT_TEACHER_DAILY_LIMIT")) {
         return NextResponse.json(
@@ -182,32 +190,27 @@ export async function POST(req: NextRequest) {
           { status: 429 }
         );
       }
+      if (reportError.code === "23505" && reportError.message.includes("student_reports_subject_teacher_submission_key_idx")) {
+        const { data: duplicate, error: duplicateError } = await supabase
+          .from("student_reports")
+          .select("id")
+          .eq("subject_teacher_submission_key", submissionKey)
+          .maybeSingle();
+        if (duplicateError) throw duplicateError;
+        if (duplicate) {
+          const response = NextResponse.json({ success: true, duplicate: true, message: "Report submitted successfully." });
+          response.cookies.delete(SUBJECT_TEACHER_REPORT_COOKIE);
+          return response;
+        }
+      }
       throw reportError;
     }
 
-    // This durable report uses the same authorized Parent/Adviser/Principal
-    // inboxes as a parent-submitted concern. Broadcast only an opaque refresh
-    // after the RPC commits, so no participant needs to reload manually.
-    await publishReportRealtimeInvalidation({
-      parentId,
-      adviserId: adviser.id,
-      reportId: Number((report as { id?: number } | null)?.id),
-      kind: "status",
-    });
+    // The report now appears in the Adviser/Principal Student Reports queue.
+    // Parent Reports changes only if the Adviser later chooses Notify Parent.
+    await publishStudentReportsRealtimeInvalidation(adviser.id);
 
     const emailResults = await Promise.allSettled([
-      parentEmail ? sendSubjectTeacherReportNotificationEmail({
-        recipientEmail: parentEmail,
-        recipientName: parentName,
-        recipientRole: "Parent / Guardian",
-        teacherName,
-        teacherEmail: subjectTeacher.email,
-        studentName,
-        grade: student.grade,
-        section: student.section,
-        concern,
-        revealReporter: false,
-      }) : Promise.resolve(),
       adviser.email ? sendSubjectTeacherReportNotificationEmail({
         recipientEmail: adviser.email,
         recipientName: adviserName,
@@ -227,21 +230,24 @@ export async function POST(req: NextRequest) {
       performedBy: teacherName,
       performedByRole: "Subject Teacher",
       performedByEmail: subjectTeacher.email,
-      targetUser: adviserName,
-      targetRole: "Adviser",
-      targetEmail: adviser.email,
-      module: "Reports",
+      targetUser: studentName,
+      targetRole: "Student",
+      targetType: "Student Report",
+      targetId: report?.id,
+      relatedReportId: report?.id,
+      relatedStudentId: student.student_id,
+      newStatus: "new",
+      module: "Student Reports",
       details: `Subject Teacher report submitted for ${studentName}.`,
       ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
       browser: req.headers.get("user-agent") ?? undefined,
+      metadata: { report_source: "subject_teacher" },
     });
 
-    const message = parentId
-      ? parentEmail
-        ? "Report submitted successfully. The assigned class adviser and linked Parent have been notified."
-        : "Report submitted successfully. The assigned class adviser has been notified. Parent email notification was skipped because no email address is available."
-      : "Report submitted successfully. The assigned class adviser has been notified. No Parent account is linked to this student yet.";
-    const response = NextResponse.json({ success: true, message }, { status: 201 });
+    const response = NextResponse.json({
+      success: true,
+      message: "Report submitted successfully. The assigned class adviser has been notified. The concern is now in Student Reports until the adviser chooses to notify the Parent.",
+    }, { status: 201 });
     response.cookies.delete(SUBJECT_TEACHER_REPORT_COOKIE);
     return response;
   } catch (error: unknown) {

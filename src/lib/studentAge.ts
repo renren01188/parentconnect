@@ -7,6 +7,33 @@ export type StudentAgeResult =
   | { value: number | null; error: null }
   | { value: null; error: string };
 
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Returns completed whole years for two ISO calendar dates.  Keeping this
+ * date-only avoids a timezone shift changing a learner's age near midnight.
+ */
+export function calculateStudentAge(birthDate: string | null | undefined, localToday: string): number | null {
+  if (typeof birthDate !== "string") return null;
+
+  const birthMatch = ISO_DATE_PATTERN.exec(birthDate);
+  const todayMatch = ISO_DATE_PATTERN.exec(localToday);
+  if (!birthMatch || !todayMatch || birthDate > localToday) return null;
+
+  const [, birthYearText, birthMonthText, birthDayText] = birthMatch;
+  const [, todayYearText, todayMonthText, todayDayText] = todayMatch;
+  const birthYear = Number(birthYearText);
+  const birthMonth = Number(birthMonthText);
+  const birthDay = Number(birthDayText);
+  const todayYear = Number(todayYearText);
+  const todayMonth = Number(todayMonthText);
+  const todayDay = Number(todayDayText);
+
+  let age = todayYear - birthYear;
+  if (todayMonth < birthMonth || (todayMonth === birthMonth && todayDay < birthDay)) age--;
+  return age >= 0 ? age : null;
+}
+
 export function getStudentAge(birthDate?: string | null, today = new Date()): string {
   if (!birthDate) return "—";
   const birth = new Date(`${birthDate.slice(0, 10)}T00:00:00`);

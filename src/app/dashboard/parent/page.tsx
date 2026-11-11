@@ -30,12 +30,15 @@ interface StudentInfo {
     };
     attendance: {
         attendanceDate?: string; date: string; day: string; status: string;
-        timeIn: string; timeOut: string; rfid: string;
+        timeIn: string; timeOut: string; rfid: string; missingTimeOut: boolean;
     }[];
     checkInTime: string;
+    checkOutTime: string;
     checkInDay: string;
     hasClassToday: boolean;
     isAtSchool: boolean;
+    hasCheckedOut: boolean;
+    missingTimeOut: boolean;
 }
 
 type ParentNotificationPreview = {
@@ -158,9 +161,12 @@ function emptyStudentInfo(student: { id: number; name: string; lrn: string; grad
         },
         attendance: [],
         checkInTime: "Not yet in",
+        checkOutTime: "—",
         checkInDay,
         hasClassToday: true,
         isAtSchool: false,
+        hasCheckedOut: false,
+        missingTimeOut: false,
     };
 }
 
@@ -323,12 +329,23 @@ export default function ParentDashboard() {
                             timeIn: r.time_in ?? "—",
                             timeOut: r.time_out ?? "—",
                             rfid: r.time_in ? "Verified" : "No Scan",
+                            missingTimeOut: Boolean(r.missing_time_out),
                         };
                     }) : [];
                     // Check-in info from today's record
                     const todayIso = manilaDateKey();
                     const todayRecord = s.attendance.find((record) => record.attendanceDate === todayIso);
-                    s.isAtSchool = s.hasClassToday && Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—");
+                    // A final Absent result created for a missing Time Out
+                    // must never look like an active RFID-verified presence.
+                    // Keep the Time In visible so a Parent can identify the
+                    // check-in that still needs follow-up.
+                    s.missingTimeOut = Boolean(todayRecord?.missingTimeOut)
+                        || (todayRecord?.status === "Absent" && Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—"));
+                    s.hasCheckedOut = !s.missingTimeOut && Boolean(todayRecord?.timeOut && todayRecord.timeOut !== "—");
+                    s.isAtSchool = s.hasClassToday
+                        && todayRecord?.status !== "Absent"
+                        && Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "—")
+                        && !s.hasCheckedOut;
                     s.checkInTime = !s.hasClassToday
                         ? "No Class For Today"
                         : todayRecord?.timeIn && todayRecord.timeIn !== "—"
@@ -339,6 +356,14 @@ export default function ParentDashboard() {
                             return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${suffix}`;
                         })()
                         : "Not yet in";
+                    s.checkOutTime = s.hasCheckedOut
+                        ? (() => {
+                            const [h, m] = todayRecord!.timeOut.split(":");
+                            const hour = Number(h);
+                            const suffix = hour >= 12 ? "PM" : "AM";
+                            return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${suffix}`;
+                        })()
+                        : "—";
                     s.checkInDay = new Intl.DateTimeFormat("en-US", {
                         timeZone: MANILA_TIME_ZONE,
                         weekday: "long",
@@ -609,19 +634,27 @@ export default function ParentDashboard() {
                     >
                         <div className="min-w-0">
                             <p className="text-white font-bold text-base leading-snug">
-                                {student.hasClassToday
-                                    ? `${greeting}, ${parentName.split(" ")[0]}! ${student.name.split(" ")[0]} is ${student.isAtSchool ? "at school" : "not yet in"}.`
-                                    : `No class for ${student.name.split(" ")[0]} today.`}
+                                {student.missingTimeOut
+                                    ? `${greeting}, ${parentName.split(" ")[0]}! ${student.name.split(" ")[0]} was marked absent today because no Time Out was recorded.`
+                                    : student.hasCheckedOut
+                                        ? `${greeting}, ${parentName.split(" ")[0]}! ${student.name.split(" ")[0]} checked out for today.`
+                                    : student.hasClassToday
+                                        ? `${greeting}, ${parentName.split(" ")[0]}! ${student.name.split(" ")[0]} is ${student.isAtSchool ? "at school" : "not yet in"}.`
+                                        : `No class for ${student.name.split(" ")[0]} today.`}
                             </p>
                             <p className="text-slate-400 text-xs mt-1">{student.checkInDay}</p>
                         </div>
                         <div className="shrink-0 sm:text-right">
-                            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">{student.hasClassToday ? "Checked in today" : "Class schedule"}</p>
-                            <p className="text-white font-extrabold text-2xl leading-tight">{student.checkInTime}</p>
-                            <p className={`${student.hasClassToday ? "text-green-400" : "text-slate-300"} text-[11px] mt-0.5 font-semibold`}>
-                                {student.hasClassToday
-                                    ? student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"
-                                    : "Based on the ICT schedule"}
+                            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">{student.missingTimeOut ? "Time In recorded" : student.hasCheckedOut ? "Checked out today" : student.hasClassToday ? "Checked in today" : "Class schedule"}</p>
+                            <p className="text-white font-extrabold text-2xl leading-tight">{student.hasCheckedOut ? student.checkOutTime : student.checkInTime}</p>
+                            <p className={`${student.missingTimeOut ? "text-amber-300" : student.hasClassToday ? "text-green-400" : "text-slate-300"} text-[11px] mt-0.5 font-semibold`}>
+                                {student.missingTimeOut
+                                    ? "⚠ No Time Out recorded • Marked absent"
+                                    : student.hasCheckedOut
+                                        ? "✓ Time Out recorded"
+                                    : student.hasClassToday
+                                        ? student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"
+                                        : "Based on the ICT schedule"}
                             </p>
                         </div>
                     </div>

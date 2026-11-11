@@ -1,9 +1,10 @@
 "use client";
 
 import { PublicHeroHeader } from "@/components/PublicHeroHeader";
+import Image from "next/image";
+import ParentConnectLogo from "../icon.png";
 
 import {
-  GraduationCap,
   ArrowLeft,
   Wifi,
   Bell,
@@ -13,7 +14,6 @@ import {
   BarChart3,
   Lock,
   CheckCircle,
-  School,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -115,6 +115,7 @@ export default function AboutPage() {
       <PublicHeroHeader
         title="About ParentConnect"
         description="Learn how ParentConnect helps Santiago Elementary School and families stay informed, connected, and supported."
+        showInstitutionLogos={false}
       />
 
       {/* ── Main ── */}
@@ -131,8 +132,14 @@ export default function AboutPage() {
 
           {/* ── What is ParentConnect ── */}
           <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 flex flex-col md:flex-row gap-8 items-center">
-            <div className="shrink-0 w-24 h-24 rounded-2xl bg-[#0d2d5e] flex items-center justify-center shadow-lg">
-              <School className="w-12 h-12 text-white" />
+            <div className="shrink-0 w-24 h-24 flex items-center justify-center">
+              <Image
+                src={ParentConnectLogo}
+                alt="ParentConnect logo"
+                width={80}
+                height={80}
+                className="h-20 w-20 object-contain"
+              />
             </div>
             <div>
               <h3 className="text-2xl font-extrabold text-slate-800 mb-3">
@@ -241,8 +248,14 @@ export default function AboutPage() {
 
           {/* ── School Info ── */}
           <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 flex flex-col md:flex-row gap-6 items-center">
-            <div className="shrink-0 w-20 h-20 rounded-full bg-emerald-700/20 border-2 border-emerald-400/40 flex items-center justify-center">
-              <GraduationCap className="w-10 h-10 text-emerald-600" />
+            <div className="shrink-0 w-20 h-20 flex items-center justify-center">
+              <Image
+                src="/santiago-elementary-logo.png"
+                alt="Santiago Elementary School logo"
+                width={72}
+                height={72}
+                className="h-[4.5rem] w-[4.5rem] object-contain"
+              />
             </div>
             <div>
               <h3 className="text-xl font-extrabold text-slate-800 mb-1">Santiago Elementary School</h3>

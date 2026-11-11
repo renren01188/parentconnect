@@ -26,7 +26,7 @@ const navItems = [
 
 function Badge({ count }: { count: number }) {
   if (count <= 0) return null;
-  return <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold leading-none text-white">{count > 99 ? "99+" : count}</span>;
+  return <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-sky-100 px-1 text-[10px] font-extrabold leading-none text-sky-950">{count > 99 ? "99+" : count}</span>;
 }
 
 export default function Sidebar({ ready = true }: { ready?: boolean }) {

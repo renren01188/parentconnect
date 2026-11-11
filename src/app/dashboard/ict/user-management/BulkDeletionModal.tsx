@@ -31,6 +31,13 @@ type StudentCandidate = {
   grade: string;
   section: string;
 };
+type StaffCandidate = {
+  id: number;
+  name: string;
+  email: string;
+  classGrade: string;
+  employeeId?: string;
+};
 export type BulkUser = {
   id: string;
   accountIds?: number[];
@@ -111,15 +118,18 @@ function DeletionScopeNotice({
 }
 
 export function BulkDeletionModal({
-  users,
   candidates,
   queue,
   sections: sectionCatalog,
   onClose,
   onChanged,
 }: {
-  users: BulkUser[];
-  candidates: { parents: ParentCandidate[]; students: StudentCandidate[] };
+  candidates: {
+    advisers: StaffCandidate[];
+    guidance: StaffCandidate[];
+    parents: ParentCandidate[];
+    students: StudentCandidate[];
+  };
   queue: QueueItem[];
   sections: { grade: string; name: string }[];
   onClose: () => void;
@@ -192,9 +202,28 @@ export function BulkDeletionModal({
     })),
     [candidates.parents],
   );
+  // Staff candidates come from the unpaginated protected API response, rather
+  // than the five directory rows currently visible behind this modal.
+  const staffUsers = useMemo<BulkUser[]>(() => {
+    const staff = kind === "adviser"
+      ? candidates.advisers
+      : kind === "guidance"
+        ? candidates.guidance
+        : [];
+    const role = kind === "guidance" ? "Guidance" : "Adviser";
+    return staff.map((member) => ({
+      id: `${kind}-${member.id}`,
+      accountIds: [member.id],
+      name: member.name,
+      email: member.email,
+      role,
+      classGrade: member.classGrade,
+      employeeId: member.employeeId,
+    }));
+  }, [candidates.advisers, candidates.guidance, kind]);
   const candidateUsers = useMemo(
     () =>
-      (kind === "parent" ? parentUsers : users)
+      (kind === "parent" ? parentUsers : staffUsers)
         .filter((user) => {
           if (kind === "adviser") return user.role === "Adviser";
           if (kind === "guidance") return user.role === "Guidance";
@@ -228,8 +257,8 @@ export function BulkDeletionModal({
             .includes(search.toLowerCase()),
         ),
     [
-      users,
       parentUsers,
+      staffUsers,
       kind,
       grade,
       section,

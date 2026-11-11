@@ -204,6 +204,10 @@ export async function GET(req: NextRequest) {
             time_in: string | null;
             time_out: string | null;
             time_out_status: string | null;
+            // An automatic Absent Time Out is an attendance finalization, not
+            // evidence that the learner physically checked out. Keep the
+            // original Time In while exposing the missing checkout clearly.
+            missing_time_out: boolean;
             status: string;
             via: string;
             rfid_scan: boolean;
@@ -218,6 +222,7 @@ export async function GET(req: NextRequest) {
                     time_in: null,
                     time_out: null,
                     time_out_status: null,
+                    missing_time_out: false,
                     status: log.status,
                     via: log.via,
                     rfid_scan: false,
@@ -232,14 +237,18 @@ export async function GET(req: NextRequest) {
                 entry.status = log.status;
                 entry.via = log.via;
             } else if (log.type === "Time Out") {
-                entry.time_out = log.time_logged;
                 entry.time_out_status = log.status;
                 // A saved Auto Time Out with Absent status is the learner's
-                // final daily attendance result. The Time In remains intact
-                // as the arrival record.
-                if (log.status === "Absent") {
+                // final daily attendance result, not a physical departure.
+                // The Time In remains intact as the arrival record and the
+                // Parent UI can explain why it is final Absent.
+                const isAutomaticMissingTimeOut = log.status === "Absent" && log.via === "Auto";
+                if (isAutomaticMissingTimeOut) {
+                    entry.missing_time_out = true;
                     entry.status = "Absent";
                     entry.via = log.via;
+                } else {
+                    entry.time_out = log.time_logged;
                 }
             }
         }

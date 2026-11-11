@@ -16,6 +16,14 @@ function normalizeAge(value) {
     : { value: null, error: "invalid" };
 }
 
+function calculateAge(birthDate, today) {
+  const [birthYear, birthMonth, birthDay] = birthDate.split("-").map(Number);
+  const [todayYear, todayMonth, todayDay] = today.split("-").map(Number);
+  let age = todayYear - birthYear;
+  if (todayMonth < birthMonth || (todayMonth === birthMonth && todayDay < birthDay)) age--;
+  return age;
+}
+
 assert.deepEqual(normalizeAge("12"), { value: 12, error: null });
 assert.deepEqual(normalizeAge(120), { value: 120, error: null });
 assert.deepEqual(normalizeAge(""), { value: null, error: null });
@@ -23,16 +31,23 @@ assert.equal(normalizeAge("0").error, "invalid");
 assert.equal(normalizeAge("121").error, "invalid");
 assert.equal(normalizeAge("12.5").error, "invalid");
 assert.equal(normalizeAge("twelve").error, "invalid");
+assert.equal(calculateAge("2022-11-10", "2026-11-10"), 4);
+assert.equal(calculateAge("2022-11-11", "2026-11-10"), 3);
+assert.equal(calculateAge("2014-12-01", "2026-11-10"), 11);
 
 const registration = read("src", "components", "student-parent-registration", "StudentParentRegistration.tsx");
 assert.match(registration, /normalizeStudentAge/);
 assert.match(registration, /age:\s*""/);
 assert.match(registration, /Field label="Age"/);
 assert.match(registration, /ageValidation\.error/);
+assert.match(registration, /calculateStudentAge\(value, localToday\)/);
+assert.match(registration, /readOnly aria-readonly="true"/);
+assert.doesNotMatch(registration, /set\("age", e\.target\.value\)/);
 
 const createStudent = read("src", "app", "api", "students", "route.ts");
-assert.match(createStudent, /normalizeStudentAge\(age\)/);
-assert.match(createStudent, /age:\s*normalizedAge\.value/);
+assert.match(createStudent, /calculateStudentAge\(normalizedBirthDate\.value, localToday\)/);
+assert.match(createStudent, /normalizeStudentAge\(calculatedAge\)/);
+assert.match(createStudent, /age:\s*normalizedCalculatedAge\.value/);
 
 const profile = read("src", "app", "dashboard", "ict", "StudentProfiles", "page.tsx");
 assert.match(profile, /FInput label="LRN"/);

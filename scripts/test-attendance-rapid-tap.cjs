@@ -17,6 +17,11 @@ assert.doesNotMatch(adviserPage, /RfidScannerMode|rfidScannerMode|setRfidScanner
 assert.doesNotMatch(adviserPage, />\s*Default\s*</);
 assert.doesNotMatch(adviserPage, /Default scanning|switching to Default mode/);
 assert.match(adviserPage, /const rapidTapScannerReady = isScanningOpen && rapidTapStorageReady/);
+assert.match(adviserPage, /const hasRapidTapProcessingItems = rapidTapStorageReady && rapidTapPendingCount > 0/);
+assert.match(adviserPage, /const hasRapidTapAttentionItems = rapidTapStorageReady && rapidTapFailedCount > 0/);
+assert.match(adviserPage, /hasRapidTapProcessingItems \? \(/);
+assert.match(adviserPage, /No RFID scans are waiting to be processed\. Review or retry the saved scan details below\./);
+assert.doesNotMatch(adviserPage, /hasRapidTapQueueItems/);
 assert.match(adviserPage, /if \(!rapidTapStorageReady\)[\s\S]*?Rapid Tap is preparing secure local storage/);
 assert.match(adviserPage, /enqueueRapidTapScan\(value\)/);
 assert.match(adviserPage, /Rapid Tap captured/);

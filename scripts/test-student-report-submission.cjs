@@ -30,8 +30,13 @@ assert.match(reportForm, /disabled=\{!canSubmit\}/);
 assert.match(reportForm, /Complete the reCAPTCHA verification before submitting your report\./);
 assert.match(reportForm, /typeof window\.grecaptcha\?\.render === "function"\) setRecaptchaLoaded\(true\)/);
 assert.match(reportForm, /Complete the CAPTCHA to enable Submit Report\./);
-assert.match(reportForm, /Terms and Agreement/);
+assert.match(reportForm, /Reporting Guidelines and Privacy Notice/);
+assert.match(reportForm, /By submitting this Student Report, you acknowledge that the information you provide is accurate and truthful/);
 assert.match(reportForm, /records the submitter&apos;s IP address and device\/browser information/);
+assert.match(reportForm, /Only authorized ICT and Principal users may access these security details through the system&apos;s Audit Trail/);
+assert.match(reportForm, /I have read and understood the Reporting Guidelines and Privacy Notice/);
+assert.match(reportForm, /Acknowledge and Continue/);
+assert.doesNotMatch(reportForm, /Terms and Agreement/);
 assert.match(reportForm, /function sortGradeLevels/);
 assert.match(reportForm, /includeEmptyOption/);
 assert.match(reportForm, /onChange\(\"\"\); setOpen\(false\);/);
@@ -57,7 +62,8 @@ assert.match(studentReportsRoute, /\.insert\(\{[\s\S]*?\.select\("id"\)[\s\S]*?\
 // older initial fetch from hiding the new report after the Realtime event.
 assert.match(studentReportsRoute, /publishStudentReportsRealtimeInvalidation/);
 assert.match(studentReportStatusRoute, /await publishStudentReportsRealtimeInvalidation\(adviser\.id\)/);
-assert.match(subjectTeacherReportsRoute, /await publishReportRealtimeInvalidation\(\{[\s\S]*?parentId: parent\.id,[\s\S]*?adviserId: adviser\.id/);
+assert.match(subjectTeacherReportsRoute, /await publishStudentReportsRealtimeInvalidation\(adviser\.id\)/);
+assert.doesNotMatch(subjectTeacherReportsRoute, /\.rpc\("submit_subject_teacher_report"/);
 assert.match(reportRealtimeHook, /if \(invalidation\.scope === "students"\)[\s\S]*?studentReportUpdateRef\.current/);
 assert.match(adviserNotifications, /scope === "reports" \|\| scope === "students"/);
 assert.match(adviserNotifications, /scope === "students"[\s\S]*?void loadReportCount\(\)/);

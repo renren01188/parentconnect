@@ -67,6 +67,16 @@ type RegisteredStudent = {
   archive_status?: string | null;
 };
 
+type RegisteredStaff = {
+  id: number;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string | null;
+  suffix: string | null;
+  email: string | null;
+  archive_status?: string | null;
+};
+
 function isActiveArchivableRecord(record: { archive_status?: string | null }) {
   const status = String(record.archive_status ?? "").trim().toLowerCase();
   return status !== "archived" && status !== "deleted";
@@ -77,6 +87,18 @@ function studentName(student: Omit<RegisteredStudent, "archive_status">) {
     .filter(Boolean)
     .join(" ")
     .trim() || "Student";
+}
+
+function staffName(staff: Omit<RegisteredStaff, "archive_status" | "email">) {
+  return [staff.first_name, staff.middle_name, staff.last_name, staff.suffix]
+    .filter(Boolean)
+    .join(" ")
+    .trim() || "Staff member";
+}
+
+function isActiveScheduledDeletionConflict(error: { code?: string; message?: string } | null) {
+  return error?.code === "23505"
+    && String(error.message ?? "").includes("scheduled_deletions_one_active_target_idx");
 }
 
 type ScheduledDeletionRealtimeTarget = {
@@ -328,6 +350,9 @@ export async function POST(req: NextRequest) {
         }));
       }
       const { data, error } = await supabase.from("scheduled_deletions").insert(rows).select("*");
+      if (isActiveScheduledDeletionConflict(error)) {
+        return NextResponse.json({ success: false, message: "One or more selected records already have an active deletion request." }, { status: 409 });
+      }
       if (error) throw error;
       const { data: ictAdmins } = await supabase.from("ict_admins").select("email").not("email", "is", null);
       const adviserName = `${adviser.first_name} ${adviser.last_name}`.trim() || "An adviser";
@@ -368,7 +393,19 @@ export async function POST(req: NextRequest) {
         .filter((target: { type: string }) => target.type === "student")
         .map((target: { id: number }) => Number(target.id))
         .filter((id: number) => Number.isSafeInteger(id) && id > 0))];
-      const [parentLookup, studentLookup] = await Promise.all([
+      const requestedAdviserIds = [...new Set<number>(requestedTargets
+        .filter((target: { type: string }) => target.type === "adviser")
+        .map((target: { id: number }) => Number(target.id))
+        .filter((id: number) => Number.isSafeInteger(id) && id > 0))];
+      const requestedGuidanceIds = [...new Set<number>(requestedTargets
+        .filter((target: { type: string }) => target.type === "guidance")
+        .map((target: { id: number }) => Number(target.id))
+        .filter((id: number) => Number.isSafeInteger(id) && id > 0))];
+      const requestedIctIds = [...new Set<number>(requestedTargets
+        .filter((target: { type: string }) => target.type === "ict")
+        .map((target: { id: number }) => Number(target.id))
+        .filter((id: number) => Number.isSafeInteger(id) && id > 0))];
+      const [parentLookup, studentLookup, adviserLookup, guidanceLookup, ictLookup] = await Promise.all([
         requestedParentIds.length
           ? supabase
             .from("parents")
@@ -381,53 +418,121 @@ export async function POST(req: NextRequest) {
             .select("id, student_id, first_name, middle_name, last_name, suffix, archive_status")
             .in("id", requestedStudentIds)
           : Promise.resolve({ data: [], error: null }),
+        requestedAdviserIds.length
+          ? supabase
+            .from("advisers")
+            .select("id, first_name, middle_name, last_name, suffix, email, archive_status")
+            .in("id", requestedAdviserIds)
+          : Promise.resolve({ data: [], error: null }),
+        requestedGuidanceIds.length
+          ? supabase
+            .from("guidance_counselors")
+            .select("id, first_name, middle_name, last_name, suffix, email, archive_status")
+            .in("id", requestedGuidanceIds)
+          : Promise.resolve({ data: [], error: null }),
+        requestedIctIds.length
+          ? supabase
+            .from("ict_admins")
+            .select("id, first_name, middle_name, last_name, suffix, email, archive_status")
+            .in("id", requestedIctIds)
+          : Promise.resolve({ data: [], error: null }),
       ]);
       const { data: registeredParents, error: parentLookupError } = parentLookup;
       const { data: registeredStudents, error: studentLookupError } = studentLookup;
+      const { data: registeredAdvisers, error: adviserLookupError } = adviserLookup;
+      const { data: registeredGuidance, error: guidanceLookupError } = guidanceLookup;
+      const { data: registeredIct, error: ictLookupError } = ictLookup;
       if (parentLookupError) throw parentLookupError;
       if (studentLookupError) throw studentLookupError;
+      if (adviserLookupError) throw adviserLookupError;
+      if (guidanceLookupError) throw guidanceLookupError;
+      if (ictLookupError) throw ictLookupError;
 
       const parentRows = ((registeredParents ?? []) as RegisteredParent[]).filter(isActiveArchivableRecord);
       const studentRows = ((registeredStudents ?? []) as RegisteredStudent[]).filter(isActiveArchivableRecord);
+      const adviserRows = ((registeredAdvisers ?? []) as RegisteredStaff[]).filter(isActiveArchivableRecord);
+      const guidanceRows = ((registeredGuidance ?? []) as RegisteredStaff[]).filter(isActiveArchivableRecord);
+      const ictRows = ((registeredIct ?? []) as RegisteredStaff[]).filter(isActiveArchivableRecord);
       const parentById = new Map<number, RegisteredParent>(parentRows.map((parent) => [Number(parent.id), parent]));
       const studentById = new Map<number, RegisteredStudent>(studentRows.map((student) => [Number(student.id), student]));
+      const adviserById = new Map<number, RegisteredStaff>(adviserRows.map((adviser) => [Number(adviser.id), adviser]));
+      const guidanceById = new Map<number, RegisteredStaff>(guidanceRows.map((guidance) => [Number(guidance.id), guidance]));
+      const ictById = new Map<number, RegisteredStaff>(ictRows.map((ictAdmin) => [Number(ictAdmin.id), ictAdmin]));
       const rejectedRequestedParents = requestedParentIds.filter((id) => !parentById.has(id));
       const rejectedRequestedStudents = requestedStudentIds.filter((id) => !studentById.has(id));
-      if (rejectedRequestedParents.length || rejectedRequestedStudents.length) {
+      const rejectedRequestedAdvisers = requestedAdviserIds.filter((id) => !adviserById.has(id));
+      const rejectedRequestedGuidance = requestedGuidanceIds.filter((id) => !guidanceById.has(id));
+      const rejectedRequestedIct = requestedIctIds.filter((id) => !ictById.has(id));
+      const rejectedTargetCount = rejectedRequestedParents.length
+        + rejectedRequestedStudents.length
+        + rejectedRequestedAdvisers.length
+        + rejectedRequestedGuidance.length
+        + rejectedRequestedIct.length;
+      if (rejectedTargetCount) {
         return NextResponse.json({
           success: false,
-          message: "One or more selected student or parent records no longer exist or have already been archived.",
-          deletion: { successful: 0, failed: rejectedRequestedParents.length + rejectedRequestedStudents.length },
+          message: "One or more selected records no longer exist or have already been archived.",
+          deletion: { successful: 0, failed: rejectedTargetCount },
         }, { status: 404 });
       }
-      const [activeParentRequests, activeStudentRequests] = await Promise.all([
+      const [activeParentRequests, activeStudentRequests, activeAdviserRequests, activeGuidanceRequests, activeIctRequests] = await Promise.all([
         requestedParentIds.length
           ? supabase.from("scheduled_deletions").select("target_id").eq("target_type", "parent").in("target_id", requestedParentIds.map(String)).in("status", ["PendingICT", "Scheduled"])
           : Promise.resolve({ data: [], error: null }),
         requestedStudentIds.length
           ? supabase.from("scheduled_deletions").select("target_id").eq("target_type", "student").in("target_id", requestedStudentIds.map(String)).in("status", ["PendingICT", "Scheduled"])
           : Promise.resolve({ data: [], error: null }),
+        requestedAdviserIds.length
+          ? supabase.from("scheduled_deletions").select("target_id").eq("target_type", "adviser").in("target_id", requestedAdviserIds.map(String)).in("status", ["PendingICT", "Scheduled"])
+          : Promise.resolve({ data: [], error: null }),
+        requestedGuidanceIds.length
+          ? supabase.from("scheduled_deletions").select("target_id").eq("target_type", "guidance").in("target_id", requestedGuidanceIds.map(String)).in("status", ["PendingICT", "Scheduled"])
+          : Promise.resolve({ data: [], error: null }),
+        requestedIctIds.length
+          ? supabase.from("scheduled_deletions").select("target_id").eq("target_type", "ict").in("target_id", requestedIctIds.map(String)).in("status", ["PendingICT", "Scheduled"])
+          : Promise.resolve({ data: [], error: null }),
       ]);
       if (activeParentRequests.error) throw activeParentRequests.error;
       if (activeStudentRequests.error) throw activeStudentRequests.error;
-      if (activeParentRequests.data?.length || activeStudentRequests.data?.length) {
-        return NextResponse.json({ success: false, message: "One or more selected students or parent accounts already have an active deletion request." }, { status: 409 });
+      if (activeAdviserRequests.error) throw activeAdviserRequests.error;
+      if (activeGuidanceRequests.error) throw activeGuidanceRequests.error;
+      if (activeIctRequests.error) throw activeIctRequests.error;
+      if (
+        activeParentRequests.data?.length
+        || activeStudentRequests.data?.length
+        || activeAdviserRequests.data?.length
+        || activeGuidanceRequests.data?.length
+        || activeIctRequests.data?.length
+      ) {
+        return NextResponse.json({ success: false, message: "One or more selected records already have an active deletion request." }, { status: 409 });
       }
       const validTargets = requestedTargets.filter((target: { id: number; type: string }) =>
         (target.type !== "parent" || parentById.has(target.id))
-        && (target.type !== "student" || studentById.has(target.id)),
+        && (target.type !== "student" || studentById.has(target.id))
+        && (target.type !== "adviser" || adviserById.has(target.id))
+        && (target.type !== "guidance" || guidanceById.has(target.id))
+        && (target.type !== "ict" || ictById.has(target.id)),
       );
       const deleteAfter = new Date(Date.now() + THIRTY_DAYS).toISOString();
       const rows = validTargets.map((target: { id: number; name: string; type: string; email: string | null }) => {
         const parent = target.type === "parent" ? parentById.get(target.id) : undefined;
         const student = target.type === "student" ? studentById.get(target.id) : undefined;
+        const staff = target.type === "adviser"
+          ? adviserById.get(target.id)
+          : target.type === "guidance"
+            ? guidanceById.get(target.id)
+            : target.type === "ict"
+              ? ictById.get(target.id)
+              : undefined;
         // Parent deletion notices are in-app only. Do not carry a delivery
         // address from either the browser or the Parent record into this flow.
+        // Staff names and email destinations likewise come from the protected
+        // source rows, never the browser-provided bulk-selection payload.
         return {
           target_type: target.type,
           target_id: String(target.id),
-          target_name: parent ? parentName(parent) : student ? studentName(student) : target.name,
-          target_email: parent ? null : target.email,
+          target_name: parent ? parentName(parent) : student ? studentName(student) : staff ? staffName(staff) : target.name,
+          target_email: parent ? null : staff ? staff.email : target.email,
           requested_by_role: "ICT",
           requested_by_id: authId,
           reason: reason.trim(),
@@ -441,10 +546,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           success: false,
           message: "None of the selected records could be found.",
-          deletion: { successful: 0, failed: rejectedRequestedParents.length + rejectedRequestedStudents.length },
+          deletion: { successful: 0, failed: rejectedTargetCount },
         }, { status: 400 });
       }
       const { data, error } = await supabase.from("scheduled_deletions").insert(rows).select("*");
+      if (isActiveScheduledDeletionConflict(error)) {
+        return NextResponse.json({ success: false, message: "One or more selected records already have an active deletion request." }, { status: 409 });
+      }
       if (error) throw error;
 
       // Suspending selected parent accounts is one bounded database update. A
@@ -475,6 +583,38 @@ export async function POST(req: NextRequest) {
         deletion.target_type !== "parent" || suspendedParentIds.has(Number(deletion.target_id)),
       );
 
+      // Unlike Parents, staff have no in-app deletion notice. Send the
+      // existing recoverable-archive email for each Adviser, Guidance, or ICT
+      // account whose protected account row supplied a valid email address.
+      const deleteAfterLabel = new Date(deleteAfter).toLocaleDateString("en-PH", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      await Promise.all(successfulRows
+        .filter((deletion) => ["adviser", "guidance", "ict"].includes(deletion.target_type))
+        .map(async (deletion) => {
+          const recipientEmail = typeof deletion.target_email === "string"
+            ? deletion.target_email.trim()
+            : "";
+          if (!isValidEmail(recipientEmail)) return;
+          try {
+            await sendAccountDeletionScheduledEmail({
+              recipientEmail,
+              recipientName: deletion.target_name,
+              accountType: accountTypeLabel(deletion.target_type),
+              reason: reason.trim(),
+              deleteAfter: deleteAfterLabel,
+            });
+            await supabase
+              .from("scheduled_deletions")
+              .update({ notice_sent_at: new Date().toISOString() })
+              .eq("id", deletion.id);
+          } catch (mailError) {
+            console.error("Account deletion-schedule email failed:", mailError);
+          }
+        }));
+
       const ictName = getIctName(ict);
       await logAudit({
         action: "Schedule Bulk Deletion",
@@ -484,14 +624,14 @@ export async function POST(req: NextRequest) {
         targetUser: `${successfulRows.length} account${successfulRows.length === 1 ? "" : "s"}`,
         targetRole: "Multiple Users",
         module: "User Management",
-        details: `Scheduled bulk deletion for ${successfulRows.length} record${successfulRows.length === 1 ? "" : "s"}; ${rejectedRequestedParents.length + rejectedRequestedStudents.length + failedScheduledRows.length} selected record(s) failed. Parent accounts receive an in-app notification only after scheduling. Reason: ${reason.trim()}`,
+        details: `Scheduled bulk deletion for ${successfulRows.length} record${successfulRows.length === 1 ? "" : "s"}; ${rejectedTargetCount + failedScheduledRows.length} selected record(s) failed. Parent accounts receive an in-app notification only after scheduling; staff accounts receive the configured archive email. Reason: ${reason.trim()}`,
       });
       await publishScheduledDeletionInvalidations(successfulRows);
       return NextResponse.json({
         success: true,
         deletions: successfulRows,
-        deletion: { successful: successfulRows.length, failed: rejectedRequestedParents.length + rejectedRequestedStudents.length + failedScheduledRows.length },
-        message: "Selected records are scheduled for deletion in 30 days. Scheduled parent accounts receive an in-app notification.",
+        deletion: { successful: successfulRows.length, failed: rejectedTargetCount + failedScheduledRows.length },
+        message: "Selected records are scheduled for deletion in 30 days. Parent accounts receive an in-app notice and staff accounts receive the configured archive email.",
       });
     }
     // Student Profiles deliberately never receives Parent contact details.
@@ -539,6 +679,9 @@ export async function POST(req: NextRequest) {
     const status = "Scheduled";
     const scheduledAt = ict ? new Date(Date.now() + THIRTY_DAYS).toISOString() : null;
     const { data, error } = await supabase.from("scheduled_deletions").insert({ target_type: targetType, target_id: String(targetId), target_name: targetName, target_email: targetType === "parent" ? null : resolvedTargetEmail, requested_by_role: ict ? "ICT" : "Adviser", requested_by_id: authId, reason: reason.trim(), status, approved_at: ict ? new Date().toISOString() : null, approved_by_ict_id: ict?.id ?? null, delete_after: scheduledAt }).select("*").single();
+    if (isActiveScheduledDeletionConflict(error)) {
+      return NextResponse.json({ success: false, message: "This record already has an active deletion request." }, { status: 409 });
+    }
     if (error) throw error;
     if (ict) await suspendDeletionTarget(data);
     if (ict && ["adviser", "guidance", "ict"].includes(targetType) && targetEmail && scheduledAt) {

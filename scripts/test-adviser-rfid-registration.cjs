@@ -25,4 +25,11 @@ assert.match(attendancePage, /student\.id === selectedRfidStudent\.id[\s\S]*?rfi
 assert.match(attendancePage, /setRfidStudentDbId\(null\)/);
 assert.match(attendancePage, /alreadyAssigned[\s\S]*?No duplicate assignment was created/);
 
+// A delayed roster response begun before a confirmed replacement must not
+// overwrite the new UID shown by the immediate local update.
+assert.match(attendancePage, /const studentsLoadRequestRef = useRef\(0\)/);
+assert.match(attendancePage, /const requestId = \+\+studentsLoadRequestRef\.current/);
+assert.match(attendancePage, /if \(data\.success && requestId === studentsLoadRequestRef\.current\)[\s\S]*?setStudents\(data\.data \|\| \[\]\)/);
+assert.match(attendancePage, /if \(requestId === studentsLoadRequestRef\.current\) setIsLoadingStudents\(false\)/);
+
 console.log("Adviser RFID registration lookup, idempotency, and local roster update checks passed.");

@@ -1455,7 +1455,23 @@ function PrincipalReportsPageContent() {
     () => findSelectedParentGroup(parentGroups, selectedParentKey, selectedReport?.id ?? null) as ParentGroup | null,
     [parentGroups, selectedParentKey, selectedReport?.id]
   );
-  const allCategories = Array.from(new Set(currentReports.flatMap((report) => report.categories))).sort();
+  const reportsForCategoryFilter = useMemo(() => currentReports.filter((report) => {
+    if (filterTab === "Pending") return report.status === "New" || report.status === "Read";
+    if (filterTab === "Ongoing") return report.status === "Ongoing";
+    if (filterTab === "Escalated") return report.escalatedToPrincipal;
+    if (filterTab === "Resolved") return report.status === "Resolved";
+    return true;
+  }), [currentReports, filterTab]);
+  const allCategories = useMemo(
+    () => Array.from(new Set(reportsForCategoryFilter.flatMap((report) => report.categories))).sort(),
+    [reportsForCategoryFilter],
+  );
+
+  useEffect(() => {
+    if (categoryFilter !== "All" && !allCategories.includes(categoryFilter)) {
+      setCategoryFilter("All");
+    }
+  }, [allCategories, categoryFilter]);
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
   const unreadMessageCount = conversations.filter((conversation) => conversation.status === "New Message" || conversation.status === "Unread").length;
   const selectedConversationMessageCount = selectedConversation?.messages.length ?? 0;
@@ -2746,9 +2762,11 @@ function PrincipalReportsPageContent() {
                       onChange={(event) => setCategoryFilter(event.target.value)}
                       className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 pr-7 text-xs font-semibold text-slate-600 outline-none transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
                     >
-                      <option value="All">All Categories ({currentReports.length})</option>
+                      <option value="All">All Categories ({reportsForCategoryFilter.length})</option>
                       {allCategories.map((category) => (
-                        <option key={category} value={category}>{category}</option>
+                        <option key={category} value={category}>
+                          {category} ({reportsForCategoryFilter.filter((report) => report.categories.includes(category)).length})
+                        </option>
                       ))}
                     </select>
                     <ChevronRight className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 rotate-90 -translate-y-1/2 text-slate-400" />
@@ -2917,16 +2935,16 @@ function PrincipalReportsPageContent() {
               </div>
 
               <div className={panelClass(viewStep === "detail", "bg-slate-50", detailWidth, detailPosition)}>
-                <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 bg-white px-3 py-2">
+                <div className="flex shrink-0 items-center border-b border-slate-100 bg-white px-3 py-2 md:hidden">
                   <button
+                    type="button"
                     onClick={() => { setSelectedReport(null); setViewStep(selectedParent ? "reports" : "list"); }}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-violet-50 hover:text-violet-600"
+                    aria-label="Back to reports"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-violet-50 hover:text-violet-600"
                   >
-                    <ChevronRight className="h-3.5 w-3.5 rotate-180" /> Back
+                    <ChevronRight className="h-4 w-4 rotate-180" />
                   </button>
-                  <span className="truncate text-xs font-semibold text-slate-700">{selectedReport?.subject ?? ""}</span>
                 </div>
-
                 {selectedReport ? (() => {
                   const replies = principalReplies[selectedReport.id] ?? [];
                   const isResolved = selectedReport.status === "Resolved";

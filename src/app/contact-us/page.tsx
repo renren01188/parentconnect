@@ -24,6 +24,14 @@ export default function ContactUsPage() {
   const submissionIdRef = useRef<string | null>(null);
   const isFormComplete = [form.name, form.email, form.phone, form.subject, form.message]
     .every((value) => value.trim().length > 0);
+  const missingContactRequirements = [
+    !form.name.trim() ? "Name" : "",
+    !form.email.trim() ? "Email" : "",
+    !form.phone.trim() ? "Phone" : "",
+    !form.subject.trim() ? "Subject" : "",
+    !form.message.trim() ? "Message" : "",
+    !captchaToken ? "CAPTCHA verification" : "",
+  ].filter(Boolean);
   const canSubmit = isFormComplete && Boolean(captchaToken) && !loading;
 
   const handleChange = (
@@ -83,6 +91,7 @@ export default function ContactUsPage() {
       <PublicHeroHeader
         title="Contact Us"
         description="Get in touch with Santiago Elementary School. Send us your questions, feedback, or concerns and we will be glad to help."
+        showInstitutionLogos={false}
       />
 
       {/* ── Main Content ── */}
@@ -194,7 +203,7 @@ export default function ContactUsPage() {
                     {/* Subject */}
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                        Subject
+                        Subject <span aria-hidden="true" className="text-red-500">*</span><span className="sr-only"> (required)</span>
                       </label>
                       <input
                         type="text"
@@ -210,7 +219,7 @@ export default function ContactUsPage() {
                     {/* Message */}
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                        Message
+                        Message <span aria-hidden="true" className="text-red-500">*</span><span className="sr-only"> (required)</span>
                       </label>
                       <textarea
                         name="message"
@@ -236,25 +245,42 @@ export default function ContactUsPage() {
 
                     {/* Send */}
                     <div className="flex justify-end">
-                      <button
-                        type="submit"
-                        disabled={!canSubmit}
-                        className="flex items-center gap-2 bg-[#0d2d5e] hover:bg-[#163a75] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none text-white font-bold py-3 px-8 rounded-full transition-all duration-200 active:scale-95 shadow-md text-sm"
+                      <div
+                        className="group relative"
+                        tabIndex={!canSubmit && !loading ? 0 : -1}
+                        aria-describedby={!canSubmit && !loading ? "contact-send-requirements" : undefined}
+                        aria-label={!canSubmit && !loading ? `Before sending, complete: ${missingContactRequirements.join(", ")}` : undefined}
                       >
-                        {loading ? (
-                          <span className="flex items-center gap-2">
-                            <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                            </svg>
-                            Sending...
-                          </span>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4" /> Send
-                          </>
+                        {!canSubmit && !loading && missingContactRequirements.length > 0 && (
+                          <div
+                            id="contact-send-requirements"
+                            role="tooltip"
+                            className="pointer-events-none absolute bottom-full right-0 z-10 mb-3 w-72 max-w-[calc(100vw-2rem)] rounded-xl bg-slate-800 px-3 py-2.5 text-xs leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                          >
+                            <p className="font-bold">Before sending, complete:</p>
+                            <p className="mt-0.5 text-slate-200">{missingContactRequirements.join(" • ")}</p>
+                          </div>
                         )}
-                      </button>
+                        <button
+                          type="submit"
+                          disabled={!canSubmit}
+                          className="flex items-center gap-2 bg-[#0d2d5e] hover:bg-[#163a75] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none text-white font-bold py-3 px-8 rounded-full transition-all duration-200 active:scale-95 shadow-md text-sm"
+                        >
+                          {loading ? (
+                            <span className="flex items-center gap-2">
+                              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                              Sending...
+                            </span>
+                          ) : (
+                            <>
+                              <Send className="w-4 h-4" /> Send
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </form>
                 </div>
