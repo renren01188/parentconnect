@@ -6,6 +6,20 @@ This is a source-tree snapshot, not a release checklist. It records verified
 paths and working-tree state only; feature behavior is not considered verified
 unless a named check has been run and recorded below.
 
+### ICT Manage Class Sessions rename repair
+
+- **Complete in source:** the production rename failure was traced to PostgreSQL
+  `42702` (ambiguous `grade`) inside `rename_section`. The forward migration
+  `20261111103000_fix_section_rename_column_ambiguity.sql` qualifies every
+  table reference while preserving the existing server-only function boundary,
+  in-place rename, and related-label synchronization.
+- **Affected files:** the new migration, the ICT section-rename regression
+  check, and the class-session architecture note.
+- **Verified:** `npm.cmd run test:ict-section-rename`, focused ESLint,
+  `npx.cmd tsc --noEmit`, and `git diff --check` passed on 2026-11-11.
+  The migration still needs to be applied through the normal deployment path
+  before the affected production batch can be retried.
+
 ### Audit Trail archive-scoped summaries and export-date validation
 
 - **Complete in source:** ICT and Principal Audit Trail responses now return

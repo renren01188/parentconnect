@@ -96,6 +96,18 @@ at least four completed years old on the school-local current date. The client
 shows the resulting whole-year age as read-only, while `/api/students` repeats
 the validation and derives the stored age from the birth date rather than
 trusting a submitted age value.
+
+### ICT class-session section configuration
+
+ICT's Create User **Manage Class Sessions** modal stages section additions,
+deletions, and renames locally, then submits one password-authorized batch to
+`PUT /api/sections`. A rename uses the server-only `rename_sections` database
+routine to retain the `sections.id` and class session, cascade canonical student
+assignments, and synchronize display-only section labels. Migration
+`20261111103000_fix_section_rename_column_ambiguity.sql` qualifies every
+routine table column because its `RETURNS TABLE` output names otherwise conflict
+with PL/pgSQL references such as `grade`.
+
 The recorded verification contact number is retained for pre-signup matching,
 but Adviser View/Edit and ICT Edit Parent Account hide it after the Parent has
 completed password setup; the active Parent contact number is the visible

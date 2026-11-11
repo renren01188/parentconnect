@@ -10,6 +10,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const sectionApi = read("src/app/api/sections/route.ts");
 const createUserPage = read("src/app/dashboard/ict/user-management/create-user/page.tsx");
 const migration = read("supabase/migrations/20261021100000_rename_sections_in_place.sql");
+const ambiguityRepairMigration = read("supabase/migrations/20261111103000_fix_section_rename_column_ambiguity.sql");
 
 // The client has an explicit rename action and checks every section in the
 // grade, not merely the currently visible class-session tab.
@@ -53,5 +54,23 @@ assert.match(migration, /UPDATE public\.parent_announcement_notifications/);
 assert.match(migration, /UPDATE public\.adviser_announcements/);
 assert.match(migration, /UPDATE public\.scheduled_adviser_transfers/);
 assert.match(migration, /REVOKE ALL ON FUNCTION public\.rename_section/);
+
+// The original routine returns columns named id/name/grade/class_session.
+// A forward repair must therefore qualify every table reference so a staged
+// rename cannot fail with PostgreSQL 42702 (ambiguous "grade").
+assert.match(ambiguityRepairMigration, /CREATE OR REPLACE FUNCTION public\.rename_section/);
+assert.match(ambiguityRepairMigration, /FROM public\.sections AS section_row/);
+assert.match(ambiguityRepairMigration, /section_row\.grade = v_grade/);
+assert.match(ambiguityRepairMigration, /UPDATE public\.sections AS section_row/);
+assert.match(ambiguityRepairMigration, /UPDATE public\.advisers AS adviser_row/);
+assert.match(ambiguityRepairMigration, /adviser_row\.grade = v_grade/);
+assert.match(ambiguityRepairMigration, /UPDATE public\.student_reports AS report_row/);
+assert.match(ambiguityRepairMigration, /report_row\.grade = v_grade/);
+assert.match(ambiguityRepairMigration, /UPDATE public\.scheduled_adviser_transfers AS transfer_row/);
+assert.match(ambiguityRepairMigration, /transfer_row\.grade = v_grade/);
+assert.match(ambiguityRepairMigration, /REVOKE ALL ON FUNCTION public\.rename_section/);
+assert.match(ambiguityRepairMigration, /GRANT EXECUTE ON FUNCTION public\.rename_section\(integer, text, text, text\) TO service_role/);
+assert.doesNotMatch(ambiguityRepairMigration, /\bWHERE grade = v_grade\b/);
+assert.doesNotMatch(ambiguityRepairMigration, /\bAND grade = v_grade\b/);
 
 console.log("ICT section rename regression checks passed.");
