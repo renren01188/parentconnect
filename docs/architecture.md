@@ -134,12 +134,13 @@ grade/sections. Draft edits to the other profile fields remain available. The
 assignment is written only by the existing confirmed profile-save or transfer
 action.
 The User Management directory derives its third and fourth desktop-column
-headers from the active role filter: Advisers use **Class / Grade** and
-**Assignment**, while ICT and Guidance use **Department** and
-**Responsibility**. The All Users and Parents & Students headers remain
-unchanged. `guidanceDisplayLabel.ts` supplies the canonical Guidance department
-and responsibility wording to both the server row mapper and client displays,
-so existing and newly created accounts show **Student Support and Advising**
+headers from the active role filter: All Users uses **Class / Department** and
+**Students / Responsibilities**; Advisers use **Class / Grade** and
+**Assignment**; ICT and Guidance use **Department** and **Responsibility**;
+Parents & Students uses **Class / Grade** and **Student(s)**.
+`guidanceDisplayLabel.ts` supplies the canonical Guidance department and
+responsibility wording to both the server row mapper and client displays, so
+existing and newly created accounts show **Student Support and Advising**
 without a data migration.
 The Adviser SF1 Import Registration preview returns the existing learner's
 name, LRN, and section for duplicate LRNs. Its compact, paginated expander

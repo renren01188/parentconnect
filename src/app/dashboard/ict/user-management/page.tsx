@@ -124,7 +124,7 @@ function parentStudentLinkBadgeClass(state: UserRow["parentStudentLinkState"]) {
 const PRIMARY = "#274e13";
 const PER_PAGE = 5;
 const USER_DIRECTORY_HEADERS: Record<UserFilterMode, readonly [string, string, string, string, string]> = {
-  all: ["User", "Role", "Class / Grade", "Student(s)", ""],
+  all: ["User", "Role", "Class / Department", "Students / Responsibilities", ""],
   adviser: ["User", "Role", "Class / Grade", "Assignment", ""],
   ict: ["User", "Role", "Department", "Responsibility", ""],
   guidance: ["User", "Role", "Department", "Responsibility", ""],

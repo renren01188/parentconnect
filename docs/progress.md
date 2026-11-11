@@ -439,12 +439,13 @@ Cancelling the Edit Adviser review or section-handover preview returns to the
 saved grade/sections and remounts the section picker so chips, selected rows,
 and its count reset together, while keeping unrelated profile draft fields. An
 assignment is persisted only by the existing confirmed save or transfer action.
-  The directory now maps its headers from the active role filter: Advisers use
-  **Class / Grade** / **Assignment**, while ICT and Guidance use **Department**
-  / **Responsibility**. All Users and Parents & Students retain their headers.
-  A shared Guidance display label supplies **Student Support and Advising** to
-  existing and newly created Guidance rows, including their lowercase
-  responsibility text.
+  The directory maps its headers from the active role filter: All Users uses
+  **Class / Department** / **Students / Responsibilities**; Advisers uses
+  **Class / Grade** / **Assignment**; ICT and Guidance use **Department** /
+  **Responsibility**; and Parents & Students uses **Class / Grade** /
+  **Student(s)**. A shared Guidance display label supplies **Student Support
+  and Advising** to existing and newly created Guidance rows, including their
+  lowercase responsibility text.
 - **Affected files:** `src/app/dashboard/ict/user-management/page.tsx`, its
   list API, `guidanceDisplayLabel`, Bulk Deletion display, focused regression
   check, and the ICT User Management architecture note.
