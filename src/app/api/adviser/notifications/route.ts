@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getAdviserFromToken } from "@/lib/getAdviserFromToken";
 import { isWithinNotificationRetention, notificationRetentionStart } from "@/lib/notificationRetention";
+import { earlyOutDecisionNotificationCopy } from "@/lib/earlyOutNotificationCopy";
 
 export async function GET() {
     try {
@@ -25,7 +26,7 @@ export async function GET() {
         const yesterdayStr = localYesterday.toISOString().split("T")[0];
 
         // ── Fetch all data in parallel ────────────────────────────────────────────
-        const [absentLogsRes, timeInLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes] = await Promise.all([
+        const [absentLogsRes, timeInLogsRes, absenceRes, reportRes, studentReportRes, [adviserAnnRes, guidanceAnnRes, principalAnnRes, ictAnnRes], readsRes, principalsRes, earlyOutNotificationsRes] = await Promise.all([
             supabase
                 .from("attendance_logs")
                 .select("id, student_id, attendance_date, time_logged, type, via")
@@ -108,6 +109,17 @@ export async function GET() {
             supabase
                 .from("principals")
                 .select("id, first_name, middle_name, last_name, suffix"),
+
+            // Early Out decisions have recipient-specific durable rows. They
+            // are never inferred from the class roster or request author.
+            supabase
+                .from("early_out_notifications")
+                .select("id, early_out_request_id, read_at, created_at")
+                .eq("recipient_role", "Adviser")
+                .eq("recipient_id", adviser.id)
+                .gte("created_at", retentionStart)
+                .order("created_at", { ascending: false })
+                .limit(100),
         ]);
 
         const queryError = [
@@ -122,8 +134,22 @@ export async function GET() {
             ictAnnRes,
             readsRes,
             principalsRes,
+            earlyOutNotificationsRes,
         ].find((result) => result.error)?.error;
         if (queryError) throw queryError;
+
+        const earlyOutNotificationRows = earlyOutNotificationsRes.data ?? [];
+        const earlyOutRequestIds = [...new Set(earlyOutNotificationRows
+            .map((row) => Number(row.early_out_request_id))
+            .filter((id) => Number.isSafeInteger(id) && id > 0))];
+        const { data: earlyOutRequestRows, error: earlyOutRequestError } = earlyOutRequestIds.length > 0
+            ? await supabase
+                .from("early_out_requests")
+                .select("id, student_name, attendance_date, status, rejection_reason, reviewed_at")
+                .in("id", earlyOutRequestIds)
+            : { data: [], error: null };
+        if (earlyOutRequestError) throw earlyOutRequestError;
+        const earlyOutRequestById = new Map((earlyOutRequestRows ?? []).map((row) => [Number(row.id), row]));
 
         // ── Collect read keys ─────────────────────────────────────────────────────
         const readKeys = new Set(
@@ -164,6 +190,33 @@ export async function GET() {
             }
             return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
                 ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+        }
+
+        for (const notification of earlyOutNotificationRows) {
+            const request = earlyOutRequestById.get(Number(notification.early_out_request_id));
+            if (!request || !["Approved", "Rejected"].includes(String(request.status))) continue;
+            const isRejected = request.status === "Rejected";
+            const key = `early-out-${notification.id}`;
+            const copy = earlyOutDecisionNotificationCopy({
+                studentName: String(request.student_name ?? "Student"),
+                attendanceDate: String(request.attendance_date ?? ""),
+                status: isRejected ? "Rejected" : "Approved",
+                decidedAt: request.reviewed_at ?? notification.created_at,
+            });
+            notifications.push({
+                id: key,
+                type: "early-out",
+                title: copy.title,
+                message: copy.message,
+                time: formatTime(notification.created_at),
+                rawTime: notification.created_at,
+                date: getDateLabel(notification.created_at),
+                read: Boolean(notification.read_at),
+                parentName: request.student_name,
+                senderName: "Guidance",
+                senderRole: "Guidance",
+                createdAt: notification.created_at,
+            });
         }
 
         type AdviserStudent = {

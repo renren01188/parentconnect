@@ -36,6 +36,7 @@ type PageNotification = Notification & {
   staffMessageConversationId?: number;
   parentDeletionNotificationId?: number;
   parentAccountChangeNotificationId?: number;
+  earlyOutNotificationId?: number;
   deleteAfter?: string | null;
   createdAt?: string;
 };
@@ -205,11 +206,14 @@ function NotificationsPageContent() {
           .filter((notif) => notif.source === "database" && !notif.reportId && !notif.staffMessageConversationId && notif.id > 0)
           .filter((notif) => !notif.parentDeletionNotificationId)
           .filter((notif) => !notif.parentAccountChangeNotificationId)
+          .filter((notif) => !notif.earlyOutNotificationId)
           .flatMap((notif) => notif.notificationIds ?? [notif.id]),
         parentDeletionNotificationIds: notifications
           .flatMap((notif) => notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []),
         parentAccountChangeNotificationIds: notifications
           .flatMap((notif) => notif.parentAccountChangeNotificationId ? [notif.parentAccountChangeNotificationId] : []),
+        earlyOutNotificationIds: notifications
+          .flatMap((notif) => notif.earlyOutNotificationId ? [notif.earlyOutNotificationId] : []),
       }),
     }).catch(() => null);
   }, [notifications]);
@@ -234,6 +238,8 @@ function NotificationsPageContent() {
               ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
             : notif.parentAccountChangeNotificationId
               ? { parentAccountChangeNotificationId: notif.parentAccountChangeNotificationId }
+            : notif.earlyOutNotificationId
+              ? { earlyOutNotificationId: notif.earlyOutNotificationId }
             : notif.announcementId
               ? { notificationIds: notif.notificationIds ?? [notif.id] }
               : notif.id < 0

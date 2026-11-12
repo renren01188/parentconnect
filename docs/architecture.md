@@ -13,7 +13,7 @@ iron-session/Jose/JWT session helpers, ExcelJS/XLSX exports, and Nodemailer.
 | Area | Verified page paths |
 | --- | --- |
 | Adviser | `src/app/dashboard/adviser/{attendance,notifications,profile,reports,students,transfer-level}` |
-| Guidance | `src/app/dashboard/guidance/{announcements,notifications,profile,reports}` |
+| Guidance | `src/app/dashboard/guidance/{announcements,AttendanceSummary,notifications,profile,reports}` |
 | ICT | `src/app/dashboard/ict/{Announcements,audit-trail,inbox,profile,StudentProfiles,user-management}` |
 | Parent | `src/app/dashboard/parent/{attendance,notifications,profile,reports}` |
 | Principal | `src/app/dashboard/principal/{announcements,AttendanceSummary,audit-trail,notifications,profile,reports}` |
@@ -79,8 +79,30 @@ and automatic absences are supported by `attendanceRapidTapQueue.ts`,
 History, manual/edit operations, and monthly reporting are under
 `/api/attendance/{history,manual,edit,monthly}`. Monthly/SF2 helpers include
 `attendanceReportingCalendar.ts`, `finalAttendanceExport.ts`,
-`sf2DailyMark.ts`, and `sf2EnrollmentSummary.ts`. Principal reporting is
-served by `dashboard/principal/AttendanceSummary` and its related API routes.
+`sf2DailyMark.ts`, and `sf2EnrollmentSummary.ts`. Principal and authorized
+Guidance reporting are served by their respective `AttendanceSummary` dashboard
+pages through the shared role-protected `/api/attendance/monthly-summary`
+calculation. The Guidance page scopes its section picker to the selected grade,
+and its table and Present/Absent/Excused analytics read the same selected
+monthly response. Attendance and student invalidations now also refresh active
+Guidance attendance views.
+Early Out requests use `early_out_requests` and the protected
+`/api/adviser/early-out-requests` and `/api/guidance/early-out-requests` routes.
+The adviser may submit only for the active assigned section; Guidance decides a
+locked Pending request through `decide_early_out_request`. An approval creates
+or updates the canonical original-date attendance logs (while retaining a valid
+Time In/Late record) and a completion Time Out, so history, Parent attendance,
+Principal/Guidance totals, SF2 exports, and automatic-absence processing share
+one result. `early_out_notifications` stores exactly one Parent/Adviser
+recipient row for a decision; the role-specific notification routes use those
+rows for both feed visibility and durable read state. `created_at` and
+`reviewed_at` are server timestamps shown in Asia/Manila as Submitted At and
+Approved At/Rejected At; the original attendance date remains unchanged when
+Guidance acts later. `parent_early_out_decision_dismissals` keys a Parent
+Dashboard pop-up dismissal to that Parent's own recipient row, while leaving
+the notification feed intact. Un-dismissed decisions are returned in order so
+the dashboard presents one approval/rejection pop-up at a time with the same
+timestamped decision copy as the notification.
 The Adviser RFID replacement flow applies the API-confirmed UID locally and
 uses ordered roster reads, so a delayed pre-save roster response cannot restore
 the old UID in the Register RFID modal.
@@ -99,6 +121,12 @@ physical checkout: it keeps the real Time In, exposes `missing_time_out`, and
 does not display the automatic finalization as a departure. The Parent
 dashboard and Parent/Adviser notification feeds use that same final result,
 including the recorded Time In when explaining a missing Time Out.
+The Parent Dashboard's selected-child check-in banner additionally receives
+that child's authorized, grade-scoped Morning/Afternoon ICT scheduled start.
+`parentNotYetIn.ts` uses the Manila clock to show a visual-only **Not Yet In**
+mark at least 60 minutes after that start when no valid Time In exists. It is
+suppressed on non-school days, without a configured start, and for Excused or
+final Absent results; it never writes or changes canonical attendance.
 
 ### Student registration
 
@@ -184,11 +212,23 @@ Profile name by LRN at read time, falling back to the stored report-name
 snapshot only when that student record is unavailable. This keeps corrected
 student names consistent in existing Parent, Adviser, Guidance, and Principal
 report views without rewriting report history.
+Adviser, Guidance, and Principal report payloads expose the original
+`parent_adviser_reports.id` as `ticketNumber` when no separately saved report
+number exists. The linked Guidance-ticket ID is deliberately never used as the
+display number, so report list and conversation-header labels remain stable
+through filtering, reloads, and Guidance/Principal escalation.
 Realtime report updates use `realtimeInvalidation.ts` and report-message hooks.
 The Parent, Adviser, Guidance, and Principal category dropdowns derive their
 options and counts from the active report tab/status scope. If a realtime or
 status update removes the selected category from that scope, the filter resets
 to **All** rather than leaving an empty, stale selection.
+The Parent **Submit Ticket to Guidance** action uses the immutable report
+`created_at` timestamp, not reply or status timestamps. It becomes eligible
+only after 72 hours while the report remains open and has never been escalated.
+`submit_parent_guidance_ticket` performs the ownership, elapsed-time, open,
+and no-existing-ticket checks while locking the report; its companion report
+escalation trigger prevents an Adviser escalation and a newly pending Parent
+ticket from winning concurrently.
 Report/message detail panels omit duplicated desktop titles, while their
 narrow-screen layout retains an icon-only Back control to return to the report
 list. Subject Teacher Notify Parent drafts use the report description as the

@@ -17,7 +17,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { type Report, type ReportStatus } from "../../adviser/data";
+import { reportTicketLabel, type Report, type ReportStatus } from "../../adviser/data";
 import { UserAvatar } from "@/components/UserAvatar";
 import { ConcernExportModal } from "@/components/reports/ConcernExportModal";
 import { MessageAttachments } from "@/components/MessageAttachments";
@@ -2893,7 +2893,7 @@ function PrincipalReportsPageContent() {
                                   className={`w-full rounded-xl border px-3.5 py-3.5 text-left shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 ${isActive ? "border-violet-300 bg-violet-50 shadow-violet-100 ring-1 ring-violet-100" : isResolvedReport ? "border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50" : isEscalatedFromGuidance ? "border-red-100 bg-red-50 hover:bg-red-100" : isAcceptedGuidanceTicket ? "border-sky-100 bg-sky-50 hover:bg-sky-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/40"}`}
                                 >
                                   <div className="flex items-start justify-between gap-3">
-                                    <p className="min-w-0 flex-1 break-words text-sm font-extrabold leading-snug text-slate-800">{report.subject}</p>
+                                    <p className="min-w-0 flex-1 break-words text-sm font-extrabold leading-snug text-slate-800"><span className="mr-1.5 text-violet-700">{reportTicketLabel(report)}</span>{report.subject}</p>
                                     <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold leading-none ${principalReportStatusClass(report)}`}>
                                       {principalReportStatusLabel(report)}
                                     </span>
@@ -2979,7 +2979,7 @@ function PrincipalReportsPageContent() {
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0 flex-1">
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${isCancelled ? "border-slate-300 bg-slate-100 text-slate-700" : "border-amber-200 bg-amber-100 text-amber-700"}`}>{isCancelled ? "Cancelled by Parents" : "Conversation locked"}</span>
-                              <h2 className="mt-2 text-base font-extrabold leading-snug text-slate-900">{selectedReport.subject}</h2>
+                              <h2 className="mt-2 text-base font-extrabold leading-snug text-slate-900"><span className="mr-2 text-violet-700">{reportTicketLabel(selectedReport)}</span>{selectedReport.subject}</h2>
                               <p className="mt-0.5 text-xs text-slate-400">{selectedReport.submitted_at}</p>
                               <div className="mt-2 flex flex-wrap gap-1.5">
                                 {selectedReport.categories.map((category) => (
@@ -3043,7 +3043,7 @@ function PrincipalReportsPageContent() {
                         )}
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0 flex-1">
-                            <h2 className="text-base font-extrabold leading-snug text-slate-900">{selectedReport.subject}</h2>
+                            <h2 className="text-base font-extrabold leading-snug text-slate-900"><span className="mr-2 text-violet-700">{reportTicketLabel(selectedReport)}</span>{selectedReport.subject}</h2>
                             <p className="mt-0.5 text-xs text-slate-400">{selectedReport.submitted_at}</p>
                             {selectedReport.submitted_by_role === "Subject Teacher" && (
                               <p className="mt-2 text-xs font-semibold text-violet-700">Submitted by: {selectedReport.submitted_by_name} · Subject Teacher · {selectedReport.student_name} · {selectedReport.grade} - {selectedReport.section}</p>

@@ -6,6 +6,7 @@ import { notificationRetentionStart } from "@/lib/notificationRetention";
 import { PRINCIPAL_PARENT_AUDIENCE_VALUES } from "@/lib/principalAnnouncementAudience";
 import { parentAccountCanAccess } from "@/lib/parentAccountAccess";
 import { publishRealtimeInvalidation } from "@/lib/realtimeInvalidation";
+import { earlyOutDecisionNotificationCopy } from "@/lib/earlyOutNotificationCopy";
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET || "fallback_secret_change_this"
@@ -95,6 +96,26 @@ type ParentAccountChangeNotification = {
   actor_name: string;
   read_at: string | null;
   created_at: string;
+};
+
+type EarlyOutNotification = {
+  id: number;
+  early_out_request_id: number;
+  read_at: string | null;
+  created_at: string;
+};
+
+type EarlyOutRequestNotification = {
+  id: number;
+  student_name: string;
+  attendance_date: string;
+  status: "Approved" | "Rejected";
+  rejection_reason: string | null;
+  reviewed_at: string | null;
+};
+
+type ParentEarlyOutDecisionDismissal = {
+  early_out_notification_id: number;
 };
 
 type StaffMessageNotification = {
@@ -431,6 +452,61 @@ export async function GET() {
       .order("created_at", { ascending: false })
       .limit(100);
     if (parentAccountChangeNotificationsError) throw parentAccountChangeNotificationsError;
+
+    const { data: earlyOutNotifications, error: earlyOutNotificationsError } = await supabase
+      .from("early_out_notifications")
+      .select("id, early_out_request_id, read_at, created_at")
+      .eq("recipient_role", "Parent")
+      .eq("recipient_id", session.id)
+      .gte("created_at", retentionStart)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (earlyOutNotificationsError) throw earlyOutNotificationsError;
+    // Popup eligibility is deliberately independent from a notification row's
+    // read state and monthly feed retention. A decision remains eligible until
+    // this Parent dismisses that exact recipient decision row.
+    const { data: earlyOutPopupNotifications, error: earlyOutPopupNotificationsError } = await supabase
+      .from("early_out_notifications")
+      .select("id, early_out_request_id, read_at, created_at")
+      .eq("recipient_role", "Parent")
+      .eq("recipient_id", session.id)
+      .order("created_at", { ascending: true })
+      .limit(100);
+    if (earlyOutPopupNotificationsError) throw earlyOutPopupNotificationsError;
+
+    const popupNotificationIds = [...new Set(((earlyOutPopupNotifications ?? []) as EarlyOutNotification[])
+      .map((notification) => Number(notification.id))
+      .filter((id) => Number.isSafeInteger(id) && id > 0))];
+    const { data: earlyOutDismissals, error: earlyOutDismissalsError } = popupNotificationIds.length > 0
+      ? await supabase
+        .from("parent_early_out_decision_dismissals")
+        .select("early_out_notification_id")
+        .eq("parent_id", session.id)
+        .in("early_out_notification_id", popupNotificationIds)
+      : { data: [] as ParentEarlyOutDecisionDismissal[], error: null };
+    if (earlyOutDismissalsError) throw earlyOutDismissalsError;
+    const dismissedEarlyOutNotificationIds = new Set(
+      ((earlyOutDismissals ?? []) as ParentEarlyOutDecisionDismissal[])
+        .map((dismissal) => Number(dismissal.early_out_notification_id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0),
+    );
+
+    const earlyOutRequestIds = [...new Set([
+      ...((earlyOutNotifications ?? []) as EarlyOutNotification[]),
+      ...((earlyOutPopupNotifications ?? []) as EarlyOutNotification[]),
+    ]
+      .map((notification) => Number(notification.early_out_request_id))
+      .filter((id) => Number.isSafeInteger(id) && id > 0))];
+    const { data: earlyOutRequestRows, error: earlyOutRequestsError } = earlyOutRequestIds.length > 0
+      ? await supabase
+        .from("early_out_requests")
+        .select("id, student_name, attendance_date, status, rejection_reason, reviewed_at")
+        .in("id", earlyOutRequestIds)
+      : { data: [] as EarlyOutRequestNotification[], error: null };
+    if (earlyOutRequestsError) throw earlyOutRequestsError;
+    const earlyOutRequestById = new Map<number, EarlyOutRequestNotification>(
+      ((earlyOutRequestRows ?? []) as EarlyOutRequestNotification[]).map((request) => [Number(request.id), request]),
+    );
 
     // Subject Teacher reports remain in the existing report workflow. Their
     // notification is derived from that source row, so it cannot duplicate or
@@ -803,6 +879,60 @@ export async function GET() {
         };
       });
 
+    const earlyOutRows = ((earlyOutNotifications ?? []) as EarlyOutNotification[])
+      .map((notification) => {
+        const request = earlyOutRequestById.get(Number(notification.early_out_request_id));
+        if (!request || !["Approved", "Rejected"].includes(request.status)) return null;
+        const rejected = request.status === "Rejected";
+        const copy = earlyOutDecisionNotificationCopy({
+          studentName: request.student_name,
+          attendanceDate: request.attendance_date,
+          status: rejected ? "Rejected" : "Approved",
+          decidedAt: request.reviewed_at ?? notification.created_at,
+        });
+        return {
+          // Keep this source's UI ID separate from announcement, report, and
+          // account notifications; the real recipient row remains attached
+          // for the authenticated read update below.
+          id: 1_100_000_000 + Number(notification.id),
+          earlyOutNotificationId: Number(notification.id),
+          type: "message" as const,
+          title: copy.title,
+          msg: copy.message,
+          time: timeLabel(notification.created_at),
+          category: "Guidance" as const,
+          unread: !notification.read_at,
+          tab: ["All", ...(!notification.read_at ? ["Unread" as const] : []), "Guidance" as const, "Attendance" as const],
+          teacherName: "Guidance",
+          senderName: "Guidance",
+          senderRole: "Guidance" as const,
+          createdAt: notification.created_at,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    const earlyOutDecisionPopups = ((earlyOutPopupNotifications ?? []) as EarlyOutNotification[])
+      .map((notification) => {
+        if (dismissedEarlyOutNotificationIds.has(Number(notification.id))) return null;
+        const request = earlyOutRequestById.get(Number(notification.early_out_request_id));
+        if (!request || !["Approved", "Rejected"].includes(request.status)) return null;
+        const copy = earlyOutDecisionNotificationCopy({
+          studentName: request.student_name,
+          attendanceDate: request.attendance_date,
+          status: request.status,
+          decidedAt: request.reviewed_at ?? notification.created_at,
+        });
+        return {
+          notificationId: Number(notification.id),
+          requestId: Number(request.id),
+          decision: request.status,
+          decidedAt: request.reviewed_at ?? notification.created_at,
+          title: copy.title,
+          msg: copy.message,
+        };
+      })
+      .filter((popup): popup is NonNullable<typeof popup> => popup !== null);
+
     const staffMessageNotificationRows = collapseStaffMessageNotifications(staffMessageRows)
       .map(({ conversationId, latestMessage: message, unread }) => {
         const messageId = Number(message.id);
@@ -867,7 +997,7 @@ export async function GET() {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...parentAccountChangeRows, ...staffMessageNotificationRows, ...acceptedGuidanceTicketNotificationRows]
+    const rows = [...announcementRows, ...attendanceRows, ...parentDeletionRows, ...parentAccountChangeRows, ...earlyOutRows, ...staffMessageNotificationRows, ...acceptedGuidanceTicketNotificationRows]
       .concat(reportNotificationRows.map((report) => {
         const isStudentConcern = /^\[Student Concern\]\s*/i.test(String(report.subject ?? ""));
         const latestMessage = latestReportMessageById.get(Number(report.id));
@@ -921,6 +1051,7 @@ export async function GET() {
       success: true,
       notifications: rows,
       unreadCount: rows.filter((row) => row?.unread).length,
+      earlyOutDecisionPopups,
       scheduledDeletionNotice: scheduledParentDeletion
         ? {
           scheduledDeletionId: Number(scheduledParentDeletion.id),
@@ -973,6 +1104,19 @@ export async function PATCH(req: NextRequest) {
         ? body.parentAccountChangeNotificationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
         : []),
     ];
+    const earlyOutNotificationIds = [
+      ...(Number.isSafeInteger(Number(body.earlyOutNotificationId)) && Number(body.earlyOutNotificationId) > 0
+        ? [Number(body.earlyOutNotificationId)]
+        : []),
+      ...(Array.isArray(body.earlyOutNotificationIds)
+        ? body.earlyOutNotificationIds.map(Number).filter((id: number) => Number.isSafeInteger(id) && id > 0)
+        : []),
+    ];
+    const dismissEarlyOutNotificationId = Number(body.dismissEarlyOutNotificationId);
+    if (body.dismissEarlyOutNotificationId !== undefined
+      && (!Number.isSafeInteger(dismissEarlyOutNotificationId) || dismissEarlyOutNotificationId <= 0)) {
+      return NextResponse.json({ success: false, message: "Invalid Early Out decision notification." }, { status: 400 });
+    }
     const reportId = Number(body.reportId);
     const reportIds = [
       ...(Number.isSafeInteger(reportId) && reportId > 0 ? [reportId] : []),
@@ -1020,7 +1164,42 @@ export async function PATCH(req: NextRequest) {
       if (error) throw error;
     }
 
-    if (notificationId || notificationIds.length > 0 || parentDeletionNotificationIds.length > 0 || parentAccountChangeNotificationIds.length > 0) {
+    if (earlyOutNotificationIds.length > 0) {
+      const { error } = await supabase
+        .from("early_out_notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("recipient_role", "Parent")
+        .eq("recipient_id", session.id)
+        .in("id", [...new Set(earlyOutNotificationIds)])
+        .is("read_at", null);
+      if (error) throw error;
+    }
+
+    if (Number.isSafeInteger(dismissEarlyOutNotificationId) && dismissEarlyOutNotificationId > 0) {
+      // The recipient filter makes the dismissal account-specific even if a
+      // caller guesses another Parent's notification ID.
+      const { data: ownedDecision, error: ownedDecisionError } = await supabase
+        .from("early_out_notifications")
+        .select("id")
+        .eq("id", dismissEarlyOutNotificationId)
+        .eq("recipient_role", "Parent")
+        .eq("recipient_id", session.id)
+        .maybeSingle();
+      if (ownedDecisionError) throw ownedDecisionError;
+      if (!ownedDecision) {
+        return NextResponse.json({ success: false, message: "Early Out decision notification not found." }, { status: 404 });
+      }
+
+      const { error: dismissalError } = await supabase
+        .from("parent_early_out_decision_dismissals")
+        .insert({
+          parent_id: session.id,
+          early_out_notification_id: dismissEarlyOutNotificationId,
+        });
+      if (dismissalError && dismissalError.code !== "23505") throw dismissalError;
+    }
+
+    if (notificationId || notificationIds.length > 0 || parentDeletionNotificationIds.length > 0 || parentAccountChangeNotificationIds.length > 0 || earlyOutNotificationIds.length > 0 || dismissEarlyOutNotificationId) {
       // Marking an announcement or deletion notice read is durable state too:
       // any other open Parent tab must reconcile its sidebar/feed immediately.
       await publishRealtimeInvalidation([{ role: "parent", id: session.id }], "notifications");

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
     MessageSquare, CheckCheck,
-    Clock, Ban, Calendar, Users,
+    Clock, Ban, Calendar, Users, X,
 } from "lucide-react";
 import Link from "next/link";
 import Sidebar from "./components/Sidebar";
@@ -14,6 +14,7 @@ import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh
 import { useParentSession } from "./ParentSessionGate";
 import { attendedDayCount, calculateAttendanceRate } from "@/lib/attendanceRate.cjs";
 import { dashboardPath } from "@/lib/routeAliases";
+import { manilaClockMinutes, shouldShowParentNotYetIn } from "@/lib/parentNotYetIn";
 
 interface StudentInfo {
     id: string;
@@ -36,6 +37,9 @@ interface StudentInfo {
     checkOutTime: string;
     checkInDay: string;
     hasClassToday: boolean;
+    scheduledStart: string | null;
+    todayStatus: string | null;
+    hasValidTimeIn: boolean;
     isAtSchool: boolean;
     hasCheckedOut: boolean;
     missingTimeOut: boolean;
@@ -56,6 +60,7 @@ type ParentNotificationPreview = {
     reportId?: number;
     staffMessageConversationId?: number;
     parentDeletionNotificationId?: number;
+    earlyOutNotificationId?: number;
 };
 
 type ParentAnnouncementPreview = {
@@ -80,9 +85,19 @@ type ParentDashboardNotification = {
     reportId?: number;
     staffMessageConversationId?: number;
     parentDeletionNotificationId?: number;
+    earlyOutNotificationId?: number;
     senderName?: string;
     senderRole?: string;
     teacherName?: string;
+};
+
+type ParentEarlyOutDecisionPopup = {
+    notificationId: number;
+    requestId: number;
+    decision: "Approved" | "Rejected";
+    decidedAt: string;
+    title: string;
+    msg: string;
 };
 
 type ParentScheduledDeletionNotice = {
@@ -164,6 +179,9 @@ function emptyStudentInfo(student: { id: number; name: string; lrn: string; grad
         checkOutTime: "—",
         checkInDay,
         hasClassToday: true,
+        scheduledStart: null,
+        todayStatus: null,
+        hasValidTimeIn: false,
         isAtSchool: false,
         hasCheckedOut: false,
         missingTimeOut: false,
@@ -226,12 +244,45 @@ function WeekDots({ attendance }: { attendance: StudentInfo["attendance"] }) {
     );
 }
 
+function EarlyOutDecisionPopup({
+    decision,
+    dismissing,
+    error,
+    onDismiss,
+}: {
+    decision: ParentEarlyOutDecisionPopup;
+    dismissing: boolean;
+    error: string;
+    onDismiss: () => void;
+}) {
+    const isApproved = decision.decision === "Approved";
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="early-out-decision-title">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                        <p className={`text-xs font-extrabold uppercase tracking-[0.14em] ${isApproved ? "text-emerald-600" : "text-red-600"}`}>Guidance decision</p>
+                        <h2 id="early-out-decision-title" className="mt-1 text-lg font-extrabold text-slate-800">{decision.title}</h2>
+                    </div>
+                    <button type="button" onClick={onDismiss} disabled={dismissing} aria-label="Dismiss Early Out decision" className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"><X className="h-5 w-5" /></button>
+                </div>
+                <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{decision.msg}</p>
+                {error && <p role="alert" className="mt-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
+                <button type="button" onClick={onDismiss} disabled={dismissing} className={`mt-5 min-h-11 w-full rounded-xl px-4 py-2 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${isApproved ? "bg-emerald-500 hover:bg-emerald-600" : "bg-red-500 hover:bg-red-600"}`}>{dismissing ? "Saving..." : "Close"}</button>
+            </div>
+        </div>
+    );
+}
+
 export default function ParentDashboard() {
     const router = useRouter();
     const { session, refreshSession } = useParentSession();
     const [notifs, setNotifs] = useState<ParentNotificationPreview[]>([]);
     const [announcements, setAnnouncements] = useState<ParentAnnouncementPreview[]>([]);
     const [scheduledDeletionNotice, setScheduledDeletionNotice] = useState<ParentScheduledDeletionNotice | null>(null);
+    const [earlyOutDecisionPopups, setEarlyOutDecisionPopups] = useState<ParentEarlyOutDecisionPopup[]>([]);
+    const [dismissingEarlyOutNotificationId, setDismissingEarlyOutNotificationId] = useState<number | null>(null);
+    const [earlyOutPopupError, setEarlyOutPopupError] = useState("");
     const [students, setStudents] = useState<StudentInfo[]>([]);
     const [selectedId, setSelectedId] = useState("");
     const [parentName, setParentName] = useState("Parent");
@@ -240,12 +291,26 @@ export default function ParentDashboard() {
     const [messagesData, setMessagesData] = useState<{ initials: string; name: string; preview: string; color: string }[]>([]);
     const [guideTarget, setGuideTarget] = useState<string | null>(null);
     const [greeting, setGreeting] = useState(() => manilaGreeting());
+    const [currentManilaMinutes, setCurrentManilaMinutes] = useState(() => manilaClockMinutes());
 
     useEffect(() => {
         const updateGreeting = () => setGreeting(manilaGreeting());
         updateGreeting();
         const timer = window.setInterval(updateGreeting, 60_000);
         return () => window.clearInterval(timer);
+    }, []);
+
+    // Re-evaluate on each Manila clock minute so the visual warning appears
+    // at the exact one-hour threshold even if no attendance event is emitted.
+    useEffect(() => {
+        let timer: number | undefined;
+        const updateClock = () => {
+            setCurrentManilaMinutes(manilaClockMinutes());
+            const now = new Date();
+            timer = window.setTimeout(updateClock, 60_000 - now.getSeconds() * 1_000 - now.getMilliseconds() + 10);
+        };
+        updateClock();
+        return () => { if (timer !== undefined) window.clearTimeout(timer); };
     }, []);
 
     const loadParentStudent = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
@@ -299,6 +364,9 @@ export default function ParentDashboard() {
                     const data = attendanceResults[i];
                     if (!data?.success) return;
                     s.hasClassToday = data.todayClassStatus !== "No Class For Today";
+                    s.scheduledStart = typeof data.todaySchedule?.scheduledStart === "string"
+                        ? data.todaySchedule.scheduledStart
+                        : null;
                     const present = Number(data.stats?.present ?? 0);
                     const late = Number(data.stats?.late ?? 0);
                     const absent = Number(data.stats?.absent ?? 0);
@@ -335,6 +403,10 @@ export default function ParentDashboard() {
                     // Check-in info from today's record
                     const todayIso = manilaDateKey();
                     const todayRecord = s.attendance.find((record) => record.attendanceDate === todayIso);
+                    s.todayStatus = todayRecord?.status ?? null;
+                    s.hasValidTimeIn = Boolean(todayRecord?.timeIn && todayRecord.timeIn !== "â€”")
+                        && todayRecord?.status !== "Absent"
+                        && todayRecord?.status !== "Excused";
                     // A final Absent result created for a missing Time Out
                     // must never look like an active RFID-verified presence.
                     // Keep the Time In visible so a Parent can identify the
@@ -378,6 +450,17 @@ export default function ParentDashboard() {
                     ? notifData.notifications
                     : [];
                 setScheduledDeletionNotice(notifData?.scheduledDeletionNotice ?? null);
+                setEarlyOutDecisionPopups(Array.isArray(notifData?.earlyOutDecisionPopups)
+                    ? notifData.earlyOutDecisionPopups.filter((popup: unknown): popup is ParentEarlyOutDecisionPopup => {
+                        if (!popup || typeof popup !== "object") return false;
+                        const value = popup as Partial<ParentEarlyOutDecisionPopup>;
+                        return Number.isSafeInteger(Number(value.notificationId))
+                            && Number(value.notificationId) > 0
+                            && (value.decision === "Approved" || value.decision === "Rejected")
+                            && typeof value.title === "string"
+                            && typeof value.msg === "string";
+                    })
+                    : []);
                 setNotifs(realNotifications.slice(0, 3).map((notif) => ({
                     id: notif.id,
                     type: "message",
@@ -393,6 +476,7 @@ export default function ParentDashboard() {
                     reportId: notif.reportId,
                     staffMessageConversationId: notif.staffMessageConversationId,
                     parentDeletionNotificationId: notif.parentDeletionNotificationId,
+                    earlyOutNotificationId: notif.earlyOutNotificationId,
                 })));
                 setAnnouncements(realNotifications
                     .filter((notif) => typeof notif.announcementId === "number")
@@ -458,6 +542,9 @@ export default function ParentDashboard() {
 
 
     const student = students.find(s => s.id === selectedId) ?? students[0];
+    const showNotYetIn = student
+        ? shouldShowParentNotYetIn(student, currentManilaMinutes)
+        : false;
     const unreadCount = notifs.filter(n => n.unread).length;
     const guideHighlight = (target: string) => guideTarget === target
         ? "relative z-[85] pointer-events-none rounded-2xl ring-4 ring-blue-400 ring-offset-4 ring-offset-[#f4f6fb]"
@@ -480,9 +567,13 @@ export default function ParentDashboard() {
                 notificationIds: notifs
                     .filter(notif => !notif.reportId && !notif.staffMessageConversationId && notif.id > 0)
                     .filter(notif => !notif.parentDeletionNotificationId)
+                    .filter(notif => !notif.earlyOutNotificationId)
                     .flatMap(notif => notif.notificationIds ?? [notif.id]),
                 parentDeletionNotificationIds: notifs.flatMap(notif =>
                     notif.parentDeletionNotificationId ? [notif.parentDeletionNotificationId] : []
+                ),
+                earlyOutNotificationIds: notifs.flatMap(notif =>
+                    notif.earlyOutNotificationId ? [notif.earlyOutNotificationId] : []
                 ),
             }),
         }).catch(() => null);
@@ -504,6 +595,8 @@ export default function ParentDashboard() {
                         ? { reportId: notif.reportId }
                         : notif.parentDeletionNotificationId
                             ? { parentDeletionNotificationId: notif.parentDeletionNotificationId }
+                            : notif.earlyOutNotificationId
+                                ? { earlyOutNotificationId: notif.earlyOutNotificationId }
                             : notif.announcementId
                                 ? { notificationIds: notif.notificationIds ?? [notif.id] }
                                 : notif.id < 0
@@ -520,6 +613,29 @@ export default function ParentDashboard() {
             return;
         }
         router.push(dashboardPath("parent", "/notifications"));
+    }
+
+    const activeEarlyOutDecision = earlyOutDecisionPopups[0] ?? null;
+
+    async function dismissEarlyOutDecision() {
+        if (!activeEarlyOutDecision || dismissingEarlyOutNotificationId) return;
+        try {
+            setDismissingEarlyOutNotificationId(activeEarlyOutDecision.notificationId);
+            setEarlyOutPopupError("");
+            const response = await fetch("/api/parents/notifications", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({ dismissEarlyOutNotificationId: activeEarlyOutDecision.notificationId }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to save the dismissal.");
+            setEarlyOutDecisionPopups((current) => current.filter((popup) => popup.notificationId !== activeEarlyOutDecision.notificationId));
+        } catch (dismissError) {
+            setEarlyOutPopupError(dismissError instanceof Error ? dismissError.message : "Unable to save the dismissal.");
+        } finally {
+            setDismissingEarlyOutNotificationId(null);
+        }
     }
 
     if (profileLoading || !student) {
@@ -647,15 +763,20 @@ export default function ParentDashboard() {
                         <div className="shrink-0 sm:text-right">
                             <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">{student.missingTimeOut ? "Time In recorded" : student.hasCheckedOut ? "Checked out today" : student.hasClassToday ? "Checked in today" : "Class schedule"}</p>
                             <p className="text-white font-extrabold text-2xl leading-tight">{student.hasCheckedOut ? student.checkOutTime : student.checkInTime}</p>
-                            <p className={`${student.missingTimeOut ? "text-amber-300" : student.hasClassToday ? "text-green-400" : "text-slate-300"} text-[11px] mt-0.5 font-semibold`}>
-                                {student.missingTimeOut
+                            <div className={`${student.missingTimeOut ? "text-amber-300" : showNotYetIn ? "text-red-300" : student.hasClassToday ? "text-green-400" : "text-slate-300"} mt-0.5 text-[11px] font-semibold`}>
+                                {showNotYetIn ? (
+                                    <span className="inline-flex items-center gap-1.5" role="status" aria-label="Not Yet In">
+                                        <span className="h-2 w-2 rounded-full bg-red-500" aria-hidden="true" />
+                                        Not Yet In
+                                    </span>
+                                ) : student.missingTimeOut
                                     ? "⚠ No Time Out recorded • Marked absent"
                                     : student.hasCheckedOut
                                         ? "✓ Time Out recorded"
-                                    : student.hasClassToday
-                                        ? student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"
-                                        : "Based on the ICT schedule"}
-                            </p>
+                                        : student.hasClassToday
+                                            ? student.isAtSchool ? "✓ RFID Verified" : "No scan recorded today"
+                                            : "Based on the ICT schedule"}
+                            </div>
                         </div>
                     </div>
 
@@ -813,6 +934,12 @@ export default function ParentDashboard() {
 
                 </main>
             </div>
+            {activeEarlyOutDecision && <EarlyOutDecisionPopup
+                decision={activeEarlyOutDecision}
+                dismissing={dismissingEarlyOutNotificationId === activeEarlyOutDecision.notificationId}
+                error={earlyOutPopupError}
+                onDismiss={() => void dismissEarlyOutDecision()}
+            />}
             <ParentDashboardGuide onStepChange={handleGuideStepChange} />
         </div>
     );

@@ -39,31 +39,36 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!report) return NextResponse.json({ success: false, message: "Report not found." }, { status: 404 });
     if (["resolved", "cancelled"].includes(String(report.status ?? "").toLowerCase())) return NextResponse.json({ success: false, message: "Closed reports cannot be submitted to Guidance." }, { status: 403 });
 
-    const { data: existing, error: existingError } = await supabase
-      .from("parent_report_guidance_tickets")
-      .select("id, status")
-      .eq("report_id", reportId)
-      .maybeSingle();
-    if (existingError) throw existingError;
+    // The database routine locks the report before checking the original
+    // submission time and escalation state. This is the authority boundary:
+    // a reply/status update cannot reset the 72-hour clock, and a concurrent
+    // Adviser escalation cannot create a second Guidance route.
+    const { data: ticketRows, error: ticketError } = await supabase.rpc("submit_parent_guidance_ticket", {
+      p_report_id: reportId,
+      p_parent_id: parent.id,
+      p_concern: cleanConcern,
+      p_message: cleanMessage,
+      p_attachments: cleanFiles,
+    });
+    if (ticketError) {
+      const message = ticketError.message || "Unable to submit ticket.";
+      const status = /report not found/i.test(message)
+        ? 404
+        : /only the parent who submitted/i.test(message)
+          ? 403
+          : /72 hours|open reports|already pending/i.test(message)
+            ? 409
+            : 500;
+      return NextResponse.json({ success: false, message }, { status });
+    }
+    const ticket = ticketRows?.[0] as { ticket_id: number; ticket_status: string; duplicate: boolean } | undefined;
+    if (!ticket) throw new Error("Unable to save the Guidance ticket.");
 
     const now = new Date().toISOString();
     // A ticket is permanent for its report. Rejected tickets retain their
     // reason and history; all repeat submits simply return that same ticket.
-    if (existing) {
-      return NextResponse.json({ success: true, duplicate: true, ticketId: existing.id, status: existing.status });
-    }
-
-    const { data, error } = await supabase
-      .from("parent_report_guidance_tickets")
-      .insert({ report_id: reportId, parent_id: report.parent_id ?? parent.id, student_id: report.student_id, adviser_id: report.adviser_id, concern: cleanConcern, message: cleanMessage, attachments: cleanFiles, status: "pending", created_at: now, updated_at: now })
-      .select("id, status")
-      .single();
-    if (error) {
-      if (error.code === "23505") {
-        const { data: ticket } = await supabase.from("parent_report_guidance_tickets").select("id, status").eq("report_id", reportId).maybeSingle();
-        return NextResponse.json({ success: true, duplicate: true, ticketId: ticket?.id, status: ticket?.status });
-      }
-      throw error;
+    if (ticket.duplicate) {
+      return NextResponse.json({ success: true, duplicate: true, ticketId: ticket.ticket_id, status: ticket.ticket_status });
     }
 
     // Preserve the report's recency for its Parent and Adviser views. Guidance
@@ -126,8 +131,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         if (result.status === "rejected") console.error("Unable to send new Guidance ticket email:", result.reason);
       });
     }
-    await logAudit({ action: "Ticket Submitted", performedById: parent.id, performedBy: parent.name, performedByRole: "Parent/Guardian", targetUser: `Ticket #${data.id}`, targetRole: "Guidance Ticket", targetType: "Guidance Ticket", targetId: data.id, relatedTicketId: data.id, relatedReportId: reportId, relatedStudentId: report.student_id, newStatus: data.status, module: "Guidance Tickets", details: `Submitted Guidance ticket #${data.id} for report #${reportId}.`, metadata: { attachmentCount: cleanFiles.length } });
-    return NextResponse.json({ success: true, ticketId: data.id, status: data.status }, { status: 201 });
+    await logAudit({ action: "Ticket Submitted", performedById: parent.id, performedBy: parent.name, performedByRole: "Parent/Guardian", targetUser: `Ticket #${ticket.ticket_id}`, targetRole: "Guidance Ticket", targetType: "Guidance Ticket", targetId: ticket.ticket_id, relatedTicketId: ticket.ticket_id, relatedReportId: reportId, relatedStudentId: report.student_id, newStatus: ticket.ticket_status, module: "Guidance Tickets", details: `Submitted Guidance ticket #${ticket.ticket_id} for report #${reportId}.`, metadata: { attachmentCount: cleanFiles.length } });
+    return NextResponse.json({ success: true, ticketId: ticket.ticket_id, status: ticket.ticket_status }, { status: 201 });
   } catch (error) {
     console.error("POST /api/reports/parent-adviser/[id]/ticket error:", error);
     return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Unable to submit ticket." }, { status: 500 });

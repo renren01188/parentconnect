@@ -16,6 +16,7 @@ import { weekdayExportDatesForMonth } from "@/lib/attendanceExportCalendar";
 import { formatStudentRemarkForSf2 } from "@/lib/studentRemarks";
 import { isFutureSchoolCalendarDateRange, isFutureSchoolCalendarDay, nextSchoolCalendarDay } from "@/lib/announcementSchedule";
 import type { Sf2EnrollmentSummary } from "@/lib/sf2EnrollmentSummary";
+import { formatManilaDateTime } from "@/lib/manilaClock";
 import { useSessionInvalidation } from "@/hooks/useSessionInvalidation";
 import { useDebouncedRealtimeRefresh } from "@/hooks/useDebouncedRealtimeRefresh";
 import {
@@ -2024,6 +2025,120 @@ function ExcuseApprovalModal({ onClose, adviserGrade }: {
     );
 }
 
+type EarlyOutRequest = {
+    id: number;
+    student_id: string;
+    student_name: string;
+    grade: string;
+    section: string;
+    attendance_date: string;
+    reason: string;
+    message: string;
+    status: "Pending" | "Approved" | "Rejected";
+    rejection_reason: string | null;
+    created_at: string;
+    reviewed_at: string | null;
+};
+
+function EarlyOutModal({ onClose, students, sectionLabel, activeSection }: {
+    onClose: () => void;
+    students: Student[];
+    sectionLabel: string;
+    activeSection: string;
+}) {
+    const [requests, setRequests] = useState<EarlyOutRequest[]>([]);
+    const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+    const [studentSearch, setStudentSearch] = useState("");
+    const [reason, setReason] = useState("");
+    const [message, setMessage] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const [manilaNow, setManilaNow] = useState(() => new Date());
+
+    useEffect(() => {
+        const timer = window.setInterval(() => setManilaNow(new Date()), 30_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    const loadRequests = useCallback(async () => {
+        if (!activeSection) return;
+        try {
+            setLoading(true);
+            setError("");
+            const response = await fetch(`/api/adviser/early-out-requests?section=${encodeURIComponent(activeSection)}`, {
+                cache: "no-store", credentials: "same-origin",
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to load Early Out requests.");
+            setRequests(Array.isArray(data.requests) ? data.requests : []);
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : "Unable to load Early Out requests.");
+        } finally {
+            setLoading(false);
+        }
+    }, [activeSection]);
+
+    useEffect(() => { void loadRequests(); }, [loadRequests]);
+    useSessionInvalidation(({ scope }) => {
+        if (!scope || scope === "attendance" || scope === "notifications") void loadRequests();
+    });
+
+    const filteredStudents = students.filter((student) => {
+        const query = studentSearch.trim().toLowerCase();
+        return !query || buildFullName(student).toLowerCase().includes(query) || student.student_id.toLowerCase().includes(query);
+    });
+
+    async function submitRequest() {
+        if (!selectedStudent || !reason.trim() || !message.trim() || saving) return;
+        try {
+            setSaving(true); setError("");
+            const response = await fetch("/api/adviser/early-out-requests", {
+                method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+                body: JSON.stringify({ studentDbId: selectedStudent.id, reason: reason.trim(), message: message.trim() }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data?.success) throw new Error(data?.message || "Unable to submit the Early Out request.");
+            setSelectedStudent(null); setStudentSearch(""); setReason(""); setMessage("");
+            await loadRequests();
+        } catch (submitError) {
+            setError(submitError instanceof Error ? submitError.message : "Unable to submit the Early Out request.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-950/45 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-labelledby="early-out-title">
+            <div className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl">
+                <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="min-w-0"><h2 id="early-out-title" className="text-lg font-extrabold text-slate-800">Early Out</h2><p className="mt-0.5 text-sm text-slate-400">Submit an Early Out request for a student in {sectionLabel}. Guidance reviews the saved attendance date.</p><p className="mt-1 text-xs font-semibold text-emerald-700">Current time (Asia/Manila): <time dateTime={manilaNow.toISOString()}>{formatManilaDateTime(manilaNow)}</time></p></div>
+                    <button type="button" onClick={onClose} aria-label="Close Early Out" className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+                    {error && <div role="alert" className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+                    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <section aria-labelledby="early-out-form-title">
+                            <h3 id="early-out-form-title" className="text-sm font-extrabold text-slate-800">New request</h3><p className="mt-1 text-xs text-slate-500">Requests are saved as Pending and sent to Guidance.</p>
+                            <label className="mt-4 block text-xs font-bold text-slate-600">Select Student
+                                <div className="relative mt-1.5"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={studentSearch} onChange={(event) => { setStudentSearch(event.target.value); setSelectedStudent(null); }} placeholder="Search name or student ID" className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></div>
+                            </label>
+                            {selectedStudent ? <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5"><div className="min-w-0"><p className="truncate text-sm font-bold text-emerald-800">{buildFullName(selectedStudent)}</p><p className="text-xs text-emerald-700">{selectedStudent.student_id}</p></div><button type="button" onClick={() => setSelectedStudent(null)} className="rounded-lg px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100">Change</button></div> : <div className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-slate-200 bg-white">{filteredStudents.length === 0 ? <p className="px-3 py-4 text-center text-xs text-slate-400">No students match this search.</p> : filteredStudents.map((student) => <button key={student.id} type="button" onClick={() => { setSelectedStudent(student); setStudentSearch(buildFullName(student)); }} className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-slate-50"><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-700">{buildFullName(student)}</span><span className="block text-xs text-slate-400">{student.student_id}</span></span><span className="shrink-0 text-[11px] font-semibold text-slate-400">{student.section || activeSection}</span></button>)}</div>}
+                            <label className="mt-4 block text-xs font-bold text-slate-600">Reason<input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required placeholder="Why does the student need to leave early?" className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></label>
+                            <label className="mt-4 block text-xs font-bold text-slate-600">Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} required rows={4} placeholder="Add the details Guidance needs to review this request." className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></label>
+                            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={onClose} className="min-h-11 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Cancel</button><button type="button" onClick={() => void submitRequest()} disabled={!selectedStudent || !reason.trim() || !message.trim() || saving} className="min-h-11 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Submitting..." : "Submit to Guidance"}</button></div>
+                        </section>
+                        <section className="border-t border-slate-100 pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0" aria-labelledby="early-out-history-title">
+                            <div className="flex items-center justify-between gap-3"><div><h3 id="early-out-history-title" className="text-sm font-extrabold text-slate-800">Submitted requests</h3><p className="mt-1 text-xs text-slate-500">Saved timestamps use Asia/Manila. Rejected requests include Guidance’s reason.</p></div><button type="button" onClick={() => void loadRequests()} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200">Refresh</button></div>
+                            {loading ? <p className="py-10 text-center text-sm text-slate-400">Loading requests...</p> : requests.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">No Early Out requests for this section yet.</p> : <div className="mt-4 space-y-3">{requests.map((request) => <article key={request.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-sm font-extrabold text-slate-800">{request.student_name}</p><p className="mt-0.5 text-xs text-slate-500">{request.attendance_date} · {request.grade} · {request.section}</p></div><span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${request.status === "Approved" ? "bg-emerald-100 text-emerald-700" : request.status === "Rejected" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{request.status}</span></div><p className="mt-3 text-xs text-slate-500"><strong>Submitted At:</strong> <time dateTime={request.created_at}>{formatManilaDateTime(request.created_at)}</time></p>{request.status === "Approved" && request.reviewed_at && <p className="mt-1 text-xs text-emerald-700"><strong>Approved At:</strong> <time dateTime={request.reviewed_at}>{formatManilaDateTime(request.reviewed_at)}</time></p>}{request.status === "Rejected" && request.reviewed_at && <p className="mt-1 text-xs text-red-700"><strong>Rejected At:</strong> <time dateTime={request.reviewed_at}>{formatManilaDateTime(request.reviewed_at)}</time></p>}<p className="mt-3 text-xs font-bold text-slate-600">Reason</p><p className="mt-0.5 text-sm text-slate-700">{request.reason}</p><p className="mt-3 text-xs font-bold text-slate-600">Message</p><p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{request.message}</p>{request.status === "Rejected" && <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700"><strong>Guidance reason:</strong> {request.rejection_reason}</div>}</article>)}</div>}
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function AdviserAttendancePage() {
     const [scanValue, setScanValue] = useState("");
     const [activeTopAction, setActiveTopAction] = useState<"history" | null>(null);
@@ -2089,6 +2204,7 @@ export default function AdviserAttendancePage() {
     // ── Monthly export modal ──
     const [showMonthlyExport, setShowMonthlyExport] = useState(false);
     const [showExcuseApproval, setShowExcuseApproval] = useState(false);
+    const [showEarlyOut, setShowEarlyOut] = useState(false);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -3342,6 +3458,12 @@ export default function AdviserAttendancePage() {
                 <div className="flex flex-wrap items-center gap-2.5">
                     {/* ── NEW: Monthly Export button ── */}
                     <button
+                        onClick={() => setShowEarlyOut(true)}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors shadow-sm">
+                        <CalendarDays className="w-3.5 h-3.5 text-emerald-500" />
+                        Early Out
+                    </button>
+                    <button
                         onClick={() => setShowExcuseApproval(true)}
                         className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors shadow-sm">
                         <FileText className="w-3.5 h-3.5 text-blue-500" />
@@ -4296,6 +4418,14 @@ export default function AdviserAttendancePage() {
                 <ExcuseApprovalModal
                     onClose={() => setShowExcuseApproval(false)}
                     adviserGrade={adviser?.grade || ""}
+                />
+            )}
+            {showEarlyOut && (
+                <EarlyOutModal
+                    onClose={() => setShowEarlyOut(false)}
+                    students={students}
+                    sectionLabel={sectionLabel}
+                    activeSection={selectedSection}
                 />
             )}
             {showEditAttendance && (

@@ -178,13 +178,14 @@ export async function attendanceRecipientsForStudents(inputs: AttendanceRealtime
 
   const resolvedStudentIds = students.map((student) => student.student_id);
   const grades = [...new Set(students.map((student) => student.grade).filter((grade): grade is string => Boolean(grade)))];
-  const [directParents, linkedParents, advisers, principals] = await Promise.all([
+  const [directParents, linkedParents, advisers, principals, guidanceCounselors] = await Promise.all([
     supabase.from("parents").select("id").in("student_id", resolvedStudentIds),
     supabase.from("parent_student_links").select("parent_id").in("student_id", resolvedStudentIds),
     grades.length
       ? supabase.from("advisers").select("id, grade, section, sections").in("grade", grades)
       : Promise.resolve({ data: [], error: null }),
     supabase.from("principals").select("id").eq("status", "active").eq("is_active", true).neq("archive_status", "archived"),
+    supabase.from("guidance_counselors").select("id").eq("status", "active").neq("archive_status", "archived"),
   ]);
 
   const recipients: RealtimeRecipient[] = [
@@ -194,6 +195,7 @@ export async function attendanceRecipientsForStudents(inputs: AttendanceRealtime
       .filter((adviser) => students.some((student) => assignedToStudent(adviser, student)))
       .map((adviser) => ({ role: "adviser" as const, id: Number(adviser.id) })),
     ...(principals.data ?? []).map((principal) => ({ role: "principal" as const, id: Number(principal.id) })),
+    ...(guidanceCounselors.data ?? []).map((guidance) => ({ role: "guidance" as const, id: Number(guidance.id) })),
   ];
   return recipients.filter((recipient) => Number.isSafeInteger(recipient.id) && recipient.id > 0);
 }

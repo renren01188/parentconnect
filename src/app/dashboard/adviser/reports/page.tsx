@@ -32,6 +32,7 @@ import {
 } from "@/lib/guidanceReportExport";
 import {
     getPriorityLabel,
+    reportTicketLabel,
     type Report, type ReportStatus, type ReportCategory,
     type StudentReport, type StudentReportStatus, type StudentReportCategory,
     type AdminMessage, type AdminMsgStatus, type MessageAttachment,
@@ -1992,7 +1993,7 @@ function ReportsPageContent() {
                                                 <button onClick={() => { selectReport(r); setViewStep("detail"); }}
                                                     className={`w-full text-left rounded-xl px-3 py-3 transition border ${r.status === "Resolved" ? "bg-emerald-50 border-emerald-100 hover:bg-emerald-100" : "bg-red-50 border-red-100 hover:bg-red-100"} ${isActive ? "ring-2 ring-emerald-300" : ""}`}>
                                                     <div className="flex items-start justify-between gap-2 mb-1.5">
-                                                        <p className="text-xs font-bold text-slate-800 leading-snug flex-1">{r.subject}</p>
+                                                        <p className="text-xs font-bold text-slate-800 leading-snug flex-1"><span className="mr-1.5 text-emerald-700">{reportTicketLabel(r)}</span>{r.subject}</p>
                                                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getStatusStyle(effectiveAdviserReportStatus(r))}`}>{adviserReportStatusLabel(r)}</span>
                                                     </div>
                                                     <div className="flex flex-wrap gap-1 mb-2">
@@ -2127,7 +2128,7 @@ function ReportsPageContent() {
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide">🔒 Pending Review</span>
                                                 </div>
-                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug mt-1">{selectedReport.subject}</h2>
+                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug mt-1"><span className="mr-2 text-emerald-700">{reportTicketLabel(selectedReport)}</span>{selectedReport.subject}</h2>
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedReport.submitted_at}</p>
                                                 <div className="flex flex-wrap gap-1.5 mt-2">
                                                     {selectedReport.categories.map(cat => (
@@ -2223,7 +2224,7 @@ function ReportsPageContent() {
                                         )}
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="flex-1 min-w-0">
-                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug">{selectedReport.subject}</h2>
+                                                <h2 className="text-base font-extrabold text-slate-900 leading-snug"><span className="mr-2 text-emerald-700">{reportTicketLabel(selectedReport)}</span>{selectedReport.subject}</h2>
                                                 <p className="text-xs text-slate-400 mt-0.5">{selectedReport.submitted_at}</p>
                                                 {selectedReport.submitted_by_role === "Subject Teacher" && (
                                                     <p className="mt-2 text-xs font-semibold text-blue-700">Submitted by: {selectedReport.submitted_by_name} · Subject Teacher · {selectedReport.student_name} · {selectedReport.grade} - {selectedReport.section}</p>

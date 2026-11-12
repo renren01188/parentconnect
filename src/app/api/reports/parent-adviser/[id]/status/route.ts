@@ -76,7 +76,12 @@ export async function PATCH(
         error = fallback.error;
       }
 
-      if (error) throw error;
+      if (error) {
+        if (/Parent Guidance ticket is already pending/i.test(error.message)) {
+          return NextResponse.json({ success: false, message: error.message }, { status: 409 });
+        }
+        throw error;
+      }
     }
 
     if (shouldMarkRead) {

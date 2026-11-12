@@ -21,6 +21,11 @@ export function getPriorityLabel(level: number): "Urgent" | "High" | "Medium" | 
 
 export interface Report {
   id: number;
+  /**
+   * Immutable number from the original report record. It must never be
+   * replaced by a linked Guidance-ticket ID when the case escalates.
+   */
+  ticketNumber?: number | null;
   /** Immutable relationship identifiers supplied by the principal reports API. */
   parent_id?: number | null;
   student_id?: string | null;
@@ -76,6 +81,15 @@ export interface Report {
   canReply?: boolean;
   /** Conversation data has been fetched for this report. */
   detailsLoaded?: boolean;
+}
+
+/** Falls back to the original report ID for historical reports without a separate number. */
+export function reportTicketLabel(report: Pick<Report, "id" | "ticketNumber">) {
+  const savedNumber = Number(report.ticketNumber);
+  const number = Number.isSafeInteger(savedNumber) && savedNumber > 0
+    ? savedNumber
+    : report.id;
+  return `#${number}`;
 }
 
 export interface MessageAttachment {
@@ -257,7 +271,7 @@ export interface AdminMessage {
 
 // ─── Notification types ───────────────────────────────────────────────────────
 export type NotificationType =
-  | "report" | "absence" | "excused" | "escalated" | "resolved" | "announcement";
+  | "report" | "absence" | "excused" | "early-out" | "escalated" | "resolved" | "announcement";
 
 export interface Notification {
   id: number;

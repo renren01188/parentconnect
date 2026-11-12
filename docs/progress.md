@@ -6,6 +6,30 @@ This is a source-tree snapshot, not a release checklist. It records verified
 paths and working-tree state only; feature behavior is not considered verified
 unless a named check has been run and recorded below.
 
+### Guidance Attendance Summary
+
+- **Complete in source:** Guidance now has `/dashboard/guidance/AttendanceSummary`
+  and a matching sidebar entry. Its month/year, grade, and grade-scoped section
+  filters drive the same protected monthly summary response used by Principal;
+  selecting a new grade clears Section, while changing the month or year keeps
+  a valid grade/section selection so its table and analytics refresh together.
+- **Analytics and access:** The Guidance theme shows Present, Absent, and
+  Excused totals plus a bar chart once Grade Level and Section are selected.
+  The no-records state is explicit. The shared route now requires either an
+  active Principal or active Guidance session, preserving server-side access
+  control and the Principal's final attendance calculation; attendance and
+  student invalidations include active Guidance accounts.
+- **Affected files:** Guidance Attendance Summary page/sidebar, shared
+  monthly-summary authorization, attendance invalidation recipients, and the
+  attendance architecture note.
+- **Verified:** `npm.cmd run test:guidance-attendance-summary`,
+  `npm.cmd run test:principal-attendance-summary-data-flow`, focused ESLint,
+  `npx.cmd tsc --noEmit`, `npm.cmd run build`, and `git diff --check` passed
+  on 2026-11-12. The separate existing
+  `test:principal-attendance-summary-students` source-expectation check is
+  still stale against the prior reporting-calendar implementation; it was not
+  changed by this feature.
+
 ### Offline local Supabase bootstrap
 
 - **Complete in source:** `supabase/migrations/20261111120000_remote_schema_baseline.sql`
@@ -413,6 +437,29 @@ unless a named check has been run and recorded below.
   three existing `no-explicit-any` errors in the Parent dashboard, outside this
   change. Browser verification remains unverified.
 
+### Parent Dashboard Not Yet In indicator
+
+- **Complete in source:** the selected child's check-in banner now shows a red
+  dot and **Not Yet In** at the exact Manila one-hour mark after that child's
+  configured ICT Morning/Afternoon start time, only when no valid Time In is
+  recorded. The Parent history route resolves the linked child's section
+  session and grade-specific schedule first, with the established legacy
+  schedule fallback.
+- **Exclusions and refresh:** the visual-only mark is omitted for non-school
+  days, holidays, no configured start, approved Excused records, and final
+  Absent records. Existing Parent attendance invalidation refreshes the
+  selected child as soon as a Time In is saved; switching children evaluates
+  the new child's own schedule and attendance snapshot. No attendance result,
+  absence total, or database write is changed.
+- **Affected files:** Parent history API, Parent Dashboard,
+  `parentNotYetIn.ts`, parent attendance checks, and
+  `scripts/test-parent-dashboard-not-yet-in.cjs`.
+- **Verified:** `npm.cmd run test:parent-dashboard-not-yet-in`,
+  `npm.cmd run test:parent-attendance-history`, `npx.cmd tsc --noEmit`, and
+  `npm.cmd run build` passed on 2026-11-12. Focused ESLint reached three
+  existing `no-explicit-any` errors in the Parent Dashboard outside this
+  change. Browser verification remains unverified.
+
 ### Student registration birth-date age calculation
 
 - **Complete in source:** Adviser Add Student and ICT Create User's shared
@@ -750,6 +797,94 @@ assignment is persisted only by the existing confirmed save or transfer action.
 - **Verified:** `npm.cmd run test:audit-trail-export`, `npx.cmd tsc --noEmit`,
   and `npm.cmd run build` passed on 2026-11-09. A browser download smoke test
   with a real ICT and Principal session remains **unverified**.
+
+### Early Out attendance workflow
+
+- **Complete in source:** Adviser Attendance now has an **Early Out** action
+  immediately before **Excuse Approval**. Its section-scoped, searchable roster
+  modal shows the current Asia/Manila time, creates a Pending request with the
+  database `created_at` submission timestamp, and shows Submitted At plus the
+  subsequent Approved At/Rejected At timestamp and rejection reason.
+- **Complete in source:** Guidance Attendance Summary has an **Early Out
+  Requests** review modal for pending and historical requests. The server
+  rejects unapproved roles and requires a nonblank rejection reason. Approval,
+  attendance normalization for the saved original date, decision audit, and
+  recipient-row creation happen in the `decide_early_out_request` database
+  transaction. Its `reviewed_at` server timestamp is returned to the client as
+  Approved At or Rejected At; a retry cannot make a second decision or
+  notification.
+- **Attendance/result boundary:** an approved request preserves an existing
+  valid On Time/Late Time In and actual Time Out. It otherwise repairs an
+  automatic absence or writes a Manual On Time/Present completion pair for the
+  original session/date. Existing history, Parent views, monthly summary,
+  analytics, SF2/export, and automatic absence readers therefore consume the
+  same canonical logs.
+- **Notifications:** only the submitting Adviser and active accounts linked to
+  the student receive a durable Parent/Adviser notification. The existing
+  notification pages surface the decision, original attendance date, and
+  Manila decision timestamp. Approval includes the pickup instruction; neither
+  recipient notification exposes a rejection reason, which remains in the
+  Adviser request history. The Parent Dashboard consumes the same copy in a
+  sequential pop-up queue. `parent_early_out_decision_dismissals` persists a
+  dismissal for the exact Parent account and recipient decision, without
+  marking or removing the existing notification.
+- **Affected files:** `supabase/migrations/20261112140000_add_early_out_requests.sql`,
+  `supabase/migrations/20261112160000_add_parent_early_out_decision_dismissals.sql`,
+  Early Out adviser/guidance API routes, `earlyOutNotificationCopy`, Adviser
+  Attendance/Notifications, Guidance Attendance Summary, Parent Dashboard and
+  notification routes, and `scripts/test-early-out-workflow.cjs`.
+- **Verified:** `npm.cmd run test:early-out-workflow`,
+  `npm.cmd run test:guidance-attendance-summary`, `npx.cmd tsc --noEmit`, and
+  `npm.cmd run build` passed on 2026-11-12. Apply both Early Out migrations to
+  the hosted Supabase project before role/browser verification; no live
+  student, attendance, or notification data was changed during implementation.
+
+### Parent Guidance ticket eligibility
+
+- **Complete in source:** Parent Reports now keeps **Submit Ticket to
+  Guidance** hidden until exactly 72 hours after the report's original
+  `created_at` submission time. Adviser replies and status changes do not
+  reset that deadline. The button is limited to an open, never-escalated
+  report, and the existing realtime reload plus deadline timer updates or
+  closes the ticket modal when that state changes.
+- **Server/race boundary:**
+  `20261112150000_add_parent_guidance_ticket_eligibility.sql` adds the
+  transactionally locked `submit_parent_guidance_ticket` RPC. It checks the
+  signed-in Parent's report ownership, original 72-hour deadline, open and
+  un-escalated state, and the unique ticket record before inserting. The
+  companion trigger blocks a simultaneous Adviser escalation after a Parent
+  ticket becomes pending, so only one path can win.
+- **Affected files:** Parent Reports UI/data mapping, Parent ticket and Adviser
+  report-status routes, the migration above,
+  `scripts/test-parent-guidance-ticket-eligibility.cjs`, and `package.json`.
+- **Verified:** `npm.cmd run test:parent-guidance-ticket-eligibility`,
+  `npm.cmd run test:guidance-ticket-dashboard-status`,
+  `npm.cmd run test:parent-report-cancellation`, `npx.cmd tsc --noEmit`, and
+  `npm.cmd run build` passed on 2026-11-12. Focused ESLint had no errors and
+  reported five existing warnings in Parent Reports. The hosted migration and
+  role/browser verification remain pending; no live report or ticket data was
+  changed during implementation.
+
+### Shared report ticket numbers
+
+- **Complete in source:** Adviser, Guidance, and Principal report lists and
+  locked/opened conversation headers now show `#<number>` directly before the
+  subject. The shared report mapper returns `ticketNumber` from the immutable
+  original report ID when a separately stored report number is unavailable.
+- **Escalation boundary:** a `parent_report_guidance_tickets.id` is a linked
+  workflow record, not a report number. Adviser, Guidance, and Principal
+  mappers therefore retain the original `parent_adviser_reports.id` after
+  escalation, detail refreshes, filtering, and grouping.
+- **Affected files:** shared Report type/mapper, all three Reports pages,
+  `scripts/test-report-ticket-numbers.cjs`, and `package.json`.
+- **Verified:** `npm.cmd run test:report-ticket-numbers`,
+  `npm.cmd run test:guidance-ticket-dashboard-status`, and
+  `npm.cmd run test:principal-report-monitoring`, `npx.cmd tsc --noEmit`,
+  `npm.cmd run build`, and `git diff --check` passed on 2026-11-12. Focused
+  ESLint had no errors and reported 14 existing warnings in Adviser/Principal
+  Reports. `test:adviser-report-statuses` is independently unavailable because
+  its configured script file is absent. Browser verification remains
+  unverified.
 
 ### Current uncommitted implementation areas
 

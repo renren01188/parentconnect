@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getPrincipalFromToken } from "@/lib/getPrincipalFromToken";
+import { getGuidanceSession } from "@/app/api/reports/parent-adviser/_lib";
 import {
     attendanceReportDaysForMonth,
     monthEndDate,
@@ -113,8 +114,15 @@ function buildFullName(row: {
 
 export async function GET(req: NextRequest) {
     try {
-        if (!(await getPrincipalFromToken())) {
-            return NextResponse.json({ success: false, message: "Principal access is required." }, { status: 403 });
+        // Principal and Guidance both need the same school-wide, role-protected
+        // monthly tally. Keeping one response builder makes the totals and
+        // final-attendance rules identical in both dashboards.
+        const [principal, guidance] = await Promise.all([
+            getPrincipalFromToken(),
+            getGuidanceSession(),
+        ]);
+        if (!principal && !guidance) {
+            return NextResponse.json({ success: false, message: "Principal or Guidance access is required." }, { status: 403 });
         }
 
         const { searchParams } = new URL(req.url);

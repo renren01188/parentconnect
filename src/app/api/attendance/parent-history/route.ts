@@ -23,7 +23,13 @@ type ActiveSchoolYear = {
     attendance_weekdays: unknown;
 };
 
-async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: string) {
+type TodayClassSchedule = {
+    hasClassToday: boolean;
+    sessionType: "Morning" | "Afternoon" | null;
+    scheduledStart: string | null;
+};
+
+async function getTodayClassSchedule(schoolYear: ActiveSchoolYear, studentLrn: string): Promise<TodayClassSchedule> {
     const today = getSchoolClock().date;
     if (!isScheduledAttendanceDate(
         today,
@@ -31,7 +37,7 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         schoolYear.end_date,
         schoolYear.attendance_weekdays,
     )) {
-        return false;
+        return { hasClassToday: false, sessionType: null, scheduledStart: null };
     }
 
     // A configured holiday takes precedence over a normally scheduled
@@ -43,7 +49,7 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         .eq("holiday_date", today)
         .limit(1);
     if (holidayError && holidayError.code !== "PGRST205") throw holidayError;
-    if ((holidays?.length ?? 0) > 0) return false;
+    if ((holidays?.length ?? 0) > 0) return { hasClassToday: false, sessionType: null, scheduledStart: null };
 
     const { data: student, error: studentError } = await supabase
         .from("students")
@@ -51,7 +57,7 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         .eq("student_id", studentLrn)
         .maybeSingle();
     if (studentError) throw studentError;
-    if (!student?.grade) return false;
+    if (!student?.grade) return { hasClassToday: false, sessionType: null, scheduledStart: null };
 
     // The section is the authoritative Morning/Afternoon assignment; the
     // student's stored session preserves compatibility with older sections.
@@ -69,13 +75,13 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         : student.class_session === "Morning" || student.class_session === "Afternoon"
             ? student.class_session
             : null;
-    if (!sessionType) return false;
+    if (!sessionType) return { hasClassToday: false, sessionType: null, scheduledStart: null };
 
     // Use the same schedule inheritance as ICT Class Session Control: a
     // grade-specific schedule wins, followed by the legacy school-wide row.
     const { data: gradeSchedule, error: gradeScheduleError } = await supabase
         .from("class_sessions")
-        .select("id")
+        .select("scheduled_start")
         .eq("grade", student.grade)
         .eq("session_type", sessionType)
         .lte("session_date", today)
@@ -83,11 +89,13 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         .limit(1)
         .maybeSingle();
     if (gradeScheduleError) throw gradeScheduleError;
-    if (gradeSchedule) return true;
+    if (gradeSchedule?.scheduled_start) {
+        return { hasClassToday: true, sessionType, scheduledStart: gradeSchedule.scheduled_start };
+    }
 
     const { data: legacySchedule, error: legacyScheduleError } = await supabase
         .from("class_sessions")
-        .select("id")
+        .select("scheduled_start")
         .is("grade", null)
         .eq("session_type", sessionType)
         .lte("session_date", today)
@@ -95,7 +103,11 @@ async function hasScheduledClassToday(schoolYear: ActiveSchoolYear, studentLrn: 
         .limit(1)
         .maybeSingle();
     if (legacyScheduleError) throw legacyScheduleError;
-    return Boolean(legacySchedule);
+    return {
+        hasClassToday: Boolean(legacySchedule?.scheduled_start),
+        sessionType,
+        scheduledStart: legacySchedule?.scheduled_start ?? null,
+    };
 }
 
 export async function GET(req: NextRequest) {
@@ -162,7 +174,7 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const hasClassToday = await hasScheduledClassToday(
+        const todayClassSchedule = await getTodayClassSchedule(
             activeSchoolYear as ActiveSchoolYear,
             studentLrn,
         );
@@ -267,7 +279,14 @@ export async function GET(req: NextRequest) {
             success: true,
             records,
             stats: { present, late, absent, excused },
-            todayClassStatus: hasClassToday ? "Scheduled" : "No Class For Today",
+            todayClassStatus: todayClassSchedule.hasClassToday ? "Scheduled" : "No Class For Today",
+            // The Parent Dashboard receives only the selected child's own
+            // Morning/Afternoon start time, after the existing parent-link
+            // authorization and school-day/holiday checks above.
+            todaySchedule: {
+                sessionType: todayClassSchedule.sessionType,
+                scheduledStart: todayClassSchedule.scheduledStart,
+            },
             schoolYear: {
                 startDate: activeSchoolYear.start_date,
                 endDate: activeSchoolYear.end_date,

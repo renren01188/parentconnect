@@ -37,6 +37,7 @@ function getNotifStyle(type: NotificationType) {
         case "report": return { icon: FileText, iconClass: "bg-emerald-500 text-white" };
         case "absence": return { icon: UserX, iconClass: "bg-emerald-500 text-white" };
         case "excused": return { icon: CheckCircle, iconClass: "bg-sky-500 text-white" };
+        case "early-out": return { icon: CheckCircle, iconClass: "bg-emerald-500 text-white" };
         case "escalated": return { icon: AlertTriangle, iconClass: "bg-slate-100 text-slate-500" };
         case "resolved": return { icon: CheckCircle, iconClass: "bg-slate-100 text-slate-500" };
         case "announcement": return { icon: Bell, iconClass: "bg-slate-100 text-slate-500" };
@@ -307,6 +308,7 @@ function AnnouncementViewModal({ notif, onClose }: { notif: Notification; onClos
 
 // ── Notification Row ──────────────────────────────────────────────────────────
 const NOTIF_HINT: Record<NotificationType, string> = {
+    "early-out": "View Early Out decision",
     report: "View parent report →",
     absence: "View absent students →",
     excused: "View excused students →",

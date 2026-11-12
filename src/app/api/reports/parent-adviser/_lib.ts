@@ -501,6 +501,9 @@ export function toAdviserReport(row: ReportRow, messages: MessageRow[], ticket?:
 
   return {
     id: row.id,
+    // The report row is the original durable case record. Guidance tickets
+    // are linked workflow records and must not renumber this conversation.
+    ticketNumber: row.id,
     parent_id: row.parent_id,
     student_id: row.student_id,
     parent_name: row.parent_name,
@@ -624,6 +627,8 @@ export function toGuidanceReport(row: ReportRow, messages: MessageRow[], ticket?
 
   return {
     id: row.id,
+    // Preserve the original report number after any Guidance/Principal handoff.
+    ticketNumber: row.id,
     parent_id: row.parent_id,
     student_id: row.student_id,
     parent_name: row.parent_name,
@@ -682,6 +687,8 @@ export function toPrincipalReport(row: ReportRow, messages: MessageRow[], ticket
 
   return {
     id: row.id,
+    // Do not substitute ticket?.id: this remains the original report number.
+    ticketNumber: row.id,
     parent_id: row.parent_id,
     student_id: row.student_id,
     parent_name: row.parent_name,

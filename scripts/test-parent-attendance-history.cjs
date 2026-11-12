@@ -25,7 +25,9 @@ assert.match(parentHistory, /generatedAt: new Date\(\)\.toISOString\(\)/);
 assert.match(parentHistory, /isScheduledAttendanceDate/);
 assert.match(parentHistory, /school_holidays/);
 assert.match(parentHistory, /class_sessions/);
-assert.match(parentHistory, /todayClassStatus: hasClassToday \? "Scheduled" : "No Class For Today"/);
+assert.match(parentHistory, /getTodayClassSchedule/);
+assert.match(parentHistory, /todaySchedule: \{/);
+assert.match(parentHistory, /todayClassStatus: todayClassSchedule\.hasClassToday \? "Scheduled" : "No Class For Today"/);
 assert.match(parentDashboard, /data\.todayClassStatus !== "No Class For Today"/);
 assert.match(parentDashboard, /No Class For Today/);
 

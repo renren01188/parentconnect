@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  Bell, FileText, HeartHandshake, LayoutDashboard, Menu, Megaphone, Monitor, X,
+  BarChart3, Bell, FileText, HeartHandshake, LayoutDashboard, Menu, Megaphone, Monitor, X,
 } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
 import { useSidebarBadgeDismissal } from "@/hooks/useSidebarBadgeDismissal";
@@ -19,6 +19,7 @@ import {
 const navItems = [
   { label: "Dashboard", href: dashboardPath("guidance"), icon: LayoutDashboard },
   { label: "Reports & Concerns", href: dashboardPath("guidance", "/reports"), icon: FileText, badgeKey: "reports" },
+  { label: "Attendance Summary", href: dashboardPath("guidance", "/AttendanceSummary"), icon: BarChart3 },
   { label: "Announcements", href: dashboardPath("guidance", "/announcements"), icon: Megaphone, badgeKey: "announcements" },
   { label: "Contact ICT", href: dashboardPath("guidance", "/contact-ict"), icon: Monitor, badgeKey: "ict" },
   { label: "Notifications", href: dashboardPath("guidance", "/notifications"), icon: Bell, badgeKey: "notifications" },

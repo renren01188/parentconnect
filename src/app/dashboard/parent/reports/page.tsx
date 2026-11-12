@@ -59,6 +59,15 @@ type StandaloneStaffMessage = {
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const GUIDANCE_TICKET_WAIT_MS = 72 * 60 * 60 * 1000;
+
+function canSubmitGuidanceTicket(report: Report | null, now: number) {
+  if (!report || report.isStandaloneStaffMessage || report.ticketStatus) return false;
+  if (report.cancelledByParent || report.escalatedToGuidance || report.escalatedToPrincipal) return false;
+  if (report.reportStatus === "Resolved" || report.reportStatus === "Cancelled" || report.reportStatus === "Escalated") return false;
+  const originalSubmissionMs = Date.parse(report.createdAt ?? "");
+  return Number.isFinite(originalSubmissionMs) && now >= originalSubmissionMs + GUIDANCE_TICKET_WAIT_MS;
+}
 
 function standaloneThreadType(role: StandaloneStaffMessage["senderRole"]): ChatMessage["threadType"] {
   if (role === "Principal") return "principal";
@@ -965,6 +974,22 @@ function ParentReportsPageContent() {
     return () => window.clearInterval(interval);
   }, [reportSubmissionCooldownUntil]);
 
+  // The wait is based solely on createdAt. Scheduling the next deadline
+  // avoids using replies or status changes as a new starting point, while
+  // still revealing the action without a page refresh at the 72-hour mark.
+  useEffect(() => {
+    const now = Date.now();
+    const upcomingDeadlines = reports
+      .filter((report) => !report.isStandaloneStaffMessage && !report.ticketStatus && !report.escalatedToGuidance && !report.escalatedToPrincipal && report.reportStatus !== "Resolved" && report.reportStatus !== "Cancelled" && report.reportStatus !== "Escalated")
+      .map((report) => Date.parse(report.createdAt ?? "") + GUIDANCE_TICKET_WAIT_MS)
+      .filter((deadline) => Number.isFinite(deadline) && deadline >= now);
+    setCurrentTime(now);
+    if (upcomingDeadlines.length === 0) return;
+    const nextDeadline = Math.min(...upcomingDeadlines);
+    const timer = window.setTimeout(() => setCurrentTime(Date.now()), Math.max(0, nextDeadline - now) + 25);
+    return () => window.clearTimeout(timer);
+  }, [reports]);
+
   const loadReports = useCallback(async () => {
     const requestVersion = ++reportListRequestVersion.current;
     const [res, staffMessagesRes] = await Promise.all([
@@ -1239,6 +1264,7 @@ function ParentReportsPageContent() {
   }, [reports, searchParams, markReportRead, markStandaloneMessageRead]);
 
   const selectedReport = reports.find(r => r.id === selectedId) ?? null;
+  const canSubmitSelectedGuidanceTicket = canSubmitGuidanceTicket(selectedReport, currentTime);
 
   // A reply in the report that the Parent deliberately has open is visible
   // immediately, but is not a new inbox item for that same Parent. Other
@@ -1264,6 +1290,10 @@ function ParentReportsPageContent() {
     selectedReport.allowHistoryAccess !== true
   );
   const selectedReportId = selectedReport?.isStandaloneStaffMessage ? null : selectedReport?.id ?? null;
+
+  useEffect(() => {
+    if (showTicketModal && !canSubmitSelectedGuidanceTicket) setShowTicketModal(false);
+  }, [canSubmitSelectedGuidanceTicket, showTicketModal]);
   selectedReportIdRef.current = selectedReportId;
   const selectedStandaloneConversationId = selectedReport?.isStandaloneStaffMessage && selectedReport.standaloneMessageId
     ? `staff-message:${selectedReport.standaloneMessageId}`
@@ -1715,7 +1745,7 @@ function ParentReportsPageContent() {
                       <p className="break-words text-xs text-slate-400">{selectedReport.recipientRole}{selectedReport.grade && ` • ${selectedReport.grade} - ${selectedReport.section}`}</p>
                     </div>
                     <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
-                      {!selectedReport.isStandaloneStaffMessage && !selectedReport.ticketStatus && !selectedReport.escalatedToGuidance && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
+                      {canSubmitSelectedGuidanceTicket && (
                         <button type="button" onClick={() => setShowTicketModal(true)} className="min-h-11 flex-1 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 transition hover:bg-sky-100 sm:flex-none">Submit Ticket to Guidance</button>
                       )}
                       {selectedReport.canCancel && selectedReport.reportStatus !== "Resolved" && selectedReport.reportStatus !== "Cancelled" && (
